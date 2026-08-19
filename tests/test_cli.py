@@ -1,5 +1,4 @@
 from click.testing import CliRunner
-
 from inspect_steward._cli.main import steward
 
 
