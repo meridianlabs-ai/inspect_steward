@@ -1,0 +1,100 @@
+[project]
+name = "inspect_steward"
+dynamic = ["version"]
+description = "An agent that supervises evaluations, monitoring progress, diagnosing problems, and adjusting runtime state on your behalf."
+authors = [{ name = "Meridian Labs" }]
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT License" }
+dependencies = [
+    "inspect-ai>=0.3.259",
+    "inspect-scout>=0.4.46",
+    "click>=8.0",
+]
+
+[project.urls]
+"Source Code" = "https://github.com/meridianlabs-ai/inspect_steward"
+"Issue Tracker" = "https://github.com/meridianlabs-ai/inspect_steward/issues"
+
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project.entry-points.inspect_ai]
+inspect_steward = "inspect_steward._registry"
+
+[project.scripts]
+steward = "inspect_steward._cli.main:main"
+
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "pytest",
+    "pyright",
+    "pytest-xdist",
+    "pytest-dotenv",
+    "pytest-timeout>=2.4.0",
+    {include-group = "doc"},
+]
+doc = [
+    "jupyter",
+    "panflute",
+    "markdown",
+    "griffe",
+    "pyyaml",
+    "types-PyYAML",
+    "quarto-cli>=1.9.36",
+]
+dist = ["twine", "build"]
+
+[tool.hatch.build]
+only-packages = true
+exclude = ["docs/", "tests/"]
+artifacts = ["src/**/*.yaml", "src/**/*.md"]
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/inspect_steward/_version.py"
+
+[tool.hatch.version.raw-options]
+local_scheme = "no-local-version" # Important for PyPI compatibility
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.uv]
+managed = true
+
+[tool.ruff]
+extend-exclude = ["docs"]
+src = ["."]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # flake8
+    "D",      # pydocstyle
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "SIM101", # duplicate isinstance
+    # "RET", # flake8-return
+    # "RUF", # ruff rules
+]
+ignore = ["E203", "E501", "D10", "D212", "D415"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+addopts = "-n auto"
+
+[tool.pyright]
+include = ["src", "tests"]
+typeCheckingMode = "strict"
+pythonPlatform = "All"

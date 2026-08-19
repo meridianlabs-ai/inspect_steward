@@ -1,0 +1,17 @@
+project:
+  type: meridianlabs-ai/inspect-docs
+
+inspect-docs:
+  title: Inspect Steward
+  description: |
+    An agent that supervises evaluations, monitoring progress, diagnosing problems, and adjusting runtime state on your behalf.
+  url: https://meridianlabs-ai.github.io/inspect_steward
+  module: inspect_steward
+  repo: meridianlabs-ai/inspect_steward
+  org: Meridian Labs
+  navigation:
+    - text: Getting Started
+      href: index.qmd
+  sidebar: unified
+  external_refs:
+    inspect_ai: https://inspect.aisi.org.uk

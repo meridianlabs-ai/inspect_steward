@@ -1,0 +1,23 @@
+---
+title: "Inspect Steward"
+description: "An agent that supervises evaluations on your behalf."
+llms-description: "Installation and getting started with Inspect Steward."
+---
+
+## Introduction
+
+Inspect Steward provides agent-driven supervision for evaluations. It plays the role of the human sitting in front of a running eval — watching progress, diagnosing problems as they surface, and adjusting runtime state.
+
+A steward acts on behalf of someone who isn't there. That's the relationship this package models: you start a run and step away, and the steward minds it.
+
+## Installation
+
+```bash
+pip install inspect-steward
+```
+
+## Getting started
+
+```bash
+steward init
+```
