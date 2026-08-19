@@ -6,4 +6,3 @@
 **/*.excalidraw.svg
 /.venv/
 **/__pycache__
-/_extensions/

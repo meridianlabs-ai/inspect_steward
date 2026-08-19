@@ -46,19 +46,26 @@ Docs live in `docs/` and are built with [Quarto](https://quarto.org). The Quarto
 uv sync --group doc
 cd docs
 source ../.venv/bin/activate
-
-# install the inspect-docs extension (once per checkout)
-mv _quarto.yml _quarto.yml.bak
-quarto add meridianlabs-ai/inspect-docs --no-prompt
-mv _quarto.yml.bak _quarto.yml
-
 quarto render        # outputs to docs/_site/
 quarto preview       # live-reload server
 ```
 
-The extension install is required once per checkout: `_quarto.yml` declares a project type contributed by the [inspect-docs](https://github.com/meridianlabs-ai/inspect-docs) extension, and rendering fails without it. The extension installs to `docs/_extensions/`, which is gitignored.
+The venv must be activated (not just `uv run quarto`) so the reference-page filter can import `griffe` and the `inspect_steward` package itself.
 
-The `mv` dance is a bootstrap workaround, not superstition — `quarto add` parses `_quarto.yml` to choose an install directory, so it chokes on the very project type it is about to provide. Moving the file aside for the duration is the only way through.
+## Updating the docs extension
+
+`docs/_extensions/` holds a checked-in copy of the [inspect-docs](https://github.com/meridianlabs-ai/inspect-docs) Quarto extension, which contributes the project type `_quarto.yml` declares. It is committed (per Quarto convention) so that a fresh clone can render without any install step.
+
+To pull a newer version:
+
+```bash
+cd docs
+mv _quarto.yml _quarto.yml.bak
+quarto update meridianlabs-ai/inspect-docs --no-prompt
+mv _quarto.yml.bak _quarto.yml
+```
+
+The `mv` is a bootstrap workaround, not superstition: `quarto add`/`update` parses `_quarto.yml` to choose an install directory, so it chokes on the very project type the extension provides. Commit the resulting diff.
 
 The venv must be activated (not just `uv run quarto`) so the reference-page filter can import `griffe` and the `inspect_steward` package itself.
 
