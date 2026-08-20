@@ -1,0 +1,15 @@
+name: steward-hawk-test
+tasks:
+  - package: hawk-pkg
+    name: hawk_pkg
+    items:
+      - name: addition
+        args:
+          difficulty: hard
+
+models:
+  - package: inspect-ai
+    items:
+      - name: mockllm/model
+
+limit: 1

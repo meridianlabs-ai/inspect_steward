@@ -1,0 +1,15 @@
+[project]
+name = "hawk-pkg"
+version = "0.1.0"
+description = "Test fixture package for hawk eval set config support."
+requires-python = ">=3.12"
+
+[project.entry-points.inspect_ai]
+hawk_pkg = "hawk_pkg._registry"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/hawk_pkg"]

@@ -7,10 +7,17 @@ readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT License" }
 dependencies = [
-    "inspect-ai>=0.3.259",
+    "inspect-ai>=0.3.259", # TODO: floor at the first release with eval-set capture (and drop the git source below)
     "inspect-scout>=0.4.46",
     "click>=8.0",
+    "pyyaml>=6.0",
 ]
+
+[project.optional-dependencies]
+flow = ["inspect_flow>=0.8.1"] # TODO: floor at the release with api.eval_set
+# hawk requires Python >= 3.13 (the marker keeps 3.12 resolvable; steward's
+# runtime check reports the Python requirement when hawk is missing)
+hawk = ["hawk>=2.3; python_version >= '3.13'"]
 
 [project.urls]
 "Source Code" = "https://github.com/meridianlabs-ai/inspect_steward"
@@ -35,6 +42,7 @@ dev = [
     "pytest-xdist",
     "pytest-dotenv",
     "pytest-timeout>=2.4.0",
+    "inspect_flow", # for the flow definition tests (source pinned below)
     {include-group = "doc"},
 ]
 doc = [
@@ -68,6 +76,12 @@ allow-direct-references = true
 [tool.uv]
 managed = true
 
+# eval-set capture is on inspect_ai main but not yet released;
+# the inspect_flow api.eval_set seam is on its feature/steward PR branch
+[tool.uv.sources]
+inspect-ai = { git = "https://github.com/UKGovernmentBEIS/inspect_ai", branch = "main" }
+inspect-flow = { git = "https://github.com/meridianlabs-ai/inspect_flow", branch = "feature/steward" }
+
 [tool.ruff]
 extend-exclude = ["docs"]
 src = ["."]
@@ -96,5 +110,12 @@ addopts = "-n auto"
 
 [tool.pyright]
 include = ["src", "tests"]
+# hawk_pkg is a standalone fixture package (own src/ root), not part of this project
+exclude = ["tests/evalset/fixtures/hawk_pkg"]
 typeCheckingMode = "strict"
 pythonPlatform = "All"
+
+# tests may exercise private helpers directly
+[[tool.pyright.executionEnvironments]]
+root = "tests"
+reportPrivateUsage = false

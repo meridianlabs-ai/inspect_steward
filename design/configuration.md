@@ -67,7 +67,7 @@ The protocol lives in **inspect_ai** — `eval_set()` honors these variables nat
 Steward exposes the enumerate side programmatically as `read_eval_set()`:
 
 ```python
-def read_eval_set(definition: str, args: dict[str, Any] | None = None) -> EvalSetManifest:
+def read_eval_set(definition: str, args: dict[str, Any] | None = None) -> Manifest:
     """Execute a definition in a subprocess with capture enabled and return its manifest."""
 ```
 
@@ -233,8 +233,8 @@ Deployment-wise, Hawk keeps its platform — CLI, API server, Helm release, runn
 
 3. **Overrides whitelist.** Exactly which `eval_set()` kwargs Steward may override in workers (`log_dir`, `display`, `log_level`, `retry_attempts`, `ctl_server`, `max_tasks`, ...) and what happens on conflict with definition-specified values.
 
-4. **Display-key format details.** Exact rendering of the solver segment (resolved plan name for default solvers), and the disambiguation format for args/config sweeps.
+4. **Display-key format details.** *Resolved in implementation:* the solver segment always renders (the resolved plan name, or the literal `default` when unregistered); collisions disambiguate by differing args, then differing model args, then ordinal (`#n`) for config-only sweeps.
 
-5. **Hawk `extra="allow"` passthrough.** Hawk forwards unknown YAML keys verbatim to `eval_set()`. Direct (non-embedded) Hawk config support in Steward should honor the same passthrough or declare a whitelist.
+5. **Hawk `extra="allow"` passthrough.** *Resolved in implementation:* mirrored — unknown top-level keys forward to `eval_set()` (minus hawk's reserved scan keys); platform-managed fields (`runner`, `isolation`, `checkpoint`, ...) are ignored when running a config directly.
 
 6. **Selection schema evolution.** The reserved per-task `samples` field for within-task sharding (splitting one large task's samples across workers, via `eval_set`'s existing `sample_id` support).

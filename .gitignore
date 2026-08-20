@@ -158,6 +158,9 @@ venv.bak/
 # pytype static type analyzer
 .pytype/
 
+# mypy type checker
+.mypy_cache/
+
 # Cython debug symbols
 cython_debug/
 

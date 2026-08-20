@@ -2,6 +2,7 @@ import click
 
 from .. import __version__
 from .init import init_command
+from .tasks import tasks_command
 
 
 @click.group()
@@ -11,6 +12,7 @@ def steward() -> None:
 
 
 steward.add_command(init_command)
+steward.add_command(tasks_command)
 
 
 def main() -> None:
