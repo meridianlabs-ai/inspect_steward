@@ -1,5 +1,4 @@
 import importlib.util
-import json
 import sys
 from pathlib import Path
 
@@ -26,15 +25,32 @@ def test_command_evalset_cwd_override(tmp_path: Path) -> None:
 
 def test_command_flow() -> None:
     path = FIXTURES / "flow_spec.py"
-    command = definition_command(path, "flow", args={"level": 2})
+    command = definition_command(path, "flow", log_dir="/tmp/scratch")
     assert command.argv == [
         sys.executable,
         "-m",
-        "inspect_steward._runner.flow",
+        "inspect_flow._cli.main",
+        "run",
         str(path.resolve()),
-        "--args",
-        json.dumps({"level": 2}),
+        "--log-dir",
+        "/tmp/scratch",
     ]
+
+
+@pytest.mark.parametrize(
+    ("args", "expected"),
+    [
+        ({"difficulty": "hard"}, ["-A", "difficulty=hard"]),
+        ({"level": 2}, ["-A", "level=2"]),
+        ({"ratio": 0.5}, ["-A", "ratio=0.5"]),
+        ({"flag": True}, ["-A", "flag=true"]),
+        ({"items": ["a", "b"]}, ["-A", "items=[a, b]"]),
+        ({"a": 1, "b": "x"}, ["-A", "a=1", "-A", "b=x"]),
+    ],
+)
+def test_command_flow_args(args: dict[str, object], expected: list[str]) -> None:
+    command = definition_command(FIXTURES / "flow_spec.py", "flow", args=args)
+    assert command.argv[-len(expected) :] == expected
 
 
 def test_command_args_require_flow() -> None:

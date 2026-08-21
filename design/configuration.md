@@ -207,7 +207,9 @@ Under a single-task selection, the non-matching `my_task` calls return placehold
 
 ### Inspect Flow specs
 
-Steward uses `inspect_flow` **as a library, never as a runner**: `load_spec()`/`expand_spec()` provide includes, implicit `_flow.py` inheritance, defaults merging, `NotGiven` semantics, and `@after_load` hooks; task instantiation goes through the registry (so Layer 2 pruning applies); the adapter maps `FlowOptions` to `eval_set()` kwargs and makes the boundary call itself. Loading a Python spec is `exec` with real side effects (sys.path mutation, dotenv, `_flow.py` files) — by design, since every worker re-executes it. Flow's store, bundling, and steps are out of scope for Steward's execution path.
+**`flow run` is itself a conforming program**: it culminates in the `eval_set()` call the spec describes, so Steward drives flow's own CLI under the protocol (`python -m inspect_flow._cli.main run <spec>`) rather than reaching into flow's internals. Flow keeps ownership of everything before the boundary — includes, implicit `_flow.py` inheritance, defaults merging, `NotGiven` semantics, `@after_load`/`@after_instantiate` hooks, and its `FlowOptions` → `eval_set()` mapping — and Steward owns execution from the boundary onward. Loading a Python spec is `exec` with real side effects (sys.path mutation, dotenv, `_flow.py` files) — by design, since every worker re-executes it.
+
+Flow writes `flow.yaml` and a requirements snapshot into the log directory *before* the boundary, so those side effects cannot be intercepted by capture. Reads therefore pass a scratch `--log-dir`, leaving the definition's real log directory untouched; execution passes the real one, where those files are wanted. Flow's store, bundling, and steps are out of scope for Steward's execution path.
 
 Flow specs may contain live `Task`/`Model` objects (which Flow itself rejects in venv mode); the always-re-execute model supports them naturally.
 

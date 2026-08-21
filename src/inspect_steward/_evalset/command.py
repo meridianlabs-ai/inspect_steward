@@ -1,9 +1,10 @@
 import importlib.util
-import json
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
+
+import yaml
 
 from .detect import DefinitionType
 
@@ -30,6 +31,7 @@ def definition_command(
     type: DefinitionType,
     args: dict[str, Any] | None = None,
     cwd: Path | None = None,
+    log_dir: str | None = None,
 ) -> DefinitionCommand:
     """Build the command that executes an eval set definition.
 
@@ -38,6 +40,7 @@ def definition_command(
         type: Definition type.
         args: Arguments for the definition (flow spec function args only).
         cwd: Working directory for the command (defaults to the current working directory, matching how the definition would run by hand).
+        log_dir: Log directory override (flow definitions only; other definition types carry their own log directory). Reads point this at a scratch directory so the definition's real log directory is left untouched.
 
     Returns:
         Command to execute the definition.
@@ -55,19 +58,32 @@ def definition_command(
         argv = [sys.executable, abs_path]
     elif type == "flow":
         _require_package("inspect_flow", "flow")
-        argv = [
-            sys.executable,
-            "-m",
-            "inspect_steward._runner.flow",
-            abs_path,
-            "--args",
-            json.dumps(args or {}),
-        ]
+        # flow's own CLI is a conforming program: it culminates in the
+        # eval_set() call this definition describes (module form rather than
+        # the `flow` console script so we stay in the current interpreter)
+        argv = [sys.executable, "-m", "inspect_flow._cli.main", "run", abs_path]
+        if log_dir is not None:
+            argv += ["--log-dir", log_dir]
+        argv += _arg_options(args)
     else:
         _require_package("hawk", "hawk")
         argv = [sys.executable, "-m", "inspect_steward._runner.hawk", abs_path]
 
     return DefinitionCommand(argv=argv, cwd=str((cwd or Path.cwd()).resolve()))
+
+
+def _arg_options(args: dict[str, Any] | None) -> list[str]:
+    """Render definition args as flow `-A KEY=VALUE` options.
+
+    Values are YAML-encoded to survive the round trip through flow's arg parsing (inspect_ai's `parse_cli_args`). Note that parser splits bare strings on commas, so a string value containing a comma arrives as a list.
+    """
+    options: list[str] = []
+    for key, value in (args or {}).items():
+        encoded = yaml.safe_dump(value, default_flow_style=True).strip()
+        # safe_dump terminates plain scalar documents with '...'
+        encoded = encoded.removesuffix("\n...").strip()
+        options += ["-A", f"{key}={encoded}"]
+    return options
 
 
 def _require_package(package: str, extra: str) -> None:

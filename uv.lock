@@ -1269,8 +1269,8 @@ dependencies = [
 
 [[package]]
 name = "inspect-flow"
-version = "0.12.1.dev3"
-source = { git = "https://github.com/meridianlabs-ai/inspect_flow?branch=feature%2Fsteward#ec866380e69330f5d0f581f752e5c283a221b5da" }
+version = "0.12.0"
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
     { name = "dateparser" },
@@ -1283,6 +1283,10 @@ dependencies = [
     { name = "pydantic" },
     { name = "python-dotenv" },
     { name = "typing-extensions" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/42/25/3a994b8ffca8dae10efff4b1d9e8ad5323599b6be16188e62f0da85e8bd1/inspect_flow-0.12.0.tar.gz", hash = "sha256:961059829d12b4ee024682a1ca82b2a8ebbcf7025c36817f7ebab5d9244aa426", size = 138837, upload-time = "2026-08-05T01:10:06.778Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/e3/17/11608c6e5e683f54853dbeac28c8ac1ee6c2af621530feb86e5e218018b3/inspect_flow-0.12.0-py3-none-any.whl", hash = "sha256:e1a0f9ddf25c2f404e02b17e2f51e2d76a70350236761e71a77f53ce36bed8a8", size = 174371, upload-time = "2026-08-05T01:10:05.228Z" },
 ]
 
 [[package]]
@@ -1381,7 +1385,7 @@ requires-dist = [
     { name = "click", specifier = ">=8.0" },
     { name = "hawk", marker = "python_full_version >= '3.13' and extra == 'hawk'", specifier = ">=2.3" },
     { name = "inspect-ai", git = "https://github.com/UKGovernmentBEIS/inspect_ai?branch=main" },
-    { name = "inspect-flow", marker = "extra == 'flow'", git = "https://github.com/meridianlabs-ai/inspect_flow?branch=feature%2Fsteward" },
+    { name = "inspect-flow", marker = "extra == 'flow'", specifier = ">=0.12.0" },
     { name = "inspect-scout", specifier = ">=0.4.46" },
     { name = "pyyaml", specifier = ">=6.0" },
 ]
@@ -1390,7 +1394,7 @@ provides-extras = ["flow", "hawk"]
 [package.metadata.requires-dev]
 dev = [
     { name = "griffe" },
-    { name = "inspect-flow", git = "https://github.com/meridianlabs-ai/inspect_flow?branch=feature%2Fsteward" },
+    { name = "inspect-flow", specifier = ">=0.12.0" },
     { name = "jupyter" },
     { name = "markdown" },
     { name = "panflute" },

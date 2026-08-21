@@ -77,14 +77,20 @@ def read_eval_set(
         raise ValueError(f"Definition file '{definition_path}' does not exist.")
 
     resolved_type = detect_definition_type(definition_path, type)
-    command = definition_command(
-        definition_path,
-        resolved_type,
-        args=args,
-        cwd=Path(cwd) if cwd is not None else None,
-    )
-
-    capture = _run_capture(command, env=env, timeout=timeout)
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        # a scratch log directory keeps pre-boundary side effects (e.g. the
+        # flow.yaml flow writes before its eval_set() call) out of the
+        # definition's real log directory
+        command = definition_command(
+            definition_path,
+            resolved_type,
+            args=args,
+            cwd=Path(cwd) if cwd is not None else None,
+            log_dir=str(Path(tmp_dir) / "logs"),
+        )
+        capture = _run_capture(
+            command, Path(tmp_dir) / "manifest.json", env=env, timeout=timeout
+        )
 
     keys = compute_display_keys(capture.tasks)
     return Manifest(
@@ -106,58 +112,57 @@ def read_eval_set(
 
 def _run_capture(
     command: DefinitionCommand,
+    manifest_path: Path,
     env: dict[str, str] | None,
     timeout: float | None,
 ) -> EvalSetCapture:
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        manifest_path = Path(tmp_dir) / "manifest.json"
-        process_env = {
-            **os.environ,
-            **command.env,
-            **(env or {}),
-            INSPECT_EVAL_SET_CAPTURE: str(manifest_path),
-            "INSPECT_DISPLAY": "plain",
-        }
-        try:
-            result = subprocess.run(
-                command.argv,
-                cwd=command.cwd,
-                env=process_env,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-        except subprocess.TimeoutExpired as ex:
-            stderr = ex.stderr
-            raise ReadEvalSetError(
-                f"Timed out reading the eval set definition (after {timeout} seconds).",
-                command=command.argv,
-                stderr=stderr.decode() if isinstance(stderr, bytes) else stderr or "",
-            ) from ex
+    process_env = {
+        **os.environ,
+        **command.env,
+        **(env or {}),
+        INSPECT_EVAL_SET_CAPTURE: str(manifest_path),
+        "INSPECT_DISPLAY": "plain",
+    }
+    try:
+        result = subprocess.run(
+            command.argv,
+            cwd=command.cwd,
+            env=process_env,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as ex:
+        stderr = ex.stderr
+        raise ReadEvalSetError(
+            f"Timed out reading the eval set definition (after {timeout} seconds).",
+            command=command.argv,
+            stderr=stderr.decode() if isinstance(stderr, bytes) else stderr or "",
+        ) from ex
 
-        if result.returncode != 0:
-            raise ReadEvalSetError(
-                "The eval set definition failed before reaching eval_set().",
-                command=command.argv,
-                returncode=result.returncode,
-                stderr=result.stderr,
-            )
-        if not manifest_path.exists():
-            raise ReadEvalSetError(
-                "The eval set definition never called eval_set() "
-                "(is this the right file or definition type?).",
-                command=command.argv,
-                returncode=result.returncode,
-                stderr=result.stderr,
-            )
-        try:
-            return EvalSetCapture.model_validate_json(manifest_path.read_bytes())
-        except ValueError as ex:
-            raise ReadEvalSetError(
-                "The captured eval set manifest is not valid (this can indicate "
-                "an inspect-ai/inspect-steward version mismatch — try upgrading "
-                f"both):\n{ex}",
-                command=command.argv,
-                returncode=result.returncode,
-                stderr=result.stderr,
-            ) from ex
+    if result.returncode != 0:
+        raise ReadEvalSetError(
+            "The eval set definition failed before reaching eval_set().",
+            command=command.argv,
+            returncode=result.returncode,
+            stderr=result.stderr,
+        )
+    if not manifest_path.exists():
+        raise ReadEvalSetError(
+            "The eval set definition never called eval_set() "
+            "(is this the right file or definition type?).",
+            command=command.argv,
+            returncode=result.returncode,
+            stderr=result.stderr,
+        )
+    try:
+        return EvalSetCapture.model_validate_json(manifest_path.read_bytes())
+    except ValueError as ex:
+        raise ReadEvalSetError(
+            "The captured eval set manifest is not valid (this can indicate "
+            "an inspect-ai/inspect-steward version mismatch — try upgrading "
+            f"both):\n{ex}",
+            command=command.argv,
+            returncode=result.returncode,
+            stderr=result.stderr,
+        ) from ex
