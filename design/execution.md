@@ -22,7 +22,7 @@ The obvious implementation — spawn N workers, each running the definition with
 
 - Worker B lists the directory, sees worker A's in-flight log with `status == "started"`, classifies it as incomplete, and re-runs A's task.
 - `cleanup_older_eval_logs` groups logs by `task_id` and deletes the losers by mtime — so one worker deletes another's good log.
-- `eval-set.json` and `logs.json` are truncate-in-place writes that can tear; the viewer's reader validates them with no error handling.
+- `eval-set.json` and `logs.json` are truncate-in-place writes that can tear, and the viewer's reader for `eval-set.json` validates it with no error handling.
 - Each worker does roughly 2N log-header reads per pass, so directory scanning costs O(workers × logs).
 
 Per-task log directories were the first answer (and are what configuration.md originally specified). They avoid the contention, but only by moving it: each worker still runs a full orchestrator, just over its own directory, and Steward inherits the job of stitching a tree of `eval-set.json` files into one view. Inspect's discovery already recurses by default, so nesting is *mostly* invisible in the viewer's default task listing — but drilling into a log loses its eval-set context, because `eval-set.json` is only read from the log's own directory.
@@ -86,7 +86,7 @@ Everything in `eval_set()` below the selection branch is orchestration, and all 
 | Skipped | Who does it instead |
 |---|---|
 | `eval_set_id_for_log_dir` (reads/writes `.eval-set-id`) | Steward, once, at run start |
-| `write_eval_set_info` (`eval-set.json`) | Steward, from the manifest |
+| `write_eval_set_info` (`eval-set.json`) | Steward, rewritten as logs land |
 | `write_log_dir_manifest` (`logs.json`) | Steward, periodically and at the end |
 | `list_all_eval_logs` + pending/failed partitioning | Steward's scheduler |
 | `validate_eval_set_prerequisites` | Steward, at enumeration time |
@@ -138,7 +138,20 @@ The protocol would mirror the other two: `INSPECT_EVAL_SET_SCAN` naming `{versio
 
 **Why not reuse selection mode with `resume` instead.** It is tempting, because `eval_set()` already scans landed logs this way — `_resume_scan_tasks` builds `PreviousTask`s for *successful* logs purely so the sample-reuse path dispatches scans for transcripts whose row never landed. But that route drags in task resolution and dataset matching, and carries a failure mode a scan pass must not have: a sample the reuse path *cannot* match gets executed, silently turning a scan into an eval run with model calls. Scanning a log should never run a sample. A dedicated mode over log locations avoids the question entirely.
 
-**Properties that follow.** Exactly one scan process runs at a time — not by convention but because scanning is work scheduled by the process holding the run claim, and journalled so a restarted Steward adopts an in-flight scan rather than starting a second (see *What enforces single-writer*). All four hazards above are then gone by construction. Passes are incremental: `scan_init` attaches to an existing scan dir and `_invalidate_finalized_flag` flips `complete` back to `False` — the same path `eval_set()` resume uses — so Steward can scan every few minutes as logs land. Passes are idempotent: a transcript with a row for every scanner is skipped.
+**Properties that follow.** Exactly one scan process runs at a time — not by convention but because spawning is serialized by the run claim and journalled, so a tend checks for a live scan before starting one and a restarted Steward adopts an in-flight scan rather than starting a second (see *What enforces single-writer*). All four hazards above are then gone by construction. Passes are incremental: `scan_init` attaches to an existing scan dir and `_invalidate_finalized_flag` flips `complete` back to `False` — the same path `eval_set()` resume uses. Passes are idempotent: a transcript with a row for every scanner is skipped.
+
+### A scan is a detached process, not part of a tend
+
+A scan reads whole transcripts and, for model-graded scanners, makes model calls — so a pass over a large eval set can run for hours. That makes it the same kind of thing as a task worker, and it must be spawned the same way: **detached, journalled, and reaped by a later tend.** A tend that ran a scan inline would hold the run claim for the scan's whole duration, which would destroy the property the driver model is built on — that a claim older than a generous tend timeout is unambiguously stale, so no heartbeat protocol is needed. Blocking on long work inside a tend brings the wedged-supervisor problem straight back.
+
+This generalizes past scanning, and scanning is just the case that forces it to be said: **a tend spawns and reaps; it never does long work itself.** Task workers, scan passes, adjudication re-runs, and end-of-run bundling all obey it. Anything whose duration is unbounded is a detached child whose completion some later tend observes.
+
+Two consequences specific to scans:
+
+- **The claim protects the decision, not the duration.** A scan process outlives the tend that spawned it, so the claim is not what keeps the scan directory single-writer — the journal plus a liveness check at spawn time is, exactly as it is for not double-spawning a task. The claim's job is only to serialize the *decision*.
+- **Scanning is a drain, not a pass.** Because a scan can outlast the tend interval, Steward cannot start one per tend. The workable model is a queue of unscanned logs drained by one process at a time, each run taking whatever has accumulated since the last. That self-regulates: slow scans simply batch more logs, and coverage lags the run rather than stalling it.
+
+It also means a run is not finished when its tasks are. The final scan is a long job that begins after cleanup and adjudication settle (see the ordering constraint above), so `status` needs *complete, scanning* as a distinct state, and end-of-run finalization is itself a multi-tend affair rather than a blocking step.
 
 **The one real ordering constraint.** `scan_finalize` runs `_cleanup_orphan_scan_rows`, which prunes rows whose uuid appears in no current log. So Steward's *final* pass must run **after** log cleanup and after adjudication re-runs have settled — otherwise rows belonging to superseded attempts survive, and rows for re-run samples are keyed to uuids that no longer exist. Mid-run passes are unaffected: in-flight samples have no rows yet, so there is nothing for the pruner to get wrong.
 
@@ -152,10 +165,62 @@ Who writes what:
 |---|---|---|
 | `<task>_<id>.eval` | worker | during its own run (atomic replace) |
 | `.eval-set-id` | Steward | run start |
-| `eval-set.json` | Steward | run start, from the manifest |
+| `eval-set.json` | Steward | **rewritten as logs land** — see below |
 | `logs.json` | Steward | periodically during the run, and at the end |
+| `listing.json` | Steward | only when producing an embedded/bundled view |
 
 Steward is the **single writer** of every shared file, which is what makes the absence of locking in Inspect's manifest writers acceptable. Workers never read the directory to make decisions; their decisions arrive in the selection.
+
+The standard by which this list is judged is **conformance**, not "something reads it". A Steward directory should contain exactly what an `eval_set()` directory contains, because the promise is that nothing downstream can tell the difference. That matters most for the file with no in-repo reader: `logs.json` (`write_log_dir_manifest`) is exported public API, so external consumers may well depend on it even though nothing inside Inspect does. Steward writes it because `eval_set()` writes it.
+
+Worth distinguishing from `listing.json` (`write_log_listing`), which is a different file and the one the **static/bundled viewer** actually fetches. `eval_set()` writes it only via `_embed_viewer` / `bundle_log_dir`, so Steward writes it only when doing the equivalent.
+
+### `eval-set.json` must be written incrementally
+
+This is the one entry that cannot be written once at run start, and the reason is worth recording because the obvious implementation is silently wrong.
+
+`eval-set.json` earns its place: the viewer reads it (`read_eval_set_info_async`) to render **pending tasks** — entries in the eval set that have no log yet — via `appendPendingItems` in `LogsPanel` and `SamplesPanel`. That is exactly the live progress view Steward wants, and without the file the viewer shows only landed logs with no sense of the whole set. Absence degrades gracefully (the reader returns `None`), but the feature is lost.
+
+The trap is `EvalSetTask.task_id`. `to_eval_set_task` resolves it as `existing_task_id or task.id or eval_set_identifier`, and `task.id` is a fresh `uuid()` assigned at resolution (`loader.py:112`). In an ordinary `eval_set()` run the manifest's task_ids match the logs' exactly — because one process both resolved and ran. **Steward's workers each resolve independently**, so a worker's log task_id is unpredictable to Steward. Writing `eval-set.json` up front from the manifest would give every task an id matching no log, and the viewer would render each one as *both* landed and pending.
+
+The fix needs no protocol change, just the same algorithm driven from a different source: rewrite `eval-set.json` as logs land, taking `task_id` from the log for tasks that have one and falling back to the task's `identifier` as a placeholder for those still pending. That is `existing_task_id or … or eval_set_identifier` computed from the log directory rather than from `ResolvedTask`s, and Steward is already rewriting directory metadata on the same trigger.
+
+### Sharing the directory operations with `eval_set()`
+
+Steward reproducing Inspect's directory bookkeeping by hand is how it would drift. That is the same failure the Hawk integration had — a re-implemented lowering that silently diverged from the real thing — so the operations should be **shared functions both `eval_set()` and Steward call**, not two implementations of one protocol.
+
+Most of this is available already. Grouped by what it would take:
+
+**Shareable as-is.** `cleanup_older_eval_logs(log_dir, task_ids)` takes nothing but a directory and a set of task ids; `latest_completed_task_eval_logs`, `list_all_eval_logs`, `write_log_dir_manifest`, `write_log_listing`, `bundle_log_dir`, and `embed_log_dir` are likewise pure directory operations, several already public. `eval_set_id_for_log_dir` is pure too, and its hard-fail on id mismatch is exactly the "is this directory already owned by a different eval set" check Steward wants. **The cleanup band — the part most likely to be enhanced — needs no refactor at all.**
+
+**Shareable after a narrow refactor**, in each case to drop a `ResolvedTask` dependency that isn't really used:
+
+- `validate_eval_set_prerequisites` touches `resolved_tasks` only to compute identifiers (and to name a task in one error message); every check below that is identifier-level. Split out an identifier-taking core.
+- `write_eval_set_info` → `to_eval_set` → `to_eval_set_task` uses only name, id, file, args, model, model_args, model_roles, and sequence — all present in Steward's manifest except `task.id`, which is the per-process uuid Steward must fall back from anyway. Have it take `list[EvalSetTask]` and let the caller build those rows.
+- `list_latest_eval_logs` / `log_samples_complete` need dataset size and epochs, which the manifest carries as `samples` and `epochs`.
+
+**Not shareable, and shouldn't be.** Task resolution requires the definition executed. And retry partitioning is genuinely different work: `eval_set()` partitions tasks into pending/failed, whereas Steward adjudicates at sample level. Forcing those together would be worse than two implementations.
+
+**These should be public API, not private-but-shared.** Sharing only protects Steward if the shared thing is *intended* as shared. Importing more from `inspect_ai._eval.evalset` as it stands would couple Steward to more internals that can change without notice — more exposure, not less. A private module maintained "with external callers in mind" is a contradiction that offers no actual guarantee.
+
+This is less of a new commitment than it sounds, because **the surface is already half-public, and inconsistently so**:
+
+| public today | private today |
+|---|---|
+| `write_log_dir_manifest` (writes `logs.json`) | `write_log_listing` (writes `listing.json`) |
+| `bundle_log_dir` | `embed_log_dir` |
+| `list_eval_logs`, `task_identifier` | `cleanup_older_eval_logs`, `write_eval_set_info`, `read_eval_set_info`, `eval_set_id_for_log_dir` |
+
+Those splits are historical accident, not design — the file the static viewer actually reads is private while its sibling is public. So the ask is not "expose internals for Steward"; it is "this surface is already partly exposed, here is the coherent version," with Steward as the forcing function. `task_identifier` was made public for exactly this reason during the capture work, so the precedent is already set within this project.
+
+**Two kinds of contract, two mechanisms.** Worth stating explicitly, because the protocol pieces deliberately go the other way:
+
+- **Data crossing a process boundary** — the capture manifest, the selection document — stays private and *versioned* (`EVAL_SET_CAPTURE_VERSION`, `EVAL_SET_SELECTION_VERSION`). A schema change breaks silently, so it needs explicit version negotiation and golden tests.
+- **Functions called in-process** — the directory operations — become *public*. A signature or semantic change breaks loudly at call time and in shared tests, so ordinary deprecation policy is sufficient and versioning would be ceremony.
+
+The honest trade is that Steward then receives breaking changes for free along with enhancements. That is still the better side: loud coupling beats silent divergence — which is precisely what happened with Hawk.
+
+**One difference sharing does not erase.** `cleanup_older_eval_logs` keeps the newest log per task id and deletes the rest, but Steward's adjudication model needs failed attempts *kept* until they are resolved. Steward therefore calls the same function on a different schedule — once at the end, after adjudication settles, rather than on every pass. Same code, different timing; worth recording so nobody moves the call earlier as a tidy-up.
 
 ### What enforces single-writer
 
@@ -284,11 +349,13 @@ Ground truth is the log directory. A journal that is lost, truncated, or stale d
 
 ## The supervisor
 
-The run claim implies a process that holds it, and the recovery model implies that process is long-lived: in-flight requeue, error classification, and adjudication are all continuous work, not a one-shot pass. So yes — **Steward detaches a supervisor**, and there are two levels of detachment, deliberately.
+"Supervisor" here means *whatever is currently driving the reconcile loop* — a foreground `steward run`, a detached process, or a coding agent scheduling `tend` calls (see *The reconcile core, and its drivers*). The claim, the journal, and the registry apply to every driver equally.
+
+**This section designs the detached case, which the current plan does not build.** It is kept because it is the only driver with a lifecycle worth designing, and because writing it down is what established that the lifecycle is a cost rather than a capability — the argument for agent-driven tending is largely assembled from the paragraphs below. Read it as the specification that would be implemented *if* the utilization evidence ever calls for a daemon, not as work in the queue.
 
 **The run and the supervisor have separate lifetimes.** Requirement 4 says the *run* outlives the process that started it, and detached workers achieve that by themselves. If the supervisor dies, workers keep running and keep writing logs; what stops is *supervision* — no new tasks scheduled, no scan passes, no requeues, no adjudication. That is a real degradation but a graceful one, and it is why both levels detach rather than making workers children of the supervisor: either layer can die without taking the other with it, and a replacement supervisor adopts the survivors from the journal.
 
-**Supervision still has to outlive the invoking session.** Steward exists to run things autonomously for hours. A coding agent that starts a sweep and then ends its session must not leave that sweep unsupervised until someone notices. So the supervisor detaches by default for long runs, exactly as `inspect eval --detach` does for an eval.
+**Supervision still has to outlive the invoking session** — unless something else is tending it. Steward exists to run things autonomously for hours, and a coding agent that starts a sweep and then ends its session must not leave it unsupervised until someone notices. Detaching is one answer; an agent that reliably schedules `steward tend` is another, and often the better one. What must not happen is a long run with *no* driver.
 
 **Foreground remains the interactive mode** — though possibly only as a convenience wrapper over the detached one (see *Interacting with a detached run*). `steward run` attached *is* the supervisor, with a live display; `--detach` re-execs it into its own session, prints the handoff, and exits. Same choice Inspect already offers, and worth borrowing Inspect's contract wholesale: `exec_detached` spawns the child, waits for its `launch` record, and **refuses to leave a detached process running when it failed to bind a control endpoint** — on the grounds that a detached process nobody can observe or cancel is worse than no process. A detached Steward supervisor should be held to the same rule: it advertises its socket in the registry, and if it cannot, the launch fails rather than orphaning an unsupervisable daemon.
 
@@ -302,6 +369,8 @@ That yields a pleasing symmetry: the supervisor is to `steward status` what a `-
 
 The argument for a supervisor is not that a process is more reliable than a coding agent. It is that **the agent is intermittent and the run is not.** An eval set running for eight hours spans many agent sessions, or none; the agent ends its session, hits a context limit, or is simply not invoked again until morning. Anything that must happen on a cadence — reaping dead workers, starting the next task as a slot frees, scan passes, requeueing a clearly-transient failure, writing a periodic status summary — cannot depend on someone being present to ask for it.
 
+That argument establishes the need for a *cadence*, though, not the need for a *daemon* — a crontab line supplies one at a fraction of the cost. What follows is still the right division of labour; it just does not require a long-lived process to enforce it.
+
 So the division is by *kind of work*, not by reliability:
 
 - **The supervisor keeps the run alive.** Mechanical continuity: maintain the worker pool, journal what it launches, run scan passes, requeue within budget, keep the eval-set metadata and status current. All of it policy execution, none of it judgement.
@@ -309,7 +378,9 @@ So the division is by *kind of work*, not by reliability:
 
 The supervisor's other job is therefore to **leave a good trail for the intelligent-but-absent party**: an escalation queue it refuses to act on alone, and a periodic written summary. That is what makes something like an hourly `status.md` load-bearing rather than decorative — it is the handoff artifact the agent reads when it next appears, and the reason a run can be picked up cold.
 
-**The honest caveat.** A daemon has a failure mode ticks do not: it can *wedge* — deadlocked, or blocked on a hung request — while still looking alive. A cron tick that fails simply does not run; a wedged supervisor holds its claim and blocks the replacement that would have taken over. That is strictly worse than being dead, and it means pid-liveness is not a sufficient definition of "the supervisor is up" (see the heartbeat note under *What enforces single-writer*).
+This division softens considerably when the agent is itself the driver: it sees each reconcile as it happens, so judgement and continuity coincide and the escalation queue never has to accumulate for long. The division still matters — the agent may stop tending at any point, and whatever is left behind has to be legible to whoever picks it up — but it becomes a property of the *artifacts* rather than a split between two actors.
+
+**The honest caveat.** A daemon has a failure mode `tend` does not: it can *wedge* — deadlocked, or blocked on a hung request — while still looking alive. A scheduled `tend` that fails simply does not run; a wedged supervisor holds its claim and blocks the replacement that would have taken over. That is strictly worse than being dead, and it means pid-liveness is not a sufficient definition of "the supervisor is up" (see the heartbeat note under *What enforces single-writer*).
 
 ### Interacting with a detached run
 
@@ -328,7 +399,7 @@ Which means the view and the supervisor are separable, and should be separated:
 Three properties follow, all of them good:
 
 - **Views need no claim.** The claim is a *writer's* lock. Any number of TUIs can watch one run, and a human and an agent can watch the same run simultaneously. Directives issued from a TUI still go to the supervisor, which serializes them, so even an interactive view stays safe.
-- **A view works without a supervisor.** With none live, `steward tui` renders read-only from the log directory — a finished run, or one whose supervisor died. Same fallback as `steward status`, same reason: the log directory is ground truth.
+- **A view works without a supervisor.** With none live, `steward tui` renders read-only from the log directory — a finished run, or one whose supervisor died. Same fallback as `steward status`, same reason: the log directory is ground truth. Under agent-driven tending this is not the fallback but the *ordinary* case: between tends there is no process to attach to, and the TUI is simply `steward status` on a repeat, watching workers it does not own.
 - **`steward run` need not be a special case.** It can simply *be* `--detach` plus an attached TUI. One supervisor lifecycle instead of two code paths, and detaching stops being a mode you choose up front.
 
 That last point changes what Ctrl+C means, and the change is an improvement: it detaches the *view*, not the run. Inspect's Ctrl+C cancels an eval, but a Steward run is a longer-lived thing that a coding agent may have started and a human may merely be visiting, so "leaving" and "stopping" must be different gestures — `steward stop` for the latter, with the TUI saying so on exit. This is the `docker attach` / `tmux` convention rather than the `inspect eval` one, and it removes a genuine "did I just kill my overnight sweep?" hazard.
@@ -342,11 +413,77 @@ Two layers of control channel then stack, and the direction matters:
 
 An agent *can* read a worker's endpoint directly and that is harmless. It should not issue directives there: requeue budgets and escalation state live with the claim holder, and a second party issuing directives puts that accounting in two places. Reads fan out; writes go through the supervisor.
 
-### The daemon is not forced
+### The reconcile core, and its drivers
 
-There is a viable alternative worth keeping in view: **no long-lived process at all**, and every `steward` invocation is a short *tick* that reconciles the journal against the log directory, spawns whatever is missing, maybe runs a scan pass, and exits — driven by cron, a `--watch` loop, or the coding agent itself. That is crash-safe by construction and has no daemon lifecycle to operate. Its cost is responsiveness: a tick can only *poll* worker control endpoints, so tier-2 in-flight requeue reacts on the tick interval rather than on the event, and the claim is held only for the duration of a tick.
+The supervisor is not the architecture. The architecture is a **pure function**:
 
-The important point is that this choice is **reversible**, because of a property the design already has: everything the supervisor knows is reconstructible from the journal and the log directory, so the supervisor is a cache, never a source of truth. Ticks and a daemon are the same logic under different drivers. They can even coexist — a daemon in the normal case, with a periodic tick as a backstop that notices the daemon died and takes over. Starting tick-based and growing into a daemon costs no redesign.
+```
+reconcile(manifest, journal, log_dir) -> (actions, summary)
+```
+
+Given the eval set's definition-derived manifest and the current on-disk state, decide what to do: which workers to spawn, which finished, what needs a scan pass, what needs adjudication. Nothing in it depends on memory carried from a previous call, because the design already guarantees that everything the supervisor knows is reconstructible from the journal and the log directory — the supervisor is a *cache*, never a source of truth.
+
+Committing to that shape buys three things that are hard to get any other way:
+
+- **Exhaustive testability.** Scheduling correctness becomes "given this directory state, what actions?" — unit-testable without clocks or processes. For a component that decides whether expensive evals run unattended and correctly, that is not a nicety.
+- **Crash recovery is the normal code path.** There is no separate resume routine to get wrong; recovery is just the next call, exercised constantly.
+- **Driver independence.** A wedged long-lived process stops being frightening: kill it, and anything else can drive the same function.
+
+**Drivers, one core.** The intended arrangement is that **the coding agent is the only driver**, scheduling `steward tend` on an interval of roughly ten minutes.
+
+| driver | status |
+|---|---|
+| **the coding agent** — schedules `steward tend` | the design centre |
+| foreground `steward run` | a `tend` loop with a display attached; interactive convenience |
+| `cron` calling `steward tend` | near-free backstop if the agent stops tending |
+| detached long-lived supervisor | **not currently justified** — see below |
+
+**Why the agent, and not a daemon.** If the agent schedules the tend, the two halves that *The supervisor decides, and what it escalates* splits apart — mechanical continuity and judgement — come back together: the agent sees each reconcile as it happens, can adjudicate in the moment instead of accumulating a queue, and *is* the escalation path rather than needing one.
+
+The strongest argument for a daemon was low-latency tier-2 requeue, and it does not survive scrutiny. Deciding that a sample's failure was transient is **judgement**, and this design explicitly says the mechanical layer does not exercise judgement. So a daemon would either apply crude rules or escalate — and if it escalates, the latency is agent-bound anyway. The daemon never had a real claim to that work. Requeue that genuinely warrants no human involvement is rare; a ten-minute delay on the rest is invisible next to a task that runs for hours.
+
+**What a ten-minute interval actually costs** is slot utilization, not responsiveness: a worker that finishes at t=0 leaves its slot idle until the next tend. That only bites when concurrency is capped below the task count, and it scales as `interval/2 ÷ mean task duration` — a few percent for multi-hour tasks, badly for short ones. Short tasks have their own fix that needs no daemon: **batch several into one worker's selection**, which the selection document already supports by taking a list. The bad case for a long interval is exactly the case where per-worker overhead argued for batching anyway.
+
+**Two things get materially simpler without a long-lived process.**
+
+- **The claim becomes short-lived** — held for the seconds a `tend` runs, not the hours a run lasts. That very nearly dissolves the wedging problem, which was the daemon's worst failure mode: no heartbeat protocol is needed, because a claim older than a generous `tend` timeout is unambiguously stale. This is conditional on the invariant that a tend spawns and reaps but never does long work itself (see *A scan is a detached process, not part of a tend*) — the moment anything unbounded runs inline, the short claim and everything it buys are gone.
+- **The failure mode is benign.** If nothing tends the run, workers finish what they are doing, their logs land, and the run simply stops progressing. It pauses; it does not break. The next `tend` from anyone resumes it. Compare a wedged daemon, which holds its claim and blocks its own replacement.
+
+**What would justify adding the daemon later** is a measurable signal, not a preference: sustained slot idle that batching cannot absorb. The pure-function core keeps that option open at no cost — the daemon would be a driver of the same `reconcile`, not a rewrite.
+
+It does impose two requirements the design must honour:
+
+- **Idempotence and claim discipline are non-negotiable.** An agent is an unreliable scheduler in a specific way: it may tend late, not at all, twice, or be interrupted mid-`tend`. A pure function plus the run claim plus the journal's `intent`-before-spawn record already covers this — a repeated `tend` is a no-op, an interrupted one is reconciled by the next — but it means those pieces are load-bearing rather than defensive.
+- **The output must be compact and structured.** Agent context is the scarce resource, so a `tend` must *summarize* — "3 finished, 2 errored, spawned 3, one arm needs a decision" — not dump a thousand log headers into the conversation. That is a real API constraint on `steward tend`: a small JSON summary designed for agent consumption, with detail available on request. It also makes the tend interval an economic choice (tokens) as well as a utilization one.
+
+The one thing an agent cannot promise is cadence: its reliability is its harness's reliability across session boundaries. That is what the `cron` row is for — the same verb, on a timer, costing one crontab line.
+
+**A nice unification falls out.** The `summary` a tend prints *is* the status update. An agent reads it inline and decides; a human sees it on stdout; a `cron` driver appends it to a file. One artifact, three consumers — rather than a status file invented separately for the absent reader.
+
+### `status` and `tend` are one function, two dispositions
+
+The unification above invites collapsing the two verbs into one — if a tend reports status anyway, why also have `steward status`? The pull is real, and the resolution is better than either single verb, because `reconcile` already returns *both* halves:
+
+| verb | actions | summary |
+|---|---|---|
+| `steward status` | computed, **discarded** | printed |
+| `steward tend` | computed, **executed** | printed |
+
+`status` is literally `tend --dry-run` — same code path, same core, differing only in whether the actions are carried out. They cannot drift or disagree, which is the property that made merging them attractive in the first place.
+
+Note what this does *not* mean: `status` is not the cheap one. It computes the same actions and performs the same reads; only the side effects are withheld. The read cost has to be attacked on its own terms, and it can be, because **completed `.eval` files are immutable** — a log never changes once it lands, so a directory scan is naturally incremental and a repeat scan costs almost nothing however many logs have accumulated. What is genuinely live (which workers are alive, per-sample progress) comes from the journal and the control endpoints and is O(running workers), not O(logs). That is the requirement that lets the TUI refresh on `status` and lets a human ask "how is it going" as often as they like.
+
+Keeping the names distinct matters for one reason: **`status` must stay read-only, because every convention in the ecosystem promises that it is.** `git status`, `systemctl status`, `docker ps` — a human who types `steward status` to satisfy their curiosity about an overnight sweep must not thereby launch eight workers. Surprise as a side effect of looking is the one thing a runner of expensive jobs cannot afford. There is also a plain mechanical need for a cheap read: the TUI refreshes continuously and must not reconcile at that rate.
+
+Splitting this way makes `status` *more* useful than a state dump, because computing the actions and then discarding them turns it into a **preview of the next tend**: "6 tasks: 3 complete, 2 running, 1 errored — the next tend would launch 2 workers and flag `swe_bench@astropy` for adjudication." That is what both a human and an agent actually want to see, and it is the natural thing to show before authorizing an interval. It should also report the claim rather than take it ("a tend has been running since 14:02, pid 8814"), since holding a writer's lock is exactly what a read must not do.
+
+**Why `tend` and not `tick`, `step`, or `advance`.** Those three all assert that the run only moves when the verb is called, and that is false: workers execute continuously between calls, so what a late call delays is the *scheduling of new work*, not the progress of work already running. The name has to agree with the benign-failure property above — miss a call and the run keeps going, it does not stall — and `tend` is the only candidate that does. `reconcile` is accurate but demands prior exposure to control loops to mean anything.
+
+The name also has an unusual primary audience. This verb is not typed by a human at a prompt; it is scheduled by a coding agent working from a runbook, so CLI convention matters less here than what the word teaches the *agent*. `tend` primes "check on it, do what needs doing, leave" — the intended behaviour. `step` primes "drive the machine", which would encourage over-calling and make a missed call look like a stall. `status`, by contrast, *is* typed by a curious human, which is exactly why it keeps the conventional read-only name.
+
+In prose, treat it as a noun-adjunct compound (`tend interval`, `tend cadence`, like `poll interval`) rather than a possessive.
+
+**What the pair looks like in use.** A human asks the agent how the run is going; the agent calls `status`, which reads without touching anything and reports both the state and what the next tend would do — so the human is *offered* the action rather than having it happen behind their question. The agent adds the one thing no `status` call can: having tended every ten minutes, it holds a time series rather than a snapshot, and "the error rate was fine until 15:40, then three samples hit the same provider timeout" is an answer only the driver can give. That history accumulates for free as a side effect of being the thing that drives the loop.
 
 ### Supervising workers
 
@@ -366,6 +503,12 @@ The endpoints most relevant to this document are the ones tier 2 recovery is bui
 
    Hard-coding the error-handling options keeps this channel purely *operational*: nothing on the whitelist can change what an eval means. Had `fail_on_error` gone here, the channel would have needed two tiers to keep semantic overrides visible.
 5. **Automatic early pruning** (Layer 2 in configuration.md) — the `@task` registry wrapper returning placeholders for unselected tasks. *Not yet*, and it is what makes a worker's startup cost proportional to its own task rather than to the whole eval set.
+
+6. **Public eval-set directory operations** (see *Sharing the directory operations with `eval_set()`*) — a documented public surface that both `eval_set()` and external runners call, so the preparation/cleanup protocol has one implementation rather than two that drift. Also rationalizes a surface that is already inconsistently half-public. Most of the cleanup band needs no change beyond export; the preparation half needs `validate_eval_set_prerequisites` and `write_eval_set_info` refactored to take identifiers and plain `EvalSetTask` rows instead of live `ResolvedTask`s. Low risk, and it retires a whole category of future divergence.
+
+   Deliberately *not* extended to the capture manifest and selection document: those cross a process boundary as data, so they stay private and versioned. See the two-contracts note in that section.
+
+7. **Notification outside an eval** (see [workflow.md](workflow.md), *The gap: notifying from outside an eval*) — `inspect_ai.util.notify()` is a silent no-op unless an Apprise instance was installed by `eval_resolve_tasks`, so it does nothing when called from a Steward process. `build_apprise()` / `init_apprise()` already do exactly what is needed but are private. Exporting them (or a `notification_scope(config)` convenience) is the same public-surface move as item 6, and it is not Steward-specific — any script that runs evals and wants to be told when they finished hits it.
 
 The selection schema can grow the partial facets Layer 2 needs (`name`, `args_hash`, `model`, `sequence`) as optional additive fields without a version bump — Steward writes the file and Inspect reads it, and an older Inspect ignores fields it does not know. A change in the *meaning* of an existing field requires bumping `EVAL_SET_SELECTION_VERSION`, which Inspect checks and rejects when it is too new.
 
@@ -391,18 +534,20 @@ The selection schema can grow the partial facets Layer 2 needs (`name`, `args_ha
 
 5. **Second `steward run` against a live run.** Declining is the safe first behaviour; attaching to the existing run and reporting its status is what a caller (especially a coding agent) actually wants. What "attach" means concretely — read-only status, streaming progress, or the ability to issue directives through the supervisor — is unresolved.
 
-6. **When Steward writes `logs.json`.** Inspect's viewer reads it, and Steward is the only writer, but the write is truncate-in-place — so a reader can still catch a torn file. Either Steward writes it atomically (and the viewer keeps working unchanged), or the writer in Inspect becomes atomic. The latter is better for everyone.
+6. **Torn reads of the directory manifests.** Steward is the only writer of `eval-set.json` and `logs.json`, but both writes are truncate-in-place, so a concurrent *reader* can still catch a partial file — and `eval-set.json` has a live reader in the viewer (`read_eval_set_info_async`, which validates with no error handling). Rewriting it as logs land makes the window recur throughout the run rather than once. Either Steward writes these atomically, or the writers in Inspect become atomic. The latter is better for everyone, since `eval_set()` has the same exposure today.
 
 7. **Error classification.** Tiers 2 and 3 both turn on "was this failure transient?", and nothing answers that today. The inputs are available (`GET /evals/{id}/sample` returns error detail; logged samples carry their error and the `error_retries` history of prior attempts), but the taxonomy — provider outage, rate limit, cluster pressure, sandbox failure, agent-caused, genuine task failure — and how confidently each can be inferred is unresolved. Everything Steward does automatically rests on this, so it deserves its own design.
 
 8. **Requeue budget and escalation.** Inspect enforces no per-sample requeue ceiling, so Steward needs its own: how many tier-2 requeues a sample gets before it drops to tier-3 adjudication, and what escalates to the human. Related: when the classification is provider-wide, the right action is a model-scoped pause rather than per-sample requeues, and Steward needs a rule for choosing between them.
 
 9. **Steward-orchestrated scanning.** The shape is settled (see *How Steward would take the scan over*): a third boundary mode, `INSPECT_EVAL_SET_SCAN`, that executes the definition and scans the named logs as single writer. Unbuilt, and these remain open:
-   - **Cadence.** Incremental passes during the run cost a full sample read per log per pass. Scanning on a completion trigger (a log lands → queue it) is cheaper than polling, but needs the journal to know what is new.
+   - **Cadence.** Incremental passes during the run cost a full sample read per log per pass, and a pass can outlast the tend interval — so the queue-and-drain model above is the shape, but how much to let accumulate before spawning is unresolved. Draining eagerly keeps coverage current at the cost of many short processes; draining lazily batches better but leaves scan results further behind the run. Model-graded scanners push this further, since a pass then has a token cost as well as a time cost.
    - **Sample reads.** The sketch reads whole logs; large transcripts make that expensive. Whether to stream samples, or scan straight from summaries plus a targeted transcript read, is unresolved.
    - **Failure of the scan pass itself.** A scan worker can crash like any other. It is idempotent, so the recovery is "run it again" — but it needs to appear in the journal and the in-flight accounting like a task worker does.
    - **Scan errors vs sample errors.** `scan_finalize` leaves a scan resumable when scanners errored. That is a second adjudication queue, distinct from the errored-sample one, and it is not yet clear whether Steward should treat them alike.
 
    Until it exists, `options["scanners"]` in the manifest lets Steward refuse a scanning definition at enumeration time with a clear explanation rather than failing every worker.
 
-10. **What "resolved" means for an eval set.** The invariant above says Steward may not report completion while any sample is unresolved, which requires a durable per-sample resolution state (re-ran and passed, re-ran and failed again, accepted-as-errored by a human, waiting). Where that lives — derived from the logs each pass, or recorded alongside the journal — is open. Note `EvalLog.invalidated` and per-sample `invalidation` records already carry part of it, with provenance.
+10. **Tend cadence, and the evidence that would justify a daemon.** With the agent as sole driver, the cost of the interval is slot idle: roughly `interval/2 ÷ mean task duration` whenever concurrency is capped below the task count. Ten minutes is a guess, not a measurement, and a tend has a second price a daemon does not — agent context per call — so the optimum is not simply "as often as possible". What is needed is actual idle-time accounting from real sweeps, which the journal can supply directly (`exited` to next `intent` per slot). Whether batching absorbs the short-task case, and whether the residue ever exceeds what a daemon would cost to operate, is the question that decides if the detached driver gets built.
+
+11. **What "resolved" means for an eval set.** The invariant above says Steward may not report completion while any sample is unresolved, which requires a durable per-sample resolution state (re-ran and passed, re-ran and failed again, accepted-as-errored by a human, waiting). Where that lives — derived from the logs each pass, or recorded alongside the journal — is open. Note `EvalLog.invalidated` and per-sample `invalidation` records already carry part of it, with provenance.
