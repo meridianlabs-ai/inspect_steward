@@ -20,7 +20,7 @@ Everything below follows from the mismatch between those three clocks. The direc
 |---|---|---|
 | `steward init [--type evalset\|flow] [--no-git]` | human | Scaffold the workspace: bootstrap `AGENTS.md`, a starter definition, `policy.md`, a repository and `.gitignore`. |
 | `steward runbook` | agent | Emit the current mechanics — how to tend, what never to do. Ships with the package so it cannot go stale. |
-| `steward launch [--max-spend N]` | agent | Claim the run, capture the manifest, spawn the first workers, **return**. |
+| `steward launch [--smoke] [--max-spend N]` | agent | Claim the run, capture the manifest, spawn the first workers, **return**. `--smoke` runs a bounded rehearsal first — see *Smoke first*. |
 | `steward tend` | agent, ~q10m | One turn of the loop: reconcile, spawn, reap, requeue, rewrite `status.md`, append to the journal. Never blocks. |
 | `steward status` | either | `tend --dry-run` — current state plus a preview of what the next tend would do. Read-only. |
 | `steward notify` | agent | Send the human a message that carries judgement, through Inspect's notification channel. |
@@ -29,7 +29,7 @@ Everything below follows from the mismatch between those three clocks. The direc
 
 Two things the table is meant to make obvious. **Almost everything is agent-facing**: the human's own surface is `init`, `signoff`, and asking the agent questions in prose. And **`signoff` is the one command an agent must never run** — it is a human attestation, and the runbook says so plainly.
 
-Deliberately absent: `steward journal` (precedent travels with the anomaly instead), `steward tui` (see *Do we need a TUI?*), `steward note` (unproven), and `steward unclaim` (unnecessary — see below). `steward tasks` exists for diagnosing enumeration but is not part of the workflow: `launch` captures the manifest anyway and `status` reports what is running. If a pre-flight "what would this cost" check turns out to be wanted, it is `launch --dry-run` rather than a second verb.
+Deliberately absent: `steward journal` (precedent travels with the anomaly instead), `steward tui` (see *Do we need a TUI?*), `steward note` (unproven), and `steward unclaim` (unnecessary — see below). `steward tasks` exists for diagnosing enumeration but is not part of the workflow: `launch` captures the manifest anyway and `status` reports what is running. The pre-flight "what would this cost" question is answered by `launch --smoke`, which measures it rather than guessing.
 
 ### What `pause` actually pauses
 
@@ -52,6 +52,8 @@ So `steward pause` means the first. The second is worth having only in the speci
        └──────────────────►  reads AGENTS.md
                              steward runbook  ─────► mechanics
                              reads policy.md  ─────► this human's standing rules
+                             steward launch --smoke ► 2 samples/task, 15m cap ► ●
+                                  │                  (.steward/smoke/, local)
                              steward launch  ───────► claim, manifest,
                                                       spawn first workers ──► ●●●
                              schedules tend q10m
@@ -219,6 +221,28 @@ It also completes a coherent verb family. **launch → tend → status** are all
 
 The one thing lost is that `steward run` paired cutely with discovering `run.py`. That was never worth much — file discovery does not need to echo the verb.
 
+### Smoke first
+
+Standing practice before an expensive sweep is a **smoke run**: a couple of samples per task under a wall-clock cap, to find out whether the thing works at all before committing real money to it. `steward launch --smoke` makes that a flag rather than a ritual people reconstruct by hand, and the runbook names it as the default first step.
+
+Defaults of two samples per task and a fifteen-minute cap match how this is done in practice. Neither is magic; the point is that both are *bounded*, so a broken definition costs minutes instead of a night.
+
+**Smoke logs go to `.steward/smoke/`, on local disk.** Two-sample truncated logs written into `logs/` would be indistinguishable from real results to `samples_df`, to the viewer, and to anyone analysing the eval six months later — so they need their own directory regardless. Making it local rather than a sibling of `log_dir` matters because **`log_dir` is frequently S3**, and a rehearsal has no business writing throwaway objects to a bucket: slower, billable, and leaving junk that needs lifecycle rules to clear. Local disk is free, fast, and already where disposable state lives.
+
+Putting it under `.steward/` also means the cleanup question answers itself. It is disposable state by construction, so it needs no special rule: each smoke clears the previous one, a failed smoke's logs stay put for as long as anyone wants to read them, and everything goes when `.steward/` goes. `inspect view --log-dir .steward/smoke` works on it like any other directory.
+
+Not deleted the moment a smoke passes, though — reading a transcript or two after a green run is a real practice, and the point of a smoke is partly to check that the agent is doing something sensible rather than merely something that terminates.
+
+**What it catches** is most of what actually goes wrong before anything interesting does: a definition that will not import, a model name or key that is wrong, a sandbox image that will not start, a scorer that throws, a grader container that falls over. All of them are cheap to find at two samples and expensive to find at five thousand.
+
+**It also measures cost rather than estimating it.** Spend and tokens across the smoke extrapolate to the real run, which is a far better answer to "what will this cost" than counting tasks — and it arrives exactly when someone is deciding whether to authorize the spend.
+
+**A smoke is valid for a manifest, not for a directory.** Whether a smoke still applies is answered by the capture manifest: if the definition changed, its task identifiers changed, and the smoke is stale. That gives `launch` a precise check to warn on — "no passing smoke for this manifest" — without needing to guess at what edits matter. Warn rather than refuse: re-launching after a fix, or resuming, are both legitimate reasons to skip it, and a hard gate would only teach people to bypass it.
+
+Nothing about a smoke needs special machinery. It is a run with a sample limit, a time cap, and a different log directory — launched, tended, and reported like any other, then recorded in the journal as part of the same story.
+
+**It does have one upstream dependency**, and it is the first concrete motivation for a change execution.md previously argued for only in the abstract. Redirecting a definition's `log_dir` needs the overrides channel (execution.md, *Changes required in inspect_ai*, item 4): Flow accepts `--log-dir`, but a raw `evalset.py` provides no way in, so `--smoke` against a plain script cannot send its logs anywhere but where the definition says. Until `INSPECT_EVAL_SET_OVERRIDES` exists, smoke works for Flow definitions and not for script ones.
+
 ## The tend loop
 
 The agent schedules `steward tend` every ~10 minutes (see execution.md, *The reconcile core and its drivers*). Each tend:
@@ -229,6 +253,123 @@ The agent schedules `steward tend` every ~10 minutes (see execution.md, *The rec
 4. **never blocks** — everything long-running is a detached child
 
 The agent reads the summary and decides whether anything warrants a human. Most tends warrant nothing and should produce no output beyond the file rewrite.
+
+## Resource allocation
+
+Two resources gate a run, and only one of them needs Steward's attention.
+
+**Connections are already handled.** Inspect's adaptive connections — on by default, ceiling of 100 — discover a provider's throughput on their own and back off when they reach it. Left alone, they do the right thing, and nothing in this section is about improving on them.
+
+**Sample concurrency is the one that costs money.** A sample waiting on a model-API semaphore is not free: it holds its sandbox container, its memory, and its slot in the event loop the whole time it waits. Concurrency set far above what the provider will actually serve means hundreds of samples sitting on EC2 consuming compute and doing nothing. The right level is roughly *the concurrency the provider actually supports* — not a number anyone can look up, since it varies by tier, by model, and by time of day.
+
+### Setting `max_samples` explicitly is what makes it a knob
+
+Three paths produce a task's sample semaphore, and which one you land on decides whether Steward can steer at all:
+
+| condition | limiter | retunable? |
+|---|---|---|
+| `max_samples` set explicitly | `ResizableLimiter` | **yes** |
+| unset, adaptive connections active | `DynamicSampleLimiter` | no — tracks the model's controller |
+| unset, adaptive off | `ResizableLimiter`, defaulted from `max_connections` | yes |
+
+**Explicit `max_samples` wins over adaptive, silently and deliberately.** Leaving it unset hands sample concurrency to the model's connection controller, which grows it as the provider allows — excellent inside one process, and not something Steward can adjust.
+
+That settles the scaffolding question with a second, stronger reason. `steward init` should write an explicit `max_samples=` into the definition not only so the author thinks about it, but because **an explicit value is the difference between a fleet Steward can coordinate and one it can only watch.**
+
+### What Steward actually has to solve
+
+**Per-process adaptation is per-process, and Steward runs many.** Left to adapt independently, eight workers each discover headroom that is partly headroom the others have not claimed yet — so they all climb, collectively overshoot, and get rate-limited together. Each is confidently optimizing against a resource it believes it has to itself.
+
+Nothing inside a worker can see the total. What reaches a provider is the sum across workers, and Steward is the only party that knows how many there are. Setting explicit per-worker limits is therefore not merely a way to make the user think — it is how the budget becomes **deterministic** rather than emergent, and Steward owns both factors: how many workers run, and each one's share.
+
+The division trades against things already weighed here. Fewer, larger workers pay less per-worker startup cost (roughly a second for Flow definitions, on every spawn); more, smaller workers give finer scheduling granularity and less slot idle between tends.
+
+### There is no single budget — there are two, with different shapes
+
+Tasks in one eval set often run against different models, and throughput varies enormously between them: a high-tier hosted provider and a single-GPU local vLLM are not the same resource and do not compete for the same thing. A uniform per-worker limit is then wrong in both directions at once — too high for the constrained model, whose samples pile up waiting, and too low for the fast one, which sits underused.
+
+So the budget splits along the same line the two-signals argument already draws:
+
+| budget | scope | who competes |
+|---|---|---|
+| **throughput** | one per rate-limit bucket | only tasks sharing that bucket |
+| **local compute** | genuinely global | **every** task, whatever model it uses |
+
+Throughput is partitioned; sandboxes, memory, and CPU are shared. Two workers on different providers do not contend for tokens at all, and contend fully for the host.
+
+**The manifest already carries the grouping.** A task identifier includes its model, so Steward can partition tasks by model at enumeration time and size each group separately, without discovering the structure at runtime.
+
+**The shape of the sweep decides which budget binds**, and the two common shapes sit at opposite extremes. A model comparison — one task across many models — has almost no throughput contention and is bound entirely by local compute. A task sweep on a single model is the reverse: local compute is usually ample and the provider is the wall. Recognizing which one is in front of it tells Steward which ceiling to manage.
+
+Setting concurrency **per task rather than per fleet** follows naturally from the mechanism, since each worker runs one task in its own process. It does put one constraint on batching several short tasks into a single worker (see the selection protocol): **batch only tasks that share a model**, or the process's initial limit is necessarily wrong for some of them.
+
+Two caveats keep this from being exact. A rate-limit bucket is not quite a model — several models can share an account's quota, so grouping by model over-partitions. And a task may consume more than one provider: a grader model, or an agent calling a different model for subtasks, neither of which appears in the identifier. Steward can see a task's primary model and not its full appetite.
+
+### The levers
+
+All of these are live-tunable through the control channel — `GET`/`PATCH /tasks/<task-id>/config` for task-scoped knobs, `GET`/`PATCH /config` for process-global ones — so tuning reaches **running** workers, not just newly spawned ones.
+
+| lever | scope | what it bounds |
+|---|---|---|
+| `max_samples` | task | sample concurrency, given an explicit setpoint |
+| `max_sandboxes` | process | sandbox concurrency — the lever for the *local* ceiling |
+| `max_connections` | process | the connection pool, and the adaptive controllers' scaling ceiling |
+
+`max_sandboxes` is the one that matters under Docker, because it bounds compute directly rather than by proxy.
+
+One detail worth relying on: **semaphores are task-scoped, not attempt-scoped.** A retune survives an in-process retry rather than silently reverting to the definition's value, so a worker Steward has tuned stays tuned.
+
+### The ratchet is asymmetric, and the mechanism says so
+
+This is not an inference about container lifetimes — it is how the limiters behave. **Lowering a limit below the current in-use count blocks new acquires until in-flight holders drain; it never preempts. Raising one lets work start immediately.**
+
+So climbing is instant and descending is gradual. Undershooting costs wall-clock and recovers in minutes; overshooting commits compute that only releases as samples finish, and under Docker can thrash or OOM the host first. Ramp in shrinking increments, and stop short of anything that cannot be undone quickly.
+
+**Overshoot has a partial repair, and knowing which half is fast matters.** Having climbed into rate limits, lowering `max_connections` clamps live connection concurrency down *at once* and the backoffs stop — that half is immediate. The sample side is not: those samples already hold their containers and memory, and the only way that releases is by finishing. So the correct first move on overshoot is the connection ceiling, which buys relief in seconds, followed by letting sample concurrency drain to a lower setpoint over minutes.
+
+This is the whole argument against being frisky on the way up. The provider-side damage is undoable in seconds; the compute-side commitment is not undoable at all, only outlastable — and on a Docker host it can take the box down before it drains.
+
+### Rate limits are the wrong signal for the local ceiling
+
+Provider pushback says nothing about memory. A run can climb to 200 concurrent samples with no rate limits at all and still take the box down. Which constraint binds depends on where sandboxes run:
+
+| sandbox | local gate | provider gate | consequence |
+|---|---|---|---|
+| Docker | **hard** — one host's memory and CPU | soft | the host is the ceiling; `max_sandboxes` is the lever |
+| k8s | elastic | **binding** | the provider is the ceiling; let adaptive climb |
+| none | slight (memory per sample) | **binding** | as k8s |
+
+"Ramp until rate limits appear" is correct advice on k8s and a way to kill a laptop under Docker.
+
+### The signal exists
+
+The config view carries an `adaptive` section reporting each controller's live limit, in-flight count, scaling bounds, and **recent scale changes** — so pushback is observable rather than inferred. Scale-downs across several workers at once are the signal that the fleet has collectively overshot, which is precisely the condition no individual worker can detect.
+
+`PATCH` also supports `dry_run`, and applies what it can while warning about knobs that do not apply rather than failing the whole request — so Steward can probe before committing and tune several things at once without brittle error handling.
+
+### The envelope is policy; the tuning is the agent's job
+
+The **ceiling** is a judgement call about infrastructure that only the user can make — how big the box is, whether the cluster scales, how much they are willing to have running at once. It belongs in `policy.md` or as a launch argument. Everything inside that envelope is the agent's to tune, and doing so is one of its standing jobs rather than an exceptional intervention: start conservatively (40 concurrent samples is a reasonable default to scaffold), raise while pushback stays absent and local headroom holds, pull back when scale-downs cluster, rebalance across groups as workers finish.
+
+All of that is observation and arithmetic. What it cannot settle is a short list, and the items on it are unclear for structural reasons rather than for want of data:
+
+- **Attribution.** Scale-downs mean *someone* is at the limit — not necessarily us. Another workload on the same API key looks identical from inside a worker. So does memory pressure from another process on a shared host. Ramping into someone else's workload is worse than running slowly.
+- **Risk appetite.** Faster-but-riskier against slower-but-safe has no observable right answer. Near a deadline a person may accept OOM risk they would never take overnight.
+- **Scope, when the numbers come back badly.** If observed throughput implies forty hours instead of four, the useful question is not what to set concurrency to — it is whether to drop a model, cut epochs, or let it run anyway.
+
+### Escalate in the units the human thinks in
+
+That last item generalizes into the rule that matters most here. **A human cannot usefully rule on whether `max_samples` should be 60 or 80.** They can rule immediately on "at current throughput this finishes at 3am rather than 9pm" or "we are burning $40/hour and the cap is $200".
+
+So the agent's tuning output is a projected completion time and spend rate, not a concurrency number, and those are what a notification carries. The smoke run makes this available before the real launch rather than three hours into it, which is the difference between a decision and a rescue.
+
+Tuning belongs in the record like anything else: each adjustment is a journal event, so "ramped to 80 at 14:10, scale-downs at 14:25, settled at 60" is reconstructible. Where the situation is genuinely unclear it becomes an **anomaly** and takes the ordinary lifecycle — open, investigating, proposed, ruled — rather than needing a parallel mechanism for resource questions.
+
+### Tuning precedent is the most reusable kind
+
+Accumulated rulings pay off more here than anywhere else in the design, because **a provider's throughput is broadly stable across runs in a way that error conditions are not.** A ruling about a transient outage is worth little next month; "this model on this account sustains about 50 concurrent" is worth a great deal, and stays true. After a few runs Steward should simply know it, and start there rather than rediscovering it by ramping from 40 every time.
+
+That is the first thing in this design that wants to persist **outside the workspace**. Throughput is a property of a model and an account, not of one sweep, and `journal.jsonl` is per-project. Where cross-project learned knowledge lives — a user-level store, something under `~/.steward`, or nowhere — is unresolved, and it carries the usual hazard of implicit state: knowledge that changes behaviour while living somewhere nobody thinks to look.
 
 ## Notification is the gate on autonomy
 
@@ -387,4 +528,6 @@ This is also the argument for the whole workspace being git-friendly: the record
 6. **Multiple runs per directory.** Policy is clearly per-project; claims, manifests, and anomalies are per-run. Whether one directory hosts a series of runs (with `logs/` accumulating) or each run gets its own is unresolved, and it determines whether `journal.jsonl` is a project history or a run record.
 7. **How does a scanner result become an anomaly?** Scanners write values, not verdicts, so something has to decide which values mean trouble. Whether scanners are *declared* as anomaly-producing, whether Steward applies thresholds to their output, or whether it takes a purpose-built scanner to say so, is unresolved — and it gates the most valuable anomaly source in the design. Related: an investigation pass wants different scanners than the broad pass, and a definition supplies only one scanner configuration.
 
-8. **What is in a journal event?** Settling on JSONL answers the format question but not the schema. Events need enough structure for the fold to reconstruct anomaly state and for an agent to look up prior rulings by class, while staying legible when rendered. Whether reasoning is a free-text field or something more constrained is the crux — it is the part a human writes and the part an agent most needs to match against.
+8. **How are the concurrency budgets divided?** Steward owns both factors, but the policy is unresolved, and it is now two policies: dividing each per-provider throughput budget among the tasks sharing it, and dividing the global local-compute ceiling across all of them. Equal shares is simplest and wrong when tasks differ in sample count or model speed; rebalancing as workers finish means retuning live limits every tend. Open alongside it: whether clustered scale-downs should pull back the whole group or only its newest workers, and how to handle a task whose grader model consumes a bucket the manifest never revealed.
+
+9. **What is in a journal event?** Settling on JSONL answers the format question but not the schema. Events need enough structure for the fold to reconstruct anomaly state and for an agent to look up prior rulings by class, while staying legible when rendered. Whether reasoning is a free-text field or something more constrained is the crux — it is the part a human writes and the part an agent most needs to match against.

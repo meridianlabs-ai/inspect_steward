@@ -138,17 +138,17 @@ The protocol would mirror the other two: `INSPECT_EVAL_SET_SCAN` naming `{versio
 
 **Why not reuse selection mode with `resume` instead.** It is tempting, because `eval_set()` already scans landed logs this way — `_resume_scan_tasks` builds `PreviousTask`s for *successful* logs purely so the sample-reuse path dispatches scans for transcripts whose row never landed. But that route drags in task resolution and dataset matching, and carries a failure mode a scan pass must not have: a sample the reuse path *cannot* match gets executed, silently turning a scan into an eval run with model calls. Scanning a log should never run a sample. A dedicated mode over log locations avoids the question entirely.
 
-**Properties that follow.** Exactly one scan process runs at a time — not by convention but because spawning is serialized by the run claim and journalled, so a tend checks for a live scan before starting one and a restarted Steward adopts an in-flight scan rather than starting a second (see *What enforces single-writer*). All four hazards above are then gone by construction. Passes are incremental: `scan_init` attaches to an existing scan dir and `_invalidate_finalized_flag` flips `complete` back to `False` — the same path `eval_set()` resume uses. Passes are idempotent: a transcript with a row for every scanner is skipped.
+**Properties that follow.** Exactly one scan process runs at a time — not by convention but because spawning is serialized by the run claim and recorded, so a tend checks for a live scan before starting one and a restarted Steward adopts an in-flight scan rather than starting a second (see *What enforces single-writer*). All four hazards above are then gone by construction. Passes are incremental: `scan_init` attaches to an existing scan dir and `_invalidate_finalized_flag` flips `complete` back to `False` — the same path `eval_set()` resume uses. Passes are idempotent: a transcript with a row for every scanner is skipped.
 
 ### A scan is a detached process, not part of a tend
 
-A scan reads whole transcripts and, for model-graded scanners, makes model calls — so a pass over a large eval set can run for hours. That makes it the same kind of thing as a task worker, and it must be spawned the same way: **detached, journalled, and reaped by a later tend.** A tend that ran a scan inline would hold the run claim for the scan's whole duration, which would destroy the property the driver model is built on — that a claim older than a generous tend timeout is unambiguously stale, so no heartbeat protocol is needed. Blocking on long work inside a tend brings the wedged-supervisor problem straight back.
+A scan reads whole transcripts and, for model-graded scanners, makes model calls — so a pass over a large eval set can run for hours. That makes it the same kind of thing as a task worker, and it must be spawned the same way: **detached, recorded, and reaped by a later tend.** A tend that ran a scan inline would hold the run claim for the scan's whole duration, which would destroy the property the driver model is built on — that a claim older than a generous tend timeout is unambiguously stale, so no heartbeat protocol is needed. Blocking on long work inside a tend brings the wedged-supervisor problem straight back.
 
 This generalizes past scanning, and scanning is just the case that forces it to be said: **a tend spawns and reaps; it never does long work itself.** Task workers, scan passes, adjudication re-runs, and end-of-run bundling all obey it. Anything whose duration is unbounded is a detached child whose completion some later tend observes.
 
 Two consequences specific to scans:
 
-- **The claim protects the decision, not the duration.** A scan process outlives the tend that spawned it, so the claim is not what keeps the scan directory single-writer — the journal plus a liveness check at spawn time is, exactly as it is for not double-spawning a task. The claim's job is only to serialize the *decision*.
+- **The claim protects the decision, not the duration.** A scan process outlives the tend that spawned it, so the claim is not what keeps the scan directory single-writer — the in-flight record plus a liveness check at spawn time is, exactly as it is for not double-spawning a task. The claim's job is only to serialize the *decision*.
 - **Scanning is a drain, not a pass.** Because a scan can outlast the tend interval, Steward cannot start one per tend. The workable model is a queue of unscanned logs drained by one process at a time, each run taking whatever has accumulated since the last. That self-regulates: slow scans simply batch more logs, and coverage lags the run rather than stalling it.
 
 It also means a run is not finished when its tasks are. The final scan is a long job that begins after cleanup and adjudication settle (see the ordering constraint above), so `status` needs *complete, scanning* as a distinct state, and end-of-run finalization is itself a multi-tend affair rather than a blocking step.
@@ -228,7 +228,7 @@ The honest trade is that Steward then receives breaking changes for free along w
 
 **Within one Steward process** — trivial. Shared-state work (scan passes, `logs.json` rewrites, log cleanup) is serialized in the process that owns the run.
 
-**Across a Steward restart, with detached work still running** — this is what the in-flight journal is for. A restarted Steward replays the journal, finds records with `launched` and no `exited`, and checks liveness against the control discovery directory using the recorded pid *and process start time*. Work still in flight is adopted, not duplicated. This is why a scan pass must be journalled exactly like a task worker: otherwise a Steward that restarts mid-scan cannot tell that one is already running, and launches a second into the same scan directory.
+**Across a Steward restart, with detached work still running** — this is what the in-flight record is for. A restarted Steward replays it, finds entries with `launched` and no `exited`, and checks liveness against the control discovery directory using the recorded pid *and process start time*. Work still in flight is adopted, not duplicated. This is why a scan pass must be recorded exactly like a task worker: otherwise a Steward that restarts mid-scan cannot tell that one is already running, and launches a second into the same scan directory.
 
 **Across two concurrent Stewards** — not covered by either of the above, and the actual gap. The mechanism is a **run claim** keyed by the log directory: before performing any shared-state write, a Steward must hold the claim for that directory.
 
@@ -319,7 +319,7 @@ This reverses the lean recorded in configuration.md's open question 1. Worker mo
 
 Worker mode skips that classification entirely, so nothing is broken today. But it means Steward must not reimplement completeness the obvious way: **completeness is `completed_samples`, never `total_samples`.**
 
-## Detachment and the in-flight journal
+## Detachment and the in-flight record
 
 Steward spawns workers **detached** (`start_new_session` on POSIX, `DETACHED_PROCESS` on Windows) so a run survives Steward exiting — including the supervisor exiting, which is why workers are not its children (see *The supervisor*). Note that Inspect's `--detach` is a *CLI* feature (`inspect eval --detach`), not an `eval_set()` kwarg, and Steward's workers are never the Inspect CLI — so Steward does its own detached spawn rather than passing a flag through.
 
@@ -327,7 +327,7 @@ Detachment creates the tracking problem: Steward must be able to answer "what is
 
 ### Why `task -> pid` is not enough
 
-PIDs are recycled, are meaningful only on one host, and — critically — are *unknown during the window between deciding to spawn and the spawn returning*. A crash in that window leaves a worker whose existence Steward has no record of. So the tracking artifact is an **append-only journal**, not a table of current state:
+PIDs are recycled, are meaningful only on one host, and — critically — are *unknown during the window between deciding to spawn and the spawn returning*. A crash in that window leaves a worker whose existence Steward has no record of. So the tracking artifact is an **append-only record** (`.steward/inflight.jsonl`), not a table of current state:
 
 | Record | Written | Carries |
 |---|---|---|
@@ -335,25 +335,27 @@ PIDs are recycled, are meaningful only on one host, and — critically — are *
 | `launched` | after the spawn returns | host, pid, process start time, control socket path |
 | `exited` | when the worker is reaped or observed gone | exit status, observed-at |
 
-Current state is *derived* by replaying the journal, never stored. An `intent` with no `launched` is the ambiguous case, and it is the one that matters: on restart Steward reconciles it against the log directory and the control discovery directory before deciding anything.
+Current state is *derived* by replaying the record, never stored. An `intent` with no `launched` is the ambiguous case, and it is the one that matters: on restart Steward reconciles it against the log directory and the control discovery directory before deciding anything.
 
 Process start time is recorded alongside the pid specifically to defeat PID recycling: a live process whose start time differs from the recorded one is a different process.
 
 ### Leaning on control discovery
 
-Inspect already maintains a discovery directory — `<inspect_data_dir>/control/<pid>.json`, holding `pid`, `socket_path`, `started_at`, `run_id`, and the control API version, with stale-PID reaping in `list_alive_discovery_entries`. **Liveness is therefore a solved problem to consume, not rebuild.** What discovery cannot supply is the task mapping (the record carries the eval's `run_id`, not the identifier Steward scheduled) and the pre-spawn intent, which is precisely what the journal adds.
+Inspect already maintains a discovery directory — `<inspect_data_dir>/control/<pid>.json`, holding `pid`, `socket_path`, `started_at`, `run_id`, and the control API version, with stale-PID reaping in `list_alive_discovery_entries`. **Liveness is therefore a solved problem to consume, not rebuild.** What discovery cannot supply is the task mapping (the record carries the eval's `run_id`, not the identifier Steward scheduled) and the pre-spawn intent, which is precisely what the in-flight record adds.
 
-### The journal is an accelerator, not a source of truth
+### The in-flight record is an accelerator, not a source of truth
 
-Ground truth is the log directory. A journal that is lost, truncated, or stale degrades Steward to scanning the log directory and the discovery directory to rebuild state — slower, never wrong. Nothing in the design may make a decision the journal alone can justify.
+Ground truth is the log directory. A record that is lost, truncated, or stale degrades Steward to scanning the log directory and the discovery directory to rebuild state — slower, never wrong. Nothing in the design may make a decision it alone can justify.
+
+> **Not to be confused with the journal.** [workflow.md](workflow.md) uses *journal* for `journal.jsonl`, the durable record of anomalies and adjudication rulings — the one file in a workspace that cannot be reconstructed. The in-flight record described here is its opposite: disposable, machine-only, and rebuildable from the log directory at any time.
 
 ## The supervisor
 
-"Supervisor" here means *whatever is currently driving the reconcile loop* — in the current design a coding agent scheduling `tend` calls, with `cron` as a backstop (see *The reconcile core, and its drivers*). The claim, the journal, and the registry apply to every driver equally.
+"Supervisor" here means *whatever is currently driving the reconcile loop* — in the current design a coding agent scheduling `tend` calls, with `cron` as a backstop (see *The reconcile core, and its drivers*). The claim, the in-flight record, and the registry apply to every driver equally.
 
 **This section designs the detached case, which the current plan does not build.** It is kept because it is the only driver with a lifecycle worth designing, and because writing it down is what established that the lifecycle is a cost rather than a capability — the argument for agent-driven tending is largely assembled from the paragraphs below. Read it as the specification that would be implemented *if* the utilization evidence ever calls for a daemon, not as work in the queue.
 
-**The run and the supervisor have separate lifetimes.** Requirement 4 says the *run* outlives the process that started it, and detached workers achieve that by themselves. If the supervisor dies, workers keep running and keep writing logs; what stops is *supervision* — no new tasks scheduled, no scan passes, no requeues, no adjudication. That is a real degradation but a graceful one, and it is why both levels detach rather than making workers children of the supervisor: either layer can die without taking the other with it, and a replacement supervisor adopts the survivors from the journal.
+**The run and the supervisor have separate lifetimes.** Requirement 4 says the *run* outlives the process that started it, and detached workers achieve that by themselves. If the supervisor dies, workers keep running and keep writing logs; what stops is *supervision* — no new tasks scheduled, no scan passes, no requeues, no adjudication. That is a real degradation but a graceful one, and it is why both levels detach rather than making workers children of the supervisor: either layer can die without taking the other with it, and a replacement supervisor adopts the survivors from the in-flight record.
 
 **Supervision still has to outlive the invoking session** — unless something else is tending it. Steward exists to run things autonomously for hours, and a coding agent that starts a sweep and then ends its session must not leave it unsupervised until someone notices. Detaching is one answer; an agent that reliably schedules `steward tend` is another, and often the better one. What must not happen is a long run with *no* driver.
 
@@ -373,7 +375,7 @@ That argument establishes the need for a *cadence*, though, not the need for a *
 
 So the division is by *kind of work*, not by reliability:
 
-- **The supervisor keeps the run alive.** Mechanical continuity: maintain the worker pool, journal what it launches, run scan passes, requeue within budget, keep the eval-set metadata and status current. All of it policy execution, none of it judgement.
+- **The supervisor keeps the run alive.** Mechanical continuity: maintain the worker pool, record what it launches, run scan passes, requeue within budget, keep the eval-set metadata and status current. All of it policy execution, none of it judgement.
 - **The agent (or human) decides what the run means.** Is this error class systemic or incidental? Is this arm worth continuing? Is this score anomalous enough to invalidate? Should the budget be raised?
 
 The supervisor's other job is therefore to **leave a good trail for the intelligent-but-absent party**: an escalation queue it refuses to act on alone, and a periodic written summary. That is what makes something like an hourly `status.md` load-bearing rather than decorative — it is the handoff artifact the agent reads when it next appears, and the reason a run can be picked up cold.
@@ -420,10 +422,10 @@ An agent *can* read a worker's endpoint directly and that is harmless. It should
 The supervisor is not the architecture. The architecture is a **pure function**:
 
 ```
-reconcile(manifest, journal, log_dir) -> (actions, summary)
+reconcile(manifest, inflight, log_dir) -> (actions, summary)
 ```
 
-Given the eval set's definition-derived manifest and the current on-disk state, decide what to do: which workers to spawn, which finished, what needs a scan pass, what needs adjudication. Nothing in it depends on memory carried from a previous call, because the design already guarantees that everything the supervisor knows is reconstructible from the journal and the log directory — the supervisor is a *cache*, never a source of truth.
+Given the eval set's definition-derived manifest and the current on-disk state, decide what to do: which workers to spawn, which finished, what needs a scan pass, what needs adjudication. Nothing in it depends on memory carried from a previous call, because the design already guarantees that everything the supervisor knows is reconstructible from the in-flight record and the log directory — the supervisor is a *cache*, never a source of truth.
 
 Committing to that shape buys three things that are hard to get any other way:
 
@@ -454,7 +456,7 @@ The strongest argument for a daemon was low-latency tier-2 requeue, and it does 
 
 It does impose two requirements the design must honour:
 
-- **Idempotence and claim discipline are non-negotiable.** An agent is an unreliable scheduler in a specific way: it may tend late, not at all, twice, or be interrupted mid-`tend`. A pure function plus the run claim plus the journal's `intent`-before-spawn record already covers this — a repeated `tend` is a no-op, an interrupted one is reconciled by the next — but it means those pieces are load-bearing rather than defensive.
+- **Idempotence and claim discipline are non-negotiable.** An agent is an unreliable scheduler in a specific way: it may tend late, not at all, twice, or be interrupted mid-`tend`. A pure function plus the run claim plus the `intent`-before-spawn entry already covers this — a repeated `tend` is a no-op, an interrupted one is reconciled by the next — but it means those pieces are load-bearing rather than defensive.
 - **The output must be compact and structured.** Agent context is the scarce resource, so a `tend` must *summarize* — "3 finished, 2 errored, spawned 3, one arm needs a decision" — not dump a thousand log headers into the conversation. That is a real API constraint on `steward tend`: a small JSON summary designed for agent consumption, with detail available on request. It also makes the tend interval an economic choice (tokens) as well as a utilization one.
 
 The one thing an agent cannot promise is cadence: its reliability is its harness's reliability across session boundaries. That is what the `cron` row is for — the same verb, on a timer, costing one crontab line.
@@ -472,7 +474,7 @@ The unification above invites collapsing the two verbs into one — if a tend re
 
 `status` is literally `tend --dry-run` — same code path, same core, differing only in whether the actions are carried out. They cannot drift or disagree, which is the property that made merging them attractive in the first place.
 
-Note what this does *not* mean: `status` is not the cheap one. It computes the same actions and performs the same reads; only the side effects are withheld. The read cost has to be attacked on its own terms, and it can be, because **completed `.eval` files are immutable** — a log never changes once it lands, so a directory scan is naturally incremental and a repeat scan costs almost nothing however many logs have accumulated. What is genuinely live (which workers are alive, per-sample progress) comes from the journal and the control endpoints and is O(running workers), not O(logs). That is the requirement that lets the TUI refresh on `status` and lets a human ask "how is it going" as often as they like.
+Note what this does *not* mean: `status` is not the cheap one. It computes the same actions and performs the same reads; only the side effects are withheld. The read cost has to be attacked on its own terms, and it can be, because **completed `.eval` files are immutable** — a log never changes once it lands, so a directory scan is naturally incremental and a repeat scan costs almost nothing however many logs have accumulated. What is genuinely live (which workers are alive, per-sample progress) comes from the in-flight record and the control endpoints and is O(running workers), not O(logs). That is the requirement that lets a view refresh on `status` and lets a human ask "how is it going" as often as they like.
 
 Keeping the names distinct matters for one reason: **`status` must stay read-only, because every convention in the ecosystem promises that it is.** `git status`, `systemctl status`, `docker ps` — a human who types `steward status` to satisfy their curiosity about an overnight sweep must not thereby launch eight workers. Surprise as a side effect of looking is the one thing a runner of expensive jobs cannot afford. There is also a plain mechanical need for a cheap read: the TUI refreshes continuously and must not reconcile at that rate.
 
@@ -490,7 +492,7 @@ In prose, treat it as a noun-adjunct compound (`tend interval`, `tend cadence`, 
 
 Workers run with Inspect's control server enabled, so each has a live HTTP endpoint over an AF_UNIX socket. That channel is what makes Steward a *steward* rather than a batch launcher: it can query a running eval's state and adjust its runtime behavior without restarting it.
 
-Steward finds a worker's endpoint by pid via the discovery directory, correlated to a task through the journal.
+Steward finds a worker's endpoint by pid via the discovery directory, correlated to a task through the in-flight record.
 
 The endpoints most relevant to this document are the ones tier 2 recovery is built on — `GET /evals/{id}/samples`, `GET /evals/{id}/sample`, and `POST /evals/{id}/sample/requeue` — plus the runtime-tuning directives (`POST /config` for per-sample limits, the pause/resume latches at process, task, and model scope). Model-scoped pause is worth noting alongside requeue: when the classification is "this provider is down", pausing the model is the correct response and requeueing individual samples is not.
 
@@ -500,7 +502,9 @@ The endpoints most relevant to this document are the ones tier 2 recovery is bui
 2. **Selection mode** — `INSPECT_EVAL_SET_SELECTION`, including the resume path and the mutual exclusion with capture. *Landed* (`_eval/eval_set_selection.py`, plus the branch in `eval_set()`).
 3. **Error-handling overrides** — *landed, as part of worker mode.* `fail_on_error=False` and task-retry-off are applied by selection mode itself, and the definition's requested values are recorded in the capture manifest's `options`. This deliberately avoids routing them through the overrides channel: they are not tunable policy, they are what selection mode *means*.
 
-4. **Overrides channel** — `INSPECT_EVAL_SET_OVERRIDES` for `log_dir` and the operational supervision kwargs (`display`, `log_level`, `ctl_server`, `max_tasks`). *Not yet.* Until it exists, Steward must reach `log_dir` per frontend (flow accepts `--log-dir`; a raw script does not). Note the corresponding `INSPECT_EVAL_*` environment variables are click `envvar=` bindings on Inspect's own CLI only (`_cli/eval.py`) — neither a raw `python evalset.py` nor `flow run` goes through it, so they are not a shortcut.
+4. **Overrides channel** — `INSPECT_EVAL_SET_OVERRIDES` for `log_dir` and the operational supervision kwargs (`display`, `log_level`, `ctl_server`, `max_tasks`, and the concurrency setpoints). *Not yet.* Until it exists, Steward must reach `log_dir` per frontend (flow accepts `--log-dir`; a raw script does not). Note the corresponding `INSPECT_EVAL_*` environment variables are click `envvar=` bindings on Inspect's own CLI only (`_cli/eval.py`) — neither a raw `python evalset.py` nor `flow run` goes through it, so they are not a shortcut.
+
+   The concrete motivating case is `steward launch --smoke` ([workflow.md](workflow.md), *Smoke first*), which must send a rehearsal's logs to local scratch rather than to the definition's `log_dir` — frequently S3, and no place for throwaway objects. Flow definitions can be redirected today; script ones cannot, so smoke is Flow-only until this lands.
 
    Hard-coding the error-handling options keeps this channel purely *operational*: nothing on the whitelist can change what an eval means. Had `fail_on_error` gone here, the channel would have needed two tiers to keep semantic overrides visible.
 5. **Automatic early pruning** (Layer 2 in configuration.md) — the `@task` registry wrapper returning placeholders for unselected tasks. *Not yet*, and it is what makes a worker's startup cost proportional to its own task rather than to the whole eval set.
@@ -531,7 +535,7 @@ The selection schema can grow the partial facets Layer 2 needs (`name`, `args_ha
 
 3. **Worker startup cost without Layer 2 pruning.** Every worker currently constructs every task in the eval set, including datasets, to compute identifiers. For a large sweep this dominates. Layer 2 fixes it; until then, batching several tasks into one worker's selection is the available mitigation.
 
-4. **Cross-host runs.** The journal records a host per launch, and both control discovery and the run claim are per-machine, so the current design supervises a run from one host. Distributing requires two things Steward would own rather than consume: a discovery mechanism for workers, and a real lease on the log directory with a fencing token to replace the local claim. The lease is the harder half — `log_dir` may be S3, where atomic create-if-absent is not reliably available through the filesystem abstraction Inspect uses.
+4. **Cross-host runs.** The in-flight record carries a host per launch, and both control discovery and the run claim are per-machine, so the current design supervises a run from one host. Distributing requires two things Steward would own rather than consume: a discovery mechanism for workers, and a real lease on the log directory with a fencing token to replace the local claim. The lease is the harder half — `log_dir` may be S3, where atomic create-if-absent is not reliably available through the filesystem abstraction Inspect uses.
 
 5. **Second `steward launch` against a live run.** Declining is the safe first behaviour; attaching to the existing run and reporting its status is what a caller (especially a coding agent) actually wants. What "attach" means concretely — read-only status, streaming progress, or the ability to issue directives through the supervisor — is unresolved.
 
@@ -544,11 +548,11 @@ The selection schema can grow the partial facets Layer 2 needs (`name`, `args_ha
 9. **Steward-orchestrated scanning.** The shape is settled (see *How Steward would take the scan over*): a third boundary mode, `INSPECT_EVAL_SET_SCAN`, that executes the definition and scans the named logs as single writer. Unbuilt, and these remain open:
    - **Cadence.** Incremental passes during the run cost a full sample read per log per pass, and a pass can outlast the tend interval — so the queue-and-drain model above is the shape, but how much to let accumulate before spawning is unresolved. Draining eagerly keeps coverage current at the cost of many short processes; draining lazily batches better but leaves scan results further behind the run. Model-graded scanners push this further, since a pass then has a token cost as well as a time cost.
    - **Sample reads.** The sketch reads whole logs; large transcripts make that expensive. Whether to stream samples, or scan straight from summaries plus a targeted transcript read, is unresolved.
-   - **Failure of the scan pass itself.** A scan worker can crash like any other. It is idempotent, so the recovery is "run it again" — but it needs to appear in the journal and the in-flight accounting like a task worker does.
+   - **Failure of the scan pass itself.** A scan worker can crash like any other. It is idempotent, so the recovery is "run it again" — but it needs to appear in the in-flight record and its accounting like a task worker does.
    - **Scan errors vs sample errors.** `scan_finalize` leaves a scan resumable when scanners errored. That is a second adjudication queue, distinct from the errored-sample one, and it is not yet clear whether Steward should treat them alike.
 
    Until it exists, `options["scanners"]` in the manifest lets Steward refuse a scanning definition at enumeration time with a clear explanation rather than failing every worker.
 
-10. **Tend cadence, and the evidence that would justify a daemon.** With the agent as sole driver, the cost of the interval is slot idle: roughly `interval/2 ÷ mean task duration` whenever concurrency is capped below the task count. Ten minutes is a guess, not a measurement, and a tend has a second price a daemon does not — agent context per call — so the optimum is not simply "as often as possible". What is needed is actual idle-time accounting from real sweeps, which the journal can supply directly (`exited` to next `intent` per slot). Whether batching absorbs the short-task case, and whether the residue ever exceeds what a daemon would cost to operate, is the question that decides if the detached driver gets built.
+10. **Tend cadence, and the evidence that would justify a daemon.** With the agent as sole driver, the cost of the interval is slot idle: roughly `interval/2 ÷ mean task duration` whenever concurrency is capped below the task count. Ten minutes is a guess, not a measurement, and a tend has a second price a daemon does not — agent context per call — so the optimum is not simply "as often as possible". What is needed is actual idle-time accounting from real sweeps, which the in-flight record can supply directly (`exited` to next `intent` per slot). Whether batching absorbs the short-task case, and whether the residue ever exceeds what a daemon would cost to operate, is the question that decides if the detached driver gets built.
 
-11. **What "resolved" means for an eval set.** The invariant above says Steward may not report completion while any sample is unresolved, which requires a durable per-sample resolution state (re-ran and passed, re-ran and failed again, accepted-as-errored by a human, waiting). Where that lives — derived from the logs each pass, or recorded alongside the journal — is open. Note `EvalLog.invalidated` and per-sample `invalidation` records already carry part of it, with provenance.
+11. **What "resolved" means for an eval set.** *Answered in [workflow.md](workflow.md).* A run is **resolved** when no anomaly is open — anomaly state being a fold over `journal.jsonl` — and separately **signed off** when a person has attested to the results. Scan findings arrive last and can re-open a run that looked finished, which is why signoff follows the scan rather than the tasks. `EvalLog.invalidated` and per-sample `invalidation` records carry the provenance half. What remains open there is the anomaly *identity* scheme, not the definition.
