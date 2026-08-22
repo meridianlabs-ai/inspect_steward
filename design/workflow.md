@@ -327,7 +327,40 @@ So climbing is instant and descending is gradual. Undershooting costs wall-clock
 
 **Overshoot has a partial repair, and knowing which half is fast matters.** Having climbed into rate limits, lowering `max_connections` clamps live connection concurrency down *at once* and the backoffs stop — that half is immediate. The sample side is not: those samples already hold their containers and memory, and the only way that releases is by finishing. So the correct first move on overshoot is the connection ceiling, which buys relief in seconds, followed by letting sample concurrency drain to a lower setpoint over minutes.
 
-This is the whole argument against being frisky on the way up. The provider-side damage is undoable in seconds; the compute-side commitment is not undoable at all, only outlastable — and on a Docker host it can take the box down before it drains.
+The provider-side damage is undoable in seconds; the compute-side commitment is only outlastable — and on a Docker host it can take the box down before it drains. That argues for shrinking increments, **not** for timidity, and the difference matters more than it first appears.
+
+### Over-scaling risks failure; under-scaling wastes time and often money
+
+The asymmetry above is easy to read as "be cautious", which would be the wrong lesson. The tempting summary — over-scaling costs money, under-scaling costs wall clock — is half wrong, and the wrong half is the money.
+
+**Token spend is invariant to concurrency.** The same samples make the same calls whether forty or a hundred and twenty run at once. Concurrency changes the *rate* of spend, never the total. Whatever over-scaling costs, it is not the model bill.
+
+What is left is compute, and it depends on the regime:
+
+| | over-scaling | under-scaling |
+|---|---|---|
+| **fixed host** (Docker, one EC2 box) | free — the box is paid for either way — until it OOMs, and then catastrophic | **pays for the box three times as long** |
+| **elastic** (k8s) | rents capacity to hold blocked samples: real waste | more nodes for less time ≈ a wash, so wall clock dominates |
+
+On a rented box the conservative choice is the *expensive* one. A job at a third of the viable concurrency runs three times as long on the same instance, for identical work — under-scaling costs both time and money there, and over-scaling costs nothing at all right up until it takes the host down.
+
+So the two downsides are not commensurable, and pretending they are is what produces false caution: **over-scaling risks a failure; under-scaling guarantees a loss.** One is an unbounded availability risk with a low probability, the other is a certainty that compounds every hour. The genuine dollar cost of over-scaling is narrow — idle capacity on elastic infrastructure, plus re-run tokens if the overload actually breaks samples.
+
+Set against that, **undershoot compounds**: running at 40 where 120 was available does not lose a little time, it triples the run. A job started at 10pm that could have scaled at 11pm and instead waits for a human until 8am has thrown away most of the night — and being useful during exactly those hours is the whole reason Steward exists.
+
+(One place the *rate* matters even though the total does not: against a spend cap that someone intends to stop early on, spending fast means hitting the cap before the run has taught them anything. That is an argument about observability, not about cost.)
+
+So delegating scaling to the agent is not a risk to be minimized, it is most of the value. Where the right action is clear — no pushback for half an hour, ample local headroom, well under the envelope — it should simply raise, and the escalation list above should be read as the **exceptions** it is rather than the default posture.
+
+**Overnight is the best time to probe, not the worst.** Nobody is waiting on interactive latency, provider load is often lower so there is genuinely more headroom to find, and there are hours in which to recover from a bad probe. The instinct that unattended means careful is partly backwards. What should actually govern boldness is **time remaining, not supervision**: probing at 11pm with a night ahead is cheap, and the same probe at 4pm against a 5pm deadline is not.
+
+### Authorize at 10pm, do not interrogate at 3am
+
+The cost of a question is not constant — it decays with the human's availability. Asked at launch it costs a sentence; asked at 3am it stalls the run until morning, which is the very outcome the escalation was meant to prevent.
+
+So the agent should **front-load** the decisions while the human is present, and the smoke run is the natural moment because it has already measured throughput. One exchange at launch — *"smoke sustains about 50 concurrent, ETA six hours; push toward 100 if headroom appears?"* — is worth more than any number of well-judged 3am escalations, because it converts the whole night into standing authority.
+
+This is the pre-authorization idea from *Notification is the gate on autonomy*, applied to scaling, and scaling is where it pays best: the questions are predictable, they can be asked before anything has gone wrong, and the answers stay valid all night.
 
 ### Rate limits are the wrong signal for the local ceiling
 
@@ -349,7 +382,7 @@ The config view carries an `adaptive` section reporting each controller's live l
 
 ### The envelope is policy; the tuning is the agent's job
 
-The **ceiling** is a judgement call about infrastructure that only the user can make — how big the box is, whether the cluster scales, how much they are willing to have running at once. It belongs in `policy.md` or as a launch argument. Everything inside that envelope is the agent's to tune, and doing so is one of its standing jobs rather than an exceptional intervention: start conservatively (40 concurrent samples is a reasonable default to scaffold), raise while pushback stays absent and local headroom holds, pull back when scale-downs cluster, rebalance across groups as workers finish.
+The **ceiling** is a judgement call about infrastructure that only the user can make — how big the box is, whether the cluster scales, how much they are willing to have running at once. It belongs in `policy.md` or as a launch argument. Everything inside that envelope is the agent's to tune **without asking**, and doing so is one of its standing jobs rather than an exceptional intervention. The envelope exists precisely so that the agent can move freely inside it: start conservatively (40 concurrent samples is a reasonable default to scaffold), raise while pushback stays absent and local headroom holds, pull back when scale-downs cluster, rebalance across groups as workers finish.
 
 All of that is observation and arithmetic. What it cannot settle is a short list, and the items on it are unclear for structural reasons rather than for want of data:
 
