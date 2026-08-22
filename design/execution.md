@@ -239,7 +239,7 @@ Inspect already has the primitives. `inspect_ai._util.discovery` is written to b
 Two consequences worth being explicit about:
 
 - **Safety must come from the CLI, not from convention.** Commands split by whether they write: `steward tasks` and `steward status` need no claim; anything that spawns workers, rewrites eval-set metadata, scans, or adjudicates must hold one. A rule that only holds when the caller remembers it is not a rule an autonomous agent will honour.
-- **Refusing is the wrong end state.** When a second `steward run` arrives against a live run, what the caller almost always wants is the *existing* run — so the useful behaviour is to attach and report status rather than error. Refusing with a clear message is acceptable for a first version; attaching is the better destination.
+- **Refusing is the wrong end state.** When a second `steward launch` arrives against a live run, what the caller almost always wants is the *existing* run — so the useful behaviour is to attach and report status rather than error. Refusing with a clear message is acceptable for a first version; attaching is the better destination.
 
 This also settles the shape of the runner: rather than each CLI invocation doing work directly, there is **one long-lived supervisor per eval set** (see *The supervisor*), and the claim is what makes it unique. Everything else — scan passes, metadata writes, cleanup, adjudication — is work that process schedules. "Only one scan at a time" then stops being a rule anyone has to remember and becomes a queue inside the process that owns the run.
 
@@ -349,7 +349,7 @@ Ground truth is the log directory. A journal that is lost, truncated, or stale d
 
 ## The supervisor
 
-"Supervisor" here means *whatever is currently driving the reconcile loop* — a foreground `steward run`, a detached process, or a coding agent scheduling `tend` calls (see *The reconcile core, and its drivers*). The claim, the journal, and the registry apply to every driver equally.
+"Supervisor" here means *whatever is currently driving the reconcile loop* — in the current design a coding agent scheduling `tend` calls, with `cron` as a backstop (see *The reconcile core, and its drivers*). The claim, the journal, and the registry apply to every driver equally.
 
 **This section designs the detached case, which the current plan does not build.** It is kept because it is the only driver with a lifecycle worth designing, and because writing it down is what established that the lifecycle is a cost rather than a capability — the argument for agent-driven tending is largely assembled from the paragraphs below. Read it as the specification that would be implemented *if* the utilization evidence ever calls for a daemon, not as work in the queue.
 
@@ -357,7 +357,7 @@ Ground truth is the log directory. A journal that is lost, truncated, or stale d
 
 **Supervision still has to outlive the invoking session** — unless something else is tending it. Steward exists to run things autonomously for hours, and a coding agent that starts a sweep and then ends its session must not leave it unsupervised until someone notices. Detaching is one answer; an agent that reliably schedules `steward tend` is another, and often the better one. What must not happen is a long run with *no* driver.
 
-**Foreground remains the interactive mode** — though possibly only as a convenience wrapper over the detached one (see *Interacting with a detached run*). `steward run` attached *is* the supervisor, with a live display; `--detach` re-execs it into its own session, prints the handoff, and exits. Same choice Inspect already offers, and worth borrowing Inspect's contract wholesale: `exec_detached` spawns the child, waits for its `launch` record, and **refuses to leave a detached process running when it failed to bind a control endpoint** — on the grounds that a detached process nobody can observe or cancel is worse than no process. A detached Steward supervisor should be held to the same rule: it advertises its socket in the registry, and if it cannot, the launch fails rather than orphaning an unsupervisable daemon.
+**If a detached supervisor is ever built, it would be launched rather than attached to.** There is no foreground driver in the current design — `steward launch` spawns workers and returns, and the loop is driven by scheduled `tend` calls — so the interactive/detached choice Inspect offers does not arise. What is still worth borrowing wholesale is Inspect's contract for detaching: `exec_detached` spawns the child, waits for its `launch` record, and **refuses to leave a detached process running when it failed to bind a control endpoint** — on the grounds that a detached process nobody can observe or cancel is worse than no process. A detached Steward supervisor should be held to the same rule: it advertises its socket in the registry, and if it cannot, the launch fails rather than orphaning an unsupervisable daemon.
 
 That yields a pleasing symmetry: the supervisor is to `steward status` what a `--ctl-server` eval process is to `inspect ctl` — a detached process advertising a socket through a discovery directory, with the CLI as a thin client.
 
@@ -384,15 +384,17 @@ This division softens considerably when the agent is itself the driver: it sees 
 
 ### Interacting with a detached run
 
+> **Superseded in part.** [workflow.md](workflow.md) concludes there should be no `steward tui`: a live view presumes a present human, which is the case Steward is explicitly not built for, and `steward status` plus `inspect view` covers what someone actually wants on returning. This section is retained because its *separation* argument — that a view is a client of the same surface as everything else, needing no claim and no live supervisor — is what made that conclusion safe to reach. Read `steward tui` below as "a view, if one is ever built".
+
 The display is an aggregate — tasks by state, sample progress, the adjudication queue, spend — assembled from the worker control endpoints and the log directory. It cannot be Inspect's own display relayed, because workers are separate detached processes writing their own output elsewhere. That constraint turns out to be a gift: the display is a **client of the same surface** everything else uses, not a privileged view of in-process state.
 
 Which means the view and the supervisor are separable, and should be separated:
 
-| | supervisor | view |
+| | driver | view |
 |---|---|---|
-| `steward run` | in this process | in this process |
-| `steward run --detach` | detached | none |
-| `steward tui` | wherever it already is | in this process |
+| `steward launch` | none — spawns and returns | none |
+| `steward tend` | this process, briefly | none |
+| a view, if built | wherever it already is, or nowhere | in this process |
 
 `steward tui` attaches a live display to whatever supervisor is running — the natural way to keep an eye on a detached run for a while and then walk away. It needs no new machinery: it is `steward status` rendered continuously instead of once, over the same registry lookup.
 
@@ -400,9 +402,9 @@ Three properties follow, all of them good:
 
 - **Views need no claim.** The claim is a *writer's* lock. Any number of TUIs can watch one run, and a human and an agent can watch the same run simultaneously. Directives issued from a TUI still go to the supervisor, which serializes them, so even an interactive view stays safe.
 - **A view works without a supervisor.** With none live, `steward tui` renders read-only from the log directory — a finished run, or one whose supervisor died. Same fallback as `steward status`, same reason: the log directory is ground truth. Under agent-driven tending this is not the fallback but the *ordinary* case: between tends there is no process to attach to, and the TUI is simply `steward status` on a repeat, watching workers it does not own.
-- **`steward run` need not be a special case.** It can simply *be* `--detach` plus an attached TUI. One supervisor lifecycle instead of two code paths, and detaching stops being a mode you choose up front.
+- **There is no attached-versus-detached mode to choose.** With `launch` non-blocking and the loop driven by scheduled `tend` calls, a view is only ever a separate process watching from outside. The two code paths that this section was originally reconciling never come into existence.
 
-That last point changes what Ctrl+C means, and the change is an improvement: it detaches the *view*, not the run. Inspect's Ctrl+C cancels an eval, but a Steward run is a longer-lived thing that a coding agent may have started and a human may merely be visiting, so "leaving" and "stopping" must be different gestures — `steward stop` for the latter, with the TUI saying so on exit. This is the `docker attach` / `tmux` convention rather than the `inspect eval` one, and it removes a genuine "did I just kill my overnight sweep?" hazard.
+One consequence survives regardless of whether a view is ever built, because it applies to any interactive surface Steward grows: Ctrl+C must detach the *view*, not the run. Inspect's Ctrl+C cancels an eval, but a Steward run is a longer-lived thing that a coding agent may have started and a human may merely be visiting, so "leaving" and "stopping" must be different gestures — `steward stop` for the latter, with the TUI saying so on exit. This is the `docker attach` / `tmux` convention rather than the `inspect eval` one, and it removes a genuine "did I just kill my overnight sweep?" hazard.
 
 Beyond the TUI, the same surface is reached through the CLI: `steward status`, `steward pause`, `steward resolve …` are thin clients that locate the supervisor via the registry, falling back to the log directory for reads when none is live. **The CLI is the agent's API** — a coding agent should never need to speak the wire protocol, and making it do so would be a design failure rather than a power feature.
 
@@ -434,7 +436,6 @@ Committing to that shape buys three things that are hard to get any other way:
 | driver | status |
 |---|---|
 | **the coding agent** — schedules `steward tend` | the design centre |
-| foreground `steward run` | a `tend` loop with a display attached; interactive convenience |
 | `cron` calling `steward tend` | near-free backstop if the agent stops tending |
 | detached long-lived supervisor | **not currently justified** — see below |
 
@@ -532,7 +533,7 @@ The selection schema can grow the partial facets Layer 2 needs (`name`, `args_ha
 
 4. **Cross-host runs.** The journal records a host per launch, and both control discovery and the run claim are per-machine, so the current design supervises a run from one host. Distributing requires two things Steward would own rather than consume: a discovery mechanism for workers, and a real lease on the log directory with a fencing token to replace the local claim. The lease is the harder half — `log_dir` may be S3, where atomic create-if-absent is not reliably available through the filesystem abstraction Inspect uses.
 
-5. **Second `steward run` against a live run.** Declining is the safe first behaviour; attaching to the existing run and reporting its status is what a caller (especially a coding agent) actually wants. What "attach" means concretely — read-only status, streaming progress, or the ability to issue directives through the supervisor — is unresolved.
+5. **Second `steward launch` against a live run.** Declining is the safe first behaviour; attaching to the existing run and reporting its status is what a caller (especially a coding agent) actually wants. What "attach" means concretely — read-only status, streaming progress, or the ability to issue directives through the supervisor — is unresolved.
 
 6. **Torn reads of the directory manifests.** Steward is the only writer of `eval-set.json` and `logs.json`, but both writes are truncate-in-place, so a concurrent *reader* can still catch a partial file — and `eval-set.json` has a live reader in the viewer (`read_eval_set_info_async`, which validates with no error handling). Rewriting it as logs land makes the window recur throughout the run rather than once. Either Steward writes these atomically, or the writers in Inspect become atomic. The latter is better for everyone, since `eval_set()` has the same exposure today.
 
