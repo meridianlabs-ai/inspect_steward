@@ -52,6 +52,25 @@ A second `eval_set()` call in the same process under capture or selection is an 
 
 Dynamic task producers (`TaskSource`) are fundamentally incompatible with static enumeration and are **out of scope**: capture mode fails with a clear error when the definition passes a `TaskSource`.
 
+### Locating the definition
+
+Every verb that takes a definition — `steward run`, `steward tasks` — accepts an explicit path. With no path, it discovers one **in the current directory** by convention:
+
+```
+run.py    evalset.py    flow.py    flow.yaml
+```
+
+The common case is then `steward run` in a project directory, with the filename as an escape hatch for anyone using a different convention.
+
+Four rules keep this from becoming a source of surprise:
+
+- **Current directory only.** No recursion, no walking upward. A definition is found because the user is standing in its project, not because Steward went looking.
+- **Multiple matches are an error**, naming the candidates, rather than a precedence order that silently picks. A repository with both `flow.yaml` and `run.py` is genuinely ambiguous — which is authoritative is unknowable — and quietly running the wrong eval set is expensive and easy not to notice. The fix is one word on the command line. This matches how ambiguity is already handled a layer down: `detect_definition_type` refuses a `.py` file that imports both `inspect_flow` and `eval_set` rather than guessing.
+- **The name is a discovery hint, not a type declaration.** Type detection stays structural and independent, so a file called `flow.py` that culminates in `eval_set()` is an `evalset` definition and is treated as one.
+- **`_flow.py` is deliberately not a candidate.** It is Flow's implicit-inheritance fragment — a piece of shared configuration, not a program that culminates in an `eval_set()` call — so matching it would be a category error.
+
+One hazard worth recording: Flow writes a *resolved* `flow.yaml` into its log directory as an output artifact, and that file is itself a valid spec. Discovery run from inside a log directory would therefore find it and re-run the eval set from its resolved config. Steward should recognize a log directory (`.eval-set-id` or `eval-set.json` present) and refuse rather than treat its contents as a definition.
+
 ### Protocol
 
 The interception protocol is environment-based so that any conforming program works unmodified under any process manager (names provisional):
@@ -59,8 +78,8 @@ The interception protocol is environment-based so that any conforming program wo
 | Variable | Meaning |
 |---|---|
 | `INSPECT_EVAL_SET_CAPTURE` | Path to write the manifest. `eval_set()` resolves tasks, writes the manifest, and exits the process. |
-| `INSPECT_EVAL_SET_SELECTION` | Path to (or inline JSON of) a selection document. `eval_set()` runs only matching tasks. |
-| `INSPECT_EVAL_SET_OVERRIDES` | Whitelisted `eval_set()` kwarg overrides (`log_dir`, `display`, `log_level`, `retry_attempts`, `ctl_server`, ...) so Steward can control the runtime behavior of workers without editing definitions. |
+| `INSPECT_EVAL_SET_SELECTION` | Path to a selection document (`{version, eval_set_id, tasks: [{identifier, resume?}]}` — `inspect_ai._eval.eval_set_selection`). `eval_set()` runs only matching tasks, through `eval()`, and performs no eval-set orchestration. |
+| `INSPECT_EVAL_SET_OVERRIDES` | Whitelisted *operational* `eval_set()` kwarg overrides (`log_dir`, `display`, `log_level`, `retry_attempts`, `ctl_server`, ...) so Steward can control worker runtime behavior without editing definitions. Nothing on the whitelist can change what an eval means; the one option Steward does override semantically (`fail_on_error`) is applied by selection mode itself rather than routed through here. |
 
 The protocol lives in **inspect_ai** — `eval_set()` honors these variables natively. Flow and Hawk then conform with zero code changes, `python evalset.py` works directly under Steward, and any future frontend gets Steward support for free.
 
@@ -129,23 +148,24 @@ Because enumeration fully resolves tasks, the manifest carries per-task sample c
 
 ## Selection and filtering
 
-A selection is a structured document, not a bare list of identifier strings — early filtering layers need partial facets that opaque identifiers can't provide:
+A selection is a structured document, not a bare list of identifier strings — the per-task entry is an object so early filtering layers can carry partial facets that opaque identifiers can't provide. Version 1, as implemented, carries only what the authoritative filter and resume need:
 
 ```jsonc
 {
+  "version": 1,
+  "eval_set_id": "swe-sweep-2026-08",
   "tasks": [
     {
-      "key": "mbpp[react]@openai/gpt-5",
-      "name": "mbpp",
-      "args_hash": "9f3a…",
-      "model": "openai/gpt-5",
-      "sequence": 4,
-      "identifier": "<full task_identifier>"
+      "identifier": "<full task_identifier>",
+      "resume": "logs/…_mbpp_abc.eval"   // optional prior log to reuse samples from
+      // added with Layer 2: "name", "args_hash", "model", "sequence"
       // reserved: "samples": [...] — future within-task sharding
     }
   ]
 }
 ```
+
+The Layer 2 facets are additive optional fields, so adding them needs no version bump: Steward writes the file and inspect_ai reads it, and an older inspect_ai ignores fields it doesn't know.
 
 Filtering happens at two internal layers. **No user-facing filtering API is required** — users write exactly the code they write today.
 
@@ -169,15 +189,15 @@ Layer 2 covers all three frontends with no cooperation: users' `@task` calls in 
 
 ## Execution model
 
-Full runner design belongs to a future document; the parts that constrain configuration:
+Full runner design is in [execution.md](execution.md); the parts that constrain configuration:
 
-- **One worker process per task.** The worker executes the definition under `INSPECT_EVAL_SET_SELECTION` with a single-task selection. The boundary call becomes a single-task filtered `eval_set()`.
+- **One worker process per task.** The worker executes the definition under `INSPECT_EVAL_SET_SELECTION` with a single-task selection. At the boundary, `eval_set()` resolves normally, filters to the selection, and runs the task through the ordinary `eval()` path — performing none of its own orchestration (no directory scan, no `.eval-set-id` / `eval-set.json` / `logs.json`, no log pruning).
 
-- **Per-task log directories.** The definition's `log_dir` is the root; Steward assigns each task its own directory beneath it (derived from the task's key, exact layout TBD) via the `log_dir` override. Per-task directories eliminate log-dir contention and dirty-dir validation concerns entirely, and sample-level resume still works: respawning a failed task reuses its own directory, where `eval_set`'s log-matching idempotency picks up completed samples from the prior attempt. Steward owns the aggregate view across directories (see open questions). Note this layout is a Steward runtime choice — running `python evalset.py` by hand still uses the single `log_dir` as normal.
+- **One flat log directory.** Every worker writes into the definition's own `log_dir`, and each writes exactly one `.eval` file, which inspect writes atomically. Because worker mode removes the competing orchestrator, this is safe by construction, and `inspect view` and `samples_df` work against the directory live and unmodified. Steward is the single writer of the shared eval-set metadata. (An earlier draft specified per-task subdirectories; that avoided contention only by moving it, since each worker still ran a full orchestrator over its own directory — see execution.md.)
 
-- **Retries** are split across two failure domains, and the division of responsibility is an open question (see below): sample/eval-level errors, which `eval_set`'s in-process retry machinery (`retry_immediate`, sample reuse) already handles well, vs process/infra-level failures (crash, OOM, hang), which only Steward can see and act on.
+- **Recovery** runs in three tiers rather than as a single retry setting. Selection mode hard-codes `fail_on_error=False` (and task-retry-off), so a task runs its whole dataset and finishes `success` carrying whatever errored samples remain; `retry_on_error` stays the definition author's to set. Those samples become an explicit adjudication queue: Steward can requeue them in flight over the control channel when the cause looks transient, or re-run them after completion by respawning with `resume` (errored samples re-run automatically; `invalidate_samples` forces a re-run of completed-but-suspect ones). Whole-task retry is Steward's alone and narrows to process death and errors outside sample scope; workers run with in-process task retry disabled so budgets cannot multiply. The consequence for configuration: **a worker exiting 0 with a `success` log says nothing about whether the work is good** — the log is the only ground truth.
 
-- **Supervision channel.** Workers run with inspect's control server enabled (`ctl_server`), giving Steward a live channel to query state and adjust runtime behavior of a running eval — which is Steward's whole purpose. Details in the runner design.
+- **Supervision channel.** Workers run with inspect's control server enabled (`ctl_server`), giving Steward a live channel to query state and adjust runtime behavior of a running eval — which is Steward's whole purpose. Details in [execution.md](execution.md).
 
 ## Frontend adapters
 
@@ -192,7 +212,7 @@ The user's file is the program. Steward executes it as `__main__` (via `runpy` o
 from inspect_ai import eval_set
 from my_evals import my_task
 
-set_model_info(...)                     # side effects: run in every process
+set_model_info(...)  # side effects: run in every process
 
 tasks = [my_task(difficulty=d) for d in ["easy", "hard"]]
 
@@ -209,7 +229,9 @@ Under a single-task selection, the non-matching `my_task` calls return placehold
 
 **`flow run` is itself a conforming program**: it culminates in the `eval_set()` call the spec describes, so Steward drives flow's own CLI under the protocol (`python -m inspect_flow._cli.main run <spec>`) rather than reaching into flow's internals. Flow keeps ownership of everything before the boundary — includes, implicit `_flow.py` inheritance, defaults merging, `NotGiven` semantics, `@after_load`/`@after_instantiate` hooks, and its `FlowOptions` → `eval_set()` mapping — and Steward owns execution from the boundary onward. Loading a Python spec is `exec` with real side effects (sys.path mutation, dotenv, `_flow.py` files) — by design, since every worker re-executes it.
 
-Flow writes `flow.yaml` and a requirements snapshot into the log directory *before* the boundary, so those side effects cannot be intercepted by capture. Reads therefore pass a scratch `--log-dir`, leaving the definition's real log directory untouched; execution passes the real one, where those files are wanted. Flow's store, bundling, and steps are out of scope for Steward's execution path.
+Flow writes `flow.yaml` and a requirements snapshot into the log directory *before* the boundary, so those side effects cannot be intercepted by capture. Reads therefore pass a scratch `--log-dir`, leaving the definition's real log directory untouched; execution passes the real one, where those files are wanted. Flow's store, bundling, and steps are out of scope for Steward's execution path (workers run with `--store none`).
+
+Flow conforms to both halves of the protocol as-is — verified end to end, including four concurrent flow workers writing into one flat log directory. Flow also passes `ctl_server` through to `eval_set()`, so flow-launched workers get the control endpoint Steward supervises them with, and it already defaults `retry_on_error` to 3. Flow specs can carry `scanner:`, which selection mode rejects; `options["scanners"]` in the manifest surfaces that at enumeration time. The one rough edge is that each worker repeats Flow's pre-boundary work — see open question 1 in [execution.md](execution.md).
 
 Flow specs may contain live `Task`/`Model` objects (which Flow itself rejects in venv mode); the always-re-execute model supports them naturally.
 
@@ -227,19 +249,20 @@ The right shape is the one used for Flow: **Hawk's runner is itself a conforming
 
 ## Changes required in inspect_ai
 
-1. Capture mode: `INSPECT_EVAL_SET_CAPTURE` honored by `eval_set()` — resolve, write manifest, exit the process.
-2. Selection mode: `INSPECT_EVAL_SET_SELECTION` honored at the boundary (Layer 1), plus drift errors and the single-call constraint.
+1. Capture mode: `INSPECT_EVAL_SET_CAPTURE` honored by `eval_set()` — resolve, write manifest, exit the process. *Landed.*
+2. Selection mode: `INSPECT_EVAL_SET_SELECTION` honored at the boundary (Layer 1), plus drift errors. *Landed.*
 3. Automatic pruning in the resolver and the `@task` registry wrapper (Layer 2), including the placeholder task mechanism.
-4. Overrides channel: `INSPECT_EVAL_SET_OVERRIDES` for the whitelisted supervision kwargs (including `log_dir`).
-5. Public (or at least stable) exposure of `task_identifier` and the manifest models, which today live in `inspect_ai._eval.evalset`.
+4. Overrides channel: `INSPECT_EVAL_SET_OVERRIDES` for the whitelisted operational kwargs (including `log_dir`). Note the matching `INSPECT_EVAL_*` environment variables are click bindings on Inspect's own CLI only, which neither a raw script nor `flow run` goes through — so they are not a shortcut. The error-handling options this once had to carry (`fail_on_error`, `continue_on_fail`) are instead hard-coded by selection mode, and `retry_on_error` stays with the definition. *Selection-mode part landed.*
+5. Public (or at least stable) exposure of `task_identifier` and the manifest models, which today live in `inspect_ai._eval.evalset`. *Partly landed:* `task_identifier` is public; the capture and selection models stay private as versioned wire formats.
+6. The single-`eval_set()`-call constraint (a second call under capture or selection is an error) is not yet enforced.
 
 ## Open questions
 
-1. **Retry responsibility.** How to divide retries between `eval_set`'s in-process machinery and Steward's process-level supervision. Options: (a) Steward is the sole retry authority — workers run with `retry_attempts=0` and a respawn *is* the retry (per-task log dirs make this clean, since sample resume is per-directory); (b) workers keep modest in-process retries for cheap transient failures (model API errors, sample errors — where `retry_immediate` + sample reuse is battle-tested), while Steward supervises attempt budgets at the process level and handles the failures `eval_set` can't see (crash, OOM, hang). Current lean: (b) — don't reimplement working sample-level retry. Belongs to the runner design.
+1. **Retry responsibility.** *Resolved, and reframed:* the question was the wrong shape. Rather than dividing one retry mechanism, Steward runs `fail_on_error=False` so sample failures never fail a task, which turns recovery into three tiers — in-eval `retry_on_error`, in-flight requeue over the control channel, and post-completion adjudication (invalidate + resume). Whole-task retry is Steward's alone and shrinks to process death and errors outside sample scope; worker mode forces in-process task retry off so budgets cannot multiply. What remains open is the classification and escalation policy the tiers depend on. See [execution.md](execution.md).
 
-2. **Aggregate view across per-task log dirs.** Each task's directory gets its own `eval-set.json` and logs; Steward's manifest is the top-level index. How `inspect view`, bundling, and log listing work across the tree (and whether Steward writes a root-level manifest/redirect inspect tools understand).
+2. **Aggregate view across per-task log dirs.** *Moot:* there are no per-task directories. One flat directory means `inspect view`, `samples_df`, bundling, and log listing work unmodified, and Steward is the single writer of `.eval-set-id`, `eval-set.json`, and `logs.json`.
 
-3. **Overrides whitelist.** Exactly which `eval_set()` kwargs Steward may override in workers (`log_dir`, `display`, `log_level`, `retry_attempts`, `ctl_server`, `max_tasks`, ...) and what happens on conflict with definition-specified values.
+3. **Overrides whitelist.** Exactly which `eval_set()` kwargs Steward may override in workers (`log_dir`, `display`, `log_level`, `retry_attempts`, `ctl_server`, `max_tasks`, ...) and what happens on conflict with definition-specified values. *Partly settled:* the whitelist stays purely operational — nothing on it may change what an eval means. The one semantic override (`fail_on_error=False`) is applied by selection mode itself, which keeps this channel from needing a second, riskier tier.
 
 4. **Display-key format details.** *Resolved in implementation:* the solver segment always renders (the resolved plan name, or the literal `default` when unregistered); collisions disambiguate by differing args, then differing model args, then ordinal (`#n`) for config-only sweeps.
 
