@@ -58,7 +58,7 @@ def read_eval_set(
     Executes the definition in a subprocess with eval-set capture enabled: the definition runs normally (including any side effects) up to its `eval_set()` call, which resolves all tasks, writes a manifest, and exits without running anything.
 
     Args:
-        definition: Path to the definition file (an `eval_set()` script, an Inspect Flow spec, or a Hawk eval set config).
+        definition: Path to the definition file (an `eval_set()` script or an Inspect Flow spec).
         args: Arguments for the definition (flow spec function args only).
         type: Explicit definition type (auto-detected by default).
         cwd: Working directory for executing the definition (defaults to the current working directory, matching how the definition would run by hand).

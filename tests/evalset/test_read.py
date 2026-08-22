@@ -76,21 +76,6 @@ def test_read_eval_set_flow_args(tmp_path: Path) -> None:
     assert task.args == {"difficulty": "hard"}
 
 
-def test_read_eval_set_hawk(tmp_path: Path) -> None:
-    pytest.importorskip("hawk", reason="hawk not installed (requires Python >= 3.13)")
-    pytest.importorskip("hawk_pkg", reason="hawk_pkg fixture package not installed")
-    manifest = read_eval_set(FIXTURES / "hawk_local.yaml", cwd=tmp_path)
-
-    assert manifest.source.type == "hawk"
-    assert len(manifest.tasks) == 1
-    task = manifest.tasks[0]
-    assert task.registry_name == "hawk_pkg/addition"
-    assert task.args == {"difficulty": "hard"}
-    assert task.model == "mockllm/model"
-    assert task.samples == 1  # limit: 1
-    assert not (tmp_path / "logs").exists()
-
-
 def test_read_eval_set_env_cannot_break_capture(tmp_path: Path) -> None:
     # a caller-supplied capture var must not displace the protocol's own
     bogus = tmp_path / "bogus" / "manifest.json"

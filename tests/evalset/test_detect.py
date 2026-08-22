@@ -34,7 +34,6 @@ not_a_flow_field: true
         ("no_eval_set.py", "evalset"),
         ("flow_spec.py", "flow"),
         ("flow_spec.yaml", "flow"),
-        ("hawk_config.yaml", "hawk"),
     ],
 )
 def test_detect_fixtures(fixture: str, expected: DefinitionType) -> None:
@@ -67,18 +66,9 @@ def test_detect_explicit_type_wins(tmp_path: Path) -> None:
     assert detect_definition_type(path, "flow") == "flow"
 
 
-@pytest.mark.parametrize(
-    "fixture,explicit",
-    [
-        ("simple_evalset.py", "hawk"),
-        ("hawk_config.yaml", "evalset"),
-    ],
-)
-def test_detect_explicit_type_extension_mismatch(
-    fixture: str, explicit: DefinitionType
-) -> None:
+def test_detect_explicit_type_extension_mismatch() -> None:
     with pytest.raises(ValueError, match="not compatible"):
-        detect_definition_type(FIXTURES / fixture, explicit)
+        detect_definition_type(FIXTURES / "flow_spec.yaml", "evalset")
 
 
 def test_detect_module_attribute_usage(tmp_path: Path) -> None:

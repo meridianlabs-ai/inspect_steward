@@ -1082,20 +1082,6 @@ wheels = [
 ]
 
 [[package]]
-name = "hawk"
-version = "2.3.0"
-source = { registry = "https://pypi.org/simple" }
-dependencies = [
-    { name = "packaging", marker = "python_full_version >= '3.13'" },
-    { name = "pydantic", marker = "python_full_version >= '3.13'" },
-    { name = "ruamel-yaml", marker = "python_full_version >= '3.13'" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/72/75/158ca2b88c82010787876aee36ff471b57f64eeb51a75656c5fa6ccedde8/hawk-2.3.0.tar.gz", hash = "sha256:c4ecee2bcf1864dca5da4b627f90f40d332a9165bd55dc01bd715526dd7a7954", size = 3149852, upload-time = "2026-08-04T19:58:59.195Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/73/05/951103e204649597839528e73081225ccf908a15289a72feeccc921f3b57/hawk-2.3.0-py3-none-any.whl", hash = "sha256:40b004b3549ab089e2d4ad916cf32aeb879f60f3def90b947fd609bd4b1e639b", size = 658890, upload-time = "2026-08-04T19:58:57.522Z" },
-]
-
-[[package]]
 name = "httpcore"
 version = "1.0.9"
 source = { registry = "https://pypi.org/simple" }
@@ -1345,9 +1331,6 @@ dependencies = [
 flow = [
     { name = "inspect-flow" },
 ]
-hawk = [
-    { name = "hawk", marker = "python_full_version >= '3.13'" },
-]
 
 [package.dev-dependencies]
 dev = [
@@ -1383,13 +1366,12 @@ doc = [
 [package.metadata]
 requires-dist = [
     { name = "click", specifier = ">=8.0" },
-    { name = "hawk", marker = "python_full_version >= '3.13' and extra == 'hawk'", specifier = ">=2.3" },
     { name = "inspect-ai", git = "https://github.com/UKGovernmentBEIS/inspect_ai?branch=main" },
     { name = "inspect-flow", marker = "extra == 'flow'", specifier = ">=0.12.0" },
     { name = "inspect-scout", specifier = ">=0.4.46" },
     { name = "pyyaml", specifier = ">=6.0" },
 ]
-provides-extras = ["flow", "hawk"]
+provides-extras = ["flow"]
 
 [package.metadata.requires-dev]
 dev = [

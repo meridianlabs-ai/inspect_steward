@@ -10,8 +10,8 @@ MANIFEST_VERSION = 1
 class ManifestSource(BaseModel):
     """The source a manifest was read from: an eval set definition and the arguments it was invoked with."""
 
-    type: Literal["evalset", "flow", "hawk"]
-    """Definition type: an `evalset` definition is a Python file culminating in a call to `eval_set()`; a `flow` definition is an Inspect Flow spec (Python or YAML); a `hawk` definition is a Hawk eval set config (YAML)."""
+    type: Literal["evalset", "flow"]
+    """Definition type: an `evalset` definition is a Python file culminating in a call to `eval_set()`; a `flow` definition is an Inspect Flow spec (Python or YAML)."""
 
     path: str
     """Definition file path (as provided by the caller)."""

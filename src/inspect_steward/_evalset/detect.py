@@ -5,12 +5,12 @@ from typing import Any, Literal, cast
 
 import yaml
 
-DefinitionType = Literal["evalset", "flow", "hawk"]
+DefinitionType = Literal["evalset", "flow"]
 
 _EXTENSIONS: dict[str, list[DefinitionType]] = {
     ".py": ["evalset", "flow"],
-    ".yaml": ["flow", "hawk"],
-    ".yml": ["flow", "hawk"],
+    ".yaml": ["flow"],
+    ".yml": ["flow"],
 }
 
 
@@ -19,7 +19,7 @@ def detect_definition_type(
 ) -> DefinitionType:
     """Determine the type of an eval set definition file.
 
-    Detection is static — the definition is never executed. Python files are classified by their imports (`inspect_flow` => flow, `eval_set` from `inspect_ai` => evalset). YAML files are classified by structure: hawk configs have `tasks` entries with `package`/`items` fields, otherwise the file must validate as an Inspect Flow spec (which requires `inspect_flow` to be installed).
+    Detection is static — the definition is never executed. Python files are classified by their imports (`inspect_flow` => flow, `eval_set` from `inspect_ai` => evalset). YAML files must validate as an Inspect Flow spec (which requires `inspect_flow` to be installed).
 
     Args:
         path: Path to the definition file.
@@ -35,8 +35,7 @@ def detect_definition_type(
     if candidates is None:
         raise ValueError(
             f"Unsupported definition file '{path}': expected a .py file "
-            "(eval_set script or flow spec) or a .yaml/.yml file (flow spec "
-            "or hawk eval set config)."
+            "(eval_set script or flow spec) or a .yaml/.yml file (flow spec)."
         )
 
     if type is not None:
@@ -104,12 +103,6 @@ def _detect_yaml(path: Path) -> DefinitionType:
         raise ValueError(f"Definition file '{path}' does not contain a YAML mapping.")
     data = cast(dict[str, Any], loaded)
 
-    # hawk structural signature: tasks[] entries with package/items. checked
-    # structurally (not via hawk's validator) because hawk's schema allows
-    # extra keys and would falsely accept a flow spec.
-    if _is_hawk_config(data):
-        return "hawk"
-
     if importlib.util.find_spec("inspect_flow") is not None:
         from inspect_flow import FlowSpec
         from pydantic import ValidationError
@@ -119,33 +112,14 @@ def _detect_yaml(path: Path) -> DefinitionType:
             return "flow"
         except ValidationError as ex:
             raise ValueError(
-                f"Definition file '{path}' is neither a hawk eval set config "
-                f"(no tasks with package/items) nor a valid flow spec:\n{ex}"
+                f"Definition file '{path}' is not a valid flow spec:\n{ex}"
             ) from ex
     else:
         raise ValueError(
-            f"Cannot determine the type of '{path}': it is not a hawk eval "
-            "set config, and inspect_flow is not installed to validate it "
-            "as a flow spec. Install with 'pip install inspect_steward[flow]' "
-            "or pass an explicit type."
+            f"Cannot determine the type of '{path}': inspect_flow is not "
+            "installed to validate it as a flow spec. Install with "
+            "'pip install inspect_steward[flow]' or pass an explicit type."
         )
-
-
-def _is_hawk_config(data: dict[str, Any]) -> bool:
-    tasks = data.get("tasks")
-    if not isinstance(tasks, list):
-        return False
-    entries = cast(list[Any], tasks)
-    return len(entries) > 0 and all(_is_hawk_task(entry) for entry in entries)
-
-
-def _is_hawk_task(task: Any) -> bool:
-    if not isinstance(task, dict):
-        return False
-    entry = cast(dict[str, Any], task)
-    return isinstance(entry.get("package"), str) and isinstance(
-        entry.get("items"), list
-    )
 
 
 def _is_module(name: str, module: str) -> bool:

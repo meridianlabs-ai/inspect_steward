@@ -1,4 +1,3 @@
-import importlib.util
 import sys
 from pathlib import Path
 
@@ -56,25 +55,3 @@ def test_command_flow_args(args: dict[str, object], expected: list[str]) -> None
 def test_command_args_require_flow() -> None:
     with pytest.raises(ValueError, match="only supported for flow"):
         definition_command(FIXTURES / "simple_evalset.py", "evalset", args={"x": 1})
-
-
-@pytest.mark.skipif(
-    importlib.util.find_spec("hawk") is not None, reason="hawk is installed"
-)
-def test_command_hawk_requires_package() -> None:
-    with pytest.raises(ValueError, match=r"inspect_steward\[hawk\]"):
-        definition_command(FIXTURES / "hawk_config.yaml", "hawk")
-
-
-@pytest.mark.skipif(
-    importlib.util.find_spec("hawk") is None, reason="hawk not installed"
-)
-def test_command_hawk() -> None:
-    path = FIXTURES / "hawk_config.yaml"
-    command = definition_command(path, "hawk")
-    assert command.argv == [
-        sys.executable,
-        "-m",
-        "inspect_steward._runner.hawk",
-        str(path.resolve()),
-    ]

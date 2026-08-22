@@ -15,9 +15,6 @@ dependencies = [
 
 [project.optional-dependencies]
 flow = ["inspect_flow>=0.12.0"]
-# hawk requires Python >= 3.13 (the marker keeps 3.12 resolvable; steward's
-# runtime check reports the Python requirement when hawk is missing)
-hawk = ["hawk>=2.3; python_version >= '3.13'"]
 
 [project.urls]
 "Source Code" = "https://github.com/meridianlabs-ai/inspect_steward"
@@ -108,8 +105,6 @@ addopts = "-n auto"
 
 [tool.pyright]
 include = ["src", "tests"]
-# hawk_pkg is a standalone fixture package (own src/ root), not part of this project
-exclude = ["tests/evalset/fixtures/hawk_pkg"]
 typeCheckingMode = "strict"
 pythonPlatform = "All"
 

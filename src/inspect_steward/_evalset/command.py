@@ -56,7 +56,7 @@ def definition_command(
     abs_path = str(path.resolve())
     if type == "evalset":
         argv = [sys.executable, abs_path]
-    elif type == "flow":
+    else:
         _require_package("inspect_flow", "flow")
         # flow's own CLI is a conforming program: it culminates in the
         # eval_set() call this definition describes (module form rather than
@@ -65,9 +65,6 @@ def definition_command(
         if log_dir is not None:
             argv += ["--log-dir", log_dir]
         argv += _arg_options(args)
-    else:
-        _require_package("hawk", "hawk")
-        argv = [sys.executable, "-m", "inspect_steward._runner.hawk", abs_path]
 
     return DefinitionCommand(argv=argv, cwd=str((cwd or Path.cwd()).resolve()))
 
