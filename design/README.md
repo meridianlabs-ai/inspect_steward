@@ -1,12 +1,13 @@
 # Design
 
-Three documents, read in this order. Each starts where the previous one ends.
+Four documents. The first three read in order, each starting where the previous ends; the fourth is one platform's integration and depends on all three.
 
 | | covers | status |
 |---|---|---|
 | [configuration.md](configuration.md) | How a *definition* — any program culminating in one `eval_set()` call — becomes a **manifest** of resolved tasks, via capture mode. | Implemented |
 | [execution.md](execution.md) | How a manifest becomes **running processes**: worker mode, the shared log directory, recovery, and the reconcile loop. | Protocol landed upstream; runner unbuilt |
 | [workflow.md](workflow.md) | What a person actually **does** — `init` through `signoff` — the workspace, adjudication, notification, and resource tuning. | Sketch, actively being figured out |
+| [hawk.md](hawk.md) | Running under **Hawk**: its config as a definition, its infra config at runtime, a blocking `launch`, and the relay an external agent drives it through. | Stage 0 implemented (configs read and run); runtime stages sketched |
 
 ## The shape in one paragraph
 
@@ -21,10 +22,11 @@ A definition is executed once under `INSPECT_EVAL_SET_CAPTURE` to enumerate its 
 - **`fail_on_error=False`.** Everything runs to the end; anomalies are settled afterwards rather than aborting a run mid-flight.
 - **Mechanics ship with the package (`steward runbook`); policy lives with the project (`policy.md`).** Steward proposes changes to policy and never writes it.
 - **The workspace syncs outward on every tend.** Runs happen on machines with no git and sometimes no internet, where an S3 bucket is the only observability channel. The sync is exclusionary (everything top-level but dotfiles, directories, and agent bootstrap) and never raises.
+- **A platform is a definition type, not a second architecture.** Flow's CLI and Hawk's runner are both programs culminating in one `eval_set()` call, so Steward runs *their* entrypoints and intercepts at the boundary rather than re-deriving what they do.
 
 ## Where the open questions live
 
-Each document ends with its own numbered list. Roughly: configuration.md holds definition-boundary questions, execution.md holds process, recovery, and scanning questions, and workflow.md holds product, adjudication, and resource-allocation questions. Two answers live across documents — execution.md's *what "resolved" means* is answered in workflow.md, and workflow.md's smoke run depends on the selection overrides described in execution.md.
+Each document ends with its own numbered list. Roughly: configuration.md holds definition-boundary questions, execution.md holds process, recovery, and scanning questions, workflow.md holds product, adjudication, and resource-allocation questions, and hawk.md holds the ones that only arise inside someone else's platform. Answers cross documents in three places — execution.md's *what "resolved" means* is answered in workflow.md, workflow.md's smoke run depends on the selection overrides described in execution.md, and configuration.md's deferred Hawk support is answered in hawk.md.
 
 ## Upstream dependencies
 

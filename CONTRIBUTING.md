@@ -6,6 +6,15 @@ Thanks for your interest in contributing. Bug reports, doc fixes, and core chang
 
 Steward uses [uv](https://docs.astral.sh/uv/) for environment and dependency management, and requires Python 3.12+.
 
+The development environment pins 3.13 (`.python-version`) even though 3.12 is supported, because the optional `hawk` extra requires 3.13 — on 3.12 it resolves to nothing and the Hawk tests skip. CI covers both: 3.12 proves the floor still works without Hawk, and 3.14 exercises the Hawk path.
+
+That asymmetry is worth remembering when touching anything that imports an optional package: `make check` only ever sees the 3.13 environment, where Hawk *is* installed, so it cannot catch a type error that appears only where Hawk is absent. CI typechecks 3.12 as well and will. To reproduce that half locally:
+
+```bash
+uv venv --python 3.12 /tmp/py312 && uv pip install --python /tmp/py312/bin/python -e . --group dev
+.venv/bin/pyright --pythonpath /tmp/py312/bin/python
+```
+
 ```bash
 git clone https://github.com/meridianlabs-ai/inspect_steward
 cd inspect_steward

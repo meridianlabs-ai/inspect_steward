@@ -19,7 +19,7 @@ Steward is an autonomous evaluation runner: it launches, monitors, scales, diagn
 
 3. **Side effects run everywhere.** Definition files do real work when executed: `set_model_info()`, dynamically constructed `Model` objects, environment mutation, dataset preparation. These effects cannot be captured in a static artifact, so *every* process that runs evaluation work must execute the definition itself — enumeration produces an index into the definition, never a replacement for it.
 
-A fourth, structural decision frames everything below: **Steward owns all orchestration.** It never calls `flow run` and never relies on Hawk's single `eval_set()` invocation. Flow and Hawk contribute *definition formats* (and loading libraries); scheduling, retries, scaling, and supervision belong to Steward.
+A fourth, structural decision frames everything below: **Steward owns all orchestration.** It does run Flow's and Hawk's own entrypoints — that is what keeps their formats theirs — but it intercepts at the `eval_set()` boundary, so neither ever orchestrates. Flow and Hawk contribute *definition formats* and the code that lowers them; scheduling, retries, scaling, and supervision belong to Steward.
 
 We maintain inspect_ai, so the mechanisms below that belong in inspect_ai are designed as inspect_ai features from the start — no interim patching or workarounds.
 
@@ -237,15 +237,23 @@ Flow specs may contain live `Task`/`Model` objects (which Flow itself rejects in
 
 ### Hawk eval set configs
 
-**Not currently supported** — deferred until the integration can go through Hawk's own runner. Steward recognizes a Hawk config structurally and reports that it is unsupported, rather than failing as an invalid flow spec.
+**`hawk local eval-set` is itself a conforming program**: it culminates in the `eval_set()` call the config describes, so Steward drives Hawk's own CLI under the protocol (`python -m hawk local eval-set <config> --direct`) rather than reaching into Hawk's internals. Hawk keeps ownership of everything before the boundary — the tasks × solvers/agents × models crossing, secrets resolution, `runner.environment`, provider environment for middleman routing, and rejecting configs it does not support — and Steward owns execution from the boundary onward. `--direct` is not optional: without it Hawk builds a fresh venv per worker.
 
-A first implementation parsed configs with Hawk's `EvalSetConfig` and then reimplemented the lowering (the tasks × solvers/agents × models crossing from `run_eval_set.py`). That fork diverged from a real Hawk run in ways a manifest cannot show:
+`--direct` does not mean *skip installing*, though — Hawk still runs `uv pip install` into the current environment on every invocation (`run_in_venv.install_into_current`). It is a no-op in a consistent environment, since Hawk pins the versions already installed, but two consequences follow that Flow has no equivalent of: a config declaring `packages:` installs them into the caller's environment, and N workers starting together run N concurrent installs into it. Two concurrent workers are verified; higher fan-out is not, and this is the first thing to suspect if it misbehaves. Driving `python -m hawk.runner.run_eval_set` instead would avoid the install entirely — that entry point skips Hawk's entrypoint module — at the cost of the pre-boundary work above.
 
-- **`EvalSetInfraConfig` is invisible to it.** Hawk merges a second, platform-supplied config into the `eval_set()` call — `log_dir`, the retry family, `tags`/`metadata` (unioned with the user's), `max_samples`/`max_tasks` defaults, `log_shared`, `acp_server`, and a runtime-computed `max_sandboxes`. Even `hawk local` synthesizes a default one. Task identity is unaffected (none of those fields feed `task_identifier`), but eval-set options are not what Hawk would use.
-- **`runner.environment` was ignored**, though it is a user-config field Hawk applies to the environment before running — so dataset loading could differ or fail.
-- Secrets resolution (files, AWS Secrets Manager, provider routing) and dependency installation were absent.
+An earlier implementation instead parsed configs with Hawk's `EvalSetConfig` and reimplemented the lowering. That fork diverged from a real Hawk run in ways a manifest cannot show — `EvalSetInfraConfig` was invisible to it, `runner.environment` was ignored, and secrets resolution was absent — and all three dissolve here, because all three happen in Hawk's runner *before* the boundary.
 
-The right shape is the one used for Flow: **Hawk's runner is itself a conforming program** (config in, one `eval_set()` call out), so Steward should drive Hawk's entrypoint under the protocol rather than re-deriving it. Deployment-wise Hawk keeps its platform — CLI, API server, Helm release, runner-pod venv construction, secrets, sandboxes — and embeds Steward inside the release, delegating where `run_eval_set.py` makes its single `eval_set()` call; Hawk continues to own environments, Steward owns execution within the environment Hawk built. Steward does not take on dependency/venv management.
+Hawk has no log-directory option to override: a local run synthesizes an infra config whose `log_dir` is a fresh `logs/<random job id>/` relative to the working directory. Reads need no scratch directory anyway, because capture exits before that path is used (nothing creates it), and workers override both `log_dir` and `eval_set_id` through the selection document. Verified end to end, including two concurrent Hawk workers writing into one flat log directory, both logs stamped with the eval-set id Steward assigned rather than Hawk's synthetic one.
+
+Detection validates a YAML definition against both `FlowSpec` and `EvalSetConfig` and requires exactly one match. Any definition that names tasks discriminates itself: a flow spec's `{name, model}` task entries cannot satisfy Hawk's `PackageConfig` (which requires `package` and `items`), and Hawk's entries match no member of flow's `str | FlowTask | Task` union. A definition that names *no* tasks satisfies both — `tasks: []` is a valid empty sequence for flow and a present-but-empty required field for Hawk — so that one case is reported as ambiguous and asks for an explicit `--type` rather than being resolved by declaring one format the winner.
+
+Detection is relative to what is installed: each format is validated only when its package is present, so "exactly one match" means one among those that could be checked. With only one of the two installed, an otherwise-ambiguous document resolves to that one. A document that is genuinely the *other* format still fails, and says which package is missing — the ambiguity is confined to definitions that declare no tasks, which no frontend can run anyway.
+
+Hawk requires Python 3.13; inspect_steward does not. The extra is marker-gated, so the floor binds only those who ask for Hawk, and on 3.12 the extra resolves to nothing.
+
+That install also needs a `uv` binary, which Hawk shells out to but does not declare, so the `[hawk]` extra carries it. Declaring it is necessary but not sufficient: pip installs it beside the interpreter, and Hawk resolves a bare `uv` through `PATH`, which contains that directory only when the venv happens to be activated — so an unactivated `.venv/bin/steward` would still fail. Steward prepends the interpreter's directory to the Hawk child's `PATH`, which is Steward's to do because Steward chose the interpreter. Both are ours to carry until Hawk declares the dependency.
+
+Deployment-wise Hawk keeps its platform — CLI, API server, Helm release, runner-pod venv construction, secrets, sandboxes — and would embed Steward inside the release, delegating where `run_eval_set.py` makes its single `eval_set()` call; Hawk continues to own environments, Steward owns execution within the environment Hawk built. Steward does not take on dependency/venv management. That half is unbuilt — see [hawk.md](hawk.md) for the infra config's per-process budgets, the blocking `launch`, and the relay surface an external agent drives it through.
 
 ## Changes required in inspect_ai
 
@@ -266,6 +274,6 @@ The right shape is the one used for Flow: **Hawk's runner is itself a conforming
 
 4. **Display-key format details.** *Resolved in implementation:* the solver segment always renders (the resolved plan name, or the literal `default` when unregistered); collisions disambiguate by differing args, then differing model args, then ordinal (`#n`) for config-only sweeps.
 
-5. **Hawk `extra="allow"` passthrough.** *Moot for now:* Hawk support is deferred (see above). If Steward drives Hawk's entrypoint rather than lowering configs itself, Hawk's own passthrough handling applies unchanged.
+5. **Hawk `extra="allow"` passthrough.** *Moot:* Steward drives Hawk's entrypoint rather than lowering configs itself, so Hawk's own passthrough handling applies unchanged — including its guarantee that a forwarded extra cannot shadow an infra-config kwarg. Hawk's remaining open questions are in [hawk.md](hawk.md).
 
 6. **Selection schema evolution.** The reserved per-task `samples` field for within-task sharding (splitting one large task's samples across workers, via `eval_set`'s existing `sample_id` support).

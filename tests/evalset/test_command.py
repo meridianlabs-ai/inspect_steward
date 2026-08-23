@@ -1,8 +1,12 @@
+import os
 import sys
 from pathlib import Path
 
 import pytest
 from inspect_steward._evalset.command import definition_command
+from inspect_steward._evalset.detect import DefinitionType
+
+from ._hawk import requires_hawk
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -36,6 +40,26 @@ def test_command_flow() -> None:
     ]
 
 
+@requires_hawk
+def test_command_hawk() -> None:
+    path = FIXTURES / "hawk_config.yaml"
+    command = definition_command(path, "hawk", log_dir="/tmp/scratch")
+    assert command.argv == [
+        sys.executable,
+        "-m",
+        "hawk",
+        "local",
+        "eval-set",
+        str(path.resolve()),
+        "--direct",
+    ]
+    # hawk has no log-dir option, so the scratch directory is not passed
+    assert "/tmp/scratch" not in command.argv
+    # hawk shells out to a bare `uv`, which lives beside the interpreter and is
+    # otherwise only findable when the venv is activated
+    assert command.env["PATH"].split(os.pathsep)[0] == str(Path(sys.executable).parent)
+
+
 @pytest.mark.parametrize(
     ("args", "expected"),
     [
@@ -52,6 +76,10 @@ def test_command_flow_args(args: dict[str, object], expected: list[str]) -> None
     assert command.argv[-len(expected) :] == expected
 
 
-def test_command_args_require_flow() -> None:
+@pytest.mark.parametrize(
+    ("fixture", "type"),
+    [("simple_evalset.py", "evalset"), ("hawk_config.yaml", "hawk")],
+)
+def test_command_args_require_flow(fixture: str, type: DefinitionType) -> None:
     with pytest.raises(ValueError, match="only supported for flow"):
-        definition_command(FIXTURES / "simple_evalset.py", "evalset", args={"x": 1})
+        definition_command(FIXTURES / fixture, type, args={"x": 1})

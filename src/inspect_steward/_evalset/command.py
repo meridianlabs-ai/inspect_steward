@@ -1,4 +1,5 @@
 import importlib.util
+import os
 import sys
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -6,7 +7,7 @@ from typing import Any
 
 import yaml
 
-from .detect import DefinitionType
+from .detect import DefinitionType, install_hint
 
 
 @dataclass(frozen=True)
@@ -54,9 +55,10 @@ def definition_command(
         )
 
     abs_path = str(path.resolve())
+    env: dict[str, str] = {}
     if type == "evalset":
         argv = [sys.executable, abs_path]
-    else:
+    elif type == "flow":
         _require_package("inspect_flow", "flow")
         # flow's own CLI is a conforming program: it culminates in the
         # eval_set() call this definition describes (module form rather than
@@ -65,8 +67,39 @@ def definition_command(
         if log_dir is not None:
             argv += ["--log-dir", log_dir]
         argv += _arg_options(args)
+    else:
+        _require_package("hawk", "hawk")
+        # hawk's CLI is a conforming program for the same reason, and
+        # `local eval-set` is the command a user runs by hand. Driving it
+        # rather than hawk's runner module keeps hawk's pre-boundary work --
+        # secrets resolution, provider env for middleman routing, rejecting
+        # `scan:` -- where it belongs.
+        #
+        # --direct runs in this interpreter; without it hawk builds a fresh
+        # venv per worker. Note it does not mean "skip installing": hawk still
+        # runs `uv pip install` into the *current* environment on every
+        # invocation (`run_in_venv.install_into_current`). That is a no-op in a
+        # consistent environment, because hawk pins what is already installed,
+        # but a config declaring `packages:` installs them into the caller's
+        # venv, and N workers starting together run N concurrent installs.
+        #
+        # log_dir is deliberately not passed: hawk has no such option, and a
+        # local run's log directory comes from the infra config it synthesizes
+        # for itself. That costs nothing here because capture exits before the
+        # directory is used, and workers override it through the selection.
+        argv = [sys.executable, "-m", "hawk", "local", "eval-set", abs_path, "--direct"]
+        # that install shells out to a bare `uv`, resolved through PATH. We
+        # declare uv in the [hawk] extra, but pip puts it beside the
+        # interpreter -- a directory that is only on PATH when the venv happens
+        # to be activated, so `.venv/bin/steward` would still die with
+        # FileNotFoundError. We chose this interpreter; making its uv reachable
+        # is ours to do. An ambient uv still wins for everything else on PATH,
+        # since this only prepends one directory.
+        env["PATH"] = os.pathsep.join(
+            [str(Path(sys.executable).parent), os.environ.get("PATH", "")]
+        )
 
-    return DefinitionCommand(argv=argv, cwd=str((cwd or Path.cwd()).resolve()))
+    return DefinitionCommand(argv=argv, cwd=str((cwd or Path.cwd()).resolve()), env=env)
 
 
 def _arg_options(args: dict[str, Any] | None) -> list[str]:
@@ -87,5 +120,5 @@ def _require_package(package: str, extra: str) -> None:
     if importlib.util.find_spec(package) is None:
         raise ValueError(
             f"The '{package}' package is required to run this definition. "
-            f"Install it with: pip install inspect_steward[{extra}]"
+            f"{install_hint(package, extra)}"
         )

@@ -15,6 +15,29 @@ dependencies = [
 
 [project.optional-dependencies]
 flow = ["inspect_flow>=0.12.0"]
+# cli: the `python -m hawk` click entry point Steward invokes.
+# runner: hawk.runner.run_eval_set imports k8s_sandbox at module scope.
+# uv: hawk shells out to `uv pip install` on every invocation but does not
+#   declare it, so without this the extra installs and then fails at the first
+#   read with FileNotFoundError. Ours to carry until hawk declares it.
+#   Declaring it is necessary but not sufficient: pip puts the binary beside
+#   the interpreter, and hawk resolves a bare `uv` through PATH, which only
+#   contains that directory when the venv happens to be activated. The hawk
+#   branch of `definition_command` prepends it for the child process.
+#
+# Marker-gated because hawk requires Python 3.13 and inspect_steward does not.
+# An extra is opt-in, so hawk's floor binds only those who ask for hawk: on
+# 3.12 the extra resolves to nothing and hawk support is simply unavailable.
+#
+# No upper bound, but note the coupling it leaves open: the hawk test fixture
+# names `hawk/e2e_hello`, hawk's own internal smoke-test task, because
+# `--direct` installs nothing new and it is the only registered task available
+# without one. A hawk release that renames or drops it breaks that fixture with
+# no change on our side.
+hawk = [
+    "hawk[cli,runner]>=2.4.0; python_version >= '3.13'",
+    "uv>=0.5; python_version >= '3.13'",
+]
 
 [project.urls]
 "Source Code" = "https://github.com/meridianlabs-ai/inspect_steward"
@@ -40,6 +63,9 @@ dev = [
     "pytest-dotenv",
     "pytest-timeout>=2.4.0",
     "inspect_flow>=0.12.0", # for the flow definition tests
+    # for the hawk definition tests; 3.13+ only, so those tests skip on 3.12
+    "hawk[cli,runner]>=2.4.0; python_version >= '3.13'",
+    "uv>=0.5; python_version >= '3.13'",
     {include-group = "doc"},
 ]
 doc = [
@@ -102,6 +128,13 @@ convention = "google"
 pythonpath = ["src"]
 testpaths = ["tests"]
 addopts = "-n auto"
+markers = [
+    # Requires network and the `uv` binary. Hawk's CLI runs `uv pip install`
+    # into the running interpreter on every invocation, resolving inspect-ai
+    # from a pinned git commit, so a hawk definition cannot be read offline.
+    # Exclude with: pytest -m "not network"
+    "network: needs network access and an external tool on PATH",
+]
 
 [tool.pyright]
 include = ["src", "tests"]

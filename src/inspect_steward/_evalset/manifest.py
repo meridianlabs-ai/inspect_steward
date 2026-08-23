@@ -1,8 +1,10 @@
-from typing import Any, Literal
+from typing import Any
 
 # the capture models are a versioned wire format, deliberately not public API
 from inspect_ai._eval.eval_set_manifest import EvalSetCaptureTask
 from pydantic import BaseModel
+
+from .detect import DefinitionType
 
 MANIFEST_VERSION = 1
 
@@ -10,8 +12,8 @@ MANIFEST_VERSION = 1
 class ManifestSource(BaseModel):
     """The source a manifest was read from: an eval set definition and the arguments it was invoked with."""
 
-    type: Literal["evalset", "flow"]
-    """Definition type: an `evalset` definition is a Python file culminating in a call to `eval_set()`; a `flow` definition is an Inspect Flow spec (Python or YAML)."""
+    type: DefinitionType
+    """Definition type: an `evalset` definition is a Python file culminating in a call to `eval_set()`; a `flow` definition is an Inspect Flow spec (Python or YAML); a `hawk` definition is a Hawk eval set config (YAML)."""
 
     path: str
     """Definition file path (as provided by the caller)."""

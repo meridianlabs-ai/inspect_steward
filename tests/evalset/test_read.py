@@ -3,6 +3,8 @@ from pathlib import Path
 import pytest
 from inspect_steward import Manifest, ReadEvalSetError, read_eval_set
 
+from ._hawk import requires_hawk
+
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
@@ -61,6 +63,34 @@ def test_read_eval_set_flow(fixture: str, tmp_path: Path) -> None:
     assert task.model == "mockllm/model"
     assert task.samples == 2
     assert task.identifier
+    assert not (tmp_path / "logs").exists()
+    assert not (FIXTURES / "logs").exists()
+
+
+@requires_hawk
+@pytest.mark.network
+def test_read_eval_set_hawk(tmp_path: Path) -> None:
+    # Unlike every other definition type, reading a hawk config is not
+    # hermetic: `hawk local eval-set --direct` runs `uv pip install` into the
+    # interpreter running this test, resolving inspect-ai from a pinned git
+    # commit. It is a no-op only while this environment happens to satisfy
+    # hawk's self-pin -- an accident of current state, not an invariant. Hence
+    # the marker; see the `network` entry in pyproject.toml.
+    manifest = read_eval_set(FIXTURES / "hawk_config.yaml", cwd=tmp_path)
+
+    assert manifest.source.type == "hawk"
+
+    # the manifest is hawk's own lowering: one task crossed over two solvers,
+    # which is the crossing Steward deliberately does not re-derive
+    assert len(manifest.tasks) == 2
+    assert {task.solver for task in manifest.tasks} == {"generate", "chain_of_thought"}
+    assert {task.name for task in manifest.tasks} == {"hawk/hawk/e2e_hello"}
+    assert all(task.model == "mockllm/model" for task in manifest.tasks)
+    assert len({task.identifier for task in manifest.tasks}) == 2
+
+    # hawk synthesizes a local infra config whose log directory is relative to
+    # the working directory; capture must exit before anything creates it
+    assert manifest.options["log_dir"].startswith("logs/")
     assert not (tmp_path / "logs").exists()
     assert not (FIXTURES / "logs").exists()
 

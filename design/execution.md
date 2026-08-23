@@ -93,6 +93,7 @@ Everything in `eval_set()` below the selection branch is orchestration, and all 
 | `cleanup_older_eval_logs` | Steward, at the end of the run |
 | `embed_log_dir` / `bundle_log_dir` | Steward, at the end of the run |
 | `scan_context` / `scan_finalize` | Steward, over the log directory (see Scanning) |
+| `emit_eval_set_start` / `emit_eval_set_end` | **Nobody, today** — see open question 11 |
 
 Two things are *not* skipped. The worker still creates `log_dir` (`mkdir(exist_ok=True)` is idempotent and concurrency-safe), and it still runs the full `eval()` path, so every eval-set-level kwarg the definition set — epochs, limits, solver, generate config, tags, metadata, `retry_on_error` — applies exactly as it would have.
 
@@ -125,9 +126,14 @@ with scan_context(scanner, scan_id=eval_set_id, log_dir=log_dir):
         scanned = scanned_transcripts_for_resume(scanner, eval_set_id, location)
         for sample in eval_log.samples or []:
             await resume_scan_previous_sample(
-                sample, scanner, scanned, sample_semaphore,
-                scan_id=eval_set_id, eval_id=eval_log.eval.eval_id,
-                log_location=location, model=eval_log.eval.model,
+                sample,
+                scanner,
+                scanned,
+                sample_semaphore,
+                scan_id=eval_set_id,
+                eval_id=eval_log.eval.eval_id,
+                log_location=location,
+                model=eval_log.eval.model,
                 eval_spec=eval_log.eval,
             )
 ```
@@ -536,6 +542,8 @@ The selection schema can grow the partial facets Layer 2 needs (`name`, `args_ha
 
    The clean fix is on Flow's side and is small: a way to skip the pre-boundary artifacts when an external runner owns the log directory — either a flag Steward passes, or Flow noticing `INSPECT_EVAL_SET_SELECTION` and skipping `write_config_file` / `write_flow_requirements` / the log scan. Steward would then have one worker write those artifacts once, or write them itself. Accepted as-is until it hurts.
 
+   **This is not a Flow question.** Hawk has the same shape and a sharper version of it — its pre-boundary work includes `uv pip install` into the running interpreter on every invocation, so N workers mutate one shared environment concurrently rather than merely duplicating reads ([hawk.md](hawk.md), *Pre-boundary work that must not be per-worker*). Any frontend Steward drives will divide its startup into per-process work, which must repeat, and per-run work, which must not. The general ask — **a way for an external runner to declare that it owns the once-per-run work** — is one protocol question with one answer, and it is better asked once of the boundary than twice of two frontends. `INSPECT_EVAL_SET_SELECTION` is already the signal that an external runner is present; what is missing is any obligation on a frontend to notice it.
+
 2. **What replaces flow's store.** With `--store none`, flow's completion decisions and log reuse go away. Steward makes those decisions from the manifest and the log directory, but the store also provided cross-run reuse (finding an identical task's log from a *previous* run). Whether Steward offers an equivalent, and whether a single shared log directory makes flow's store usable again rather than disabled, is unresolved.
 
 3. **Worker startup cost without Layer 2 pruning.** Every worker currently constructs every task in the eval set, including datasets, to compute identifiers. For a large sweep this dominates. Layer 2 fixes it; until then, batching several tasks into one worker's selection is the available mitigation.
@@ -560,4 +568,6 @@ The selection schema can grow the partial facets Layer 2 needs (`name`, `args_ha
 
 10. **Tend cadence, and the evidence that would justify a daemon.** With the agent as sole driver, the cost of the interval is slot idle: roughly `interval/2 ÷ mean task duration` whenever concurrency is capped below the task count. Ten minutes is a guess, not a measurement, and a tend has a second price a daemon does not — agent context per call — so the optimum is not simply "as often as possible". What is needed is actual idle-time accounting from real sweeps, which the in-flight record can supply directly (`exited` to next `intent` per slot). Whether batching absorbs the short-task case, and whether the residue ever exceeds what a daemon would cost to operate, is the question that decides if the detached driver gets built.
 
-11. **What "resolved" means for an eval set.** *Answered in [workflow.md](workflow.md).* A run is **resolved** when no anomaly is open — anomaly state being a fold over `journal.jsonl` — and separately **signed off** when a person has attested to the results. Scan findings arrive last and can re-open a run that looked finished, which is why signoff follows the scan rather than the tasks. `EvalLog.invalidated` and per-sample `invalidation` records carry the provenance half. What remains open there is the anomaly *identity* scheme, not the definition.
+11. **Eval-set-scoped hooks fire nowhere.** Selection mode returns at `evalset.py:648`; `emit_eval_set_start` and `emit_eval_set_end` are at `:899` and `:937`. A worker never reaches them, correctly — it is not running an eval set. But Steward does not emit them either, so any hook registered at eval-set scope is silently dropped, while the same hook's run- and sample-scoped handlers keep firing. Found concretely in Hawk, where it costs two metrics and, more seriously, arms nothing for a stuck-eval watchdog ([hawk.md](hawk.md)); it applies to any platform that registers at that scope. Either Steward emits the pair around the run it owns — the honest reading, since it *is* the eval set — or Inspect grows a way for an external runner to, which is the same shape as the shared directory operations above. Whichever, the current state is a silent gap rather than a decision.
+
+12. **What "resolved" means for an eval set.** *Answered in [workflow.md](workflow.md).* A run is **resolved** when no anomaly is open — anomaly state being a fold over `journal.jsonl` — and separately **signed off** when a person has attested to the results. Scan findings arrive last and can re-open a run that looked finished, which is why signoff follows the scan rather than the tasks. `EvalLog.invalidated` and per-sample `invalidation` records carry the provenance half. What remains open there is the anomaly *identity* scheme, not the definition.

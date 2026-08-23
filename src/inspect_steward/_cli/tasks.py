@@ -21,7 +21,7 @@ from .._evalset.read import ReadEvalSetError, read_eval_set
 @click.option(
     "--type",
     "definition_type",
-    type=click.Choice(["evalset", "flow"]),
+    type=click.Choice(["evalset", "flow", "hawk"]),
     default=None,
     help="Definition type (auto-detected by default).",
 )
@@ -40,7 +40,7 @@ def tasks_command(
 ) -> None:
     """Enumerate the tasks defined by an eval set definition.
 
-    DEFINITION is a Python file culminating in an eval_set() call, or an Inspect Flow spec (Python or YAML).
+    DEFINITION is a Python file culminating in an eval_set() call, an Inspect Flow spec (Python or YAML), or a Hawk eval set config (YAML).
     """
     try:
         manifest = read_eval_set(
