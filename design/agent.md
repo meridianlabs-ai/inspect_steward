@@ -6,7 +6,7 @@ Every other document in this set describes machinery. This one describes the onl
 
 [execution.md](execution.md) establishes that the reconcile core is a pure function driven from outside, and that a timer guarantees the mechanical half of that. [workflow.md](workflow.md) establishes that the human's own surface is three commands and a conversation. Everything between those two facts is the agent, and it has accumulated more responsibility than any single document has acknowledged.
 
-## Four jobs, all of them judgement
+## 1. Four jobs, all of them judgement
 
 The design's division of labour is consistent — mechanical work stays in `tend`, judgement goes to the agent — and applying it repeatedly has produced an agent that does four distinct things. Driving is deliberately **not** among them: an earlier draft had the agent scheduling `tend`, and that job now belongs to a timer for reasons the next section gives.
 
@@ -19,7 +19,7 @@ The design's division of labour is consistent — mechanical work stays in `tend
 
 All four fail the same way: **with no agent in session none of them happens.** Each was individually argued as an acceptable cost, and their sum is what makes the separation below matter — because they are all judgement, an absent agent leaves a run that is *converging but undecided*, which is a tolerable overnight state. It stops being tolerable the moment the mechanical half depends on the agent too.
 
-## The agent does not guarantee the cadence — a timer does
+## 2. The agent does not guarantee the cadence — a timer does
 
 An earlier draft made the agent the scheduler, and the reason it cannot be is structural rather than a matter of discipline:
 
@@ -29,7 +29,7 @@ Combine that with the four jobs above and the failure compounds: an absent agent
 
 **What that buys is a clean separation of what breaks.** With a timer running and no agent in session, the fleet converges, logs land, scans drain, `status.md` stays current, and mechanical notifications fire. What accumulates is judgement: anomalies unruled, scan results unprobed, `analysis.md` unwritten. That is a run waiting for a decision, which is a fine thing to be at 4am — as opposed to a stalled run that looks exactly like a healthy one.
 
-### Three postures, all of them supported
+### 2.1 Three postures, all of them supported
 
 Because the floor is guaranteed, the agent's relationship to the run is a choice rather than an obligation:
 
@@ -45,7 +45,7 @@ Because the floor is guaranteed, the agent's relationship to the run is a choice
 
 **Reactive beats periodic where the harness supports it.** A monitor watching for a new anomaly or a landed scan costs nothing while nothing happens, where a periodic check pays context on every quiet interval. Sixty tends a night read in full is a real cost; sixty tends a night that only wake an agent when something changed is not.
 
-### Tend output is collected, and collection is a recorded act
+### 2.2 Tend output is collected, and collection is a recorded act
 
 "The agent reads what accumulated" is a hope unless something records that it did. **Collection makes it a state transition**: an agent reads the uncollected tends, acts on them, and then acknowledges up to a high-water mark, which lands in the journal like any other event.
 
@@ -61,14 +61,14 @@ It also answers the tend summary's audience problem concretely: the delta an arr
 
 **Whether a growing backlog should notify is a policy question, not a mechanical one.** In the transient posture a long uncollected stretch is normal — that is what an unattended night looks like. It becomes a problem only against an expectation the human holds, so it belongs in `policy.md` ("I expect collection at least every four hours") rather than in a threshold Steward invents. What Steward does unconditionally is *report* it: `status.md` carries both ages, and a workspace whose last tend is four minutes old and whose last collection is six hours old is describing its own situation accurately.
 
-### What the agent still owes
+### 2.3 What the agent still owes
 
 Two things the timer cannot do, both of which belong in the runbook:
 
 - **Check on attach, before anything else.** A session that starts by answering the human's question without first reading what accumulated is answering from a stale picture.
 - **Confirm supervision is actually running**, once, early. The timer cannot detect its own absence, so two cheap signals stand in: the journal should show tend events at roughly the expected interval, and `status.md` states its own age. A workspace whose newest tend is four hours old in a ten-minute cadence is unsupervised, and nothing else will say so.
 
-## Cold pickup is a procedure, not a property
+## 3. Cold pickup is a procedure, not a property
 
 The design repeatedly claims a third party can pick a workspace up cold. That claim is a workflow, it has never been written down, and it runs far more often than the phrase suggests — **at every session boundary, several times a night**, not only when someone new arrives.
 
@@ -85,7 +85,7 @@ Two properties make this work rather than merely sound plausible. Everything an 
 
 The last two lines are why the journal carries observations and why `analysis.md` exists at all. Without them a fresh agent inherits a list of open items and no idea which are getting worse.
 
-## The tend summary
+## 4. The tend summary
 
 The most-executed interface in the system, and a real constraint rather than a formatting question. Note the audience shifted once the timer took over the cadence: most tends are now read by *nobody* at the time they run, and are read later in bulk by an agent that has just attached. That makes the summary a **record** as much as a report, and it is the reason the last row below exists — an agent arriving after six unattended tends needs the delta since anyone last looked, not since the last one ran.
 
@@ -102,7 +102,7 @@ What it must carry, given what the five jobs need:
 
 The schema itself is unsettled (open question 1). What is settled is that it is **one structured object rendered as markdown**, not prose the agent has to parse and not a table the agent has to reformat — for the reason in the next section.
 
-## Render the summary; do not replace it
+## 5. Render the summary; do not replace it
 
 *"How is it going", "what's the latest", "any update"* are requests for **the snapshot**, not for the agent's reading of it. The rule is worth stating as flatly as possible because the temptation is constant and the failure is invisible:
 
@@ -114,7 +114,7 @@ Analysis is **held by default** and goes below the snapshot, marked as the agent
 
 This applies to a wake-up at 3am exactly as it applies to a question asked directly.
 
-## What the agent may do without asking
+## 6. What the agent may do without asking
 
 The bounds are already set by decisions in other documents; collected here because an agent needs them in one place.
 
@@ -137,7 +137,7 @@ The bounds are already set by decisions in other documents; collected here becau
 
 **Stop and ask** on: a smoke gate that still fails after two attempts; identity or resume errors, where the manifest and the logs disagree about what the eval *is*; numbers that fail sanity; anything requiring a destructive or irreversible action; persistent credential failures; or a non-converging loop — the same task failing across three launches, or logs accumulating for one task. A stop is not a teardown: healthy work keeps running, and the journal gets a final entry with state and a hypothesis.
 
-## Notification is the only channel that reaches an absent human
+## 7. Notification is the only channel that reaches an absent human
 
 Two rules, and the first is the one most likely to be skipped.
 
@@ -151,7 +151,7 @@ This is the answer to [workflow.md](workflow.md) open question 2 from the other 
 
 **Post freely otherwise.** An unconfigured channel makes `notify()` a silent no-op, so there is nothing to check and nothing accumulates. The cost of an unnecessary `attention` is a line in a channel; the cost of a skipped `stopped` is a night spent waiting for an answer nobody knew was wanted.
 
-## Context is the real budget
+## 8. Context is the real budget
 
 Roughly sixty tends a night, plus evidence on every anomaly opened, plus whatever investigation costs. Three rules keep it bounded:
 
@@ -159,13 +159,13 @@ Roughly sixty tends a night, plus evidence on every anomaly opened, plus whateve
 - **Transcript analysis goes through a scan**, never a raw log read. Live diagnosis of a *running* sample over the control channel is different and is fine — that is diagnosis, not analysis.
 - **Narrow an anomaly before opening it.** An investigation that means reading a five-hundred-sample transcript needs scoping first; the cost of a scan is wall-clock and tokens across many logs, and the cost of an investigation is context on a few ([workflow.md](workflow.md), *Scanning collects; investigation digs*).
 
-## What `steward runbook` says
+## 9. What `steward runbook` says
 
 The runbook ships with the package and is mechanics, not policy — [workflow.md](workflow.md) draws that line and this document does not move it. It is closer to a prompt than to documentation, and its content is this document reduced to instructions: the cadence and how to arm it, cold pickup, the rendering discipline, the bounds above, when to notify, and the hard stops.
 
 One rule belongs there that appears nowhere else, because it is about how an agent reads tool output rather than about Steward: **trust the artifact, not the exit code.** Every gate here has an artifact that says what happened — the manifest delta, the smoke digest, the log itself, the anomaly count. A clean exit means a process ended, which is not the same as the work having succeeded, and under `fail_on_error=False` the gap between those two is the normal case rather than an edge one.
 
-## Open questions
+## 10. Open questions
 
 1. **The tend summary schema.** The contents are settled above; the encoding is not. It is read sixty times a night, so its size is a real cost, and the balance between a compact structured form and one legible when rendered directly to a human is unresolved.
 

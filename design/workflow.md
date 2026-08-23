@@ -4,7 +4,7 @@
 
 [configuration.md](configuration.md) covers how a definition becomes a manifest. [execution.md](execution.md) covers how a manifest becomes running processes. This document is about the layer above both: what a person actually *does* with Steward, from starting a sweep to trusting its results.
 
-## The premise, restated
+## 1. The premise, restated
 
 Three facts drive every decision here:
 
@@ -14,7 +14,7 @@ Three facts drive every decision here:
 
 Everything below follows from the mismatch between those three clocks. The directory is the only thing present the whole time, so the directory has to carry the state, the instructions, and the record.
 
-## A project, not a run
+## 2. A project, not a run
 
 The word *run* invites a model this design does not have: a thing that starts, has an identity, and ends. What a workspace actually holds is a **project** — one definition that evolves over time, one log directory that accumulates its results, and one journal recording what was decided. Work happens in episodes, but an episode is not an entity: nothing keys on it, nothing is named after it, and it needs no id.
 
@@ -28,7 +28,7 @@ tend                            =  the controller
 
 `reconcile(manifest, inflight, log_dir)` is a controller driving observed state toward desired state. Edit the definition, and the next launch captures a new desired state; everything already satisfying it is left alone. That is not a mechanism Steward invents — it is what `eval_set()` has always done when pointed at the same log directory twice, and Steward inherits it by inheriting the boundary.
 
-### Inspect already splits identity from completeness, and the split is the whole trick
+### 2.1 Inspect already splits identity from completeness, and the split is the whole trick
 
 Two mechanisms upstream do the work, and it matters that they are separate:
 
@@ -48,7 +48,7 @@ The third row is what makes extending a project cheap rather than merely possibl
 
 **It also needs no new mechanism, and cannot have one.** Epochs is not a live knob — nothing on the control channel adds work to a running eval, by design ([execution.md](execution.md), *The channel changes how work runs, never what work exists*). Extension happens through the loop instead: the running worker is left alone, its log lands and reads as incomplete, and the next tend respawns with `resume`. Letting it finish is clearly right rather than merely defensible, because what it is producing is epoch 1 — precisely what the extension reuses. The cost is latency, since a task hours from finishing starts its new epochs hours from now.
 
-### Steward never destroys a result, but it does curate the directory
+### 2.2 Steward never destroys a result, but it does curate the directory
 
 The tempting invariant is *additive only* — Steward adds work and never removes anything. That is the wrong line, and the case that breaks it is ordinary: a provider has an outage, you decide mid-flight to drop that arm. Under additive-only its half-failed logs stay in `logs/` forever, so the arm you abandoned is still in your results.
 
@@ -86,7 +86,7 @@ Anything satisfied from either source is journaled with where it came from and n
 
 The archive grows and never shrinks, which on S3 is a real bill. That is the user's to lifecycle-rule; Steward does not offer a prune verb, because a command whose job is deleting results is precisely the one this section exists to avoid.
 
-### One trigger, and one gate on it
+### 2.3 One trigger, and one gate on it
 
 Capture executes the definition, so it is expensive — minutes for a Hawk config, which installs packages and resolves secrets on the way to the boundary. More importantly, **the definition is a file a human edits live.** Anything that captures automatically eventually captures a half-saved edit.
 
@@ -125,11 +125,11 @@ Two consequences follow. **The timer detects drift but never applies it** — a 
 
 The mid-edit hazard survives this but stops mattering. An intermediate save that is additive gets applied early and the next tend picks up the rest, so the final state is right and only the start is staggered — convergence is forgiving that way. One that is syntactically broken fails capture and is noise. One that is valid but wrong is only harmful when it archives, and that is gated.
 
-### What signoff attests to
+### 2.4 What signoff attests to
 
 If the definition evolves, an attestation has to name what it covered. It pins to the **manifest digest** rather than to a run id — derived rather than minted, and it gives "a signoff can be invalidated" a precise trigger: the definition changed, so what was signed is no longer what is current. See *Signoff*.
 
-## The commands
+## 3. The commands
 
 | command | who calls it | what it does |
 |---|---|---|
@@ -146,7 +146,7 @@ Two things the table is meant to make obvious. **Almost everything is agent-faci
 
 Deliberately absent: `steward amend` / `steward update` (a second `launch` is the amend path — see *One trigger, and one gate on it*), `steward prune` (a verb whose job is deleting results, in a design built on never deleting them), `steward journal` (precedent travels with the anomaly instead), `steward tui` (see *Do we need a TUI?*), `steward note` (unproven), and `steward unclaim` (unnecessary — see below). `steward tasks` exists for diagnosing enumeration but is not part of the workflow: `launch` captures the manifest anyway and `status` reports what is running. The pre-flight "what would this cost" question is answered by `launch --smoke`, which measures it rather than guessing.
 
-### What `pause` actually pauses
+### 3.1 What `pause` actually pauses
 
 Two things get called pausing, and only one of them is cheap:
 
@@ -155,7 +155,7 @@ Two things get called pausing, and only one of them is cheap:
 
 So `steward pause` means the first. The second exists as an **action a ruling may authorize** — "the provider is down, hold everything on sonnet" is a reasonable thing for a human to decide — but never as something Steward does on its own; [execution.md](execution.md) works through why the automatic version arrives too late to help. Anyone reaching for it should know that a hard pause holds a sample while its `time_limit` keeps running, which Inspect names as the operator's risk. Process-wide suspension of in-flight work is rarely what anyone actually wants.
 
-## The shape, end to end
+## 4. The shape, end to end
 
 ```
   human                    agent                     steward                run
@@ -188,7 +188,7 @@ So `steward pause` means the first. The second exists as an **action a ruling ma
   steward status / inspect view
 ```
 
-## `steward init` — the deliverable is a directory
+## 5. `steward init` — the deliverable is a directory
 
 The output of `init` is a workspace that a human and an agent co-inhabit, and that a *third* party can pick up cold. That framing is doing real work: it means everything important has to be written down rather than held in someone's session.
 
@@ -216,7 +216,7 @@ my-sweep/
 
 `init --type evalset|flow` scaffolds a starter definition, so a new directory is runnable rather than a set of empty conventions. It should still accept an existing definition and merely wrap it — the contract is deliberately "any program culminating in one `eval_set()` call", and `init` should not imply otherwise.
 
-### Three categories, and the one that matters
+### 5.1 Three categories, and the one that matters
 
 The obvious split — "human-readable top level, machine-owned `.steward/`" — conflates *who writes a file* with *whether it can be recovered*, and rulings are the case that breaks it. A ruling and its reasoning exist nowhere else: not in the logs, not in the manifest, not derivable from anything. So the categories are:
 
@@ -237,7 +237,7 @@ The fourth category is the newest and easy to mislabel as rendered. `scanning.md
 
 The usual reason to delete a state directory — a stuck claim — does not arise here, because the claim is held only for the seconds a tend runs and one older than a generous tend timeout is reaped as stale (execution.md, *The reconcile core and its drivers*). There is deliberately no `steward unclaim`: it would be a command for a failure mode the short-lived claim already removed.
 
-### Why there is no `journal.md`
+### 5.2 Why there is no `journal.md`
 
 The obvious companion to the log is a rendered markdown version, committed so the record is browsable. It was considered and dropped, because what it buys is narrow and what it costs is not.
 
@@ -251,7 +251,7 @@ In git, `.steward/` is ignored and `journal.jsonl` is committed, so cloning the 
 
 There is also no `steward journal` command, for a related reason. What an agent needs from the record is not a rendering but a **query** — "have we ruled on this class before?" — and that should not be something it must remember to ask. See *Precedent travels with the anomaly*.
 
-### The alternative that looked best and is not
+### 5.3 The alternative that looked best and is not
 
 A single markdown file with YAML front-matter per entry — structured fields above, narrative below — is the most attractive rejected option, and it wins on two counts worth naming. Drift becomes structurally impossible rather than merely unlikely, and prose sits **with** the data it describes instead of at a distance from it. It would also make the journal co-writable: prose is inert to the fold, so a human could annotate an entry with no risk of breaking anything.
 
@@ -261,11 +261,11 @@ It fails on one property, and the failure is not recoverable by care: **line-del
 
 Its co-writability is worth noting but not worth building for: the need for human annotation was a property of *that* design rather than a requirement anyone stated. If it turns out to be wanted, appending a narrative event to the journal is a small addition at any time.
 
-### The one file Steward must never write
+### 5.4 The one file Steward must never write
 
 `status.md`, `anomalies.md`, and `steward.log` are generated, carry a header, and are expendable. `policy.md` is its counterexample, and the reason the line is worth drawing visibly in the directory listing: it is the human's own document, and the one thing Steward only ever *proposes* changes to.
 
-### State is a fold over the journal
+### 5.5 State is a fold over the journal
 
 Given an append-only event log in `journal.jsonl`, the rest follows the discipline execution.md already established for the reconcile core — *the supervisor is a cache, never a source of truth*:
 
@@ -276,7 +276,7 @@ fold(journal.jsonl)                      -> anomaly state        # this document
 
 Anomaly state — what is open, what was proposed, what was ruled and how — is a **pure fold over the journal**, not a separately maintained file. Any `anomalies.json` is a cache of that fold, living in `.steward/` with the rest of the disposable state. The property this buys is the same one that made reconcile worth writing as a pure function: crash recovery for adjudication state is the normal code path, exercised on every tend rather than in a rescue routine nobody tests.
 
-### The journal records observations, not only decisions
+### 5.6 The journal records observations, not only decisions
 
 A journal of rulings alone would be too thin, and the reason is a claim made elsewhere in this design that is otherwise false. [execution.md](execution.md) says the agent watches a run as a time series — ramped here, pulled back there, this class started at 11pm and grew. **An agent's own memory does not survive a session boundary, and there are several of those in a night.** If the series is not written down it does not exist, and the 6am agent inherits a list of open items with no idea which are getting worse.
 
@@ -303,7 +303,7 @@ Event types, all sharing a `ts` (UTC ISO-8601) and `type` envelope:
 Two consequences worth naming. Rulings recorded per class are what let a group decision be unpicked later — the fold sees twelve rulings sharing a proposal id, not one ruling over twelve things. And because every event is timestamped and appended, "this class started at 11pm and tripled by 2am" is a query, which is what makes the weight-based re-notification above computable at all.
 
 
-### `steward.log` — whether Steward itself worked
+### 5.7 `steward.log` — whether Steward itself worked
 
 The journal is the record of the *eval set*: what was observed about it and what was decided. A second record is needed for a different subject — **whether the machinery ran** — and mixing them makes both harder to read. A tend that crashed, a spawn that failed, a sync that timed out, a ticker that had to be restarted, a claim that was found stale and reaped: none of these is a fact about the eval, and none belongs in a fold that reconstructs anomaly state.
 
@@ -317,7 +317,7 @@ It sits at the top level and is **disposable**, which is exactly the shape `stat
 
 One honest limit: the conditions most worth logging are the ones most likely to prevent logging. A full disk fails the `steward.log` write along with everything else, which is why the substrate failures in [execution.md](execution.md) escalate through the notification channel rather than relying on a file.
 
-### `init` and version control
+### 5.8 `init` and version control
 
 Where version control is available, `journal.jsonl` survives and is reviewable because it is committed — but nothing so far makes that happen, so `init` takes care of it. (On machines with no git or no network, the S3 sync described under *Syncing the workspace out* plays this role instead; `init` treats a missing git as an ordinary condition, not an error.)
 
@@ -328,7 +328,7 @@ Where version control is available, `journal.jsonl` survives and is reviewable b
 
 **A small integrity bonus falls out.** Committing an append-only journal gives a second, independent record of when each decision was made — git's own metadata — and any edit to a past entry shows up in review as a *modification* rather than an append. It does not make the record tamper-proof, but it makes tampering visible in the course of ordinary review, which is most of the value.
 
-### There is no `steward.yaml`
+### 5.9 There is no `steward.yaml`
 
 Every candidate for it turned out to belong somewhere else:
 
@@ -346,7 +346,7 @@ What is left over is per-run and belongs on the command line — `--smoke`, `--a
 
 The stronger reason to refuse it is drift. configuration.md spends its length establishing that the definition is the single source of truth for what an eval set *is*; a second config file beside it is precisely the place where a contradicting `log_dir` or `model` ends up. Not creating it is cheaper than policing it.
 
-## Mechanics and policy are different documents
+## 6. Mechanics and policy are different documents
 
 This is the distinction I most want to get right, because conflating them causes both of the obvious failure modes.
 
@@ -361,7 +361,7 @@ Making the runbook a *command* rather than a file solves version skew: instructi
 
 `AGENTS.md` is the thin bootstrap that points at both. It is the only thing that has to be discovered by convention.
 
-### A ruling is not a policy
+### 6.1 A ruling is not a policy
 
 `policy.md` grows over the life of a project, but **Steward should not write to it.** The distinction that matters: a *ruling* is a human's decision about one situation, with all of that situation's context behind it. A *policy* is a standing rule for every future situation of that shape. Promoting the first into the second is itself a judgement, and it is the human's.
 
@@ -374,7 +374,7 @@ So the division is:
 
 The accumulation benefit survives, and authorship stays where it belongs. It also gives the workflow a legible success metric: **interruptions per run, trending down.**
 
-### The journal, and a naming collision to fix
+### 6.2 The journal, and a naming collision to fix
 
 `journal.jsonl` is the append-only event log — launches, anomalies observed, proposals, rulings, resolutions, completion. It is what answers "what happened here, and who decided what" a year later, and the only file in the directory that nothing else can reconstruct.
 
@@ -382,7 +382,7 @@ Two files named *journal* would be one too many. execution.md currently uses the
 
 The two then differ in what they are for, which is why they sit in different places: `inflight.jsonl` is a **performance cache** over the log directory, discardable at any moment, while `journal.jsonl` is the **record**, and the only file in the directory that cannot be rebuilt.
 
-## `steward launch`
+## 7. `steward launch`
 
 Takes the claim, captures the manifest, writes the initial state, spawns the first workers, **returns**.
 
@@ -392,7 +392,7 @@ It also completes a coherent verb family. **launch → tend → status** are all
 
 The one thing lost is that `steward run` paired cutely with discovering `run.py`. That was never worth much — file discovery does not need to echo the verb.
 
-### Smoke first
+### 7.1 Smoke first
 
 Standing practice before an expensive sweep is a **smoke run**: a couple of samples per task under a wall-clock cap, to find out whether the thing works at all before committing real money to it. `steward launch --smoke` makes that a flag rather than a ritual people reconstruct by hand, and the runbook names it as the default first step.
 
@@ -418,7 +418,7 @@ Almost nothing about a smoke needs special machinery. It is a run with a sample 
 
 **The time cap is Steward's to enforce, and this is where the obvious implementation is wrong.** `time_limit` *is* in the identifier, so passing one through would change every task's identity and break selection matching against the very manifest the smoke was captured from. The fifteen minutes is therefore a wall-clock deadline Steward applies by stopping the smoke's workers — which is what it had to be regardless, since the cap bounds the *rehearsal* rather than each sample within it.
 
-## The tend loop
+## 8. The tend loop
 
 The agent schedules `steward tend` every ~10 minutes (see execution.md, *The reconcile core and its drivers*). Each tend:
 
@@ -429,7 +429,7 @@ The agent schedules `steward tend` every ~10 minutes (see execution.md, *The rec
 
 The agent reads the summary and decides whether anything warrants a human. Most tends warrant nothing and should produce no output beyond the file rewrite.
 
-## Syncing the workspace out
+## 9. Syncing the workspace out
 
 Some runs happen on machines with no git, and sometimes no internet at all. The deployment worth designing for has exactly two pipes out: a localhost model endpoint that proxies, and an S3 bucket. On such a machine **the bucket is the only observability channel there is** — the alternative to syncing is shelling into the runner, which is precisely what an unattended overnight job should not require.
 
@@ -437,7 +437,7 @@ So each tend mirrors the workspace's top-level files to object storage. Someone 
 
 It also completes the picture in one place: when `log_dir` is in the same bucket, the remote reader has the logs and the run's state side by side, and `inspect view` works against the same prefix.
 
-### The policy is exclusionary
+### 9.1 The policy is exclusionary
 
 The point of syncing is to carry out artifacts nobody predicted — an analysis an agent wrote, a note a human left, a report a scaffold generated. An allow-list defeats that by construction: anything unanticipated is silently left behind, which is the failure you notice last and regret most. So everything at the top level goes, minus a short deny list:
 
@@ -451,7 +451,7 @@ The `.env` case deserves the explicit rule rather than an incidental one. Syncin
 
 A pleasant consequence of exclusionary-by-default: if a rendered `journal.md` is ever added, or a report, or anything else, it flows out with no configuration change.
 
-### What actually leaves, and why `.env` is not the whole of it
+### 9.2 What actually leaves, and why `.env` is not the whole of it
 
 The `.env` rule is correct and it is the easy case. The harder one is that the files being synced *on purpose* carry material lifted out of transcripts:
 
@@ -467,7 +467,7 @@ Usually the sync target is the same bucket as `log_dir`, which bounds the audien
 - **Bound the volume.** Error text in a journal event is truncated to a stated length with a pointer to the log, which a full traceback badly needs anyway — the journal is read by a fold on every tend, and an untruncated stack trace is both a size problem and gratuitous surface.
 - **Keep the deny list.** Dotfiles and directories stay excluded, for the reason above and because the failure of an allow-list is silent.
 
-### It must never raise
+### 9.3 It must never raise
 
 The sync is advisory. It is important — on an air-gapped runner it is the whole window — but it is not on the critical path of producing results, and an eval must never fail because a bucket was briefly unreachable. So: bounded timeout, failures caught and recorded in `steward.log`, tend proceeds regardless — a sync failure is a fact about the machinery, not about the eval set. This also keeps it consistent with *a tend spawns and reaps; it never does long work itself* — a handful of small files with a timeout, not an unbounded transfer.
 
@@ -477,7 +477,7 @@ Note the recursion, and that it resolves: the record of *why* the sync failed is
 
 The sync is **outbound only**. Editing `policy.md` in the bucket does not change the run; two-way sync would need conflict resolution nobody wants for a monitoring channel.
 
-### What this means for git
+### 9.4 What this means for git
 
 The durability argument earlier leans on version control, and these machines have none. Neither mechanism is universal, so they are alternatives rather than a stack:
 
@@ -490,7 +490,7 @@ The durability argument earlier leans on version control, and these machines hav
 
 One conclusion this does *not* overturn, though it dents its reasoning: *why there is no `journal.md`* argued partly that append-only JSONL diffs cleanly in git, serving the technical reader. That argument is worth nothing here. The decision still stands on reversibility — adding the render later is cheap, and the exclusionary sync would carry it out automatically — but if remote readers turn out to want a rendered journal, this is the environment that will ask for it.
 
-## Resource allocation
+## 10. Resource allocation
 
 Two resources gate a run, and only one of them needs Steward's attention.
 
@@ -498,7 +498,7 @@ Two resources gate a run, and only one of them needs Steward's attention.
 
 **Sample concurrency is the one that costs money.** A sample waiting on a model-API semaphore is not free: it holds its sandbox container, its memory, and its slot in the event loop the whole time it waits. Concurrency set far above what the provider will actually serve means hundreds of samples sitting on EC2 consuming compute and doing nothing. The right level is roughly *the concurrency the provider actually supports* — not a number anyone can look up, since it varies by tier, by model, and by time of day.
 
-### Setting `max_samples` explicitly is what makes it a knob
+### 10.1 Setting `max_samples` explicitly is what makes it a knob
 
 Three paths produce a task's sample semaphore, and which one you land on decides whether Steward can steer at all:
 
@@ -512,7 +512,7 @@ Three paths produce a task's sample semaphore, and which one you land on decides
 
 That settles the scaffolding question with a second, stronger reason. `steward init` should write an explicit `max_samples=` into the definition not only so the author thinks about it, but because **an explicit value is the difference between a fleet Steward can coordinate and one it can only watch.**
 
-### What Steward actually has to solve
+### 10.2 What Steward actually has to solve
 
 **Per-process adaptation is per-process, and Steward runs many.** Left to adapt independently, eight workers each discover headroom that is partly headroom the others have not claimed yet — so they all climb, collectively overshoot, and get rate-limited together. Each is confidently optimizing against a resource it believes it has to itself.
 
@@ -520,7 +520,7 @@ Nothing inside a worker can see the total. What reaches a provider is the sum ac
 
 The division trades against things already weighed here. Fewer, larger workers pay less per-worker startup cost (roughly a second for Flow definitions, on every spawn); more, smaller workers give finer scheduling granularity and less slot idle between tends.
 
-### There is no single budget — there are two, with different shapes
+### 10.3 There is no single budget — there are two, with different shapes
 
 Tasks in one eval set often run against different models, and throughput varies enormously between them: a high-tier hosted provider and a single-GPU local vLLM are not the same resource and do not compete for the same thing. A uniform per-worker limit is then wrong in both directions at once — too high for the constrained model, whose samples pile up waiting, and too low for the fast one, which sits underused.
 
@@ -541,7 +541,7 @@ Setting concurrency **per task rather than per fleet** follows naturally from th
 
 Two caveats keep this from being exact. A rate-limit bucket is not quite a model — several models can share an account's quota, so grouping by model over-partitions. And a task may consume more than one provider: a grader model, or an agent calling a different model for subtasks, neither of which appears in the identifier. Steward can see a task's primary model and not its full appetite.
 
-### The levers
+### 10.4 The levers
 
 All of these are live-tunable through the control channel — `GET`/`PATCH /tasks/<task-id>/config` for task-scoped knobs, `GET`/`PATCH /config` for process-global ones — so tuning reaches **running** workers, not just newly spawned ones.
 
@@ -555,7 +555,7 @@ All of these are live-tunable through the control channel — `GET`/`PATCH /task
 
 One detail worth relying on: **semaphores are task-scoped, not attempt-scoped.** A retune survives an in-process retry rather than silently reverting to the definition's value, so a worker Steward has tuned stays tuned.
 
-### The ratchet is asymmetric, and the mechanism says so
+### 10.5 The ratchet is asymmetric, and the mechanism says so
 
 This is not an inference about container lifetimes — it is how the limiters behave. **Lowering a limit below the current in-use count blocks new acquires until in-flight holders drain; it never preempts. Raising one lets work start immediately.**
 
@@ -565,7 +565,7 @@ So climbing is instant and descending is gradual. Undershooting costs wall-clock
 
 The provider-side damage is undoable in seconds; the compute-side commitment is only outlastable — and on a Docker host it can take the box down before it drains. That argues for shrinking increments, **not** for timidity, and the difference matters more than it first appears.
 
-### Over-scaling risks failure; under-scaling wastes time and often money
+### 10.6 Over-scaling risks failure; under-scaling wastes time and often money
 
 The asymmetry above is easy to read as "be cautious", which would be the wrong lesson. The tempting summary — over-scaling costs money, under-scaling costs wall clock — is half wrong, and the wrong half is the money.
 
@@ -590,7 +590,7 @@ So delegating scaling to the agent is not a risk to be minimized, it is most of 
 
 **Overnight is the best time to probe, not the worst.** Nobody is waiting on interactive latency, provider load is often lower so there is genuinely more headroom to find, and there are hours in which to recover from a bad probe. The instinct that unattended means careful is partly backwards. What should actually govern boldness is **time remaining, not supervision**: probing at 11pm with a night ahead is cheap, and the same probe at 4pm against a 5pm deadline is not.
 
-### Authorize at 10pm, do not interrogate at 3am
+### 10.7 Authorize at 10pm, do not interrogate at 3am
 
 The cost of a question is not constant — it decays with the human's availability. Asked at launch it costs a sentence; asked at 3am it stalls the run until morning, which is the very outcome the escalation was meant to prevent.
 
@@ -598,7 +598,7 @@ So the agent should **front-load** the decisions while the human is present, and
 
 This is the pre-authorization idea from *Notification is the gate on autonomy*, applied to scaling, and scaling is where it pays best: the questions are predictable, they can be asked before anything has gone wrong, and the answers stay valid all night.
 
-### Rate limits are the wrong signal for the local ceiling
+### 10.8 Rate limits are the wrong signal for the local ceiling
 
 Provider pushback says nothing about memory. A run can climb to 200 concurrent samples with no rate limits at all and still take the box down. Which constraint binds depends on where sandboxes run:
 
@@ -610,13 +610,13 @@ Provider pushback says nothing about memory. A run can climb to 200 concurrent s
 
 "Ramp until rate limits appear" is correct advice on k8s and a way to kill a laptop under Docker.
 
-### The signal exists
+### 10.9 The signal exists
 
 The config view carries an `adaptive` section reporting each controller's live limit, in-flight count, scaling bounds, and **recent scale changes** — so pushback is observable rather than inferred. Scale-downs across several workers at once are the signal that the fleet has collectively overshot, which is precisely the condition no individual worker can detect.
 
 `PATCH` also supports `dry_run`, and applies what it can while warning about knobs that do not apply rather than failing the whole request — so Steward can probe before committing and tune several things at once without brittle error handling.
 
-### The envelope is policy; the tuning is the agent's job
+### 10.10 The envelope is policy; the tuning is the agent's job
 
 The **ceiling** is a judgement call about infrastructure that only the user can make — how big the box is, whether the cluster scales, how much they are willing to have running at once. It belongs in `policy.md` or as a launch argument. Everything inside that envelope is the agent's to tune **without asking**, and doing so is one of its standing jobs rather than an exceptional intervention. The envelope exists precisely so that the agent can move freely inside it: start conservatively (40 concurrent samples is a reasonable default to scaffold), raise while pushback stays absent and local headroom holds, pull back when scale-downs cluster, rebalance across groups as workers finish.
 
@@ -626,7 +626,7 @@ All of that is observation and arithmetic. What it cannot settle is a short list
 - **Risk appetite.** Faster-but-riskier against slower-but-safe has no observable right answer. Near a deadline a person may accept OOM risk they would never take overnight.
 - **Scope, when the numbers come back badly.** If observed throughput implies forty hours instead of four, the useful question is not what to set concurrency to — it is whether to drop a model, cut epochs, or let it run anyway.
 
-### Escalate in the units the human thinks in
+### 10.11 Escalate in the units the human thinks in
 
 That last item generalizes into the rule that matters most here. **A human cannot usefully rule on whether `max_samples` should be 60 or 80.** They can rule immediately on "at current throughput this finishes at 3am rather than 9pm", or on "the sonnet arm is a third of the remaining work and it is the one erroring".
 
@@ -634,7 +634,7 @@ So the agent's tuning output is a projected completion time and a picture of wha
 
 Tuning belongs in the record like anything else: each adjustment is a journal event, so "ramped to 80 at 14:10, scale-downs at 14:25, settled at 60" is reconstructible. Where the situation is genuinely unclear it becomes an **anomaly** and takes the ordinary lifecycle — open, investigating, proposed, ruled — rather than needing a parallel mechanism for resource questions.
 
-### Spend is not Steward's to manage
+### 10.12 Spend is not Steward's to manage
 
 An earlier draft had `steward launch --max-spend 200`, a cap Steward would enforce, spend attributed per arm, and escalations denominated in dollars per hour. **None of that is built.** Steward does not track spend, does not project it, does not cap it, and takes no action on it.
 
@@ -652,13 +652,13 @@ This is a decision rather than a deferral, and four things argue it.
 
 **What survives is reporting, not management.** Token usage is already in every log header (`EvalStats.model_usage`, per model), and Steward reads those headers on every tend for other reasons. Surfacing usage in `status` costs nothing and requires no prices. The line is that Steward *reports what the logs say* and does not track, project, cap, or act on spend. Nothing in the design depends on more than that.
 
-### Tuning precedent is the most reusable kind
+### 10.13 Tuning precedent is the most reusable kind
 
 Accumulated rulings pay off more here than anywhere else in the design, because **a provider's throughput is broadly stable across runs in a way that error conditions are not.** A ruling about a transient outage is worth little next month; "this model on this account sustains about 50 concurrent" is worth a great deal, and stays true. After a few runs Steward should simply know it, and start there rather than rediscovering it by ramping from 40 every time.
 
 That is the first thing in this design that wants to persist **outside the workspace**. Throughput is a property of a model and an account, not of one sweep, and `journal.jsonl` is per-project. Where cross-project learned knowledge lives — a user-level store, something under `~/.steward`, or nowhere — is unresolved, and it carries the usual hazard of implicit state: knowledge that changes behaviour while living somewhere nobody thinks to look.
 
-## Notification is the gate on autonomy
+## 11. Notification is the gate on autonomy
 
 The entire value proposition is "don't bother me unless it matters," and both failure modes are bad in the same way: notify too much and the human stops reading; notify too little and they discover in the morning that $400 went somewhere wrong. So notification policy is *the* tuning knob for how much autonomy the human has actually granted, and it belongs in `policy.md`.
 
@@ -669,7 +669,7 @@ Two sources, and the distinction matters:
 
 The second is the valuable one and the reason `steward notify` should exist as a command rather than being Steward-internal. It also means the agent needs to know when *not* to use it, which is a policy question, not a mechanism question.
 
-### Four kinds, and two of them are not the agent's to send
+### 11.1 Four kinds, and two of them are not the agent's to send
 
 Every post carries a **kind**. It is not decoration: it sets how the post presents, and its whole job is keeping the one message that needs a person distinguishable from the ones that merely inform.
 
@@ -686,9 +686,9 @@ The split is the point. `attention` and `stopped` carry judgement, which is why 
 
 **`gate` is the handover, and it is a latch.** The first tend that finds the run settled posts it and records that it did; every later tend writes its files and posts nothing. So the channel going quiet *is* the signal that the automatic work is over. It needs no new state to implement — "the gate was posted" is a journal event, so the fold already knows. And because a workspace is a project rather than a run, a later `launch` that puts work back in flight reopens it: the latch clears, and the next settling posts again. That is the case a manual convention would get wrong, since a relaunch is exactly where nobody would think to re-arm anything.
 
-**Post freely.** With no channel configured, `notify()` is a silent no-op that never raises ([What Inspect already provides](#what-inspect-already-provides)) — so the agent never has to check whether notification is set up, and a machine with no target does not accumulate failures. The cost of an unnecessary `attention` is one line in a channel; the cost of a skipped `stopped` is a run that waits all night for an answer nobody knew was wanted.
+**Post freely.** With no channel configured, `notify()` is a silent no-op that never raises ([What Inspect already provides](#112-what-inspect-already-provides)) — so the agent never has to check whether notification is set up, and a machine with no target does not accumulate failures. The cost of an unnecessary `attention` is one line in a channel; the cost of a skipped `stopped` is a run that waits all night for an answer nobody knew was wanted.
 
-### What Inspect already provides
+### 11.2 What Inspect already provides
 
 `inspect_ai.util.notify(message, title=None)` — async, best-effort, backed by [Apprise](https://appriseit.com), so every channel (Slack, email, SMS, desktop, webhook) comes from Apprise's URL DSL rather than from Inspect. It never raises and never blocks more than five seconds, which suits a caller that must not stall a tend. Apprise is an optional dependency.
 
@@ -700,17 +700,17 @@ Three properties of it shape Steward's design:
 
 **There is no eval-completion notification.** Nothing fires on task or eval completion today. That makes Steward the natural owner rather than a duplicator, and appropriately so: *complete* is a Steward-level concept — tasks finished **and** the scan drained **and** adjudication resolved — that Inspect is not in a position to know.
 
-### The gap: notifying from outside an eval
+### 11.3 The gap: notifying from outside an eval
 
 `notify()` resolves an Apprise instance from a `ContextVar` installed inside `eval_resolve_tasks`, so it is a **silent no-op anywhere outside a running eval**. Steward's tend, and therefore `steward notify`, runs in a process that is not inside an eval at all — so the function most relevant to Steward is exactly the one that does nothing when Steward calls it.
 
 The fix is small: `build_apprise()` and `init_apprise()` already exist and do precisely what is needed, but live in the private `inspect_ai.util._notify`. Making them public (or adding a `notification_scope(config)` convenience) is the same move as *Public eval-set directory operations* in execution.md — a documented surface for external callers rather than a private one reached around. It is also not Steward-specific: any script that runs evals and wants to be told when it finished hits the identical wall.
 
-### A distinction worth not blurring
+### 11.4 A distinction worth not blurring
 
 Inspect's existing `notify()` call sites are human-in-the-loop moments — `request_input()` behind the `ask_user()` tool, and `human_approver`. Both **block the sample** until a human responds. Steward's escalations use the same channel for the opposite semantics: queue the question, notify, and *carry on*. Same pipe, blocking versus non-blocking, and conflating them would reintroduce the one thing adjudication must never do.
 
-## Anomalies are structured state
+## 12. Anomalies are structured state
 
 Adjudication needs a data structure, not just a conversation. Without one, an unresolved problem is only ever a sentence in a summary — which means at a ten-minute cadence it gets re-discovered and re-reported on every tend, and nothing can tell whether it was already raised, already ruled on, or already fixed.
 
@@ -734,7 +734,7 @@ The fields that earn their place:
 
 **Stable identity is the hard requirement**, and it is easy to get wrong. The key is the class — *not* the set of affected samples, because that set grows as more samples fail into the same class. Get this wrong and either the same anomaly notifies fifty times over an overnight run, or a growing problem keeps looking like a new one and never accumulates the weight that would justify escalating it.
 
-### Three levels: instance, class, proposal
+### 12.1 Three levels: instance, class, proposal
 
 One grouping level is not enough, and trying to make it serve both ends is what makes the identity question feel unanswerable. There are two different consumers with opposite needs, so there are two groupings.
 
@@ -754,7 +754,7 @@ So **a proposal names the classes it covers**, and the human agrees once. The ru
 
 **Grouping is judgement, so it is the agent's**, on the same division that puts investigation there. That degrades gracefully: with no agent in session the classes stand on their own and `status.md` lists twelve, which is noisier but never wrong. When an agent arrives it collapses them into two proposals. Nothing is lost by waiting, and precedent makes the collapse cheaper each time, since the classes that grouped together last time are recorded as having done so.
 
-### The window closes when someone rules
+### 12.2 The window closes when someone rules
 
 Given classes, the remaining identity question is when one ends. **An anomaly stays open and absorbs new instances until it is ruled on; an instance of the same class arriving after a ruling opens a new anomaly.**
 
@@ -766,7 +766,7 @@ Its one weakness is real and needs a mitigation rather than an argument: an anom
 
 *Resolved* is not the same as *done*, though. See *Signoff*.
 
-### Scan findings are anomalies, and they arrive last
+### 12.3 Scan findings are anomalies, and they arrive last
 
 Scanners are purpose-built to notice things, which makes them the most valuable anomaly source in the system. Worth separating two cases that the word "scan error" blurs:
 
@@ -783,7 +783,7 @@ tasks complete  →  scan drains  →  anomalies settle  →  human signs off
 
 Which is the concrete reason signoff sits after the scan rather than after the tasks, and another reason a run is not finished when its workers are.
 
-### Adjudicate as you go, because that collapses to the other thing anyway
+### 12.4 Adjudicate as you go, because that collapses to the other thing anyway
 
 There is a coherent alternative worth recording, because a previous system in this shape chose it: hold *every* question for one blocking gate at the end, once all tasks have finished and all scans have drained. Its argument is real — a scan surfaces re-run candidates the error census cannot see, so ruling before the scans are in risks ruling twice, and an arm that just finished then needs nothing from anyone.
 
@@ -793,7 +793,7 @@ The wasted-work risk the end-gate model worries about is real but small, and **t
 
 Two things follow for the agent. It should **hold a proposal whose task has not been scanned yet** where the re-run looks expensive and the scan looks imminent — judgement, not a rule. And it should ask only what it is genuinely blocked on; everything else accumulates and is answered together, which is the end-gate model reappearing as the default rather than as a policy.
 
-### Scanning collects; investigation digs
+### 12.5 Scanning collects; investigation digs
 
 A distinction worth importing from how scanning is used in practice: **scanning collects results across everything, investigation digs into the interesting ones.** They are different activities with different economics — one is broad, mechanical, and runs over every transcript; the other is narrow, targeted, and follows a specific question.
 
@@ -807,7 +807,7 @@ Where investigation *is* a scan — a targeted pass with more expensive scanners
 
 For an anomaly to be investigable at all, it has to carry the pointers: which logs, which samples, which time window. That is already in `evidence`, and this is the use that justifies keeping it precise.
 
-### A scan result is a measurement, and only the agent can read it
+### 12.6 A scan result is a measurement, and only the agent can read it
 
 Asking what threshold turns a scanner value into a finding is a category error, and recognizing that is what unsticks the question. An error is *definitionally* a problem. A scan result is a **reading** — most are normal, and "is 0.3 bad" has no answer in the abstract. Nobody asks Steward to threshold scorer values; scan values are the same kind of thing. `Result.value` is `JsonValue` and carries no severity, verdict, or threshold anywhere in the API, which is the shape of a measurement rather than an omission.
 
@@ -820,7 +820,7 @@ So the question splits, and only one half is hard:
 
 So **`tend` reports that scan results are ready and which of them look worth a look**, in the same summary that carries everything else. The goal of that signal is precisely stated: *identify where investigation may be fruitful*. It is a shortlist, never a verdict.
 
-#### What these scanners are actually looking for
+#### 12.6.1 What these scanners are actually looking for
 
 The abstraction above is fine but it hides the stakes, and the stakes change what the machinery has to be good at. In practice scanners are looking for **reward hacking, attempts to escape the sandbox, environment misconfiguration, grader gaming or malfunction, and infrastructure failures**. These are not incidental readings; several of them mean the numbers are wrong, and one of them means something happened that a person needs to know about today.
 
@@ -841,11 +841,11 @@ Two things follow that the general treatment above gets wrong.
 So the two mitigations are not optional extras, they are what makes the mechanism honest:
 
 - **Report each scanner's distribution unconditionally**, not only its deviations. A uniform 0.0 across every task is then visible in `scanning.md` even though nothing stands out within the run — and a human or agent reading a flat distribution for a reward-hacking detector will recognize it immediately, where a shortlist of outliers would have been empty.
-- **Compare against the project's previous runs** once there are any. This is the same cross-run precedent [Tuning precedent is the most reusable kind](#tuning-precedent-is-the-most-reusable-kind) wants for throughput, and for the systematic case it is the only thing that catches a break — "this scanner fired on 4% of samples last month and 81% this month" is the shape a successful new exploit actually has.
+- **Compare against the project's previous runs** once there are any. This is the same cross-run precedent [Tuning precedent is the most reusable kind](#1013-tuning-precedent-is-the-most-reusable-kind) wants for throughput, and for the systematic case it is the only thing that catches a break — "this scanner fired on 4% of samples last month and 81% this month" is the shape a successful new exploit actually has.
 
-One further consequence, and it sharpens a hazard already recorded. A validity finding is a caveat that belongs *with the data*, which is a second and stronger reason both files are written into the log directory. It also bears directly on publication: [Publication is part of the attestation](#publication-is-part-of-the-attestation) already worries that a task signed with accepted exceptions carries a caveat that travels nowhere. When the exception is "this task's grader was gameable", handing another project the log without the footnote is not untidy, it is passing on a known-bad result.
+One further consequence, and it sharpens a hazard already recorded. A validity finding is a caveat that belongs *with the data*, which is a second and stronger reason both files are written into the log directory. It also bears directly on publication: [Publication is part of the attestation](#132-publication-is-part-of-the-attestation) already worries that a task signed with accepted exceptions carries a caveat that travels nowhere. When the exception is "this task's grader was gameable", handing another project the log without the footnote is not untidy, it is passing on a known-bad result.
 
-### `scanning.md` and `analysis.md` — what investigation produces
+### 12.7 `scanning.md` and `analysis.md` — what investigation produces
 
 Investigation that leaves no artifact is investigation done again next session. Two files, both **per task**, and both **authored by the agent** — a category the design did not previously have, and the thing that makes the agent's judgement outlive its session:
 
@@ -858,7 +858,7 @@ Per task because that is the manifest's unit, the unit a ruling and a re-run act
 
 **This fills a real gap.** The design has produced `status.md` (current state, ephemeral), `anomalies.md` (terse signoff footnotes), and `journal.jsonl` (raw events) — and nothing a person reads to find out *what happened*. `analysis.md` is that document, and its relationship to the journal is the one already established for observations and interpretation: **the journal carries the time series, `analysis.md` carries what it meant.**
 
-#### They belong in the log directory
+#### 12.7.1 They belong in the log directory
 
 Both files are written into `log_dir` alongside the results, not only at the workspace root.
 
@@ -870,17 +870,17 @@ They are mirrored on every tend that changes them rather than only at signoff, o
 
 **Both are durable, not disposable.** They belong in the same category as `journal.jsonl` and for the same reason — the interpretation exists nowhere else. `analysis.md` re-derives partly from the journal, but *which things were noteworthy* is judgement, and judgement is not recoverable by replaying events.
 
-### Precedent travels with the anomaly
+### 12.8 Precedent travels with the anomaly
 
 An agent adjudicating an anomaly wants to know whether this class has come up before and what was decided. Making that a lookup it must remember to perform is a design failure — it will sometimes forget, and the whole point of accumulating rulings is that they get applied.
 
 So **prior rulings for a class are attached to the anomaly** wherever it surfaces, in `tend` output and in `status`. The agent can apply precedent without a round trip, and a human deciding sees "you ruled this way twice before, on these dates, for this reason" at the moment of deciding rather than after. It is also the mechanism that makes *interruptions per run, trending down* actually happen rather than merely being hoped for.
 
-## Signoff
+## 13. Signoff
 
 Steward can compute that no anomaly is open. Only a person can say **I accept these results**. Those are different claims, and conflating them is how a run ends up looking certified because a machine ran out of things to flag.
 
-`steward signoff` is that attestation: the terminal event in the journal, recording who, when, and what was true at the time — task counts, samples resolved, exceptions accepted. Those accepted exceptions are exactly the contents of [`anomalies.md`](#anomaliesmd--the-caveats-that-reached-the-data), so signing off is also the moment the caveat list stops changing.
+`steward signoff` is that attestation: the terminal event in the journal, recording who, when, and what was true at the time — task counts, samples resolved, exceptions accepted. Those accepted exceptions are exactly the contents of [`anomalies.md`](#14-anomaliesmd--the-caveats-that-reached-the-data), so signing off is also the moment the caveat list stops changing.
 
 Three properties it needs:
 
@@ -888,7 +888,7 @@ Three properties it needs:
 - **It is an attestation, not access control.** Nothing can stop an agent from running the command, so the design does not pretend to: it records the signer, and the runbook states plainly that the agent never signs. A forged signature is then visible rather than prevented, which is the same bargain a commit author line makes.
 - **It can be invalidated.** A scan landing after signoff, or a later invalidation, re-opens anomalies. The signature stays in the journal as a record of what was believed at the time, and a fresh one is required.
 
-### Curation is part of the attestation too
+### 13.1 Curation is part of the attestation too
 
 A re-run leaves its predecessor behind. Over a project with several adjudications, `logs/` accumulates superseded attempts, failed ones, and cancelled ones alongside the results that count — and somebody reading that directory in six months has to know that `latest_completed_task_eval_logs` semantics decide which log is real.
 
@@ -906,7 +906,7 @@ Three details worth fixing now rather than discovering:
 
 Because a workspace is a project rather than a run, this happens once per signoff rather than once ever, and each pass curates what that signoff covered. Signoff reports what it moved, in the journal entry and on stdout.
 
-### Publication is part of the attestation
+### 13.2 Publication is part of the attestation
 
 Signoff is also where results leave the project, if they leave it at all. The reuse store ([execution.md](execution.md), *Flow's store, and who is allowed to read it*) indexes logs by task identifier so that another project — possibly someone else's, on a shared bucket — skips running a task Steward has already run. A row in it is a claim that a result is good enough to be reused sight-unseen.
 
@@ -922,7 +922,7 @@ The result is a lifecycle with two distinct terminal states rather than one over
 
 
 
-## `anomalies.md` — the caveats that reached the data
+## 14. `anomalies.md` — the caveats that reached the data
 
 The journal answers *was this run conducted properly*. A different reader asks a different question — *what caveats apply to these numbers* — and that reader is writing up the results, or reading the write-up, and may never open the journal at all. They need something short, and they need it to be honest.
 
@@ -958,7 +958,7 @@ Inspect draws exactly this line already, so detection is exact rather than heuri
 
 That is worth noticing against open question 1, where classifying anomalies is otherwise the hard, unresolved part of this design. Here the taxonomy already exists upstream and Steward only has to read it.
 
-### Approval terminations
+### 14.1 Approval terminations
 
 A sample killed by a tool-approval monitor arrives as `type="operator"` too — `TerminateSampleError` is caught and recorded as `EvalSampleLimit(type="operator", limit=1)`, the same shape as a bridge or manual termination. That is convenient: they need no special handling, falling out of the operator-limit rule above and into `anomalies.md` like any other externally-truncated sample.
 
@@ -977,7 +977,7 @@ So the cheap fix is upstream and small: carry the reason onto `EvalSampleLimit`,
 
 The alternative considered was a side-channel: approvers appending to a `terminations.jsonl` in the working directory. It was rejected as a second source of truth living outside the log, in a design that otherwise insists the log directory is ground truth. Re-runs are the concrete failure — invalidate a sample, run it again, and the file holds both attempts with nothing marking which is live, a problem the log does not have. Ownership across concurrent workers sharing a directory is unresolved, and a free-form format is one Steward cannot consume, so it would become an unversioned schema every approver author had to implement.
 
-## Adjudication is a conversation, and it has rules
+## 15. Adjudication is a conversation, and it has rules
 
 The hardest part of the workflow, and the least designed. Some starting positions:
 
@@ -989,7 +989,7 @@ The hardest part of the workflow, and the least designed. Some starting position
 
 **The default is conservative, because this is a scientific judgement.** Invalidating samples changes the number you report. The agent proposes; the human disposes; everything is recorded with provenance. A run where someone quietly dropped the inconvenient samples is worse than a run with known holes in it.
 
-## Do we need a TUI?
+## 16. Do we need a TUI?
 
 Probably not, and the reason is the premise: **a TUI assumes a present human**, which is the case Steward is explicitly not built for.
 
@@ -1006,13 +1006,13 @@ Nothing in that list wants a bespoke live UI. And if a run-level live view is ge
 
 This deletes a component, which is the best kind of design decision. It does leave one gap: `inspect view` shows *evals*, not *runs* — pending tasks, adjudication queue, and budget have no home in it today.
 
-## The audit trail
+## 17. The audit trail
 
 A thread running through all of the above: Steward's directory is an **integrity record**, not a scratch space. Someone reviewing results months later should be able to answer "which samples were re-run, which were dropped, who decided, and why" from the directory alone. Inspect already carries part of this (`EvalLog.invalidated`, per-sample `invalidation` records with provenance); the reasoning and the class-level rulings are Steward's to keep.
 
 This is also the argument for the whole workspace being git-friendly: the record of an eval's conduct is as reviewable as the code that produced it.
 
-## Open questions
+## 18. Open questions
 
 1. **Anomaly identity.** *Resolved — see *Three levels: instance, class, proposal* and *The window closes when someone rules*.* The normalization problem dissolved once message text left the key: a class is the exception type plus its raising frame (or, for a task, its failure signature), neither of which carries ids, hostnames, or counts. The window is a state boundary rather than a clock — an anomaly absorbs instances until ruled, and a later instance of the same class opens a new one, which is the useful signal that a ruling did not hold. Fine classes over-split relative to real causes, and the proposal layer is what collapses them for the human without collapsing what a ruling applies to.
 2. **How does a human answer when no agent is in session?** Notifications are outbound only, and Inspect's are deliberately one-way. The reply path is "start a session and the agent reads the open anomalies" — workable, but it means a yes/no costs a terminal. The mitigation is making questions rare (pre-authorization plus accumulated policy) rather than making answers fast, but that is a bet, not a solution.

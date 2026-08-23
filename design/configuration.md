@@ -4,7 +4,7 @@
 
 How users define what an evaluation run contains, and how Steward turns that definition into work it can manage.
 
-## Requirements
+## 1. Requirements
 
 Steward is an autonomous evaluation runner: it launches, monitors, scales, diagnoses, and remedies on behalf of a human. That role imposes three requirements on configuration:
 
@@ -23,7 +23,7 @@ A fourth, structural decision frames everything below: **Steward owns all orches
 
 We maintain inspect_ai, so the mechanisms below that belong in inspect_ai are designed as inspect_ai features from the start — no interim patching or workarounds.
 
-## The definition contract
+## 2. The definition contract
 
 The central abstraction: **a Steward definition is any program that culminates in a single `eval_set()` call.**
 
@@ -52,7 +52,7 @@ A second `eval_set()` call in the same process under capture or selection is an 
 
 Dynamic task producers (`TaskSource`) are fundamentally incompatible with static enumeration and are **out of scope**: capture mode fails with a clear error when the definition passes a `TaskSource`.
 
-### Locating the definition
+### 2.1 Locating the definition
 
 Every verb that takes a definition — `steward run`, `steward tasks` — accepts an explicit path. With no path, it discovers one **in the current directory** by convention:
 
@@ -71,7 +71,7 @@ Four rules keep this from becoming a source of surprise:
 
 One hazard worth recording: Flow writes a *resolved* `flow.yaml` into its log directory as an output artifact, and that file is itself a valid spec. Discovery run from inside a log directory would therefore find it and re-run the eval set from its resolved config. Steward should recognize a log directory (`.eval-set-id` or `eval-set.json` present) and refuse rather than treat its contents as a definition.
 
-### Protocol
+### 2.2 Protocol
 
 The interception protocol is environment-based so that any conforming program works unmodified under any process manager (names provisional):
 
@@ -92,7 +92,7 @@ def read_eval_set(definition: str, args: dict[str, Any] | None = None) -> Manife
 
 > **Naming note**: inspect_ai has an internal `read_eval_set_info(log_dir)` that reads the post-hoc `eval-set.json` manifest from a log directory — a different artifact (what ran) from ours (what is defined to run). Since the capture API lands in inspect_ai we should either unify the two or choose a name like `resolve_eval_set()` to avoid confusion.
 
-## Tasks and identity
+## 3. Tasks and identity
 
 The unit of work is a **task**: a resolved task × model × solver combination — inspect_ai's `ResolvedTask`, corresponding 1:1 with an eval log. This follows existing precedent: inspect_ai's `eval-set.json` calls these entries `tasks` (`EvalSetTask`, each carrying its model) and Flow's crossed unit is `FlowTask`. Where prose needs to distinguish the definition (`@task my_task`) from the combination, we say "task definition" vs "resolved task".
 
@@ -104,7 +104,7 @@ Two identity layers:
 
 Full identifiers are only computable *after* task construction (they hash the resolved plan and config). This asymmetry — cheap partial facets early, exact identity late — drives the filtering design below.
 
-## The manifest
+## 4. The manifest
 
 The manifest is an **index into the definition, not a reconstruction of it**. The definition file remains the single source of truth; the manifest exists so Steward can schedule, display, and track without re-executing the definition.
 
@@ -146,7 +146,7 @@ Because enumeration fully resolves tasks, the manifest carries per-task sample c
 
 **Determinism requirement.** The contract assumes the definition produces the same task list on every execution: enumerate on Monday, execute task 7 on Tuesday, and the selection must still match. `task_identifier` is deterministic given the same tasks/args/models, so the requirement reduces to "the definition is deterministic with respect to its task list" (no time- or randomness-dependent task construction). Drift is detected, never papered over: a selected task that resolution fails to produce is a hard error naming the missing task, and the manifest's `content_hash` lets Steward warn when the definition file changed after enumeration. What that hash is and is not for is the subject of the next section.
 
-## Reproducibility is the author's concern
+## 5. Reproducibility is the author's concern
 
 `task_identifier` hashes a task's **interface** — name, args, model, resolved plan, generate config, limits — and not its **implementation**. Change a scorer's logic, a prompt body, or the contents behind a dataset location, and the identifier is byte-identical. Inspect's answer is `task.version`, which participates in the identifier and is the author's to bump.
 
@@ -160,7 +160,7 @@ It is still the wrong thing to build. Reproducibility discipline is a property o
 
 One caveat worth recording so nobody reaches for it: `revision.dirty` is computed from `git status --porcelain` over the whole tree, and a Steward workspace writes `journal.jsonl`, `status.md`, and `anomalies.md` into that tree as it runs. In a workspace that `init` made its own repository, every log is therefore marked dirty by Steward's own operation. The flag means "a run touched this tree", not "the source was edited", and it should not be built on.
 
-## Selection and filtering
+## 6. Selection and filtering
 
 A selection is a structured document, not a bare list of identifier strings — the per-task entry is an object so early filtering layers can carry partial facets that opaque identifiers can't provide. Version 1, as implemented, carries only what the authoritative filter and resume need:
 
@@ -183,11 +183,11 @@ The Layer 2 facets are additive optional fields, but that does not make them fre
 
 Filtering happens at two internal layers. **No user-facing filtering API is required** — users write exactly the code they write today.
 
-### Layer 1: authoritative boundary filter
+### 6.1 Layer 1: authoritative boundary filter
 
 At the `eval_set()` boundary, after resolution: exact matching of resolved tasks against selection `identifier`s. Only this layer decides what runs. It also enforces drift detection (selected-but-unresolved task → hard error) and requires every selected task to match exactly one resolved task.
 
-### Layer 2: automatic early pruning
+### 6.2 Layer 2: automatic early pruning
 
 The expensive part of running a filtered worker is constructing task definitions the worker will never run — datasets load at `Task` construction. Pruning happens automatically at two points, both inside inspect_ai, both invisible to users:
 
@@ -201,7 +201,7 @@ Layer 2 covers all three frontends with no cooperation: users' `@task` calls in 
 
 **Edge case.** Task definitions built without `@task` — e.g. inline `Task(dataset=csv_dataset(...))`, where the dataset loads in the argument expression — cannot be intercepted. They still filter correctly at the boundary; they simply don't get the cost savings. Essentially all registry and real-world tasks are `@task` functions, so this is documented and accepted. A public query API (e.g. `eval_set_selection()`) may be offered later as an escape hatch for expensive side effects outside task construction; it is an optimization tool, never part of the contract. The systemic fix — lazy datasets — is a deep inspect_ai change and out of scope.
 
-## Execution model
+## 7. Execution model
 
 Full runner design is in [execution.md](execution.md); the parts that constrain configuration:
 
@@ -213,11 +213,11 @@ Full runner design is in [execution.md](execution.md); the parts that constrain 
 
 - **Supervision channel.** Workers run with inspect's control server enabled (`ctl_server`), giving Steward a live channel to query state and adjust runtime behavior of a running eval — which is Steward's whole purpose. Details in [execution.md](execution.md).
 
-## Frontend adapters
+## 8. Frontend adapters
 
 Each frontend needs a thin adapter that turns a definition reference into a conforming program. The interception protocol is common; only loading differs.
 
-### Raw `eval_set()` scripts
+### 8.1 Raw `eval_set()` scripts
 
 The user's file is the program. Steward executes it as `__main__` (via `runpy` or a subprocess `python evalset.py`) with the protocol environment set. Nothing about the file is Steward-specific — it runs identically by hand:
 
@@ -239,7 +239,7 @@ eval_set(
 
 Under a single-task selection, the non-matching `my_task` calls return placeholders (no dataset load), and the boundary runs exactly one task.
 
-### Inspect Flow specs
+### 8.2 Inspect Flow specs
 
 **`flow run` is itself a conforming program**: it culminates in the `eval_set()` call the spec describes, so Steward drives flow's own CLI under the protocol (`python -m inspect_flow._cli.main run <spec>`) rather than reaching into flow's internals. Flow keeps ownership of everything before the boundary — includes, implicit `_flow.py` inheritance, defaults merging, `NotGiven` semantics, `@after_load`/`@after_instantiate` hooks, and its `FlowOptions` → `eval_set()` mapping — and Steward owns execution from the boundary onward. Loading a Python spec is `exec` with real side effects (sys.path mutation, dotenv, `_flow.py` files) — by design, since every worker re-executes it.
 
@@ -251,7 +251,7 @@ Flow conforms to both halves of the protocol as-is — verified end to end, incl
 
 Flow specs may contain live `Task`/`Model` objects (which Flow itself rejects in venv mode); the always-re-execute model supports them naturally.
 
-### Hawk eval set configs
+### 8.3 Hawk eval set configs
 
 **`hawk local eval-set` is itself a conforming program**: it culminates in the `eval_set()` call the config describes, so Steward drives Hawk's own CLI under the protocol (`python -m hawk local eval-set <config> --direct`) rather than reaching into Hawk's internals. Hawk keeps ownership of everything before the boundary — the tasks × solvers/agents × models crossing, secrets resolution, `runner.environment`, provider environment for middleman routing, and rejecting configs it does not support — and Steward owns execution from the boundary onward. `--direct` is not optional: without it Hawk builds a fresh venv per worker.
 
@@ -271,7 +271,7 @@ That install also needs a `uv` binary, which Hawk shells out to but does not dec
 
 Deployment-wise Hawk keeps its platform — CLI, API server, Helm release, runner-pod venv construction, secrets, sandboxes — and would embed Steward inside the release, delegating where `run_eval_set.py` makes its single `eval_set()` call; Hawk continues to own environments, Steward owns execution within the environment Hawk built. Steward does not take on dependency/venv management. That half is unbuilt — see [hawk.md](hawk.md) for the infra config's per-process budgets, the blocking `launch`, and the relay surface an external agent drives it through.
 
-## Changes required in inspect_ai
+## 9. Changes required in inspect_ai
 
 1. Capture mode: `INSPECT_EVAL_SET_CAPTURE` honored by `eval_set()` — resolve, write manifest, exit the process. *Landed.*
 2. Selection mode: `INSPECT_EVAL_SET_SELECTION` honored at the boundary (Layer 1), plus drift errors. *Landed.*
@@ -280,7 +280,7 @@ Deployment-wise Hawk keeps its platform — CLI, API server, Helm release, runne
 5. Public (or at least stable) exposure of `task_identifier` and the manifest models, which today live in `inspect_ai._eval.evalset`. *Partly landed:* `task_identifier` is public; the capture and selection models stay private as versioned wire formats.
 6. The single-`eval_set()`-call constraint (a second call under capture or selection is an error) is not yet enforced.
 
-## Open questions
+## 10. Open questions
 
 1. **Retry responsibility.** *Resolved, and reframed:* the question was the wrong shape. Rather than dividing one retry mechanism, Steward runs `fail_on_error=False` so sample failures never fail a task, which turns recovery into three mechanisms — in-eval `retry_on_error`, in-flight requeue over the control channel, and post-completion invalidate-plus-resume — divided by *authority* into one automatic tier and one adjudicated one. Only `retry_on_error` runs unsupervised; past it, further attempts are a decision, which is why Steward carries no requeue budget. Whole-task retry is Steward's alone and shrinks to process death and errors outside sample scope; worker mode forces in-process task retry off so budgets cannot multiply. See [execution.md](execution.md), *The authority line is not where the tiers divide*.
 

@@ -4,7 +4,7 @@
 
 How Steward runs the tasks that [configuration.md](configuration.md) enumerates. That document ends at the manifest — the static list of resolved tasks in an eval set. This one starts there: how those tasks become processes, where their logs go, who retries what, and how Steward keeps track of work it did not stay attached to.
 
-## Requirements
+## 1. Requirements
 
 1. **Steward owns orchestration.** Scheduling, retries, scaling, and supervision are Steward's, not `eval_set()`'s. A definition's `eval_set()` call is a *boundary*, not a runner.
 
@@ -14,7 +14,7 @@ How Steward runs the tasks that [configuration.md](configuration.md) enumerates.
 
 4. **Survive Steward restarting.** A run outlives the process that started it. Steward must be able to exit, be killed, or be upgraded, and on return reconstruct what is in flight without killing or double-running anything.
 
-## The problem with running `eval_set()` per worker
+## 2. The problem with running `eval_set()` per worker
 
 The obvious implementation — spawn N workers, each running the definition with a single-task selection, all pointed at one log directory — does not work, and the reason shapes everything below.
 
@@ -29,7 +29,7 @@ Per-task log directories were the first answer (and are what configuration.md or
 
 **The resolution is to remove the competing orchestrator, not to give each one its own sandbox.** Steward *is* the eval-set runner. A worker should run a single `eval()`, which is the part of Inspect that actually runs a task, and none of the part that decides *which* tasks to run.
 
-## Worker model
+## 3. Worker model
 
 A worker is one process running one task:
 
@@ -51,7 +51,7 @@ The definition still calls `eval_set()` — that is the contract, and it is what
 
 Each worker therefore writes exactly one `.eval` file, and Inspect writes those atomically (temp file + `os.replace`). That is the whole safety argument for a shared directory: the only thing a worker touches is a file no other worker knows about.
 
-## The selection protocol
+## 4. The selection protocol
 
 Selection is the execution counterpart to capture. Both are environment-variable interceptions at the `eval_set()` boundary, and they are mutually exclusive.
 
@@ -79,7 +79,7 @@ The selection document (`inspect_ai._eval.eval_set_selection`, schema version 1)
 
 An identifier that matches no resolved task is a hard error naming the likely cause — the definition changed since it was enumerated. An identifier that matches *more* than one resolved task is also an error: outside selection mode, `validate_eval_set_prerequisites` enforces identifier uniqueness across the eval set, and worker mode skips that check, so it makes the same guarantee locally for the tasks it is asked to run.
 
-### What worker mode deliberately skips
+### 4.1 What worker mode deliberately skips
 
 Everything in `eval_set()` below the selection branch is orchestration, and all of it is Steward's:
 
@@ -97,7 +97,7 @@ Everything in `eval_set()` below the selection branch is orchestration, and all 
 
 Two things are *not* skipped. The worker still creates `log_dir` (`mkdir(exist_ok=True)` is idempotent and concurrency-safe), and it still runs the full `eval()` path, so every eval-set-level kwarg the definition set — epochs, limits, solver, generate config, tags, metadata, `retry_on_error` — applies exactly as it would have.
 
-### Scanning
+### 4.2 Scanning
 
 Scanners are **rejected** in worker mode rather than silently dropped, and the reason is worth stating precisely: a scan directory reproduces every hazard that made a shared eval-set log directory unsafe, one level down.
 
@@ -112,7 +112,7 @@ Worker mode fixed these for logs by *removing* the orchestrator, not by adding l
 
 Because rejection happens at execution, capture records `options["scanners"]` so a runner learns at *enumeration* time that a definition scans, rather than discovering it when every worker fails.
 
-### How Steward would take the scan over
+### 4.3 How Steward would take the scan over
 
 Steward cannot simply read `scanners=` out of the manifest and run it itself. Scanners are **live objects the definition constructs** — `Scanner` callables, a `ScanJob`, scanners backed by models built at import time — so they face exactly the constraint that shapes the rest of this design: they exist only in a process that executed the definition. A scan pass therefore has to *be* the definition, executed. That makes it a third mode at the `eval_set()` boundary rather than a Steward-side library call.
 
@@ -146,7 +146,7 @@ The protocol would mirror the other two: `INSPECT_EVAL_SET_SCAN` naming `{versio
 
 **Properties that follow.** Exactly one scan process runs at a time — not by convention but because spawning is serialized by the run claim and recorded, so a tend checks for a live scan before starting one and a restarted Steward adopts an in-flight scan rather than starting a second (see *What enforces single-writer*). All four hazards above are then gone by construction. Passes are incremental: `scan_init` attaches to an existing scan dir and `_invalidate_finalized_flag` flips `complete` back to `False` — the same path `eval_set()` resume uses. Passes are idempotent: a transcript with a row for every scanner is skipped.
 
-### A scan is a detached process, not part of a tend
+### 4.4 A scan is a detached process, not part of a tend
 
 A scan reads whole transcripts and, for model-graded scanners, makes model calls — so a pass over a large eval set can run for hours. That makes it the same kind of thing as a task worker, and it must be spawned the same way: **detached, recorded, and reaped by a later tend.** A tend that ran a scan inline would hold the run claim for the scan's whole duration, which would destroy the property the driver model is built on — that a claim older than a generous tend timeout is unambiguously stale, so no heartbeat protocol is needed. Blocking on long work inside a tend brings the wedged-supervisor problem straight back.
 
@@ -161,7 +161,7 @@ It also means a run is not finished when its tasks are. The final scan is a long
 
 **The one real ordering constraint.** `scan_finalize` runs `_cleanup_orphan_scan_rows`, which prunes rows whose uuid appears in no current log. So Steward's *final* pass must run **after** log cleanup and after adjudication re-runs have settled — otherwise rows belonging to superseded attempts survive, and rows for re-run samples are keyed to uuids that no longer exist. Mid-run passes are unaffected: in-flight samples have no rows yet, so there is nothing for the pruner to get wrong.
 
-## Log directory
+## 5. Log directory
 
 **One flat directory, shared by every worker**, at the definition's own `log_dir`. This is the hard requirement behind the whole design: it is what makes `inspect view <log_dir>` and `samples_df(<log_dir>)` work live, unmodified, with clean task names and no folder column.
 
@@ -181,7 +181,7 @@ The standard by which this list is judged is **conformance**, not "something rea
 
 Worth distinguishing from `listing.json` (`write_log_listing`), which is a different file and the one the **static/bundled viewer** actually fetches. `eval_set()` writes it only via `_embed_viewer` / `bundle_log_dir`, so Steward writes it only when doing the equivalent.
 
-### `eval-set.json` must be written incrementally
+### 5.1 `eval-set.json` must be written incrementally
 
 This is the one entry that cannot be written once at run start, and the reason is worth recording because the obvious implementation is silently wrong.
 
@@ -191,7 +191,7 @@ The trap is `EvalSetTask.task_id`. `to_eval_set_task` resolves it as `existing_t
 
 The fix needs no protocol change, just the same algorithm driven from a different source: rewrite `eval-set.json` as logs land, taking `task_id` from the log for tasks that have one and falling back to the task's `identifier` as a placeholder for those still pending. That is `existing_task_id or … or eval_set_identifier` computed from the log directory rather than from `ResolvedTask`s, and Steward is already rewriting directory metadata on the same trigger.
 
-### Sharing the directory operations with `eval_set()`
+### 5.2 Sharing the directory operations with `eval_set()`
 
 Steward reproducing Inspect's directory bookkeeping by hand is how it would drift. That is the same failure the Hawk integration had — a re-implemented lowering that silently diverged from the real thing — so the operations should be **shared functions both `eval_set()` and Steward call**, not two implementations of one protocol.
 
@@ -230,7 +230,7 @@ The honest trade is that Steward then receives breaking changes for free along w
 
 The second difference is behavioural. Steward **never deletes an eval log** ([workflow.md](workflow.md), *Steward never destroys a result, but it does curate the directory*), so where `eval_set()` removes a superseded attempt Steward moves it to the sibling archive. That is a genuine divergence in a design that argues divergence is how Steward drifts — so the resolution is not to fork the function but to widen it: an `archive_dir` parameter that moves rather than deletes, useful to `eval_set()` itself and folded into the public-directory-operations ask. Until it exists, Steward performs the move and calls cleanup with nothing left to remove.
 
-### Flow's store, and who is allowed to read it
+### 5.3 Flow's store, and who is allowed to read it
 
 Flow ships a **store**: a Delta Lake table mapping `log_path → task_identifier`, indexing completed logs so an identical task never runs twice. It holds no log data — only pointers — and is rebuildable with `flow store import`, which is why its own design describes it as a cache whose absence costs time and never correctness.
 
@@ -247,7 +247,7 @@ The read half fails for a specific and instructive reason. `find_existing_logs` 
 
 That is the competing-orchestrator problem again, one level out. **The store read is a scheduling decision, and scheduling belongs to Steward.**
 
-### Steward owns both halves, because the store is not really Flow's
+### 5.4 Steward owns both halves, because the store is not really Flow's
 
 The obvious repair is to leave workers writing and move only the read to Steward. That works for Flow definitions and fails the moment you ask the question that matters: **an `evalset` or `hawk` worker contains no Flow code at all**, so there is nobody in it to index anything. A store that only accumulates when the definition happens to be a Flow spec is a store that is empty for two thirds of the projects that would benefit.
 
@@ -261,7 +261,7 @@ So Steward takes both halves:
 
 Three properties follow, and they are the same three the rest of the design keeps arriving at: one writer, uniform behaviour across frontends, and a cache whose loss costs time rather than correctness — a missed row means a re-run, and `flow store import` rebuilds the table from the logs at any point.
 
-### Publication is an act of signoff, not a side effect of landing
+### 5.5 Publication is an act of signoff, not a side effect of landing
 
 The tempting implementation indexes each log as it lands: every tend already reads new headers to reconcile, so the row is nearly free. It is also wrong, and the reason is an invariant this document states two sections earlier.
 
@@ -277,7 +277,7 @@ Three consequences worth recording:
 - **Archiving dangles rows.** A store row is a path, and Steward moves logs to the archive. A signed log later superseded by an amendment leaves a row pointing at nothing. The store degrades gracefully by design (unreadable matches are skipped), but Steward owns the tidy-up: archiving a log means removing its row, which `remove_log_prefix` already supports.
 - **Accepted exceptions cross the boundary invisibly.** A signed task carrying two samples accepted-as-errored is a legitimate result *with a caveat recorded in this project's `anomalies.md`* — and a project reusing it gets the log without the caveat. Whether such logs should be publishable at all is unresolved, and it is the sharpest form of the question the filter policy below has to answer.
 
-### Configuring it
+### 5.6 Configuring it
 
 The store is a **machine-level resource**, frequently shared: pointing several machines at one S3 prefix means a colleague's completed task is one your next launch does not have to run. That shape decides where the settings live, and they split along the line this design already draws between mechanics and standards.
 
@@ -310,7 +310,7 @@ There is deliberately no `steward.yaml` entry for either ([workflow.md](workflow
 
 What remains genuinely open is the **filter policy**: `FlowStoreConfig.filter` accepts a `LogFilter` restricting what may be matched — only logs that scored, only recent ones, only from a trusted prefix. That is the concrete form the `policy.md` question takes, and it wants deciding alongside the reuse default rather than separately.
 
-### What enforces single-writer
+### 5.7 What enforces single-writer
 
 "Steward is the single writer" is a claim about a *process*, and nothing about the architecture so far makes that process unique. Steward detaches, it is restartable, and it is frequently driven by a coding agent — which double-invokes far more readily than a human at a terminal does. So the property has to be enforced, at three levels.
 
@@ -337,11 +337,11 @@ Because that process is long-lived and advertises a socket, "is one already runn
 
 The directory is "eval-set conforming" throughout — it has the same files with the same meanings as one produced by `eval_set()` — so nothing downstream can tell the difference.
 
-### Multiple logs per task
+### 5.8 Multiple logs per task
 
 A task can end up with more than one log: a first attempt that failed, then a resumed attempt. That is the same situation `eval_set()` produces on retry, and Steward resolves it the same way — the latest successful log for an identifier wins, and the final sweep clears superseded failed logs to the archive rather than deleting them. Steward keeps them in place until then, because the attempt history is exactly the diagnostic material it exists to reason about.
 
-## Recovery: retry, requeue, adjudication
+## 6. Recovery: retry, requeue, adjudication
 
 The model rests on **`fail_on_error=False`**: sample errors never mark a task failed, so a task that reaches the end of its dataset finishes `status="success"` whatever residue of errored samples it carries. Because the whole design depends on it, worker mode **hard-codes it** rather than routing it through configuration — a definition asking for fail-fast is asking for a completion decision that belongs to the runner. `continue_on_fail` needs no override at all: it is moot once `fail_on_error` is `False` (`_should_eval_fail` returns `False`, so the mid-run abort it guards can never fire).
 
@@ -353,14 +353,14 @@ The definition's own `fail_on_error`, `continue_on_fail`, and `retry_on_error` a
 
 Recovery therefore happens at three tiers, in increasing order of how much judgement each requires. Whole-task failure is not a fourth: it lands in tier 3 with the unit enlarged, since nothing at that level is retried without a ruling ([scheduling.md](scheduling.md), *Failure is adjudicated, not retried*).
 
-### Tier 1 — in-eval sample retry (no judgement)
+### 6.1 Tier 1 — in-eval sample retry (no judgement)
 
 `retry_on_error` handles transient sample failures inside the worker, with no supervision, at whatever count the definition set. Two properties matter:
 
 - **Retries do not hold a concurrency slot.** Inspect performs the retry recursion deliberately outside the sample semaphore (`_eval/task/run.py`, the `retry_on_error > 0` branch after the sample scope exits), so a retrying sample releases its `max_samples` slot and re-enters at the back of the sample queue. No head-of-line blocking, no deadlock against the cap. The only observable effect is ordering — retries land behind pending samples and so tend to finish late in a task.
 - **Exhaustion is terminal but not fatal.** A sample that burns all three attempts is recorded errored, and (with `fail_on_error=False`) the task carries on.
 
-### Tier 2 — in-flight requeue (adjudicated, live)
+### 6.2 Tier 2 — in-flight requeue (adjudicated, live)
 
 Inspect's control channel exposes `POST /evals/{eval_id}/sample/requeue`, alongside `GET /evals/{id}/samples` (listing plus status histogram) and `GET /evals/{id}/sample` (summary **plus error detail**). That is the full loop needed to act on a failure *while the task is still running*: read the error detail and re-open the sample's slot without waiting for the task to end. The sample re-runs inside a task that is already warm, with no respawn and no resume read. Requeue is idempotent — a repeat lands in the already-queued rows and reports `changed: False`.
 
@@ -368,7 +368,7 @@ Inspect's control channel exposes `POST /evals/{eval_id}/sample/requeue`, alongs
 
 The mechanism matters anyway, because it is what makes an *early* ruling cheap. A human who rules at 2am on a sandbox blip gets those samples re-run in the task still running rather than after it finishes.
 
-### The authority line is not where the tiers divide
+### 6.3 The authority line is not where the tiers divide
 
 The three tiers are divided by **mechanism** — inside the eval, into a live task, into a finished one. The line that decides who may act falls somewhere else, and stating it plainly retires two open questions:
 
@@ -384,11 +384,11 @@ Three things follow.
 
 **A pre-authorization is a ruling made earlier, not an exception to this.** `policy.md` may admit a class of re-run — *"sandbox provisioning failures may be re-run without asking"* — and Steward acting on it is executing a decision the human already made, recorded where anyone can read it. That is the same standing-authority move [workflow.md](workflow.md) makes for scaling, and it is what keeps the rule from meaning "wake someone up for every flaky container". Nothing is pre-authorized by default.
 
-### Considered and declined: pausing a failing model
+### 6.4 Considered and declined: pausing a failing model
 
 An outage looks like the one place a mechanical response might beat adjudication. With `fail_on_error=False`, the default behaviour when a provider dies is not "wait" but **destroy** — every in-flight sample burns its `retry_on_error` attempts against a dead endpoint, errors terminally, and takes its sandbox and accumulated conversation with it. Inspect's hard pause (`pause --now`) would park each sample before its next `generate` with the sandbox intact, and one model-scoped call reaches every task on that model. On a long-episode agentic benchmark that is hours of work saved.
 
-**It does not work, for a timing reason that no amount of policy fixes.** A sample dies within a few minutes of the outage starting: the model API exhausts its own backoff, then `retry_on_error` restarts the sample from the top twice more, each attempt failing at its first call. The tend interval is ten minutes. By the time a tend could observe the error cluster and issue the pause, **the fleet it would have protected is already gone.** Closing that gap means either polling faster than a tend — which is a daemon, and [the driver argument](#the-supervisor) rejects one — or putting the response in-process beside `should_retry`, which is Inspect's layer and not Steward's to build.
+**It does not work, for a timing reason that no amount of policy fixes.** A sample dies within a few minutes of the outage starting: the model API exhausts its own backoff, then `retry_on_error` restarts the sample from the top twice more, each attempt failing at its first call. The tend interval is ten minutes. By the time a tend could observe the error cluster and issue the pause, **the fleet it would have protected is already gone.** Closing that gap means either polling faster than a tend — which is a daemon, and [the driver argument](#8-the-supervisor) rejects one — or putting the response in-process beside `should_retry`, which is Inspect's layer and not Steward's to build.
 
 **The loss it was protecting against also has a better answer already.** Inspect ships checkpointing — `Checkpointer` with time, token, and turn triggers, restic-backed sandbox state capture, and a retry path that scans for the latest committed checkpoint. A checkpointed sample resumes rather than restarting, which beats pausing on every axis: it survives worker death and host loss and not just provider outages, it has no interaction with sample limits, it needs no unpause trigger, and it belongs to the definition author alongside `retry_on_error`. Where hours of agentic work are at stake, that is the mechanism to reach for.
 
@@ -398,7 +398,7 @@ So the rule stays clean, with no exception to reason about: **tier 1 is automati
 
 Hard pause remains available as an *action*, since a human or agent may well want it — "the provider is down, hold everything on sonnet" is a reasonable ruling. It carries the `time_limit` caveat above wherever it is used, and note that model gates key on a task's **primary** model, so role and grader models need task-scoped pauses instead (the manifest carries `model_roles`, so Steward knows which tasks those are).
 
-### Tier 3 — post-completion adjudication (real judgement)
+### 6.5 Tier 3 — post-completion adjudication (real judgement)
 
 When a task finishes, its errored samples are an explicit queue of unresolved work. Steward reviews them and can re-run them by respawning the worker with `resume` pointing at the log. Inspect's resume path already distinguishes the two cases Steward cares about (`eval_log_sample_source` in `_eval/task/run.py`):
 
@@ -415,7 +415,7 @@ So errored samples re-run on resume **for free** — invalidation is not require
 
 This all works against the resume path as built: worker mode reads the prior log header-only and passes its file info through, and Inspect reads each prior sample lazily from the file, checking `sample.error is None and sample.invalidation is None` per sample. No full-log read is needed to decide reuse.
 
-### What is left for task-level recovery
+### 6.6 What is left for task-level recovery
 
 With tiers 1–3 covering sample failures, whole-task recovery narrows to what no sample-scoped mechanism can reach:
 
@@ -429,7 +429,7 @@ And a worker performs **no task-level retry of its own** — worker mode forces 
 
 This reverses the lean recorded in configuration.md's open question 1. Worker mode changed the trade-off: with one `eval()` per process, in-process task retry and a Steward respawn are the same operation at different levels, and `resume` preserves the sample reuse that made the in-process version worth keeping.
 
-### Two invariants this model creates
+### 6.7 Two invariants this model creates
 
 **Completion is not success.** With `fail_on_error=False`, a worker exits 0 and its log says `success` even if every sample errored. Worker exit status therefore carries no information about whether the work is good — Steward must read the log, always. This is the sharpest version of the rule that the log directory is ground truth.
 
@@ -439,13 +439,13 @@ This reverses the lean recorded in configuration.md's open question 1. Worker mo
 
 Worker mode skips that classification entirely, so nothing is broken today. But it means Steward must not reimplement completeness the obvious way: **completeness is `completed_samples`, never `total_samples`.**
 
-## Detachment and the in-flight record
+## 7. Detachment and the in-flight record
 
 Steward spawns workers **detached** (`start_new_session` on POSIX, `DETACHED_PROCESS` on Windows) so a run survives Steward exiting — including the supervisor exiting, which is why workers are not its children (see *The supervisor*). Note that Inspect's `--detach` is a *CLI* feature (`inspect eval --detach`), not an `eval_set()` kwarg, and Steward's workers are never the Inspect CLI — so Steward does its own detached spawn rather than passing a flag through.
 
 Detachment creates the tracking problem: Steward must be able to answer "what is running right now?" after a restart, without a live parent-child relationship.
 
-### Why `task -> pid` is not enough
+### 7.1 Why `task -> pid` is not enough
 
 PIDs are recycled, are meaningful only on one host, and — critically — are *unknown during the window between deciding to spawn and the spawn returning*. A crash in that window leaves a worker whose existence Steward has no record of. So the tracking artifact is an **append-only record** (`.steward/inflight.jsonl`), not a table of current state:
 
@@ -459,11 +459,11 @@ Current state is *derived* by replaying the record, never stored. An `intent` wi
 
 Process start time is recorded alongside the pid specifically to defeat PID recycling: a live process whose start time differs from the recorded one is a different process.
 
-### Leaning on control discovery
+### 7.2 Leaning on control discovery
 
 Inspect already maintains a discovery directory — `<inspect_data_dir>/control/<pid>.json`, holding `pid`, `socket_path`, `started_at`, `run_id`, and the control API version, with stale-PID reaping in `list_alive_discovery_entries`. **Liveness is therefore a solved problem to consume, not rebuild.** What discovery cannot supply is the task mapping (the record carries the eval's `run_id`, not the identifier Steward scheduled) and the pre-spawn intent, which is precisely what the in-flight record adds.
 
-### The in-flight record is an accelerator, with one window where it is not
+### 7.3 The in-flight record is an accelerator, with one window where it is not
 
 Ground truth is the log directory, and for a worker that has reached its eval the claim holds exactly: a record that is lost, truncated, or stale degrades Steward to scanning the log directory and the discovery directory to rebuild state — slower, never wrong.
 
@@ -478,7 +478,7 @@ Take both. The first is the real fix and costs nothing, since the selection docu
 
 > **Not to be confused with the journal.** [workflow.md](workflow.md) uses *journal* for `journal.jsonl`, the durable record of anomalies and adjudication rulings — the one file in a workspace that cannot be reconstructed. The in-flight record described here is its opposite: disposable, machine-only, and rebuildable from the log directory at any time.
 
-## The supervisor
+## 8. The supervisor
 
 "Supervisor" here means *whatever is currently driving the reconcile loop* — in the current design a coding agent scheduling `tend` calls, with `cron` as a backstop (see *The reconcile core, and its drivers*). The claim, the in-flight record, and the registry apply to every driver equally.
 
@@ -496,7 +496,7 @@ That yields a pleasing symmetry: the supervisor is to `steward status` what a `-
 
 **The costs are real and worth naming.** A daemon is a thing to operate: its own diagnostics have to go somewhere, it needs a clean stop, and upgrading the Steward package while a supervisor from the previous version is still running is a version-skew problem the protocol between CLI and supervisor has to tolerate.
 
-### What the supervisor decides, and what it escalates
+### 8.1 What the supervisor decides, and what it escalates
 
 The argument for a supervisor is not that a process is more reliable than a coding agent. It is that **the agent is intermittent and the run is not.** An eval set running for eight hours spans many agent sessions, or none; the agent ends its session, hits a context limit, or is simply not invoked again until morning. Anything that must happen on a cadence — reaping dead workers, starting the next task as a slot frees, scan passes, requeueing a clearly-transient failure, writing a periodic status summary — cannot depend on someone being present to ask for it.
 
@@ -513,7 +513,7 @@ This division softens considerably when the agent is itself the driver: it sees 
 
 **The honest caveat.** A daemon has a failure mode `tend` does not: it can *wedge* — deadlocked, or blocked on a hung request — while still looking alive. A scheduled `tend` that fails simply does not run; a wedged supervisor holds its claim and blocks the replacement that would have taken over. That is strictly worse than being dead, and it means pid-liveness is not a sufficient definition of "the supervisor is up" (see the heartbeat note under *What enforces single-writer*).
 
-### Interacting with a detached run
+### 8.2 Interacting with a detached run
 
 > **Superseded in part.** [workflow.md](workflow.md) concludes there should be no `steward tui`: a live view presumes a present human, which is the case Steward is explicitly not built for, and `steward status` plus `inspect view` covers what someone actually wants on returning. This section is retained because its *separation* argument — that a view is a client of the same surface as everything else, needing no claim and no live supervisor — is what made that conclusion safe to reach. Read `steward tui` below as "a view, if one is ever built".
 
@@ -546,7 +546,7 @@ Two layers of control channel then stack, and the direction matters:
 
 An agent *can* read a worker's endpoint directly and that is harmless. It should not issue directives there: requeue budgets and escalation state live with the claim holder, and a second party issuing directives puts that accounting in two places. Reads fan out; writes go through the supervisor.
 
-### The reconcile core, and its drivers
+### 8.3 The reconcile core, and its drivers
 
 The supervisor is not the architecture. The architecture is a **pure function**:
 
@@ -616,7 +616,7 @@ Two requirements the design must honour regardless of driver:
 
 **A nice unification falls out.** The `summary` a tend prints *is* the status update. An agent reads it inline and decides; a human sees it on stdout; a timer-driven tend leaves it in `status.md` and the journal for whoever arrives next. One artifact, three consumers — rather than a status file invented separately for the absent reader.
 
-### `status` and `tend` are one function, two dispositions
+### 8.4 `status` and `tend` are one function, two dispositions
 
 The unification above invites collapsing the two verbs into one — if a tend reports status anyway, why also have `steward status`? The pull is real, and the resolution is better than either single verb, because `reconcile` already returns *both* halves:
 
@@ -641,7 +641,7 @@ In prose, treat it as a noun-adjunct compound (`tend interval`, `tend cadence`, 
 
 **What the pair looks like in use.** A human asks the agent how the run is going; the agent calls `status`, which reads without touching anything and reports both the state and what the next tend would do — so the human is *offered* the action rather than having it happen behind their question. The agent adds the one thing no `status` call can: having tended every ten minutes, it holds a time series rather than a snapshot, and "the error rate was fine until 15:40, then three samples hit the same provider timeout" is an answer only the driver can give. That history accumulates for free as a side effect of being the thing that drives the loop.
 
-### Supervising workers
+### 8.5 Supervising workers
 
 Workers run with Inspect's control server enabled, so each has a live HTTP endpoint over an AF_UNIX socket. That channel is what makes Steward a *steward* rather than a batch launcher: it can query a running eval's state and adjust its runtime behavior without restarting it.
 
@@ -649,7 +649,7 @@ Steward finds a worker's endpoint by pid via the discovery directory, correlated
 
 The endpoints most relevant to this document are the ones tier 2 recovery is built on — `GET /evals/{id}/samples`, `GET /evals/{id}/sample`, and `POST /evals/{id}/sample/requeue` — plus the runtime-tuning directives (`POST /config` for per-sample limits, the pause/resume latches at process, task, and model scope). Model-scoped pause is worth noting alongside requeue: when the classification is "this provider is down", pausing the model is the correct response and requeueing individual samples is not.
 
-#### The channel changes how work runs, never what work exists
+#### 8.5.1 The channel changes how work runs, never what work exists
 
 Worth stating as a boundary rather than discovering it as a gap. Across the whole route surface there is nothing that adds a sample: reads (`/tasks`, `/evals/{id}/samples`, `/sample`, `/events`, `/messages`, `/config`), concurrency and routing knobs (`PATCH /config`, `PATCH /tasks/{id}/config`), pause/resume latches at three scopes, and sample-lifecycle operations — `cancel` and `requeue` — that act on samples the task *already has*. A task's sample set is fixed when it starts, from dataset × epochs.
 
@@ -659,7 +659,7 @@ So **epochs cannot be raised on a running eval**, and should not be: epochs is s
 
 **One hazard in the other direction, worth verifying rather than assuming.** `PATCH /tasks/{id}/config` accepts `time_limit`, `token_limit`, and `message_limit` — and all three *are* in `task_identifier`. If a patched value reaches the log's `eval.config`, then `task_identifier(EvalLog)` no longer matches the manifest entry that scheduled it, and the log correlates to nothing. The override machinery it routes through suggests these layer at runtime rather than being written back, but that is an inference. Until it is checked, Steward should treat those three as not-to-be-patched; the concurrency knobs it actually wants for tuning are unaffected either way.
 
-## When the substrate fails
+## 9. When the substrate fails
 
 Everything above assumes the machine works. Three ways it stops, all of which a multi-day run meets eventually.
 
@@ -669,13 +669,13 @@ Everything above assumes the machine works. Three ways it stops, all of which a 
 
 **`log_dir` becomes unwritable** for any other reason — a revoked policy, a deleted bucket, a mount that went away.
 
-### The hazard is that a substrate failure wears the costume of an eval failure
+### 9.1 The hazard is that a substrate failure wears the costume of an eval failure
 
 `fail_on_error=False` absorbs everything sample-shaped, so a log store that stops accepting writes surfaces as **a wave of errored samples** rather than as an infrastructure alarm. The classing is honest as far as it goes — the exception type will say `OSError` or an S3 error, and [workflow.md](workflow.md)'s class key puts them all in one anomaly — but the ordinary *response* to a wave of errored samples is a re-run, and re-running into a store that is still broken burns the work twice.
 
 This is the same shape as the provider outage that *Considered and declined: pausing a failing model* worked through, and it gets the same answer for the same reason: no mechanical response, because by the time a tend sees the pattern the damage is done, and the correct action depends on a fact Steward cannot check. What it gets instead is a **runbook rule**: a class whose exception is a storage or filesystem error is a *substrate* class, and no re-run is proposed for one until the substrate has been verified by hand. Re-running is not wrong here, it is merely premature, and the ordering is what matters.
 
-### Detection is free; recovery is not Steward's
+### 9.2 Detection is free; recovery is not Steward's
 
 No polling is needed. Steward writes to the workspace and reads the log directory on every tend, so a failing substrate is *observed* rather than watched for — and a tend that cannot write is exactly the event `steward.log` exists for ([workflow.md](workflow.md), *`steward.log`*).
 
@@ -683,7 +683,7 @@ What Steward does about it is narrow, and deliberately so. It **stops scheduling
 
 One honest gap follows from the disk case. A full disk fails the `steward.log` write too, so the condition most in need of a record is the one least able to leave one. That is why the escalation goes out through the notification channel rather than relying on a file, and why "the files stopped changing" remains the outermost signal that something is wrong.
 
-## Clocks
+## 10. Clocks
 
 Stated once, because it is the kind of thing that is decided implicitly and inconsistently otherwise.
 
@@ -697,11 +697,11 @@ Stated once, because it is the kind of thing that is decided implicitly and inco
 
 Git's commit metadata stays what [workflow.md](workflow.md) already calls it: a corroborating record of when a decision was committed, not a source Steward reads.
 
-## Topology: what must be co-located, and what must not
+## 11. Topology: what must be co-located, and what must not
 
 Everything above describes one machine, because that is the case the design was written against. Three real deployments exist and they differ in ways that matter, so it is worth extracting the constraint that generates them rather than describing each.
 
-### One constraint, and it is narrower than it looks
+### 11.1 One constraint, and it is narrower than it looks
 
 Three things Steward depends on are **machine-local by construction**:
 
@@ -715,9 +715,9 @@ So the constraint is:
 
 > **`steward tend` must execute on the host running the workers.** The *agent* may be anywhere it can execute commands there.
 
-That distinction is the whole of the flexibility. An agent on a laptop driving a rented box over ssh satisfies it; an agent that can only read the S3 bucket does not. Distributing workers across hosts is a different and much larger question ([open question 4](#open-questions)) — it needs worker discovery and a real lease with a fencing token, and nothing here assumes it.
+That distinction is the whole of the flexibility. An agent on a laptop driving a rented box over ssh satisfies it; an agent that can only read the S3 bucket does not. Distributing workers across hosts is a different and much larger question ([open question 4](#13-open-questions)) — it needs worker discovery and a real lease with a fencing token, and nothing here assumes it.
 
-### Three deployments
+### 11.2 Three deployments
 
 | | workers | `tend` runs | judgement | how a person is reached |
 |---|---|---|---|---|
@@ -727,7 +727,7 @@ That distinction is the whole of the flexibility. An agent on a laptop driving a
 
 The middle row is the one the S3 sync was designed for and the one the documents otherwise draw least. Two things about it are worth stating because they are easy to assume away: the agent needs **model access from that box**, which an air-gapped runner must provision deliberately; and the human's reply path is a session on a machine they may not normally use, which is the practical content of [workflow.md](workflow.md) open question 2.
 
-### Driving and judging are separate roles that usually coincide
+### 11.3 Driving and judging are separate roles that usually coincide
 
 [hawk.md](hawk.md) settles the pod case by splitting them — an in-pod timer runs the mechanical tend while an external agent supplies judgement, both calling the same pure `reconcile`. That is not a Hawk peculiarity. It is the design's own mechanical/judgement line applied to the driver, and stating it generally resolves an apparent contradiction with [agent.md](agent.md)'s *the cadence is a dependency*:
 
@@ -738,7 +738,7 @@ Where a timer exists, the mechanical floor is covered and an absent agent degrad
 
 The two never conflict, and the reason is already built: the claim is held for the seconds a tend takes rather than the hours a run lasts, so an external `steward tend` racing an internal timer is exactly the case the short claim was designed for.
 
-### The supervisor spends from the budget it is tuning
+### 11.4 The supervisor spends from the budget it is tuning
 
 An agent is a model client. In the runner and pod topologies its calls usually go through the same proxy and the same account as the eval — which makes it an **N+1th consumer that no part of the resource design counts.** [scheduling.md](scheduling.md) says Steward owns both factors of total concurrency, and that is true of the eval and false of the fleet, because the supervisor is also in the bucket.
 
@@ -749,7 +749,7 @@ Two consequences, and the second is the one that bites:
 
 The fix is not machinery. **A separate key for the supervisor** removes it entirely and is the right answer where an account can be provisioned that way. Failing that, the envelope is already the place this belongs: [workflow.md](workflow.md) makes the concurrency ceiling a policy decision, and a ceiling set at the account's true limit leaves the supervisor nothing. Leave headroom, and say that is what it is for.
 
-## Changes required in inspect_ai
+## 12. Changes required in inspect_ai
 
 1. **Capture mode** — `INSPECT_EVAL_SET_CAPTURE`. *Landed.*
 2. **Selection mode** — `INSPECT_EVAL_SET_SELECTION`, including the resume path and the mutual exclusion with capture. *Landed* (`_eval/eval_set_selection.py`, plus the branch in `eval_set()`).
@@ -795,7 +795,7 @@ The selection schema can grow the partial facets Layer 2 needs (`name`, `args_ha
 
 That is the better trade and worth understanding rather than working around. Silent tolerance of unknown fields is what makes a typo (`"resuem"`) read as *no resume at all*, and makes an ignored `limit` run five thousand samples where two were asked for. Forbidding extras converts both into a failure on the writer's own machine. The cost is that the version number moves more often than a purely additive scheme would need, which is bookkeeping rather than friction.
 
-## Open questions
+## 13. Open questions
 
 1. **Flow's pre-boundary work.** Everything Flow does before reaching `eval_set()` is out of worker mode's reach, and every flow worker repeats all of it. Verified against a four-task spec with four concurrent workers: the run works correctly (four logs, correct identifiers, no eval-set metadata written), but each worker independently
 

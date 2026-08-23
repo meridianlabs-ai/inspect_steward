@@ -10,7 +10,7 @@ Each of those is load-bearing — other decisions were made *because* of them �
 
 Two properties of the architecture make this affordable, and the strategy follows from them: `reconcile` is a pure function, so most scheduling correctness needs no processes at all; and `mockllm` makes a real multi-worker run cost milliseconds, so the parts that *do* need processes can have them.
 
-## Four layers
+## 1. Four layers
 
 | | what runs | what it covers | cost |
 |---|---|---|---|
@@ -21,7 +21,7 @@ Two properties of the architecture make this affordable, and the strategy follow
 
 The existing suite already establishes layers 1 and 2 — `tests/evalset/fixtures/` holds real definitions run for real against `mockllm/model`, and `tests/evalset/test_read.py` is table-driven over them. Nothing below replaces that; it extends the same pattern.
 
-## Layer 1: the fixture generator is the highest-leverage thing to build
+## 2. Layer 1: the fixture generator is the highest-leverage thing to build
 
 `reconcile(manifest, inflight, log_dir) -> (actions, summary)` takes a directory and returns decisions. Testing it means **synthesizing log directories**, and doing that well converts most of scheduling into a table:
 
@@ -39,7 +39,7 @@ The generator needs to produce, per task: a header with the right `task_id` and 
 
 **States worth having in the table**, because each drives a different decision: complete-and-clean, complete-with-errors, complete-but-short (the holes case — a `success` log permanently missing samples), started-never-finished, superseded-by-a-later-attempt, invalidated, orphaned (an identifier absent from the current manifest, which is the archive path), and present-but-unreadable.
 
-## Layer 2: real workers, and one test that has to exist
+## 3. Layer 2: real workers, and one test that has to exist
 
 `mockllm` makes an end-to-end run essentially free, which means the boundary protocol can be tested for real rather than mocked: capture a manifest, write selection documents, spawn workers, let logs land.
 
@@ -49,7 +49,7 @@ This is spike S1, and it should land as a **test rather than as a one-off verifi
 
 Also here: that a flat shared directory survives concurrent workers, that worker mode writes no eval-set metadata, that `fail_on_error=False` and task-retry-off are actually applied, and that resume reuses completed samples while re-running errored ones.
 
-## Layer 3: the faults, and how to inject them deterministically
+## 4. Layer 3: the faults, and how to inject them deterministically
 
 Each fault below exists to falsify a specific claim, and the claim is what the test asserts.
 
@@ -80,7 +80,7 @@ The design already has a fixture in this shape: `tests/evalset/fixtures/slow_eva
 
 **One fault is worth building even though nothing in the design depends on it**: a definition that is slow, hangs, and crashes at each of the three interesting points (before import completes, before the boundary, after the log lands). Those three are the whole taxonomy of worker startup failure, and having them as fixtures makes every scheduling test able to include a broken worker cheaply.
 
-## Layer 4: the agent is a prompt artifact, and its quality is the product
+## 5. Layer 4: the agent is a prompt artifact, and its quality is the product
 
 Uncomfortable but true: the runbook plus the tend loop determines most of what a user experiences, and none of the layers above touches it. It is also the hardest thing here to test, and worth being honest about rather than describing an aspiration.
 
@@ -100,7 +100,7 @@ What *is* testable is that the agent's rules produce the right behaviour from a 
 
 These are nondeterministic and cost money, so they belong on a different cadence than the rest — run against a change to the runbook, not on every commit. The last three are the ones worth having first: they are the bounds, and a bound that is only written down is a bound nobody has checked.
 
-## What this strategy cannot reach
+## 6. What this strategy cannot reach
 
 Stated so nobody mistakes a green suite for coverage of these:
 
@@ -109,7 +109,7 @@ Stated so nobody mistakes a green suite for coverage of these:
 - **Duration.** Multi-day runs, credential expiry as it actually occurs, log directories with thousands of logs. Long-run behaviour can be *simulated* at layer 1 by synthesizing the end state, which catches scaling bugs in `reconcile` but not accumulation bugs elsewhere.
 - **The upstream surface.** Steward depends on capture, selection, the control channel, and identifier stability. Layer 2 catches a break at upgrade time, which is the right place, but only for the paths a test exercises.
 
-## Open questions
+## 7. Open questions
 
 1. **Where fault injection lives.** A harness that can kill processes and break filesystems is either a test fixture or a shipped debugging tool. Making it a tool means an operator can reproduce a failure on a real workspace; making it a fixture keeps a dangerous capability out of the package. The second is the safer default and the first is what would actually get used.
 

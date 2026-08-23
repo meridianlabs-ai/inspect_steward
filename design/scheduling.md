@@ -4,9 +4,9 @@
 
 [execution.md](execution.md) establishes that the architecture is a pure function — `reconcile(manifest, inflight, log_dir) -> (actions, summary)` — and argues at length for its *properties*: testable, idempotent, driver-independent. It does not say what the function decides. This document is that half.
 
-## The process model
+## 1. The process model
 
-### One task, one process
+### 1.1 One task, one process
 
 A worker runs exactly one task. Not "one by default" — always.
 
@@ -19,7 +19,7 @@ Two further properties come free and are worth naming because each was argued fo
 
 This overturns a trade-off recorded in [workflow.md](workflow.md), which weighed "fewer, larger workers pay less per-worker startup cost" against finer granularity. That comparison was measuring the wrong quantities: startup cost is seconds, paid once, while the CPU ceiling is permanent. The trade was never as close as it looked.
 
-### No batching
+### 1.2 No batching
 
 The selection document accepts a *list* of tasks so that one worker can host several — added for definitions whose import cost dominates, and for batches of very short tasks. Steward always writes exactly one entry, and the generality goes unused.
 
@@ -27,7 +27,7 @@ It is not merely unnecessary but unmotivated. Batching existed to solve **slot i
 
 What remains is the startup cost itself, which batching would have amortized: Flow's measured ~1.1s of pre-boundary work, and Hawk's far worse `uv pip install` per invocation. Those are real, and they are now squarely the frontends' problem rather than something Steward can paper over by running fewer processes — which is the honest place for them, and the reason the upstream ask in [execution.md](execution.md) open question 1 matters more than it did.
 
-### No sharding
+### 1.3 No sharding
 
 The mirror image of batching is splitting one large task's samples across processes, for which the selection schema reserved a per-task `samples` field. **Steward will not do this.** A task always runs all of its samples in one process, and controls its own memory through `max_samples` from the inside.
 
@@ -35,9 +35,9 @@ The cost is accepted rather than hidden: a single very large task is bounded by 
 
 This closes [configuration.md](configuration.md) open question 6.
 
-## The worker pool
+## 2. The worker pool
 
-### Total concurrency is one budget spent twice
+### 2.1 Total concurrency is one budget spent twice
 
 Worker count and per-worker `max_samples` are not independent settings:
 
@@ -54,7 +54,7 @@ throughput     ≈  concurrent samples on that model        [per rate-limit buck
 
 A process costs an interpreter and its imports, once. A concurrent sample costs a sandbox container, memory, and a slot, continuously. **Process count is the cheap axis; sample concurrency is the expensive one** — which is what makes launching many processes affordable in the first place.
 
-### Launch everything, up to a ceiling
+### 2.2 Launch everything, up to a ceiling
 
 Every pending task gets a worker immediately, bounded only by a ceiling. There is no queue in the common case, because a typical sweep has fewer tasks than the ceiling allows.
 
@@ -69,11 +69,11 @@ The ceiling is **`min(cores, pending tasks)`**, overridable by the user. It foll
 
 Note what is deliberately *not* inherited. That default's second clause — at least one slot per model — gives `eval_set()` a stratification guarantee for free: no arm can starve while another runs. Plain `min(cores, pending)` does not. Rather than smuggle the property into the ceiling, it comes from spawn order instead (see below), which delivers the same guarantee without a second knob.
 
-### Cores means the cgroup's cores
+### 2.3 Cores means the cgroup's cores
 
 `os.cpu_count()` reports the host's processors, not the container's quota. A Kubernetes pod limited to 2 CPUs on a 64-core node reports 64 — so a cores-derived ceiling over-spawns by 32× in precisely the deployment where over-spawning kills the pod ([hawk.md](hawk.md)). Steward must read the cgroup CPU quota where one exists and fall back to `os.cpu_count()` otherwise. Hawk's own `memory_monitor` already polls the cgroup, so the precedent and the mechanism are both to hand.
 
-### Memory is assumed adequate
+### 2.4 Memory is assumed adequate
 
 There is deliberately no memory term in the ceiling. Two reasons, and the second is the substantive one.
 
@@ -81,7 +81,7 @@ Nobody has measured per-worker memory, so any coefficient would be invented. Mor
 
 So: assume memory is fine, and treat **Layer 2 pruning as a prerequisite for launch-all at scale** rather than as the optimization it is currently filed as ([execution.md](execution.md), *Changes required*, item 5). Verified absent from `inspect_ai` main as of `0db4111e`. If large sweeps turn out to exhaust memory before it lands, the right response is a launch-time check against a measured figure — a guard, not a term in the default, so that it can be removed cleanly.
 
-### Spawn order transposes the crossing
+### 2.5 Spawn order transposes the crossing
 
 Order only matters when pending work exceeds the ceiling — below it everything runs at once and there is no queue to sequence. When it does matter, the default is actively bad rather than merely arbitrary.
 
@@ -104,9 +104,9 @@ spawned      mbpp@gpt5  mbpp@opus   gsm8k@gpt5  gsm8k@opus  swe@gpt5  swe@opus
 
 **One limit, stated rather than guessed around.** Steward cannot know the user's comparison axis. A sweep may vary models, task args, or solvers, and the manifest looks much the same in each case. Spreading by *model* is justified independently by rate-limit buckets, so it holds regardless; that it also stratifies the most common comparison is a bonus rather than the premise. For an args sweep on a single model, the transposition is a no-op and the author's order simply stands.
 
-## Setting the concurrency knobs
+## 3. Setting the concurrency knobs
 
-### The three knobs have different scopes, and the difference decides everything
+### 3.1 The three knobs have different scopes, and the difference decides everything
 
 This was the most consequential thing to get right, because the docs treated all three as one "per-process budget that must be divided across workers", and they are not the same kind of thing at all:
 
@@ -118,7 +118,7 @@ This was the most consequential thing to get right, because the docs treated all
 
 The first row is the surprise. Because `max_samples` is per *task*, a worker running one task gets precisely the semaphore that task would have had inside a single-process `eval_set()` run — so there is nothing to divide, and passing a definition's value through unchanged preserves its meaning exactly. What differs between Steward and `eval_set()` is *task* parallelism, which is the ceiling decision, made deliberately above.
 
-### `max_samples` — set explicitly, so it can be steered
+### 3.2 `max_samples` — set explicitly, so it can be steered
 
 Steward always writes an explicit `max_samples` into the selection, **defaulting to 40** and yielding to whatever the definition set. Explicit is the point: it is the difference between a `ResizableLimiter` the control channel can retune mid-eval and a `DynamicSampleLimiter` that tracks the model's connection controller and cannot be adjusted at all ([workflow.md](workflow.md), *Setting `max_samples` explicitly is what makes it a knob*).
 
@@ -126,7 +126,7 @@ The cost is real and worth stating: leaving it unset would let sample concurrenc
 
 40 is a starting point, not an answer. It is deliberately modest, because the ratchet is asymmetric — raising a limit takes effect immediately, lowering one only stops new acquires and waits for in-flight samples to drain — so climbing from a low setpoint is cheap and descending from a high one is not. Users who know their eval sets it in the definition and Steward honours that.
 
-### `max_connections` — left adaptive, because AIMD coordinates itself
+### 3.3 `max_connections` — left adaptive, because AIMD coordinates itself
 
 Steward does **not** divide `max_connections` across workers, and the reason is structural rather than a judgement call. The adaptive controller is AIMD: additive increase of 5% per clean round, multiplicative decrease of ×0.8 per rate-limit episode, with a 15-second cooldown that the server's `Retry-After` extends. Independent AIMD controllers sharing one bottleneck converge on a fair share of it — which is how TCP has shared links for decades.
 
@@ -134,7 +134,7 @@ So the provider's own rate limiting *is* the coordination mechanism. N workers e
 
 The defaults stay: `min 10, start 20, max 100` per process. The ceiling is a bound on *discovery*, not a promise of load. And it yields a precise signal for when it is the wrong bound: **a fleet pinned at max with no scale-downs is limited by the ceiling, not by the provider**, and that is when raising it is right.
 
-### Growing `max_samples` — rate limits are the signal, not saturation
+### 3.4 Growing `max_samples` — rate limits are the signal, not saturation
 
 Something has to raise 40, and the obvious signal is the wrong one. **A saturated sample limiter tells you nothing.** Sitting at 40/40 may simply mean eighty samples remain queued; it says nothing about whether sixty would run better. Saturation measures demand, not headroom.
 
@@ -144,7 +144,7 @@ The signal is **the absence of rate limits** — no backpressure, or only light 
 
 So the two decisions interlock: **bounding sandboxes correctly is what makes growing samples safe.**
 
-### The signal is mechanical; the decision is not
+### 3.5 The signal is mechanical; the decision is not
 
 Because the signal reduces to "were there scale-downs this interval", it is tempting to encode the whole rule in `tend` and let the mechanical layer ramp on its own. **It stays with the agent.** `tend` reports the signal; the agent decides whether to act on it.
 
@@ -156,7 +156,7 @@ It also keeps a line the design draws everywhere else intact: [workflow.md](work
 
 What `tend` owes the agent, then, is not a recommendation but the evidence: per-model rate-limit episodes since the last tend, current `max_samples` per worker, and how long each has held. The shape of that report belongs with the rest of the tend summary ([agent.md](agent.md)).
 
-### `max_sandboxes` — divided, but only where the host is the ceiling
+### 3.6 `max_sandboxes` — divided, but only where the host is the ceiling
 
 Sandbox concurrency is process-global, so N workers means N independently-computed limiters — and unlike connections there is **no backpressure signal whatsoever**. A provider says 429; a Docker host says nothing until it thrashes or the OOM killer arrives. Over-allocation is discovered by the box falling over.
 
@@ -197,7 +197,7 @@ Per sandbox *type*, since tasks in one eval set may use different ones — the D
 
 One wrinkle worth flagging rather than fixing here: Docker's `default_concurrency()` calls `os.cpu_count()`, which reports host processors rather than a container's quota — the same lie discussed under *Cores means the cgroup's cores*, this time inside Inspect. In a Hawk pod it is moot, because the infra config sets `max_sandboxes` explicitly and the default is never consulted. Elsewhere it is Inspect's to fix.
 
-### When a worker exits, only one thing needs redistributing
+### 3.7 When a worker exits, only one thing needs redistributing
 
 As a run drains, capacity frees. The question of what to do with it mostly dissolves, and it is worth saying why, because "rebalance on completion" sounds like a scheduler obligation and is only one here.
 
@@ -213,17 +213,17 @@ per-worker share  =  host budget  ÷  min(pool ceiling, tasks of this type not y
 
 That denominator only ever decreases, so each worker's share only ever increases, so **every patch is a raise** — and raises take effect immediately while lowering waits for in-flight samples to drain. The ratchet's asymmetry stops being a hazard and becomes the reason this works. Using live workers as the denominator would break it: two survivors would be widened to half the host each, and the next spawn off the queue could not be given room back.
 
-## Scanning is scheduled work
+## 4. Scanning is scheduled work
 
 [execution.md](execution.md) establishes what a scan pass *is* — a detached child running the definition in a third mode over a list of log locations, with exactly one alive at a time so the scan directory keeps a single writer. What remains is when to spawn one.
 
-### Immediately, because a scan is not competing for a core
+### 4.1 Immediately, because a scan is not competing for a core
 
 A scan pass costs a process, which under a `min(cores, pending)` ceiling looks like it should cost a task its core. It does not, and the pass should not be scheduled as though it did: a scan's work is reading transcripts and, for model-graded scanners, waiting on model calls. Transcript decompression and JSON parsing are real CPU but brief and bounded per log; the expensive part is I/O-bound. **A scan pass does not consume a worker slot**, and the pool ceiling counts task workers only.
 
 So there is no reason to defer. A pass spawns as soon as there is something unscanned and no pass is running, rather than waiting for a threshold of logs to accumulate. Latency is the whole argument: [workflow.md](workflow.md) shows scan findings arriving last and re-opening runs that read as resolved, so anything that delays them pushes discovery closer to signoff, where a finding that needs a re-run costs the most. Deferring to a single terminal pass is the worst version of this and is rejected outright — it makes signoff block on a long serial job whose output may invalidate it.
 
-### One log at a time, and where that has to bend
+### 4.2 One log at a time, and where that has to bend
 
 Each pass covers one log. A crashed pass then costs one log's scan rather than a batch's, progress is exactly countable, the in-flight record names a single log, and a transcript that reliably kills a scanner is isolated to itself instead of blocking everything queued behind it.
 
@@ -233,15 +233,15 @@ Each pass covers one log. A crashed pass then costs one log's scan rather than a
 
 This is self-regulating in the direction that matters — the batching only appears where per-pass startup is being paid too often, which is the same condition that makes batching worth it. It preserves one-at-a-time serialization either way, and idempotency means a re-run after a crash skips what already has rows.
 
-### A crashed pass is an anomaly, not a retry
+### 4.3 A crashed pass is an anomaly, not a retry
 
 A scan pass that dies is reaped like any other detached child, and the design's failure rule applies unchanged: it is recorded and surfaced, not automatically respawned. [workflow.md](workflow.md) already lists a failed scan pass as an anomaly. With one-log passes the evidence is unusually good, because the record names the log that was being scanned when it died — which is the difference between "scanning is broken" and "this transcript breaks the scanner", and only the second is actionable without a human.
 
 The queue is unaffected: an unscanned log stays unscanned and stays counted, so `status` reports coverage honestly rather than reporting a drain that silently skipped something.
 
-## Failure is adjudicated, not retried
+## 5. Failure is adjudicated, not retried
 
-### What can still fail a task
+### 5.1 What can still fail a task
 
 `fail_on_error=False` absorbs sample errors: a task carrying five hundred errored samples reaches the end of its dataset and finishes `status="success"`. So a task that *fails* has failed for a reason categorically outside the sample loop, and the list is short:
 
@@ -254,7 +254,7 @@ The queue is unaffected: an unscanned log stays unscanned and stays counted, so 
 
 **Most of that is deterministic.** Automatically respawning a definition that will not import, or a scorer that throws after every sample has already run, spends money to arrive at exactly where it was — and does it at 3am with nobody watching. The rarity is the point: because sample errors no longer reach this level, a task failure is now an unusual and mostly-structural event, and structural events deserve a look rather than a counter.
 
-### No automatic restart
+### 5.2 No automatic restart
 
 **A task failure opens an anomaly. Steward never respawns a failed task on its own.**
 
@@ -264,7 +264,7 @@ So the attempt ceiling this document set out to choose is **zero**, and there is
 
 This also removes a mechanism rather than adding one. [execution.md](execution.md) treats whole-task retry as a fourth thing standing beside the three recovery tiers; it is really the third tier again — post-completion adjudication, with respawn-and-`resume` as the action a ruling authorizes.
 
-### The failure signature classes the anomaly
+### 5.3 The failure signature classes the anomaly
 
 The forensics still matter, but for proposing rather than deciding. Two bits are free — whether a log exists, and whether the process exited cleanly or died on a signal — and together they separate causes that want genuinely different responses:
 
@@ -278,7 +278,7 @@ Getting this wrong in the other direction was a real risk. A plain *did it write
 
 Note this is process forensics, not error classification. It reads how a worker died, never what its samples did, so it carries no dependency on the sample-error taxonomy ([execution.md](execution.md), open question 7).
 
-### The cost, and where it is paid
+### 5.4 The cost, and where it is paid
 
 A genuinely transient failure — a sandbox provisioning blip, a Docker daemon hiccup — now waits for a human instead of recovering itself. That is the wasted night this design cares most about avoiding, and it is a real cost rather than a theoretical one.
 
@@ -286,7 +286,7 @@ The mitigation is one the design already has: **`policy.md` pre-authorization.**
 
 The framing that matters: **approval is the default, and automatic restart is something a human grants for named classes** — rather than something Steward assumes and then bounds with a counter it hopes is large enough.
 
-### Approved re-runs go first
+### 5.5 Approved re-runs go first
 
 Queue order between a fresh task and an adjudication re-run only bites when pending work exceeds the ceiling. When it does, **re-runs go first.**
 
@@ -300,6 +300,6 @@ The starvation risk that would normally argue for capping this at a fraction of 
 
 **Priority means queue order, never preemption.** A re-run does not displace a running worker, whatever its urgency.
 
-## Open questions
+## 6. Open questions
 
 None outstanding. Spend was the last one, and it is resolved as a won't-do: Steward does not track, project, cap, or act on spend. The reasoning is in [workflow.md](workflow.md), *Spend is not Steward's to manage* — briefly, Inspect ships no prices so Steward would have to own a price table; a cap observed at the tend interval is soft by construction and cannot stop what motivates wanting it; firing one would add a trigger rather than a capability, since `stop`, `pause`, and archiving an arm already exist; and the real control is the manifest, which enumerates everything before a dollar is spent.

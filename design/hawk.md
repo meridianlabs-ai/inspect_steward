@@ -10,7 +10,7 @@ That is still right, and two things since have made it cheap. Selection mode lan
 
 So this document is not a reversal. It is the part configuration.md left as a sentence.
 
-## Hawk's runner is a conforming definition
+## 1. Hawk's runner is a conforming definition
 
 `hawk/hawk/runner/run_eval_set.py` makes a single `inspect_ai.eval_set()` call, inside `eval_set_from_config()`. It is the synchronous facade, called from a plain `def main()`; in the Kubernetes path no event loop is running at all, so `eval_set()` owns the main thread and makes its own. Everything above it is config loading and lowering. Everything below it is Inspect.
 
@@ -30,7 +30,7 @@ That command *is* the definition. Steward's `DefinitionCommand` already exists t
 
 Hawk is the same sentence with a different module. `DefinitionType` gains `"hawk"`; `definition_command` gains one branch. There is no second architecture here — **Hawk support is a definition type**.
 
-### Capture gets Hawk's own lowering for free
+### 1.1 Capture gets Hawk's own lowering for free
 
 The lowering configuration.md warned about re-implementing is `_load_tasks_and_models` in `run_eval_set.py`: tasks × solvers/agents × models, crossed into one flat list, with each combination becoming a `Task` through `task_with(task, dataset=…, model=…, solver=…)` in `_load_task`. Note that the model is baked into each `Task`, so `eval_set()` is never called with a `model=` kwarg at all.
 
@@ -38,13 +38,13 @@ Capture mode intercepts *after* `eval_resolve_tasks`, so the manifest sees Hawk'
 
 Capture then ends the process with `raise SystemExit(0)` (`inspect_ai/_eval/evalset.py:585`). `SystemExit` derives from `BaseException`, so Hawk's `except Exception` in `lifecycle.execute_runner_main` does not catch it: the `finally` blocks run, telemetry flushes, and the process exits 0. Enumeration through Hawk's entrypoint needs no cooperation from Hawk.
 
-### Detection
+### 1.2 Detection
 
 A Hawk config is a YAML (or JSON) document that validates as `EvalSetConfig` (`hawk/hawk/core/types/evals.py`). Its one required field is `tasks`; distinctive keys are `runner`, `packages`, `secrets`, `isolation`, `acp_server`, `model_cost_config`, `human_eval`, and `approval_timeout_minutes`.
 
 Today `_detect_yaml` validates against `FlowSpec` only, and a Hawk config fails as an invalid flow spec — the outcome configuration.md wanted to avoid. With both formats in play, detection tries each and reports which matched; a document that validates as both is ambiguous and should say so rather than silently pick, since `--type` exists for exactly that. Both models are permissive in ways that make overlap plausible (`EvalSetConfig` is `extra="allow"`), so the ordering is a real decision and not an implementation detail — see open question 1.
 
-## Two configs, and no loader to borrow
+## 2. Two configs, and no loader to borrow
 
 Hawk splits configuration in two, and the split is meaningful: **the user config says what to evaluate, the infra config says where and how hard**.
 
@@ -54,7 +54,7 @@ There is no public loader. Every call site re-implements *read text → `ruamel.
 
 Steward should depend on as little of that as possible. Detection needs the schema or the model; execution needs neither, because execution runs Hawk's own command. Two validation layers exist that Steward deliberately will **not** reproduce: the CLI's unknown-key warning pass (`cli/cli.py`) and the API's semantic checks (no local package paths, secret validation, model permissions). Those belong to the frontends that own them.
 
-### Steward does not supply an infra config, and does not need to
+### 2.1 Steward does not supply an infra config, and does not need to
 
 An earlier draft of this document assumed Steward would hand Hawk its own infra config, on the reasoning that the file is Hawk's platform-half lever and the API server writes one. Implementation ruled that out: `hawk local eval-set` takes no infra config, so driving Hawk's CLI means Hawk synthesizes `_default_local_infra_config` for itself. Steward could only write one by driving `python -m hawk.runner.run_eval_set <user> <infra>` instead, which costs the pre-boundary work the CLI exists to provide.
 
@@ -65,7 +65,7 @@ It turns out not to matter, for two reasons worth recording because they were th
 
 The levers that do the work are the selection document's `log_dir` and `max_samples`, which apply uniformly to every definition type and are how a smoke run reaches a temp directory whatever the frontend. In the pod the question disappears from a different direction: there the infra config is the platform's, handed to the runner, and Steward is a consumer of it rather than its author — which is what *What Steward must honour* is about.
 
-## What Steward must honour
+## 3. What Steward must honour
 
 Three things in the infra config are not preferences:
 
@@ -75,7 +75,7 @@ Three things in the infra config are not preferences:
 
 That last point generalizes. Because a worker is the whole runner again, everything Hawk does before the boundary happens in every worker — secrets resolution, sandbox patching, annotations, `runner.environment`. Steward does not need to learn any of it.
 
-## The budget hazard: per-process ceilings meet multiplied processes
+## 4. The budget hazard: per-process ceilings meet multiplied processes
 
 This is the one place where "run the runner N times" is actively wrong rather than merely wasteful — but not for the reason it first appears, and the difference decides what has to be fixed.
 
@@ -98,7 +98,7 @@ Hawk lands cleanly on scheduling.md's rule, because computing the value explicit
 
 The narrower claim replaces the old blanket one: it is not that every knob must be divided, but that **the ones with no feedback signal must be**. Connections coordinate through rate limits; samples were never the multiplier they appeared to be; sandboxes have nothing, so Steward divides them. Within that bound the infra config's values stay an *envelope* rather than a quota to split evenly — different tasks with different models want different `max_samples`, so the agent tunes inside it and escalates when the right answer is unclear. What the agent may not do is exceed it, because unlike wall clock, exceeding this one kills the pod.
 
-## Hook scope decides what survives worker mode
+## 5. Hook scope decides what survives worker mode
 
 `lifecycle.install_runner_hooks(infra_config)` installs Hawk's Inspect hooks, and they do not all fare the same way under worker mode. The dividing line is not Hawk's — it is the scope each handler is registered at.
 
@@ -122,7 +122,7 @@ The `stuck_eval_monitor` row is the one that matters most, because it is a safet
 
 One more duplication, unrelated to hooks: **`memory_monitor`** starts a daemon thread polling the *cgroup*, launched from `execute_runner_main` rather than registered as a hook. One cgroup, N pollers, N identical gauge streams. See open question 5.
 
-## Pre-boundary work that must not be per-worker
+## 6. Pre-boundary work that must not be per-worker
 
 A worker is the whole runner again — that is what makes Hawk support a definition type rather than an architecture. The cost is that everything Hawk does *before* the `eval_set()` boundary happens N times. Sorting that work by whether repeating it is right, merely wasteful, or actively unsafe is the main thing the runner has to get right, and it is not the same list as the hooks above.
 
@@ -147,7 +147,7 @@ A worker is the whole runner again — that is what makes Hawk support a definit
 
 None of this blocks reading a config, which is why Stage 0 ships without it. It is squarely Stage 1's problem — the moment Steward spawns the second worker itself, this is the first thing that bites.
 
-## Why `launch` must block inside the pod
+## 7. Why `launch` must block inside the pod
 
 Everywhere else, `steward launch` returns immediately and a coding agent tends the run. Inside a Hawk pod that model is unavailable, and the reason is worth stating precisely, because it is a platform contract rather than a preference.
 
@@ -167,7 +167,7 @@ So the shape is `steward launch --wait-signoff`:
 
 The process holds the pod open for the whole lifecycle Steward defines — tasks complete, scans drain, anomalies settle, a human signs off — and only then lets Kubernetes call the Job complete. That is a *better* fit for the platform's semantics than what happens today, where Job-complete means "the eval loop returned" and the question of whether the data is usable has no representation at all.
 
-### Exit codes
+### 7.1 Exit codes
 
 The mapping is load-bearing, because it decides whether the pod restarts:
 
@@ -180,7 +180,7 @@ The mapping is load-bearing, because it decides whether the pod restarts:
 
 The second row is the non-obvious one, and it follows `stay_alive_if_cleanup_disabled`'s precedent exactly. A run nobody signed off is not a *failed* run — the eval may be perfectly complete — and exiting non-zero would restart the pod and re-run the work. The absence of signoff is a fact for the journal, not a process failure. Which means a parked run needs a deadline: see open question 2.
 
-## Two drivers, one function
+## 8. Two drivers, one function
 
 If the pod's process must live for the whole run, something inside it must decide when to spawn and reap. That looks like the daemon [execution.md](execution.md) rejected, and it is worth being clear that it is not.
 
@@ -192,7 +192,7 @@ The alternative, an external agent as sole driver, is rejected. A pod is expensi
 
 This split is not peculiar to Hawk, and [execution.md](execution.md), *Driving and judging are separate roles that usually coincide*, now states it generally: driving is mechanical so a clock suffices, judging is not so only an agent will do. The pod is simply the deployment where the two roles land in different places.
 
-## The relay surface
+## 9. The relay surface
 
 `hawk attach --port N` opens a loopback TCP listener on the operator's machine and pumps its bytes to the runner pod over an authenticated WebSocket. Hawk's own description of it (`hawk/cli/acp.py`):
 
@@ -202,7 +202,7 @@ Everything follows from that. It works for **any** port 1–65535, with no allow
 
 Steward must host its own TCP surface, because Inspect's control channel cannot be borrowed: `CtlServerConfig` has no host or port field, the bind is hardcoded `AF_UNIX`, the socket path is derived from the PID, the client is hardwired to `httpx(uds=...)`, and there is a `SO_PEERCRED` peer-UID check on top. Only `acp_server` has the `int → TCP 127.0.0.1:<port>` path, and that is the precedent to copy: a pod-internal loopback port, declared in config, bridged out on demand.
 
-### The limits shape the client
+### 9.1 The limits shape the client
 
 | limit | value |
 |---|---|
@@ -216,7 +216,7 @@ Two of these decide the client design. A fresh relay session per TCP connection 
 
 Both problems have the same answer: **one connection per command**. The `hawk attach` bridge stays up; the sockets through it do not. An idle bridge holds no WebSocket, so there is no clock to run out, and a CLI making one request at a time never approaches the session cap. This is also the natural shape for `steward --remote http://127.0.0.1:<local> tend` — a command, a connection, a response, a close.
 
-### Who signed off
+### 9.2 Who signed off
 
 The relay forwards no identity. It is a byte pipe, and the loopback port inside the pod is unauthenticated for the session's lifetime — Hawk's docs say so explicitly, comparing it to `kubectl port-forward`. So a signoff arriving over the relay cannot be authenticated by Steward.
 
@@ -224,7 +224,7 @@ The honest position: the journal records that a signoff arrived over the relay a
 
 What Steward should **not** do is add a shared-token scheme on the loopback port. The token would have to live in the ConfigMap next to everything else, which makes it a formality rather than a control, and the real gate already exists one layer up: attaching at all requires write access to the run's model groups. A second, weaker gate below a real one buys nothing but the appearance of rigour. (One sharp edge in the real gate is worth knowing about: a run whose pods carry no model-access annotation yields an empty required-groups set, and the authorization check passes any authenticated principal.)
 
-## What each side gains, and pays
+## 10. What each side gains, and pays
 
 Hawk gains three things it does not have:
 
@@ -234,7 +234,7 @@ Hawk gains three things it does not have:
 
 It pays: the dropped eval-set hooks and duplicated cgroup polling above, and the per-worker pre-boundary work — of which `install_into_current` is a hazard rather than a cost, and `log_prior_attempt` is the same accepted cost recorded for Flow in [execution.md](execution.md). Both point at one upstream ask, which is also the cheapest thing Hawk could do for this integration: **a way for an external runner to declare that it owns the once-per-run work**, so a worker skips installation and the prior-attempt scan. That is a small change on Hawk's side and it removes the only genuine unsafety in the arrangement.
 
-## Staging
+## 11. Staging
 
 Nothing here needs to land at once, and the stages are separated by who has to change.
 
@@ -246,7 +246,7 @@ Nothing here needs to land at once, and the stages are separated by who has to c
 
 The ordering means the interesting design risk (stage 2) is de-risked by the two stages before it, and neither of those requires anyone else's roadmap.
 
-## Open questions
+## 12. Open questions
 
 1. **Detection ordering between `FlowSpec` and `EvalSetConfig`.** Both models are permissive; `EvalSetConfig` is `extra="allow"`. Which is tried first, whether a document validating as both is an error or a precedence rule, and whether detection should use the published JSON schema rather than importing Hawk.
 

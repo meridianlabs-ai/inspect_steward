@@ -4,7 +4,7 @@
 
 Every other document works a topic to closure regardless of when it ships. This one draws the line once, at the end, so that no earlier decision was distorted by scope pressure.
 
-## Where things actually stand
+## 1. Where things actually stand
 
 **Enumeration is built and works on all three definition types.** `read_eval_set()` executes a definition under `INSPECT_EVAL_SET_CAPTURE` and returns a `Manifest` of resolved tasks; `steward tasks` renders it. Detection handles a script, a Flow spec, and a Hawk config, and Hawk's own lowering is captured through Hawk's own entrypoint rather than re-derived.
 
@@ -12,13 +12,13 @@ Every other document works a topic to closure regardless of when it ships. This 
 
 **Everything else is unbuilt.** There is no `launch`, no `tend`, no workspace, no journal, no anomalies, no signoff — `steward init` is a stub that prints a sentence. The runner is the project.
 
-## Verify one thing before building anything
+## 2. Verify one thing before building anything
 
 Every scheduling decision rests on mapping a landed `.eval` back to a manifest task, and Steward's workers resolve **independently** — the same asymmetry that produced the `eval-set.json` `task_id` trap the design already found. Capture, run two workers under a selection, recompute `task_identifier` from each landed log, assert it matches the manifest.
 
 It is an afternoon, it is the assumption everything downstream inherits, and it lands as a **test** rather than a verification ([testing.md](testing.md)) — the property has to keep holding across Inspect upgrades, not merely hold today.
 
-## Four milestones, each a capability rather than a percentage
+## 3. Four milestones, each a capability rather than a percentage
 
 | | a user can | ships |
 |---|---|---|
@@ -29,7 +29,7 @@ It is an afternoon, it is the assumption everything downstream inherits, and it 
 
 **M3 is the product.** M2 is worth shipping on its own — one task per process buys crash isolation and CPU parallelism that `eval_set()` cannot, and it is the milestone that de-risks everything by proving the protocol at scale — but nobody walks away from it. M4 is what makes a result *trustworthy* rather than merely produced.
 
-### M2 — run a sweep
+### 3.1 M2 — run a sweep
 
 The sequence matters more than the list, and one ordering choice is worth stating: **`reconcile` is built and exhaustively tested before anything spawns a process.** It is a pure function over a synthesized log directory, it is the component most likely to be subtly wrong, and it is the cheapest thing here to test. Building the process machinery first would mean debugging scheduling logic through a fleet.
 
@@ -43,7 +43,7 @@ The sequence matters more than the list, and one ordering choice is worth statin
 
 What M2 deliberately lacks: it does not notice anything. Tasks run, logs land, a human reads `status`. Errors are visible as counts, not as anomalies with a lifecycle.
 
-### M3 — walk away
+### 3.2 M3 — walk away
 
 1. **The journal** and the fold, including per-tend `observation` events.
 2. **The timer**, and `launch` arming it or refusing.
@@ -54,11 +54,11 @@ What M2 deliberately lacks: it does not notice anything. Tasks run, logs land, a
 7. **The agent surface** — the tend summary, collection, `steward runbook`.
 8. **The sync**, `steward.log`, and the two ages.
 
-### M4 — close the loop
+### 3.3 M4 — close the loop
 
 Scanning is the largest piece and the most valuable: a third boundary mode, Steward as single writer, the distribution reporting that makes results triageable, and `scanning.md` / `analysis.md` mirrored into the log directory. The smoke gate and store publication are small by comparison. Note archiving is **not** here — it moved into M3 with signoff, since curation is part of the attestation rather than a later tidy-up.
 
-## What is deferred, and why
+## 4. What is deferred, and why
 
 | deferred | reason | reconsider when |
 |---|---|---|
@@ -72,7 +72,7 @@ Scanning is the largest piece and the most valuable: a third boundary mode, Stew
 | **Sharding one task across processes** | declined outright ([scheduling.md](scheduling.md), *No sharding*) | — |
 | **Batching tasks into one worker** | declined outright — the slot idle it existed to absorb went away with capped pools | — |
 
-## Upstream, ordered by when it bites
+## 5. Upstream, ordered by when it bites
 
 [execution.md](execution.md)'s *Changes required in inspect_ai* is the authoritative list. Ordered against the milestones:
 
@@ -86,7 +86,7 @@ Scanning is the largest piece and the most valuable: a third boundary mode, Stew
 
 **Two items touch M3, and both have workarounds** — Steward can carry Apprise itself, and it can compute supersession itself. Nothing blocks M2 except at scale or on Docker, which is worth knowing: the runner can be built and proven before any of this lands.
 
-## How Hawk meshes
+## 6. How Hawk meshes
 
 [hawk.md](hawk.md) already stages itself, and the stages line up rather than competing:
 
@@ -94,7 +94,7 @@ Scanning is the largest piece and the most valuable: a third boundary mode, Stew
 - **Hawk Stage 1** — run a Hawk config outside the pod. This is **not separate work**: it falls out of M2 and M3, because a Hawk config is a definition type. Its one Hawk-specific obligation is the pre-boundary work that must not be per-worker, which bites the moment Steward spawns a second worker itself.
 - **Hawk Stage 2** — Steward inside the pod. The only stage needing a change on Hawk's side (one call site), and the only one that adds architecture — the in-pod timer and the relay RPC surface. It sits after M3, since it is a deployment of the loop rather than part of building it.
 
-## What "done" means for the design
+## 7. What "done" means for the design
 
 The exit condition for the design work is that an implementation plan can be written from these documents without further discovery. Against that:
 
