@@ -139,7 +139,7 @@ If the definition evolves, an attestation has to name what it covered. It pins t
 | `steward tend` | **a timer, ~q10m**; an agent may also call it to force a turn | One turn of the loop: reconcile, spawn, reap, rewrite `status.md`, append to the journal, and report which scan results have landed and which look worth investigating. Never blocks. |
 | `steward status` | either | `tend --dry-run` — current state plus a preview of what the next tend would do. Read-only. |
 | `steward notify [--kind attention\|stopped]` | agent | Send the human a message that carries judgement, through Inspect's notification channel. The two terminal kinds are Steward's alone — see *Four kinds*. |
-| `steward signoff [--publish]` | **human only** | Attest that the results are accepted. Terminal journal entry; records who, when, and the exceptions accepted. `--publish` indexes the signed logs into the reuse store — see *Publication is part of the attestation*. |
+| `steward signoff [--publish]` | **human only** | Attest that the results are accepted. Terminal journal entry; records who, when, and the exceptions accepted. Curates superseded attempts into `logs-archive/`, and with `--publish` indexes the signed logs into the reuse store. |
 | `steward pause` / `steward stop` | either | Stop scheduling new work, or end the run. Neither is "leaving a view". |
 
 Two things the table is meant to make obvious. **Almost everything is agent-facing**: the human's own surface is `init`, `signoff`, and asking the agent questions in prose. And **`signoff` is the one command an agent must never run** — it is a human attestation, and the runbook says so plainly.

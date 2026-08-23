@@ -25,7 +25,7 @@ It is an afternoon, it is the assumption everything downstream inherits, and it 
 | **M1 — enumerate** | see what a definition resolves to, before running it | **done** |
 | **M2 — run a sweep** | run a manifest as one process per task, with crash isolation and real CPU parallelism | `launch`, `tend`, `status`, the workspace |
 | **M3 — walk away** | leave an overnight run and be told only what matters | the timer, journal, anomalies, notification, signoff |
-| **M4 — close the loop** | trust the result: scanned, smoke-gated, curated, reusable | scanning, smoke, archive, store publication |
+| **M4 — close the loop** | trust the result: scanned, smoke-gated, reusable | scanning, smoke, store publication |
 
 **M3 is the product.** M2 is worth shipping on its own — one task per process buys crash isolation and CPU parallelism that `eval_set()` cannot, and it is the milestone that de-risks everything by proving the protocol at scale — but nobody walks away from it. M4 is what makes a result *trustworthy* rather than merely produced.
 
@@ -56,7 +56,7 @@ What M2 deliberately lacks: it does not notice anything. Tasks run, logs land, a
 
 ### M4 — close the loop
 
-Scanning is the largest piece and the most valuable: a third boundary mode, Steward as single writer, the distribution reporting that makes results triageable, and `scanning.md` / `analysis.md` mirrored into the log directory. The smoke gate, archiving, and store publication are each small by comparison.
+Scanning is the largest piece and the most valuable: a third boundary mode, Steward as single writer, the distribution reporting that makes results triageable, and `scanning.md` / `analysis.md` mirrored into the log directory. The smoke gate and store publication are small by comparison. Note archiving is **not** here — it moved into M3 with signoff, since curation is part of the attestation rather than a later tidy-up.
 
 ## What is deferred, and why
 
