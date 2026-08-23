@@ -79,7 +79,7 @@ The interception protocol is environment-based so that any conforming program wo
 |---|---|
 | `INSPECT_EVAL_SET_CAPTURE` | Path to write the manifest. `eval_set()` resolves tasks, writes the manifest, and exits the process. |
 | `INSPECT_EVAL_SET_SELECTION` | Path to a selection document (`{version, eval_set_id, tasks: [{identifier, resume?}]}` — `inspect_ai._eval.eval_set_selection`). `eval_set()` runs only matching tasks, through `eval()`, and performs no eval-set orchestration. |
-| *(operational overrides)* | Carried in the selection document rather than a channel of their own: `log_dir` and `max_samples` let Steward control worker runtime behavior without editing definitions. Neither changes what an eval means, and neither participates in task identity. The one option Steward overrides semantically (`fail_on_error`) is applied by selection mode itself. |
+| *(operational overrides)* | Carried in the selection document rather than a channel of their own: `log_dir` and `max_samples` let Steward control worker runtime behavior without editing definitions. Neither changes what an eval means, and neither participates in task identity. A dataset `limit` override belongs here on the same grounds and has not landed ([execution.md](execution.md), item 8). The one option Steward overrides semantically (`fail_on_error`) is applied by selection mode itself. |
 
 The protocol lives in **inspect_ai** — `eval_set()` honors these variables natively. Flow and Hawk then conform with zero code changes, `python evalset.py` works directly under Steward, and any future frontend gets Steward support for free.
 
@@ -144,7 +144,21 @@ The manifest is an **index into the definition, not a reconstruction of it**. Th
 
 Because enumeration fully resolves tasks, the manifest carries per-task sample counts and epochs — the raw material for Steward's scheduling, progress estimation, and cost projection.
 
-**Determinism requirement.** The contract assumes the definition produces the same task list on every execution: enumerate on Monday, execute task 7 on Tuesday, and the selection must still match. `task_identifier` is deterministic given the same tasks/args/models, so the requirement reduces to "the definition is deterministic with respect to its task list" (no time- or randomness-dependent task construction). Drift is detected, never papered over: a selected task that resolution fails to produce is a hard error naming the missing task, and the manifest's `content_hash` lets Steward warn when the definition file changed after enumeration.
+**Determinism requirement.** The contract assumes the definition produces the same task list on every execution: enumerate on Monday, execute task 7 on Tuesday, and the selection must still match. `task_identifier` is deterministic given the same tasks/args/models, so the requirement reduces to "the definition is deterministic with respect to its task list" (no time- or randomness-dependent task construction). Drift is detected, never papered over: a selected task that resolution fails to produce is a hard error naming the missing task, and the manifest's `content_hash` lets Steward warn when the definition file changed after enumeration. What that hash is and is not for is the subject of the next section.
+
+## Reproducibility is the author's concern
+
+`task_identifier` hashes a task's **interface** — name, args, model, resolved plan, generate config, limits — and not its **implementation**. Change a scorer's logic, a prompt body, or the contents behind a dataset location, and the identifier is byte-identical. Inspect's answer is `task.version`, which participates in the identifier and is the author's to bump.
+
+That is the whole of the mechanism, and deliberately so. Steward does not verify it.
+
+The temptation runs the other way, because the ingredients for a checker are lying around: every log already records `revision` (git origin, commit, dirty), `packages` (inspect_ai's version, plus the task's distribution version when it came from one), and the dataset's name, location, and sample count — and a task installed from a git URL gets an exact commit from PEP 610 `direct_url.json` with no working tree involved at all. Steward reads log headers on every tend anyway, so comparing those across a directory would cost nothing.
+
+It is still the wrong thing to build. Reproducibility discipline is a property of the eval, and the person who wrote the definition is the person who knows whether an upgraded package matters — the same reasoning that leaves `retry_on_error` with the author rather than the runner. A check Steward cannot ground in intent becomes a warning that fires during an ordinary week of `pip install -U`, and a warning that fires when nothing is wrong is one people learn to route around. The provenance is recorded in every log; querying it is a user's prerogative, not Steward's obligation.
+
+**So `content_hash` stays narrow on purpose.** It covers the top-level definition file and nothing else, and its job is an affordance rather than a guarantee: *notice that the file in front of you changed, and offer to re-read it* ([workflow.md](workflow.md), *One trigger, and one gate on it*). Widening it was considered and dropped — a Python import graph's transitive closure cannot be resolved statically, and resolving it by observation would mean a capture-schema addition and a version bump in service of a check nobody asked for. Where the hash misses an edit — a changed module, an included fragment — the consequence is only that Steward does not volunteer the prompt; the next `launch` re-captures regardless, and any identifier that moved shows up in the delta. **The delta report is the safety net; the hash is only the nudge.**
+
+One caveat worth recording so nobody reaches for it: `revision.dirty` is computed from `git status --porcelain` over the whole tree, and a Steward workspace writes `journal.jsonl`, `status.md`, and `anomalies.md` into that tree as it runs. In a workspace that `init` made its own repository, every log is therefore marked dirty by Steward's own operation. The flag means "a run touched this tree", not "the source was edited", and it should not be built on.
 
 ## Selection and filtering
 
@@ -159,13 +173,13 @@ A selection is a structured document, not a bare list of identifier strings — 
       "identifier": "<full task_identifier>",
       "resume": "logs/…_mbpp_abc.eval"   // optional prior log to reuse samples from
       // added with Layer 2: "name", "args_hash", "model", "sequence"
-      // reserved: "samples": [...] — future within-task sharding
+      // the reserved "samples" field is dropped — see open question 6
     }
   ]
 }
 ```
 
-The Layer 2 facets are additive optional fields, so adding them needs no version bump: Steward writes the file and inspect_ai reads it, and an older inspect_ai ignores fields it doesn't know.
+The Layer 2 facets are additive optional fields, but that does not make them free: the selection models are `extra="forbid"`, so an older inspect_ai *refuses* a field it doesn't know rather than ignoring it. Each added field therefore takes a version bump and a `_FIELD_MIN_VERSION` entry — deliberately, since silently dropping an unrecognized key is how a misspelled `resume` becomes no resume at all. See [execution.md](execution.md), *Changes required in inspect_ai*.
 
 Filtering happens at two internal layers. **No user-facing filtering API is required** — users write exactly the code they write today.
 
@@ -229,7 +243,9 @@ Under a single-task selection, the non-matching `my_task` calls return placehold
 
 **`flow run` is itself a conforming program**: it culminates in the `eval_set()` call the spec describes, so Steward drives flow's own CLI under the protocol (`python -m inspect_flow._cli.main run <spec>`) rather than reaching into flow's internals. Flow keeps ownership of everything before the boundary — includes, implicit `_flow.py` inheritance, defaults merging, `NotGiven` semantics, `@after_load`/`@after_instantiate` hooks, and its `FlowOptions` → `eval_set()` mapping — and Steward owns execution from the boundary onward. Loading a Python spec is `exec` with real side effects (sys.path mutation, dotenv, `_flow.py` files) — by design, since every worker re-executes it.
 
-Flow writes `flow.yaml` and a requirements snapshot into the log directory *before* the boundary, so those side effects cannot be intercepted by capture. Reads therefore pass a scratch `--log-dir`, leaving the definition's real log directory untouched; execution passes the real one, where those files are wanted. Flow's store, bundling, and steps are out of scope for Steward's execution path (workers run with `--store none`).
+Flow writes `flow.yaml` and a requirements snapshot into the log directory *before* the boundary, so those side effects cannot be intercepted by capture. Reads therefore pass a scratch `--log-dir`, leaving the definition's real log directory untouched; execution passes the real one, where those files are wanted. Flow's bundling and steps are out of scope for Steward's execution path.
+
+**Flow's store is not out of scope, though workers still run with `--store none`** — for a different reason than the original one. The store indexes logs by `task_identifier` so an identical task never runs twice, and nothing about it is Flow-specific: the key is inspect_ai's and `store_factory` takes a bare path. So rather than being disabled, both halves move to Steward, which can then offer the same caching to `evalset` and `hawk` definitions — neither of which has any Flow code in the worker to do it for them. See [execution.md](execution.md), *Flow's store, and who is allowed to read it*.
 
 Flow conforms to both halves of the protocol as-is — verified end to end, including four concurrent flow workers writing into one flat log directory. Flow also passes `ctl_server` through to `eval_set()`, so flow-launched workers get the control endpoint Steward supervises them with, and it already defaults `retry_on_error` to 3. Flow specs can carry `scanner:`, which selection mode rejects; `options["scanners"]` in the manifest surfaces that at enumeration time. The one rough edge is that each worker repeats Flow's pre-boundary work — see open question 1 in [execution.md](execution.md).
 
@@ -260,7 +276,7 @@ Deployment-wise Hawk keeps its platform — CLI, API server, Helm release, runne
 1. Capture mode: `INSPECT_EVAL_SET_CAPTURE` honored by `eval_set()` — resolve, write manifest, exit the process. *Landed.*
 2. Selection mode: `INSPECT_EVAL_SET_SELECTION` honored at the boundary (Layer 1), plus drift errors. *Landed.*
 3. Automatic pruning in the resolver and the `@task` registry wrapper (Layer 2), including the placeholder task mechanism.
-4. Operational overrides: carried by the selection document (`log_dir`, `max_samples`) rather than a separate channel. An environment variable could not serve — `INSPECT_LOG_DIR` and its siblings are *defaults*, and `eval_set()` declares `log_dir` with no default, so a definition's explicit argument always wins. The error-handling options this once had to carry (`fail_on_error`, `continue_on_fail`) are hard-coded by selection mode instead, and `retry_on_error` stays with the definition. *Landed.*
+4. Operational overrides: carried by the selection document (`log_dir`, `max_samples`) rather than a separate channel. An environment variable could not serve — `INSPECT_LOG_DIR` and its siblings are *defaults*, and `eval_set()` declares `log_dir` with no default, so a definition's explicit argument always wins. The error-handling options this once had to carry (`fail_on_error`, `continue_on_fail`) are hard-coded by selection mode instead, and `retry_on_error` stays with the definition. *Landed* — except for the dataset `limit` a smoke run needs, which is a third override on the same grounds and is tracked as [execution.md](execution.md) item 8. `max_samples` is concurrency, not a slice, and does not substitute for it.
 5. Public (or at least stable) exposure of `task_identifier` and the manifest models, which today live in `inspect_ai._eval.evalset`. *Partly landed:* `task_identifier` is public; the capture and selection models stay private as versioned wire formats.
 6. The single-`eval_set()`-call constraint (a second call under capture or selection is an error) is not yet enforced.
 
@@ -276,4 +292,4 @@ Deployment-wise Hawk keeps its platform — CLI, API server, Helm release, runne
 
 5. **Hawk `extra="allow"` passthrough.** *Moot:* Steward drives Hawk's entrypoint rather than lowering configs itself, so Hawk's own passthrough handling applies unchanged — including its guarantee that a forwarded extra cannot shadow an infra-config kwarg. Hawk's remaining open questions are in [hawk.md](hawk.md).
 
-6. **Selection schema evolution.** The reserved per-task `samples` field for within-task sharding (splitting one large task's samples across workers, via `eval_set`'s existing `sample_id` support).
+6. **Selection schema evolution.** *Resolved: won't do.* The reserved per-task `samples` field was for within-task sharding, and [scheduling.md](scheduling.md) rules that out — a task always runs all of its samples in one process, controlling memory through `max_samples` from the inside. A single very large task is therefore bounded by one core, which is accepted rather than solved: the alternative is a second granularity mechanism with multiple logs per task, a completeness predicate that reassembles shards, and adjudication that has to know which shard a sample came from. The field can be dropped rather than designed. With batching also ruled out, the selection document's `tasks` list is permanently length 1 — unused generality upstream, harmless, and not worth a schema change to remove.

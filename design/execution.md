@@ -75,7 +75,7 @@ The selection document (`inspect_ai._eval.eval_set_selection`, schema version 1)
 }
 ```
 
-`tasks` is a list rather than a single entry so a worker can host several tasks when that is cheaper than several processes (a definition whose import cost dominates, or a batch of very short tasks). One task per worker is the default.
+`tasks` is a list rather than a single entry so a worker could host several when that is cheaper than several processes. Steward never does: [scheduling.md](scheduling.md) settles on exactly one task per process, so the list is permanently length 1 and the generality goes unused.
 
 An identifier that matches no resolved task is a hard error naming the likely cause — the definition changed since it was enumerated. An identifier that matches *more* than one resolved task is also an error: outside selection mode, `validate_eval_set_prerequisites` enforces identifier uniqueness across the eval set, and worker mode skips that check, so it makes the same guarantee locally for the tasks it is asked to run.
 
@@ -226,7 +226,89 @@ Those splits are historical accident, not design — the file the static viewer 
 
 The honest trade is that Steward then receives breaking changes for free along with enhancements. That is still the better side: loud coupling beats silent divergence — which is precisely what happened with Hawk.
 
-**One difference sharing does not erase.** `cleanup_older_eval_logs` keeps the newest log per task id and deletes the rest, but Steward's adjudication model needs failed attempts *kept* until they are resolved. Steward therefore calls the same function on a different schedule — once at the end, after adjudication settles, rather than on every pass. Same code, different timing; worth recording so nobody moves the call earlier as a tidy-up.
+**One difference sharing does not erase — and it is now two.** `cleanup_older_eval_logs` keeps the newest log per task id and deletes the rest, but Steward's adjudication model needs failed attempts *kept* until they are resolved. Steward therefore calls it on a different schedule: once at the end, after adjudication settles, rather than on every pass. Same code, different timing; worth recording so nobody moves the call earlier as a tidy-up.
+
+The second difference is behavioural. Steward **never deletes an eval log** ([workflow.md](workflow.md), *Steward never destroys a result, but it does curate the directory*), so where `eval_set()` removes a superseded attempt Steward moves it to the sibling archive. That is a genuine divergence in a design that argues divergence is how Steward drifts — so the resolution is not to fork the function but to widen it: an `archive_dir` parameter that moves rather than deletes, useful to `eval_set()` itself and folded into the public-directory-operations ask. Until it exists, Steward performs the move and calls cleanup with nothing left to remove.
+
+### Flow's store, and who is allowed to read it
+
+Flow ships a **store**: a Delta Lake table mapping `log_path → task_identifier`, indexing completed logs so an identical task never runs twice. It holds no log data — only pointers — and is rebuildable with `flow store import`, which is why its own design describes it as a cache whose absence costs time and never correctness.
+
+Two things make it directly relevant rather than a Flow implementation detail. It is keyed on **`task_identifier`** — inspect_ai's identity, the same key Steward keys everything on, and versioned by `TASK_IDENTIFIER_VERSION` in the table's columns. And it works against local disk or S3 with concurrent writers, which is exactly the deployment Steward targets.
+
+**Disabling it wholesale was an error, and Flow had already drawn the right line.** `FlowStoreConfig` carries independent `read` and `write` flags, defaulting to `read=False, write=True` — index everything, match nothing unless asked. `--store none` turned off both to solve a problem with one of them.
+
+| half | what it does | under worker mode |
+|---|---|---|
+| **write** (`add_run_logs`, default on) | appends `log_path → identifier` rows after a run | harmless — Delta Lake is built for concurrent writers and the operation is idempotent — but **only available to flow definitions**, which is what disqualifies it |
+| **read** (`search_for_logs`, default off) | matches wanted identifiers and **copies** the found logs into `log_dir` | **broken, not merely redundant** — see below |
+
+The read half fails for a specific and instructive reason. `find_existing_logs` runs *before* the boundary, so it operates on the whole spec — every task Flow resolved — and knows nothing about the worker's selection. Under N workers that means N identical store queries and N racing `copy_file` calls onto the same destination paths. Worse, a copied log does not stop anything: selection mode deliberately skips `eval_set()`'s reuse logic, so the worker runs its selected task regardless, and the directory ends up with a copied log *and* a fresh log for one identifier. The reuse buys nothing and costs a race.
+
+That is the competing-orchestrator problem again, one level out. **The store read is a scheduling decision, and scheduling belongs to Steward.**
+
+### Steward owns both halves, because the store is not really Flow's
+
+The obvious repair is to leave workers writing and move only the read to Steward. That works for Flow definitions and fails the moment you ask the question that matters: **an `evalset` or `hawk` worker contains no Flow code at all**, so there is nobody in it to index anything. A store that only accumulates when the definition happens to be a Flow spec is a store that is empty for two thirds of the projects that would benefit.
+
+Nothing about the store is actually Flow-specific. It is keyed on `task_identifier`, which is inspect_ai's, and `store_factory` accepts a bare path string rather than a `FlowSpec` — so the whole mechanism is already definition-type agnostic. Only its *configuration surface* belongs to Flow.
+
+So Steward takes both halves:
+
+- **Workers run with `store=none`** — which is where this started, but now for the opposite reason. The function moved to the single writer rather than being discarded.
+- **Steward reads once, at launch.** It holds precisely the input `search_for_logs(set[str])` wants: the manifest's identifiers. One query, one copy per match, no race, and the copied logs then satisfy the convergence check like any other landed log.
+- **Steward writes at signoff, and only then** — see below. Not as logs land.
+
+Three properties follow, and they are the same three the rest of the design keeps arriving at: one writer, uniform behaviour across frontends, and a cache whose loss costs time rather than correctness — a missed row means a re-run, and `flow store import` rebuilds the table from the logs at any point.
+
+### Publication is an act of signoff, not a side effect of landing
+
+The tempting implementation indexes each log as it lands: every tend already reads new headers to reconcile, so the row is nearly free. It is also wrong, and the reason is an invariant this document states two sections earlier.
+
+A store row is a **claim** — *this log is a valid result for this identifier* — and a reader acts on it by not running the task. But under `fail_on_error=False` a task that reaches the end of its dataset finishes `status="success"` carrying whatever errored samples remain (*Completion is not success*). At the moment a log lands, anomalies may be open, no scan has run, and nothing has been adjudicated. Indexing then publishes provisional results into a shared cache, where another project inherits them silently and nobody is positioned to notice. It is the failure adjudication exists to prevent, escaping the project that could have caught it.
+
+[workflow.md](workflow.md) already names the moment results stop being provisional: *Steward can compute that no anomaly is open; only a person can say I accept these results.* Signoff is that attestation, and a store row is an assertion that a result may be reused. Same claim, same moment.
+
+So **`steward signoff --publish`** writes the project's signed logs into the store as a batch, and the store's contents strengthen accordingly — from *logs that exist* to *results a human accepted*. That is what makes automatic reads defensible: reuse inherits an attestation rather than trusting that a file is present. A project that is stopped, abandoned, or never signed publishes nothing, which is correct — its results were never accepted.
+
+Three consequences worth recording:
+
+- **A shared store can be mixed.** Flow writes rows itself, on its own default (`write=True`), with no attestation behind them. A team using both tools has a store whose rows carry different warrant, and the schema — `log_path`, `task_identifier`, timestamp — has nowhere to record which is which. Steward cannot fix this from its side; what it can do is not make the problem worse, and say plainly that the guarantee is a property of who wrote the row.
+- **Archiving dangles rows.** A store row is a path, and Steward moves logs to the archive. A signed log later superseded by an amendment leaves a row pointing at nothing. The store degrades gracefully by design (unreadable matches are skipped), but Steward owns the tidy-up: archiving a log means removing its row, which `remove_log_prefix` already supports.
+- **Accepted exceptions cross the boundary invisibly.** A signed task carrying two samples accepted-as-errored is a legitimate result *with a caveat recorded in this project's `anomalies.md`* — and a project reusing it gets the log without the caveat. Whether such logs should be publishable at all is unresolved, and it is the sharpest form of the question the filter policy below has to answer.
+
+### Configuring it
+
+The store is a **machine-level resource**, frequently shared: pointing several machines at one S3 prefix means a colleague's completed task is one your next launch does not have to run. That shape decides where the settings live, and they split along the line this design already draws between mechanics and standards.
+
+| setting | where | why |
+|---|---|---|
+| **where the store is** | `INSPECT_STEWARD_STORE` (a path, `auto`, or `none`), with `--store` as a launch override | mechanics, and a property of the machine rather than the project — the same reasoning that puts the notification channel in the environment |
+| **whether to publish to it** | decided at `steward signoff`, defaulting from `policy.md` | publication is an attestation, so it belongs to the one command a human always runs personally |
+
+**Configuring a store is the opt-in, and it enables reads.** There is no separate switch, because there is nothing to protect against: a match means the identifier is equal, and what it points at was signed off by someone. Reads are still *reported* in the launch delta — visibility, not consent — because a reused log is a result this project did not produce.
+
+Writing has no default beyond what policy says, since it is a decision on a command a human is present for. Someone who never signs off never publishes; someone whose project is exploratory can say so once in `policy.md` and stop being asked.
+
+There is deliberately no `steward.yaml` entry for either ([workflow.md](workflow.md), *There is no `steward.yaml`*): the location is environmental, and the publication rule is prose a human writes.
+
+**This unifies with the archive**, since both are identifier-keyed caches — one project-local, one global. Convergence for a wanted identifier with no log in `logs/` consults them in cost order:
+
+```
+1. logs-archive/   project-local — move back (free; a superseded task was restored)
+2. flow store      global index  — copy in  (cheap; another project already ran it)
+3. otherwise       spawn a worker
+```
+
+**Reuse must be visible, because Steward's audit posture is stronger than a cache's.** An identifier match guarantees the task, args, model, solver, resolved plan, generate config, and execution limits are identical — a strong claim, and exactly what identifier equality means. It does *not* guarantee the environment matched: package versions, or a dataset loaded from a mutable source. So a reused log is journaled with its source location and counted in the launch delta ("3 tasks satisfied from the store"), rather than silently becoming a result of this project. Reporting is where it stops: whether an identifier match is good enough to accept is the reader's judgement, not something Steward verifies ([configuration.md](configuration.md), *Reproducibility is the author's concern*).
+
+`FlowStoreConfig.filter` is the lever for the policy that follows — a `LogFilter` restricting what may be matched (only logs that scored, only recent ones). What that policy should be is unresolved; what matters here is that the mechanism exists and belongs to Steward rather than to each worker.
+
+**The one wrinkle is the dependency.** The implementation lives in `inspect_flow._store`, so store support for a Hawk or plain-script project would today require installing the `[flow]` extra — an odd thing to tell someone whose project has nothing to do with Flow. Steward should accept that for now and say so plainly when a store is configured without Flow present, rather than failing obscurely.
+
+**The destination is inspect_ai**, and this is the same move as the public directory operations above: a cache keyed on inspect_ai's own identifier, useful to `eval_set()` directly (cross-directory reuse is not a Steward-specific want), sitting in a private module of an optional third package. If it moves, Steward changes one import — the design above assumes nothing about where the code lives, only that `store_factory` takes a path.
+
+What remains genuinely open is the **filter policy**: `FlowStoreConfig.filter` accepts a `LogFilter` restricting what may be matched — only logs that scored, only recent ones, only from a trusted prefix. That is the concrete form the `policy.md` question takes, and it wants deciding alongside the reuse default rather than separately.
 
 ### What enforces single-writer
 
@@ -257,7 +339,7 @@ The directory is "eval-set conforming" throughout — it has the same files with
 
 ### Multiple logs per task
 
-A task can end up with more than one log: a first attempt that failed, then a resumed attempt. That is the same situation `eval_set()` produces on retry, and Steward resolves it the same way — the latest successful log for an identifier wins, and the run's final sweep removes superseded failed logs. Steward keeps them until then, because the attempt history is exactly the diagnostic material it exists to reason about.
+A task can end up with more than one log: a first attempt that failed, then a resumed attempt. That is the same situation `eval_set()` produces on retry, and Steward resolves it the same way — the latest successful log for an identifier wins, and the final sweep clears superseded failed logs to the archive rather than deleting them. Steward keeps them in place until then, because the attempt history is exactly the diagnostic material it exists to reason about.
 
 ## Recovery: retry, requeue, adjudication
 
@@ -269,7 +351,7 @@ The point of forcing `fail_on_error=False` is to convert a binary task outcome i
 
 The definition's own `fail_on_error`, `continue_on_fail`, and `retry_on_error` are recorded in the capture manifest's `options`, so Steward can see what it is honouring and what it is overriding rather than having to guess.
 
-Recovery therefore happens at three tiers, in increasing order of how much judgement each requires.
+Recovery therefore happens at three tiers, in increasing order of how much judgement each requires. Whole-task failure is not a fourth: it lands in tier 3 with the unit enlarged, since nothing at that level is retried without a ruling ([scheduling.md](scheduling.md), *Failure is adjudicated, not retried*).
 
 ### Tier 1 — in-eval sample retry (no judgement)
 
@@ -303,15 +385,17 @@ So errored samples re-run on resume **for free** — invalidation is not require
 
 This all works against the resume path as built: worker mode reads the prior log header-only and passes its file info through, and Inspect reads each prior sample lazily from the file, checking `sample.error is None and sample.invalidation is None` per sample. No full-log read is needed to decide reuse.
 
-### What is left for task-level retry
+### What is left for task-level recovery
 
-With tiers 1–3 covering sample failures, whole-task retry narrows to what no sample-scoped mechanism can reach:
+With tiers 1–3 covering sample failures, whole-task recovery narrows to what no sample-scoped mechanism can reach:
 
 - **Errors outside sample scope** — dataset load, task setup, sandbox provisioning, scorers and metrics at the end. These still produce `status="error"` regardless of `fail_on_error`.
 - **Hangs.** A sample past its `time_limit` or `working_limit` records a limit event, not an exception, so `retry_on_error` never fires.
 - **The process dying** — OOM, host loss, SIGKILL. Not an error from Inspect's point of view at all.
 
-All three are handled the same way: respawn with `resume`. And a worker performs **no task-level retry of its own** — worker mode forces `task_retry_attempts=0` regardless of the definition's `retry_attempts`. Honouring the definition's value would multiply Steward's attempt budget by it and leave a failed log per in-process attempt in the shared directory. With three sample attempts already inside, an in-process task loop would be a third multiplier on the same failures.
+All three are handled the same way, and **not automatically**: a failed task opens an anomaly, and respawn-with-`resume` is the action a ruling authorizes ([scheduling.md](scheduling.md), *Failure is adjudicated, not retried*). That makes this less a fourth mechanism than tier 3 arriving from a different direction — post-completion adjudication, where the unit happens to be a task rather than a sample. The reasoning is short: `fail_on_error=False` has already absorbed everything sample-shaped, so what reaches this level is mostly structural and mostly deterministic, and respawning a definition that will not import spends money to arrive where it started. Rarity is what makes asking affordable, and classed anomalies are what keep one reboot from costing forty questions.
+
+And a worker performs **no task-level retry of its own** — worker mode forces `task_retry_attempts=0` regardless of the definition's `retry_attempts`. Honouring the definition's value would multiply Steward's attempt budget by it and leave a failed log per in-process attempt in the shared directory. With three sample attempts already inside, an in-process task loop would be a third multiplier on the same failures.
 
 This reverses the lean recorded in configuration.md's open question 1. Worker mode changed the trade-off: with one `eval()` per process, in-process task retry and a Steward respawn are the same operation at different levels, and `resume` preserves the sample reuse that made the in-process version worth keeping.
 
@@ -341,7 +425,7 @@ PIDs are recycled, are meaningful only on one host, and — critically — are *
 | `launched` | after the spawn returns | host, pid, process start time, control socket path |
 | `exited` | when the worker is reaped or observed gone | exit status, observed-at |
 
-Current state is *derived* by replaying the record, never stored. An `intent` with no `launched` is the ambiguous case, and it is the one that matters: on restart Steward reconciles it against the log directory and the control discovery directory before deciding anything.
+Current state is *derived* by replaying the record, never stored. An `intent` with no `launched` is the ambiguous case, and it is the one that matters: on restart Steward reconciles it against the log directory and the control discovery directory before deciding anything — and when neither can see it yet, which is a longer window than it sounds, the quarantine rule below decides.
 
 Process start time is recorded alongside the pid specifically to defeat PID recycling: a live process whose start time differs from the recorded one is a different process.
 
@@ -349,9 +433,18 @@ Process start time is recorded alongside the pid specifically to defeat PID recy
 
 Inspect already maintains a discovery directory — `<inspect_data_dir>/control/<pid>.json`, holding `pid`, `socket_path`, `started_at`, `run_id`, and the control API version, with stale-PID reaping in `list_alive_discovery_entries`. **Liveness is therefore a solved problem to consume, not rebuild.** What discovery cannot supply is the task mapping (the record carries the eval's `run_id`, not the identifier Steward scheduled) and the pre-spawn intent, which is precisely what the in-flight record adds.
 
-### The in-flight record is an accelerator, not a source of truth
+### The in-flight record is an accelerator, with one window where it is not
 
-Ground truth is the log directory. A record that is lost, truncated, or stale degrades Steward to scanning the log directory and the discovery directory to rebuild state — slower, never wrong. Nothing in the design may make a decision it alone can justify.
+Ground truth is the log directory, and for a worker that has reached its eval the claim holds exactly: a record that is lost, truncated, or stale degrades Steward to scanning the log directory and the discovery directory to rebuild state — slower, never wrong.
+
+**There is one window where it is wrong, and it is not brief.** A worker becomes visible to both ground-truth sources at the same moment — the control server writes its discovery file and the recorder opens its log — and that moment is *after* everything the definition does on the way to `eval_set()`. For a plain script that is imports: a second or two. For Flow it is the measured ~1.1s of spec resolution, `flow.yaml`, and the directory scan (open question 1). For Hawk it is `uv pip install` into the running interpreter, secrets resolution against Secrets Manager, and building the entire cross product ([hawk.md](hawk.md), *Pre-boundary work that must not be per-worker*) — plausibly minutes. Throughout that window a live worker has no log, no discovery entry, and cannot be found by scanning anything. The only thing that knows it exists is its `intent` record.
+
+So the record is load-bearing for at-most-once spawning, and two mechanisms make that safe rather than merely hoped for:
+
+- **Self-identifying workers.** Steward writes each worker its own selection document at a known path and passes that path in argv, so the process table answers "is a worker for this task already running?" without consulting any record at all. This closes the window rather than waiting it out, and it is what restores the plain reading of *the log directory is ground truth* — the fallback stops having a hole in it, so the record goes back to being an accelerator.
+- **Quarantine.** A task the manifest wants, with no log and no live process, is not respawned until a full tend interval has passed since the last `intent` naming it. This covers what the first cannot: the sub-second gap between writing `intent` and the process existing, and a spawn that failed in between. A tend that would otherwise double-spawn reports the task as *starting* instead, and the next tend either finds it or acts.
+
+Take both. The first is the real fix and costs nothing, since the selection document has to be written anyway; the second bounds the residue. The cost of quarantine is one tend interval of latency on a genuinely lost spawn, against paying twice for the same task — and a double-spawn is not loud: two workers resolve independently, take different `task_id` uuids, and both logs land, so the duplicate reads as an ordinary retry rather than as an error.
 
 > **Not to be confused with the journal.** [workflow.md](workflow.md) uses *journal* for `journal.jsonl`, the durable record of anomalies and adjudication rulings — the one file in a workspace that cannot be reconstructed. The in-flight record described here is its opposite: disposable, machine-only, and rebuildable from the log directory at any time.
 
@@ -451,7 +544,7 @@ Committing to that shape buys three things that are hard to get any other way:
 
 The strongest argument for a daemon was low-latency tier-2 requeue, and it does not survive scrutiny. Deciding that a sample's failure was transient is **judgement**, and this design explicitly says the mechanical layer does not exercise judgement. So a daemon would either apply crude rules or escalate — and if it escalates, the latency is agent-bound anyway. The daemon never had a real claim to that work. Requeue that genuinely warrants no human involvement is rare; a ten-minute delay on the rest is invisible next to a task that runs for hours.
 
-**What a ten-minute interval actually costs** is slot utilization, not responsiveness: a worker that finishes at t=0 leaves its slot idle until the next tend. That only bites when concurrency is capped below the task count, and it scales as `interval/2 ÷ mean task duration` — a few percent for multi-hour tasks, badly for short ones. Short tasks have their own fix that needs no daemon: **batch several into one worker's selection**, which the selection document already supports by taking a list. The bad case for a long interval is exactly the case where per-worker overhead argued for batching anyway.
+**What a ten-minute interval actually costs** is slot utilization, not responsiveness: a worker that finishes at t=0 leaves its slot idle until the next tend. **That cost is now largely gone**, because [scheduling.md](scheduling.md) launches every pending task at once rather than feeding a capped pool — slot idle requires slots, and below the core-count ceiling there are none. What survives is the residue: sweeps large enough to queue behind the ceiling still leave a freed core idle until the next tend, scaling as `interval/2 ÷ mean task duration`. Batching was the fix named here for the short-task case and is no longer available, having been ruled out with the slots it existed to fill.
 
 **Two things get materially simpler without a long-lived process.**
 
@@ -502,6 +595,16 @@ Steward finds a worker's endpoint by pid via the discovery directory, correlated
 
 The endpoints most relevant to this document are the ones tier 2 recovery is built on — `GET /evals/{id}/samples`, `GET /evals/{id}/sample`, and `POST /evals/{id}/sample/requeue` — plus the runtime-tuning directives (`POST /config` for per-sample limits, the pause/resume latches at process, task, and model scope). Model-scoped pause is worth noting alongside requeue: when the classification is "this provider is down", pausing the model is the correct response and requeueing individual samples is not.
 
+#### The channel changes how work runs, never what work exists
+
+Worth stating as a boundary rather than discovering it as a gap. Across the whole route surface there is nothing that adds a sample: reads (`/tasks`, `/evals/{id}/samples`, `/sample`, `/events`, `/messages`, `/config`), concurrency and routing knobs (`PATCH /config`, `PATCH /tasks/{id}/config`), pause/resume latches at three scopes, and sample-lifecycle operations — `cancel` and `requeue` — that act on samples the task *already has*. A task's sample set is fixed when it starts, from dataset × epochs.
+
+So **epochs cannot be raised on a running eval**, and should not be: epochs is semantic, and the channel is deliberately operational — the same line the selection overrides draw when they refuse anything that changes what an eval means. Extending a project by epochs is handled by convergence instead, and needs no new mechanism at all ([workflow.md](workflow.md), *A project, not a run*): the identifier is unchanged, so when the running worker's log lands it simply reads as incomplete, and the next tend respawns with `resume` to add the missing epochs while reusing the ones already done.
+
+**Letting the running worker finish is unambiguously right here**, which is not true of the superseded case it resembles. Its output is epoch 1, and epoch 1 is exactly what the extension will reuse — so preempting it discards samples that were going to count, and buys nothing, since two workers cannot share a task (one task means one log). The cost is latency: a task six hours from finishing starts its new epochs in six hours. That is the eventual-consistency the convergence model trades for, and the alternative is strictly worse rather than merely different.
+
+**One hazard in the other direction, worth verifying rather than assuming.** `PATCH /tasks/{id}/config` accepts `time_limit`, `token_limit`, and `message_limit` — and all three *are* in `task_identifier`. If a patched value reaches the log's `eval.config`, then `task_identifier(EvalLog)` no longer matches the manifest entry that scheduled it, and the log correlates to nothing. The override machinery it routes through suggests these layer at runtime rather than being written back, but that is an inference. Until it is checked, Steward should treat those three as not-to-be-patched; the concurrency knobs it actually wants for tuning are unaffected either way.
+
 ## Changes required in inspect_ai
 
 1. **Capture mode** — `INSPECT_EVAL_SET_CAPTURE`. *Landed.*
@@ -510,11 +613,11 @@ The endpoints most relevant to this document are the ones tier 2 recovery is bui
 
 4. **Operational overrides in the selection document** — *landed.* A selection may carry `log_dir` and `max_samples`, overriding what the definition passed (schema version 2; omitting either keeps the definition's value). This deliberately avoided a third env var: overrides only matter in selection mode, and the selection document is already a versioned channel the worker reads.
 
-   An environment variable could not have served here. `INSPECT_LOG_DIR` and its siblings supply *defaults*, and `eval_set()` declares `log_dir` with no default — so every definition passes it explicitly and a default can never win. That is why `--smoke` was blocked for script definitions: Flow could be redirected with `--log-dir`, a raw script had no way in at all.
+   An environment variable could not have served here. `INSPECT_LOG_DIR` and its siblings supply *defaults*, and `eval_set()` declares `log_dir` with no default — so every definition passes it explicitly and a default can never win. That is why `--smoke`'s log-directory half was blocked for script definitions: Flow could be redirected with `--log-dir`, a raw script had no way in at all.
 
    Neither override participates in `task_identifier()`, so redirecting a worker cannot desynchronize it from the capture manifest. Both are operational by construction: they change where output goes and how fast it arrives, never what is evaluated.
 
-   Still unreached, and judged not worth a channel of their own: `log_level` (CLI-only) and `display` (`INSPECT_DISPLAY` is read generally, so it already works). `ctl_server` needs nothing — it defaults to enabled. `max_tasks` is moot in worker mode, where a worker runs one task.
+   Still unreached, and judged not worth a channel of their own: `log_level` (CLI-only) and `display` (`INSPECT_DISPLAY` is read generally, so it already works). `ctl_server` needs nothing — it defaults to enabled. `max_tasks` is moot in worker mode, where a worker runs one task. One override *is* wanted and did not land here — the dataset `limit` a smoke run needs. `max_samples` is not it; see item 8.
 
    Hard-coding the error-handling options keeps this surface purely *operational*: nothing that can be overridden changes what an eval means. Had `fail_on_error` gone here, the channel would have needed two tiers to keep semantic overrides visible.
 
@@ -524,9 +627,19 @@ The endpoints most relevant to this document are the ones tier 2 recovery is bui
 
    Deliberately *not* extended to the capture manifest and selection document: those cross a process boundary as data, so they stay private and versioned. See the two-contracts note in that section.
 
+   **One addition rather than a fork:** `cleanup_older_eval_logs` should grow an `archive_dir` that moves superseded logs instead of deleting them. Steward never deletes an eval log ([workflow.md](workflow.md), *Steward never destroys a result*), so without this it must reimplement the one operation this item exists to stop it reimplementing. It is not Steward-specific either — an `eval_set()` user who retries a task and later wants to know what the failed attempt looked like has the same need, and today the log is simply gone.
+
 7. **Notification outside an eval** (see [workflow.md](workflow.md), *The gap: notifying from outside an eval*) — `inspect_ai.util.notify()` is a silent no-op unless an Apprise instance was installed by `eval_resolve_tasks`, so it does nothing when called from a Steward process. `build_apprise()` / `init_apprise()` already do exactly what is needed but are private. Exporting them (or a `notification_scope(config)` convenience) is the same public-surface move as item 6, and it is not Steward-specific — any script that runs evals and wants to be told when they finished hits it.
 
-The selection schema can grow the partial facets Layer 2 needs (`name`, `args_hash`, `model`, `sequence`) as optional additive fields without a version bump — Steward writes the file and Inspect reads it, and an older Inspect ignores fields it does not know. A change in the *meaning* of an existing field requires bumping `EVAL_SET_SELECTION_VERSION`, which Inspect checks and rejects when it is too new.
+8. **A dataset `limit` override in the selection document** (see [workflow.md](workflow.md), *Smoke first*) — the one thing a smoke run still cannot express, and the correction to a claim both documents used to make. `max_samples` bounds how many of a task's samples run concurrently; `limit` bounds how many run at all, and only the first of the two arrived in schema version 2. It belongs in the same channel on the same grounds: `task_identifier` hashes a task's *execution* limits — message, token, turn, time, working, cost — but not its dataset slice, so truncating a worker's dataset cannot desynchronize it from the capture manifest. Mechanically it is one field plus one `_FIELD_MIN_VERSION` entry at schema version 3, exactly as `log_dir` and `max_samples` were gated at version 2.
+
+   The version bump is not ceremony here, and the reason is worth recording: an unknown *facet hint* ignored by an older inspect costs nothing, but an ignored `limit` means a worker asked for two samples runs five thousand. The declared-version gate is what turns that into a refusal on the writer's machine instead of a surprise in the one deployment still running an older inspect.
+
+   Its sibling is **not** wanted: `time_limit` is in the identifier, so the smoke's wall-clock cap must stay a Steward-side deadline rather than an override. Passing one through would change every task's identity and break the matching the smoke depends on.
+
+The selection schema can grow the partial facets Layer 2 needs (`name`, `args_hash`, `model`, `sequence`), but **not for free** — an earlier draft of this paragraph said additive optional fields need no version bump, and what shipped decided otherwise. Both selection models are `extra="forbid"`, so an unknown field is refused rather than ignored, and every added field takes an `EVAL_SET_SELECTION_VERSION` bump plus a `_FIELD_MIN_VERSION` entry recording where it began. A document may not use a field newer than the version it declares.
+
+That is the better trade and worth understanding rather than working around. Silent tolerance of unknown fields is what makes a typo (`"resuem"`) read as *no resume at all*, and makes an ignored `limit` run five thousand samples where two were asked for. Forbidding extras converts both into a failure on the writer's own machine. The cost is that the version number moves more often than a purely additive scheme would need, which is bookkeeping rather than friction.
 
 ## Open questions
 
@@ -544,13 +657,13 @@ The selection schema can grow the partial facets Layer 2 needs (`name`, `args_ha
 
    **This is not a Flow question.** Hawk has the same shape and a sharper version of it — its pre-boundary work includes `uv pip install` into the running interpreter on every invocation, so N workers mutate one shared environment concurrently rather than merely duplicating reads ([hawk.md](hawk.md), *Pre-boundary work that must not be per-worker*). Any frontend Steward drives will divide its startup into per-process work, which must repeat, and per-run work, which must not. The general ask — **a way for an external runner to declare that it owns the once-per-run work** — is one protocol question with one answer, and it is better asked once of the boundary than twice of two frontends. `INSPECT_EVAL_SET_SELECTION` is already the signal that an external runner is present; what is missing is any obligation on a frontend to notice it.
 
-2. **What replaces flow's store.** With `--store none`, flow's completion decisions and log reuse go away. Steward makes those decisions from the manifest and the log directory, but the store also provided cross-run reuse (finding an identical task's log from a *previous* run). Whether Steward offers an equivalent, and whether a single shared log directory makes flow's store usable again rather than disabled, is unresolved.
+2. **What replaces flow's store.** *Resolved: nothing replaces it, because it keeps working* — see *Flow's store, and who is allowed to read it*. `--store none` disabled two halves to fix one. Workers keep the write half; Steward performs the read half itself, once per launch. What remains open is narrower and is recorded there: whether the lookup runs for non-flow definitions, and what filter policy governs reuse.
 
-3. **Worker startup cost without Layer 2 pruning.** Every worker currently constructs every task in the eval set, including datasets, to compute identifiers. For a large sweep this dominates. Layer 2 fixes it; until then, batching several tasks into one worker's selection is the available mitigation.
+3. **Worker startup cost without Layer 2 pruning.** Every worker currently constructs every task in the eval set, including datasets, to compute identifiers. For a large sweep this dominates — and because Steward launches every task at once ([scheduling.md](scheduling.md)), the cost is paid in parallel across the whole fleet rather than amortized. Per-worker memory therefore scales with the manifest rather than with the task, which is why scheduling.md treats Layer 2 as a **prerequisite for launching at scale** rather than an optimization. Batching was previously named as the mitigation; it is no longer available, having been ruled out along with the slot idle it existed to absorb. Verified still absent from `inspect_ai` main as of `0db4111e`.
 
 4. **Cross-host runs.** The in-flight record carries a host per launch, and both control discovery and the run claim are per-machine, so the current design supervises a run from one host. Distributing requires two things Steward would own rather than consume: a discovery mechanism for workers, and a real lease on the log directory with a fencing token to replace the local claim. The lease is the harder half — `log_dir` may be S3, where atomic create-if-absent is not reliably available through the filesystem abstraction Inspect uses.
 
-5. **Second `steward launch` against a live run.** Declining is the safe first behaviour; attaching to the existing run and reporting its status is what a caller (especially a coding agent) actually wants. What "attach" means concretely — read-only status, streaming progress, or the ability to issue directives through the supervisor — is unresolved.
+5. **Second `steward launch` against a live run.** *Resolved* — see [workflow.md](workflow.md), *One trigger, and one gate on it*. A second launch is neither an error nor an attach: it is the **amend** path. It re-captures the manifest, reports the delta against the log directory, and commits it as the new desired state, which the running convergence loop then pursues. Declining would have been refusing the most common legitimate reason to run the command twice. What survives of the original concern is the gate: a delta that would move logs out of `logs/` requires explicit acceptance, because a typo in a task arg is indistinguishable from a deliberate change.
 
 6. **Torn reads of the directory manifests.** Steward is the only writer of `eval-set.json` and `logs.json`, but both writes are truncate-in-place, so a concurrent *reader* can still catch a partial file — and `eval-set.json` has a live reader in the viewer (`read_eval_set_info_async`, which validates with no error handling). Rewriting it as logs land makes the window recur throughout the run rather than once. Either Steward writes these atomically, or the writers in Inspect become atomic. The latter is better for everyone, since `eval_set()` has the same exposure today.
 

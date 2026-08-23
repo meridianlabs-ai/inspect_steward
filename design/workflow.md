@@ -14,22 +14,139 @@ Three facts drive every decision here:
 
 Everything below follows from the mismatch between those three clocks. The directory is the only thing present the whole time, so the directory has to carry the state, the instructions, and the record.
 
+## A project, not a run
+
+The word *run* invites a model this design does not have: a thing that starts, has an identity, and ends. What a workspace actually holds is a **project** — one definition that evolves over time, one log directory that accumulates its results, and one journal recording what was decided. Work happens in episodes, but an episode is not an entity: nothing keys on it, nothing is named after it, and it needs no id.
+
+What replaces it is a **convergence loop**, and Steward already had the shape without naming it:
+
+```
+manifest (from the definition)  =  desired state
+log directory                   =  observed state
+tend                            =  the controller
+```
+
+`reconcile(manifest, inflight, log_dir)` is a controller driving observed state toward desired state. Edit the definition, and the next launch captures a new desired state; everything already satisfying it is left alone. That is not a mechanism Steward invents — it is what `eval_set()` has always done when pointed at the same log directory twice, and Steward inherits it by inheriting the boundary.
+
+### Inspect already splits identity from completeness, and the split is the whole trick
+
+Two mechanisms upstream do the work, and it matters that they are separate:
+
+- **`task_identifier`** answers *is this the same task?* — task file, name, args, model, resolved plan, generate config, model roles, version, and the execution limits (message, token, turn, time, working, cost).
+- **`log_samples_complete`** answers *has enough of it been done?* — and takes `epochs` and the dataset `limit` as arguments held deliberately *outside* the identifier, comparing them against the log's sample counts.
+
+So an edit sorts itself into one of three outcomes with no policy from Steward at all:
+
+| you change | identifier | what happens |
+|---|---|---|
+| add a task, add a model | new tasks appear | new work; existing logs untouched |
+| task args, solver, generate config, a task limit | **changes** | a *different* task — new work, and the previous log is superseded |
+| `epochs`, dataset `limit` | **stable** | the *same* task, now incomplete — resumes and adds only the missing samples |
+| nothing | stable | everything no-ops |
+
+The third row is what makes extending a project cheap rather than merely possible: raising epochs from 1 to 3 reuses the epoch-1 samples and runs epochs 2 and 3, because resume matches samples on id *and* epoch. Nothing has to be re-derived and nothing is re-paid for.
+
+**It also needs no new mechanism, and cannot have one.** Epochs is not a live knob — nothing on the control channel adds work to a running eval, by design ([execution.md](execution.md), *The channel changes how work runs, never what work exists*). Extension happens through the loop instead: the running worker is left alone, its log lands and reads as incomplete, and the next tend respawns with `resume`. Letting it finish is clearly right rather than merely defensible, because what it is producing is epoch 1 — precisely what the extension reuses. The cost is latency, since a task hours from finishing starts its new epochs hours from now.
+
+### Steward never destroys a result, but it does curate the directory
+
+The tempting invariant is *additive only* — Steward adds work and never removes anything. That is the wrong line, and the case that breaks it is ordinary: a provider has an outage, you decide mid-flight to drop that arm. Under additive-only its half-failed logs stay in `logs/` forever, so the arm you abandoned is still in your results.
+
+So the invariant is stronger and more useful:
+
+> **A log leaving `logs/` is always a move, never a delete — reversible, and journaled with its reason.**
+
+Superseded and removed logs move to a sibling **archive** directory (`logs-archive/` beside `logs/`; `s3://…/logs-archive` beside `s3://…/logs`), derived from whatever `log_dir` the definition chose rather than from the workspace.
+
+**A sibling and not a subdirectory, for a mechanical reason:** `list_eval_logs` defaults to `recursive=True`, so anything nested inside `log_dir` is still found by `samples_df`, the viewer, and every listing. An archive underneath `logs/` would hide nothing.
+
+What that buys is a precise meaning for the log directory, which it did not have before: **`logs/` is the current definition's results and nothing else.** That is what makes `samples_df(log_dir)` trustworthy without anyone remembering a filter — and it is *closer* to the conformance standard [execution.md](execution.md) sets, not further from it, because an `eval_set()` directory holds the results of one definition rather than of every definition it ever had.
+
+Three unrelated situations turn out to be the same operation:
+
+| a log leaves `logs/` because | previously | now |
+|---|---|---|
+| its task was **removed** from the definition | accumulated forever | archived |
+| its task was **superseded** by an edit (new identifier) | accumulated forever | archived |
+| it is a **failed attempt** replaced by a good one | *deleted* by `cleanup_older_eval_logs` | archived |
+
+That third row is the one worth noticing. Folding it in means **Steward never deletes an eval log** — a simple, checkable property for a tool asked to be trusted with unattended expensive work, and it costs only an `archive_dir` variant of a cleanup function Steward was already going to call ([execution.md](execution.md), *Changes required*).
+
+**The archive is also a cache.** Edit a task's args, launch, decide the edit was wrong, revert — the original identifier comes back, and a matching log is sitting in the archive. Restoring it is a move rather than a re-run, so revert-after-edit is free.
+
+It is the project-local member of a pair. Flow's store is the same idea globally — an index from `task_identifier` to log location, spanning projects — and Steward consults both before spawning anything ([execution.md](execution.md), *Flow's store, and who is allowed to read it*):
+
+```
+1. logs-archive/   move back  — this project ran it before
+2. flow store      copy in    — some project ran it before
+3. otherwise       spawn
+```
+
+Anything satisfied from either source is journaled with where it came from and named in the launch delta, because a reused log is a result this project did not produce.
+
+The archive grows and never shrinks, which on S3 is a real bill. That is the user's to lifecycle-rule; Steward does not offer a prune verb, because a command whose job is deleting results is precisely the one this section exists to avoid.
+
+### One trigger, and one gate on it
+
+Capture executes the definition, so it is expensive — minutes for a Hawk config, which installs packages and resolves secrets on the way to the boundary. More importantly, **the definition is a file a human edits live.** Anything that captures automatically eventually captures a half-saved edit.
+
+So the division is:
+
+| verb | reads the definition? | |
+|---|---|---|
+| `launch` | **yes** — captures a fresh manifest | computes the delta, reports it, commits it as desired state, spawns |
+| `tend` | no | converges toward the *stored* manifest |
+| `status` | no | reports state, and whether the definition has drifted since capture |
+
+Drift detection is free: compare the definition's content hash against the stored manifest's. No subprocess, cheap enough to run on every tend, so an edit is **never silently ignored** — which is the failure that actually costs a night. The guidance is one sentence, and it is the whole of the amend story: *if you change the definition, call `launch` again.*
+
+A second `launch` is therefore not an error to decline. It is the amend path, and it resolves [execution.md](execution.md) open question 5.
+
+Not every delta deserves the same treatment, and the asymmetry is sharp. Adding work is what the human just asked for; removing work from `logs/` could equally be a typo:
+
+```
+launching would:
+  add        3 tasks                              (1,500 samples)
+  extend    40 tasks   epochs 1 → 3              (12,000 samples)
+  archive   12 tasks   removed from definition    (8 logs, 2 workers stopped)
+  archive    8 tasks   args changed → superseded  (4,000 samples redone)
+
+20 tasks would leave logs/. Proceed? [--accept-archive]
+```
+
+**One predicate, two surfaces.** The same test gates the CLI and bounds the agent's autonomy:
+
+| delta | who commits it |
+|---|---|
+| purely additive | **the agent, unasked** — the human typed the instruction; asking whether they meant it is the interruption this design exists to remove |
+| anything that archives | **escalate, always** — a one-character change to a task arg reads identically to a deliberate removal, and quietly buys a re-run of everything |
+
+Budget does not appear as a third axis. Spend is a gate on *any* work Steward commits, wherever it came from; stating it here would put one rule in two places.
+
+Two consequences follow. **A cron-only driver detects drift but never applies it** — cron is the backstop for keeping existing work moving, not for accepting new instructions, and it cannot weigh whether a delta looks like a mistake. And **whether the agent auto-applies additive changes at all is a `policy.md` line**, defaulting to yes: it is a standing rule about granted autonomy, which is exactly what that file is for.
+
+The mid-edit hazard survives this but stops mattering. An intermediate save that is additive gets applied early and the next tend picks up the rest, so the final state is right and only the start is staggered — convergence is forgiving that way. One that is syntactically broken fails capture and is noise. One that is valid but wrong is only harmful when it archives, and that is gated.
+
+### What signoff attests to
+
+If the definition evolves, an attestation has to name what it covered. It pins to the **manifest digest** rather than to a run id — derived rather than minted, and it gives "a signoff can be invalidated" a precise trigger: the definition changed, so what was signed is no longer what is current. See *Signoff*.
+
 ## The commands
 
 | command | who calls it | what it does |
 |---|---|---|
 | `steward init [--type evalset\|flow] [--no-git]` | human | Scaffold the workspace: bootstrap `AGENTS.md`, a starter definition, `policy.md`, a repository and `.gitignore`. |
 | `steward runbook` | agent | Emit the current mechanics — how to tend, what never to do. Ships with the package so it cannot go stale. |
-| `steward launch [--smoke] [--max-spend N]` | agent | Claim the run, capture the manifest, spawn the first workers, **return**. `--smoke` runs a bounded rehearsal first — see *Smoke first*. |
+| `steward launch [--smoke] [--accept-archive]` | agent | Capture the manifest, report the delta, commit it as desired state, spawn, **return**. The only verb that reads the definition, and therefore the amend path too — call it again after an edit. `--smoke` runs a bounded rehearsal first — see *Smoke first*. |
 | `steward tend` | agent, ~q10m | One turn of the loop: reconcile, spawn, reap, requeue, rewrite `status.md`, append to the journal. Never blocks. |
 | `steward status` | either | `tend --dry-run` — current state plus a preview of what the next tend would do. Read-only. |
 | `steward notify` | agent | Send the human a message that carries judgement, through Inspect's notification channel. |
-| `steward signoff` | **human only** | Attest that the results are accepted. Terminal journal entry; records who, when, and the exceptions accepted. |
+| `steward signoff [--publish]` | **human only** | Attest that the results are accepted. Terminal journal entry; records who, when, and the exceptions accepted. `--publish` indexes the signed logs into the reuse store — see *Publication is part of the attestation*. |
 | `steward pause` / `steward stop` | either | Stop scheduling new work, or end the run. Neither is "leaving a view". |
 
 Two things the table is meant to make obvious. **Almost everything is agent-facing**: the human's own surface is `init`, `signoff`, and asking the agent questions in prose. And **`signoff` is the one command an agent must never run** — it is a human attestation, and the runbook says so plainly.
 
-Deliberately absent: `steward journal` (precedent travels with the anomaly instead), `steward tui` (see *Do we need a TUI?*), `steward note` (unproven), and `steward unclaim` (unnecessary — see below). `steward tasks` exists for diagnosing enumeration but is not part of the workflow: `launch` captures the manifest anyway and `status` reports what is running. The pre-flight "what would this cost" question is answered by `launch --smoke`, which measures it rather than guessing.
+Deliberately absent: `steward amend` / `steward update` (a second `launch` is the amend path — see *One trigger, and one gate on it*), `steward prune` (a verb whose job is deleting results, in a design built on never deleting them), `steward journal` (precedent travels with the anomaly instead), `steward tui` (see *Do we need a TUI?*), `steward note` (unproven), and `steward unclaim` (unnecessary — see below). `steward tasks` exists for diagnosing enumeration but is not part of the workflow: `launch` captures the manifest anyway and `status` reports what is running. The pre-flight "what would this cost" question is answered by `launch --smoke`, which measures it rather than guessing.
 
 ### What `pause` actually pauses
 
@@ -87,10 +204,13 @@ my-sweep/
   journal.jsonl      # DURABLE — append-only event log; the source of truth
   anomalies.md       # rendered — caveats that reached the final data
   status.md          # rendered by every tend
-  logs/              # the flat eval-set log directory
+  logs/              # the flat log directory — the CURRENT definition's results
+  logs-archive/      # DURABLE — superseded, removed, and failed logs; never deleted
 
   .steward/          # DISPOSABLE — claim, manifest, inflight.jsonl, caches
 ```
+
+`logs-archive/` is a sibling rather than a child of `logs/` because log discovery recurses by default; nesting it would hide nothing. Both are gitignored for the same reason — `.eval` files are large archives, and outputs rather than source.
 
 `init --type evalset|flow` scaffolds a starter definition, so a new directory is runnable rather than a set of empty conventions. It should still accept an existing definition and merely wrap it — the contract is deliberately "any program culminating in one `eval_set()` call", and `init` should not imply otherwise.
 
@@ -101,12 +221,14 @@ The obvious split — "human-readable top level, machine-owned `.steward/`" — 
 | category | examples | if you delete it |
 |---|---|---|
 | **authored** | `policy.md`, `AGENTS.md`, the definition | the human's own work is gone |
-| **durable machine state** | `journal.jsonl` | the audit trail is gone |
+| **durable machine state** | `journal.jsonl`, `logs/`, `logs-archive/` | the audit trail, or the results, are gone |
 | **disposable machine state** | everything in `.steward/`, `status.md`, `anomalies.md` | rebuilt on the next tend |
 
-`journal.jsonl` therefore sits at the top level, beside the authored files, where a file nobody can regenerate belongs. Nothing in `.steward/` is irreplaceable, which makes it safe to delete — a property worth more than a tidy listing.
+`journal.jsonl` therefore sits at the top level, beside the authored files, where a file nobody can regenerate belongs. Nothing in `.steward/` is irreplaceable, which makes it disposable — a property worth more than a tidy listing.
 
-**Losing `.steward/` fails in the safe direction.** Anomalies re-derive from the log directory, since the errored samples are right there; the manifest is re-captured from the definition; in-flight records are rebuilt from the logs. Nothing is lost but time, because the rulings — the part that could not be recovered — are not in there.
+**Losing `.steward/` mostly fails in the safe direction.** Anomalies re-derive from the log directory, since the errored samples are right there; the manifest is re-captured from the definition; in-flight records are rebuilt from the logs. Nothing durable is lost, because the rulings — the part that could not be recovered — are not in there.
+
+**The exception is workers that are starting**, and it is worth stating because "disposable" invites deleting the directory at any moment. A worker is invisible to both the log directory and control discovery until its eval actually begins, which is after everything its definition does on the way to `eval_set()` — a second or two for a script, plausibly minutes for a Hawk config (execution.md, *The in-flight record is an accelerator, with one window where it is not*). Delete `.steward/` inside that window and the next tend finds a task with no log and no live process, and spawns it again; both workers then land a log under different task ids, so the duplicate reads as an ordinary retry rather than as an error. What is lost is money and directory clarity, not a result — and self-identifying workers plus the quarantine rule narrow it considerably. Still: delete it when nothing is starting, not as a reflex.
 
 The usual reason to delete a state directory — a stuck claim — does not arise here, because the claim is held only for the seconds a tend runs and one older than a generous tend timeout is reaped as stale (execution.md, *The reconcile core and its drivers*). There is deliberately no `steward unclaim`: it would be a command for a failure mode the short-lived claim already removed.
 
@@ -154,9 +276,9 @@ Anomaly state — what is open, what was proposed, what was ruled and how — is
 Where version control is available, `journal.jsonl` survives and is reviewable because it is committed — but nothing so far makes that happen, so `init` takes care of it. (On machines with no git or no network, the S3 sync described under *Syncing the workspace out* plays this role instead; `init` treats a missing git as an ordinary condition, not an error.)
 
 - **`git init` if, and only if, there is no repository already.** Detection walks up from the directory: a Steward workspace created inside an existing project (`evals/sweep-2026-08/` in a monorepo) belongs to that repository, and initialising a nested one there is a footgun rather than a convenience. Announce it when it happens, and allow `--no-git` for people who mean it.
-- **Write a local `.gitignore` either way**, listing `.steward/` and `logs/`. Scoping the rules to a nested `.gitignore` means Steward never edits a file it does not own — the parent project's own ignore rules stay untouched. Append missing entries idempotently if one already exists.
+- **Write a local `.gitignore` either way**, listing `.steward/`, `logs/`, and `logs-archive/`. Scoping the rules to a nested `.gitignore` means Steward never edits a file it does not own — the parent project's own ignore rules stay untouched. Append missing entries idempotently if one already exists.
 
-`logs/` is ignored because `.eval` files are large archives, they are outputs rather than source, and they are shared through a log server or object store rather than through git. `.steward/` is ignored because it is disposable by construction.
+`logs/` and `logs-archive/` are ignored because `.eval` files are large archives, they are outputs rather than source, and they are shared through a log server or object store rather than through git — ignored, but *durable*: gitignored is not the same category as disposable, and only `.steward/` is safe to remove. `.steward/` is ignored because it is disposable by construction.
 
 **A small integrity bonus falls out.** Committing an append-only journal gives a second, independent record of when each decision was made — git's own metadata — and any edit to a past entry shows up in review as a *modification* rather than an append. It does not make the record tamper-proof, but it makes tampering visible in the course of ordinary review, which is most of the value.
 
@@ -170,6 +292,8 @@ Every candidate for it turned out to belong somewhere else:
 | `log_dir` | defaults to `logs/` |
 | tend interval | the runbook, and the agent's scheduling |
 | notification channel | `INSPECT_EVAL_NOTIFICATION` — reference-only *by design*, so a config file is the wrong home |
+| log-reuse store location | `INSPECT_STEWARD_STORE` — a machine-level resource shared across projects, not a property of one |
+| whether to publish to it | a `signoff` decision, defaulting from `policy.md` — publishing a result for others to reuse is an attestation, not a setting |
 | eval configuration | the definition, which configuration.md establishes as the single source of truth |
 
 That leaves budgets, and a budget is a **launch argument** (`steward launch --max-spend 200`), recorded into run state. A config file is for settings you re-apply across many invocations; a run is launched once. Where someone genuinely repeats a launch, a shell script or Makefile does the job and they have one anyway.
@@ -240,9 +364,13 @@ Not deleted the moment a smoke passes, though — reading a transcript or two af
 
 **A smoke is valid for a manifest, not for a directory.** Whether a smoke still applies is answered by the capture manifest: if the definition changed, its task identifiers changed, and the smoke is stale. That gives `launch` a precise check to warn on — "no passing smoke for this manifest" — without needing to guess at what edits matter. Warn rather than refuse: re-launching after a fix, or resuming, are both legitimate reasons to skip it, and a hard gate would only teach people to bypass it.
 
-Nothing about a smoke needs special machinery. It is a run with a sample limit, a time cap, and a different log directory — launched, tended, and reported like any other, then recorded in the journal as part of the same story.
+Almost nothing about a smoke needs special machinery. It is a run with a sample limit, a time cap, and a different log directory — launched, tended, and reported like any other, then recorded in the journal as part of the same story. The cap is the one exception, for the reason below.
 
-**Its one upstream dependency has landed.** Redirecting a definition's `log_dir` needs an override the definition cannot pre-empt, which no environment variable can supply — `eval_set()` declares `log_dir` with no default, so every definition passes it explicitly and `INSPECT_LOG_DIR` always loses. Selection documents now carry optional `log_dir` and `max_samples` overrides (execution.md, item 4), so smoke works for script definitions as well as Flow ones.
+**Half its upstream dependency has landed.** Redirecting a definition's `log_dir` needs an override the definition cannot pre-empt, which no environment variable can supply — `eval_set()` declares `log_dir` with no default, so every definition passes it explicitly and `INSPECT_LOG_DIR` always loses. Selection documents now carry that override (execution.md, item 4), so the log-directory half works for script definitions as well as Flow ones.
+
+**The sample slice does not, and a name collision is what hid it: `max_samples` is concurrency, not a limit.** The override that landed beside `log_dir` bounds how many of a task's samples run *at once*; a smoke needs `eval_set()`'s separate `limit`, which bounds how many run *at all*. Nothing in the selection document supplies that today — see execution.md, item 8, where it is a small ask for the same reason the others were: `task_identifier` hashes a task's *execution* limits (message, token, turn, time, working, cost) and not its dataset slice, so truncating a worker's dataset cannot desynchronize it from the capture manifest.
+
+**The time cap is Steward's to enforce, and this is where the obvious implementation is wrong.** `time_limit` *is* in the identifier, so passing one through would change every task's identity and break selection matching against the very manifest the smoke was captured from. The fifteen minutes is therefore a wall-clock deadline Steward applies by stopping the smoke's workers — which is what it had to be regardless, since the cap bounds the *rehearsal* rather than each sample within it.
 
 ## The tend loop
 
@@ -345,7 +473,7 @@ Throughput is partitioned; sandboxes, memory, and CPU are shared. Two workers on
 
 **The shape of the sweep decides which budget binds**, and the two common shapes sit at opposite extremes. A model comparison — one task across many models — has almost no throughput contention and is bound entirely by local compute. A task sweep on a single model is the reverse: local compute is usually ample and the provider is the wall. Recognizing which one is in front of it tells Steward which ceiling to manage.
 
-Setting concurrency **per task rather than per fleet** follows naturally from the mechanism, since each worker runs one task in its own process. It does put one constraint on batching several short tasks into a single worker (see the selection protocol): **batch only tasks that share a model**, or the process's initial limit is necessarily wrong for some of them.
+Setting concurrency **per task rather than per fleet** follows naturally from the mechanism, since each worker runs one task in its own process. This used to carry a caveat — batching several short tasks into one worker would make the process's single limit wrong for whichever of them used a different model — but [scheduling.md](scheduling.md) rules batching out entirely, so one process serves one task on one model and the limit is always about exactly one thing.
 
 Two caveats keep this from being exact. A rate-limit bucket is not quite a model — several models can share an account's quota, so grouping by model over-partitions. And a task may consume more than one provider: a grader model, or an agent calling a different model for subtasks, neither of which appears in the identifier. Steward can see a task's primary model and not its full appetite.
 
@@ -485,7 +613,9 @@ Inspect's existing `notify()` call sites are human-in-the-loop moments — `requ
 
 Adjudication needs a data structure, not just a conversation. Without one, an unresolved problem is only ever a sentence in a summary — which means at a ten-minute cadence it gets re-discovered and re-reported on every tend, and nothing can tell whether it was already raised, already ruled on, or already fixed.
 
-An **anomaly** is anything observed in the run that may need a decision: a cluster of errored samples, samples that hit a token or time limit, a task that scored uniformly zero, a worker that died repeatedly, spend trending past its cap, a scan pass that failed, or — see below — something a scan pass *found*. Samples cut short by an **operator** limit count — including those a tool-approval monitor terminated; samples that exhausted a limit their own task declared do not, since that is the measurement working as designed (see *`anomalies.md`*). It is not stored directly: anomalies are **folded out of `journal.jsonl`** (see *State is a fold over the journal*), cached in `.steward/`, and surfaced through `status.md`. Each tend appends what it observed and what it decided; current state is the replay.
+An **anomaly** is anything observed in the run that may need a decision: a cluster of errored samples, samples that hit a token or time limit, a task that scored uniformly zero, **any task that failed at all**, spend trending past its cap, a scan pass that failed, or — see below — something a scan pass *found*.
+
+That fourth item is stronger than it reads, and it is the one place an anomaly is not merely *observed* but *blocking*. Because `fail_on_error=False` absorbs everything sample-shaped, a task that fails has failed structurally, and Steward never restarts one on its own — the restart is an action a ruling authorizes ([scheduling.md](scheduling.md), *Failure is adjudicated, not retried*). Classing is what makes that affordable: forty workers killed by one reboot are one anomaly with forty instances and one decision, not forty of anything. Samples cut short by an **operator** limit count — including those a tool-approval monitor terminated; samples that exhausted a limit their own task declared do not, since that is the measurement working as designed (see *`anomalies.md`*). It is not stored directly: anomalies are **folded out of `journal.jsonl`** (see *State is a fold over the journal*), cached in `.steward/`, and surfaced through `status.md`. Each tend appends what it observed and what it decided; current state is the replay.
 
 The fields that earn their place:
 
@@ -555,6 +685,18 @@ Three properties it needs:
 - **Accepting known holes must be explicit, not blocked.** Real evals ship with failures nobody intends to fix. Refusing to sign until everything is clean would just push people to fake resolutions, so signoff records accepted exceptions by name — "2 samples accepted as errored" is a signed statement, not a silent gap.
 - **It is an attestation, not access control.** Nothing can stop an agent from running the command, so the design does not pretend to: it records the signer, and the runbook states plainly that the agent never signs. A forged signature is then visible rather than prevented, which is the same bargain a commit author line makes.
 - **It can be invalidated.** A scan landing after signoff, or a later invalidation, re-opens anomalies. The signature stays in the journal as a record of what was believed at the time, and a fresh one is required.
+
+### Publication is part of the attestation
+
+Signoff is also where results leave the project, if they leave it at all. The reuse store ([execution.md](execution.md), *Flow's store, and who is allowed to read it*) indexes logs by task identifier so that another project — possibly someone else's, on a shared bucket — skips running a task Steward has already run. A row in it is a claim that a result is good enough to be reused sight-unseen.
+
+That is the same claim signoff makes, which is why the two are one command rather than two. **Nothing is published as logs land**, and the reason is the invariant that governs everything else here: with `fail_on_error=False` a task finishes `status="success"` while carrying errored samples, so a freshly landed log is exactly the provisional thing adjudication exists to examine. Publishing then would export unexamined results into a cache where no one is positioned to catch them.
+
+So the store contains **results a person accepted**, rather than logs that happen to exist — a stronger property than a cache usually has, and the one that makes reading from it automatic rather than a decision. A project that is stopped, abandoned, or simply never signed publishes nothing, and that is the right outcome rather than an oversight.
+
+Two edges follow from the same place. A signed log later superseded by an amendment leaves a store row pointing at an archived path, so archiving removes the row. And a task signed *with* accepted exceptions carries a caveat that lives in this project's `anomalies.md` and travels nowhere — whoever reuses it gets the log without the footnote, which is the sharpest open question about what should be publishable at all.
+
+**It pins to a manifest digest, not to a run.** Because a project's definition evolves (see *A project, not a run*), an attestation has to name what it covered, and the manifest digest is the natural handle — *derived* rather than minted, so nothing has to allocate or persist an id for it. It also gives invalidation a second precise trigger alongside the anomaly one: the definition changed, so what was signed is no longer what is current. A launch whose delta is purely additive leaves an existing signoff standing over the tasks it covered while the new tasks are plainly unsigned; one that archives supersedes part of what was signed, which is a further reason that case escalates rather than proceeding quietly.
 
 The result is a lifecycle with two distinct terminal states rather than one overloaded boolean: **resolved** (computed — nothing is open) and **signed off** (attested — a person accepted it). A run can be resolved and unsigned, or signed with exceptions, and those are usefully different things to report.
 
@@ -658,7 +800,7 @@ This is also the argument for the whole workspace being git-friendly: the record
 4. **Who commits the journal?** `init` prepares the repository, but nothing in the workflow commits. If nobody does, the durability-through-git story quietly fails to happen. Candidates: the agent commits at milestones as a runbook instruction, `signoff` commits as its terminal act, or it stays the human's job. Auto-committing on every tend would collide with the user's own working tree, so the cadence matters as much as the owner.
 
 5. **`status.md` staleness.** With no agent tending and no cron, it silently goes stale. It should carry its own timestamp and say how old it is rather than reading as current. This matters more once the file is synced to a bucket: a remote reader cannot distinguish a stalled run from a broken sync by any other means, so the file's stated age is the only signal either has failed.
-6. **Multiple runs per directory.** Policy is clearly per-project; claims, manifests, and anomalies are per-run. Whether one directory hosts a series of runs (with `logs/` accumulating) or each run gets its own is unresolved, and it determines whether `journal.jsonl` is a project history or a run record.
+6. **Multiple runs per directory.** *Resolved, and the question was the wrong shape* — see *A project, not a run*. A workspace is a **project**: one evolving definition, one log directory holding the current definition's results, one archive holding everything superseded, and one journal that is a project history. There is no run entity for anything to be "per", so claims key on the log directory, the manifest is whatever the last `launch` captured, and anomalies scope to the logs they concern. What remains is not a question but a consequence: every fold over the journal spans the project's whole history, which is what makes precedent accumulate.
 7. **How does a scanner result become an anomaly?** Scanners write values, not verdicts, so something has to decide which values mean trouble. Whether scanners are *declared* as anomaly-producing, whether Steward applies thresholds to their output, or whether it takes a purpose-built scanner to say so, is unresolved — and it gates the most valuable anomaly source in the design. Related: an investigation pass wants different scanners than the broad pass, and a definition supplies only one scanner configuration.
 
 8. **How are the concurrency budgets divided?** Steward owns both factors, but the policy is unresolved, and it is now two policies: dividing each per-provider throughput budget among the tasks sharing it, and dividing the global local-compute ceiling across all of them. Equal shares is simplest and wrong when tasks differ in sample count or model speed; rebalancing as workers finish means retuning live limits every tend. Open alongside it: whether clustered scale-downs should pull back the whole group or only its newest workers, and how to handle a task whose grader model consumes a bucket the manifest never revealed.
