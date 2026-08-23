@@ -2,7 +2,7 @@
 
 **Status: the sequence and the gates are settled. Each step's internals are not — that is what per-step design produces.**
 
-[roadmap.md](roadmap.md) draws the scope line and names four milestones. This document is the next resolution down: **twenty-eight steps, each one independently designable, buildable and testable**, in an order where every step's dependencies are behind it.
+[roadmap.md](roadmap.md) draws the scope line and names four milestones. This document is the next resolution down: **thirty-two steps, each one independently designable, buildable and testable**, in an order where every step's dependencies are behind it.
 
 A step is not a task list. It is a *unit of design*: small enough that its open questions can be closed in one sitting, self-contained enough that it can be tested without the steps after it, and shaped so that finishing it leaves the system in a working state rather than a half-migrated one. The details are deliberately absent — each step gets its own design pass when it comes up, and the **Refs** line says which numbered sections that pass starts from.
 
@@ -17,10 +17,10 @@ Each step carries:
 
 Two markers appear:
 
-- ⚠ **upstream N** — blocked or degraded pending item N of [execution.md](execution.md) §12. The step says whether a workaround exists.
+- ⚠ **upstream N** — blocked or degraded pending item N of [execution.md](execution.md) §12. The step says whether a workaround exists. A few steps depend on a change in a *frontend* rather than in Inspect; those say so.
 - 🔧 — **test infrastructure**, not a user-visible feature. Three steps are pure infrastructure and they are placed where they are on purpose.
 
-Gates **M2**, **M3**, **M4** are [roadmap.md](roadmap.md) §3's milestones, located precisely.
+Gates **M2**, **M3**, **M4** are [roadmap.md](roadmap.md) §3's milestones, located precisely. **Ship** is not pinned to one of them here; the only thing this document fixes about it is that it falls before §8.
 
 ## 2. Foundations — nothing spawns a process yet
 
@@ -80,7 +80,7 @@ Test infrastructure ahead of the thing it tests, which reads backwards and is th
 - **Refs.** exec §8.3, §8.1; sched §1.1, §2.1–2.5, §3.1–3.3.
 - **Done when** the table covers convergence, idempotence and every state from step 4 — and passes with no process ever started.
 
-Sandbox division is *not* here; it is step 23, blocked upstream. `reconcile` computes a division of one budget at this step and grows a second later.
+Sandbox division is *not* here; it is step 24, blocked upstream. `reconcile` computes a division of one budget at this step and grows a second later.
 
 ## 3. Execution — processes, and the machinery that survives them
 
@@ -92,7 +92,20 @@ Sandbox division is *not* here; it is step 23, blocked upstream. `reconcile` com
 - **Refs.** exec §3, §4, §4.1; config §6.1, §6.2.
 - **Done when** N workers under `mockllm` land N correct logs in one shared directory.
 
-### Step 8 — In-flight record and liveness
+### Step 8 — Once-per-run pre-boundary work ⚠ frontend-side
+
+**Delivers** Steward owning a definition's once-per-run setup, so workers do not each repeat it.
+
+- **Scope.** Sort a frontend's pre-boundary work into *correct per worker* (process state), *wasteful* (repeated directory scans, cross-product builds), and *actively unsafe* (concurrent dependency installation into one environment, N× remote secrets calls). The mechanism by which a worker is told to skip — the general form is a way for an external runner to declare it owns the once-per-run half. How Steward learns the resolved environment to hand on; `DefinitionCommand.env` already exists to carry it.
+- **Refs.** hawk §6, §10, §12 q6; exec §13 q1; config §2.2.
+- **Workaround.** Serialize worker startup behind a lock. Removes the race, keeps the N× cost and the environment mutation. Interim, not an answer.
+- **Done when** a fan-out over a frontend definition installs once and resolves secrets once.
+
+**This is general, not a Hawk step, and treating it as Hawk-specific is how it gets built twice.** Flow has the same shape — every worker rescans the log directory and rewrites `flow.yaml`; the cost merely grows with the run instead of corrupting an environment. Hawk is where it turns unsafe: `install_into_current` runs unconditionally on every invocation, so N workers starting together run N concurrent `uv pip install` against one shared environment, and against a PyPI-versioned inspect-ai that can downgrade the interpreter Steward itself is running in.
+
+Nothing here blocks a raw-script or Flow fleet, so **M2 does not wait for it** — but *Hawk* fan-out does, from step 7 onward, which is why it sits at the front of execution rather than in §8's Hawk group.
+
+### Step 9 — In-flight record and liveness
 
 **Delivers** knowing what is running, including during the window where a worker is invisible.
 
@@ -100,7 +113,9 @@ Sandbox division is *not* here; it is step 23, blocked upstream. `reconcile` com
 - **Refs.** exec §7, §7.1, §7.2, §7.3.
 - **Done when** a worker killed before its log lands is not respawned, and one killed after is not either.
 
-### Step 9 — The control channel client
+Step 8 makes this window shorter for the frontends where it is longest, but not shorter than zero, so the two are independent.
+
+### Step 10 — The control channel client
 
 **Delivers** talking to a live worker: read its config, change it, pause it, act on its samples.
 
@@ -108,9 +123,9 @@ Sandbox division is *not* here; it is step 23, blocked upstream. `reconcile` com
 - **Refs.** exec §8.2, §8.5; workflow §3.1, §10.5; sched §3.2.
 - **Done when** every call has a defined behaviour against a worker that has already gone.
 
-This is the mechanism half of concurrency tuning, and it is also what `pause` and adjudication (step 20) need. It lands here, well before the policy that steers it, because it is a wire protocol rather than a judgement and it is testable on its own against a single live worker.
+This is the mechanism half of concurrency tuning, and it is also what `pause` and adjudication (step 21) need. It lands here, well before the policy that steers it, because it is a wire protocol rather than a judgement and it is testable on its own against a single live worker.
 
-### Step 10 — The run claim
+### Step 11 — The run claim
 
 **Delivers** mutual exclusion between Stewards.
 
@@ -118,17 +133,17 @@ This is the mechanism half of concurrency tuning, and it is also what `pause` an
 - **Refs.** exec §5.7, §10.
 - **Done when** a second tend refuses against a held claim and reaps a stale one.
 
-### Step 11 — Fault-injection harness 🔧
+### Step 12 — Fault-injection harness 🔧
 
 **Delivers** the ability to break a run deterministically.
 
 - **Scope.** Definitions that hang, crash or exit at each of the three interesting points (before import completes, before the boundary, after the log lands). Killing a worker at a named state. Breaking the filesystem underneath a run. Waiting on conditions, never on `sleep`. Whether it ships as a tool or stays a fixture.
 - **Refs.** testing §4, §7 q1.
-- **Done when** the fifteen faults in testing §4 are expressible, and the ones whose subjects exist (steps 7–10) pass.
+- **Done when** the fifteen faults in testing §4 are expressible, and the ones whose subjects exist (steps 7–11) pass.
 
 It lands here rather than at the end because this is the first point where every recovery claim has machinery behind it, and because the harness then grows with each later step instead of being retrofitted onto all of them at once.
 
-### Step 12 — `steward launch`
+### Step 13 — `steward launch`
 
 **Delivers** the entry point: a definition becomes a run.
 
@@ -136,15 +151,15 @@ It lands here rather than at the end because this is the first point where every
 - **Refs.** workflow §7, §2.3; config §4; sched §2.2, §3.1–3.3.
 - **Done when** a launch on a fresh workspace and a re-launch over a partial log directory both do the right thing.
 
-### Step 13 — `steward tend` and `steward status`
+### Step 14 — `steward tend` and `steward status`
 
 **Delivers** the turn: observe, decide, act, record.
 
 - **Scope.** The two dispositions of one function; what `status` may not do; the journal events a turn writes; an interrupted turn reconciled by the next.
 - **Refs.** exec §8.4, §8.1, §8.3; workflow §8.
-- **Done when** a repeated tend is a no-op and a tend interrupted at any point is recovered by the following one — both under step 11's harness.
+- **Done when** a repeated tend is a no-op and a tend interrupted at any point is recovered by the following one — both under step 12's harness.
 
-### Step 14 — The timer
+### Step 15 — The timer
 
 **Delivers** the guarantee that the mechanical tend happens whether or not anyone is watching.
 
@@ -158,7 +173,7 @@ It lands here rather than at the end because this is the first point where every
 
 ## 4. Observability and tuning
 
-### Step 15 — The tend summary and the queue
+### Step 16 — The tend summary and the queue
 
 **Delivers** the most-executed interface in the system.
 
@@ -166,17 +181,17 @@ It lands here rather than at the end because this is the first point where every
 - **Refs.** agent §4, §2.2, §2.3, §8; workflow §5.6.
 - **Done when** an agent that missed six tends reads exactly what happened across them, once.
 
-### Step 16 — The tuning loop
+### Step 17 — The tuning loop
 
 **Delivers** concurrency that adapts over the night rather than being fixed at launch.
 
-- **Scope.** The growth signal — rate limits, not saturation — carried in the summary; the envelope as policy; the asymmetric ratchet; retuning through step 9; recording tuning precedent.
+- **Scope.** The growth signal — rate limits, not saturation — carried in the summary; the envelope as policy; the asymmetric ratchet; retuning through step 10; recording tuning precedent.
 - **Refs.** sched §3.2, §3.4, §3.5; workflow §10.5–10.7, §10.10, §10.11, §10.13.
 - **Done when** an envelope and a synthesized signal produce the right retune, and the ratchet's asymmetry is a test rather than a comment.
 
 Note the honest limit up front: `mockllm` never returns a 429, so the *end-to-end* growth path stays untested until something emits rate limits on a schedule (testing §6).
 
-### Step 17 — `status.md`, `steward.log`, and the sync
+### Step 18 — `status.md`, `steward.log`, and the sync
 
 **Delivers** the human-readable surface, and the record of whether Steward itself worked.
 
@@ -186,7 +201,7 @@ Note the honest limit up front: `mockllm` never returns a 429, so the *end-to-en
 
 ## 5. Judgement
 
-### Step 18 — Anomalies
+### Step 19 — Anomalies
 
 **Delivers** errors as structured state with a lifecycle, rather than counts.
 
@@ -194,7 +209,7 @@ Note the honest limit up front: `mockllm` never returns a 429, so the *end-to-en
 - **Refs.** workflow §12, §12.1, §12.2; sched §5.1, §5.3; exec §6.7.
 - **Done when** synthesized error populations produce stable classes across tends, and a ruling closes exactly the right window.
 
-### Step 19 — Notification ⚠ upstream 7
+### Step 20 — Notification ⚠ upstream 7
 
 **Delivers** the channel that reaches an absent human.
 
@@ -205,7 +220,7 @@ Note the honest limit up front: `mockllm` never returns a 429, so the *end-to-en
 
 Before adjudication rather than after, because anomalies need somewhere to escalate and the channel's shape constrains the lifecycle. Building the lifecycle first risks discovering that late.
 
-### Step 20 — Adjudication actions
+### Step 21 — Adjudication actions
 
 **Delivers** doing something about a ruling.
 
@@ -213,7 +228,7 @@ Before adjudication rather than after, because anomalies need somewhere to escal
 - **Refs.** exec §6.5, §6.6; sched §5.5; workflow §15; agent §6.
 - **Done when** an invalidate-and-resume cycle reuses completed samples and re-runs only the invalidated ones.
 
-### Step 21 — Proposals and precedent
+### Step 22 — Proposals and precedent
 
 **Delivers** the grouping that makes adjudication one question instead of thirty.
 
@@ -221,7 +236,7 @@ Before adjudication rather than after, because anomalies need somewhere to escal
 - **Refs.** workflow §12.1, §12.8, §6.1; sched §5.3.
 - **Done when** a ruling on a proposal produces correct per-class records, and precedent surfaces on a recurrence.
 
-### Step 22 — Signoff ⚠ upstream 6
+### Step 23 — Signoff ⚠ upstream 6
 
 **Delivers** the attestation, and the end of the run.
 
@@ -234,11 +249,11 @@ Before adjudication rather than after, because anomalies need somewhere to escal
 >
 > An overnight run tends itself, notices what matters, escalates it, and ends in an attestation. This is the product. ([roadmap.md](roadmap.md) §3.2)
 >
-> One caveat stated plainly: the runbook is not written yet (step 28), so at this gate a human is in the loop each session. That is deliberate — see §7.
+> One caveat stated plainly: the runbook is not written yet (step 29), so at this gate a human is in the loop each session. That is deliberate — see §7.
 
 ## 6. Completeness and trust
 
-### Step 23 — Sandbox division ⚠ upstream 9 + 10
+### Step 24 — Sandbox division ⚠ upstream 9 + 10
 
 **Delivers** a fleet that does not ask a Docker host for `workers × 2 × cores` containers.
 
@@ -247,9 +262,9 @@ Before adjudication rather than after, because anomalies need somewhere to escal
 - **No workaround.** The override does not exist and patching after spawn is too late — the containers are already open.
 - **Done when** the arithmetic is unit-tested and the override is exercised against a real Docker sweep.
 
-Positioned by an external dependency rather than by design. It is an M2-on-Docker concern and would otherwise sit near step 12; k8s and unsandboxed evals are unaffected.
+Positioned by an external dependency rather than by design. It is an M2-on-Docker concern and would otherwise sit near step 13. **k8s and unsandboxed evals are unaffected** — `k8s_sandbox` does not override `default_concurrency`, so the base `None` applies and its sandboxes are elastic.
 
-### Step 24 — Scanning ⚠ upstream
+### Step 25 — Scanning ⚠ upstream
 
 **Delivers** the third boundary mode, and Steward as single writer.
 
@@ -257,9 +272,9 @@ Positioned by an external dependency rather than by design. It is an M2-on-Docke
 - **Refs.** exec §4.2–4.4; sched §4, §4.1–4.3; workflow §12.3, §12.5, §12.6.
 - **Done when** a sweep's logs drain through scanning with the results surfacing as leads in the tend summary.
 
-The largest piece in the plan and the most valuable.
+The largest piece in the plan and the most valuable. One frontend caveat: **Hawk rejects `scan:` locally**, so this has no Hawk path until §8.
 
-### Step 25 — `scanning.md` and `analysis.md`
+### Step 26 — `scanning.md` and `analysis.md`
 
 **Delivers** what investigation produces, per task, mirrored where the data lives.
 
@@ -267,7 +282,7 @@ The largest piece in the plan and the most valuable.
 - **Refs.** workflow §12.7, §12.4, §12.6.
 - **Done when** both files exist per task and reach the log directory.
 
-### Step 26 — Smoke gate ⚠ upstream 8
+### Step 27 — Smoke gate ⚠ upstream 8
 
 **Delivers** the rehearsal before the sweep.
 
@@ -276,7 +291,7 @@ The largest piece in the plan and the most valuable.
 - **No workaround.** Without `limit`, a rehearsal runs the whole dataset.
 - **Done when** a smoke run truncates, caps, and gates the real launch.
 
-### Step 27 — Store read and publish
+### Step 28 — Store read and publish
 
 **Delivers** reuse across runs, and publication as an act of signoff.
 
@@ -290,7 +305,7 @@ The largest piece in the plan and the most valuable.
 
 ## 7. The agent surface
 
-### Step 28 — `steward runbook`, `AGENTS.md`, and cold pickup
+### Step 29 — `steward runbook`, `AGENTS.md`, and cold pickup
 
 **Delivers** the prompt artifact that determines most of what a user experiences.
 
@@ -298,29 +313,65 @@ The largest piece in the plan and the most valuable.
 - **Refs.** agent §3, §5, §6, §9; testing §5, §7 q2; workflow §10.7.
 - **Done when** the three bound scenarios pass — refusing signoff, raising a definition change as a question, notifying with kind `stopped` rather than only speaking into the conversation.
 
-**Deliberately last, and after the M3 gate it appears to belong to.** A runbook is a set of rules for operating machinery, and rules written against machinery nobody has operated are guesses. Steps 15 through 22 each surface rules as a side effect of being built — what the summary makes obvious, what the anomaly lifecycle actually asks of a reader, which escalations turn out to matter — and those accumulate as notes rather than as a document. This step is where they become one.
+**Deliberately last before ship, and after the M3 gate it appears to belong to.** A runbook is a set of rules for operating machinery, and rules written against machinery nobody has operated are guesses. Steps 16 through 23 each surface rules as a side effect of being built — what the summary makes obvious, what the anomaly lifecycle actually asks of a reader, which escalations turn out to matter — and those accumulate as notes rather than as a document. This step is where they become one.
 
 The cost is honest and worth naming: between the M3 gate and this step, running overnight means a human in the session each time, working from the design docs rather than from a runbook. That is a slower path to the same place, and it is also how the rules get discovered rather than invented.
 
-## 8. Why this order
+## 8. Hawk in the pod — after ship
 
-Five ordering choices are load-bearing. The rest of the sequence is just dependencies.
+[hawk.md](hawk.md) §11 stages Hawk in three, and only the third is here.
+
+**Stage 0** — read and run a Hawk config — is done. **Stage 1** — Hawk on an ordinary machine, with the full workspace, tend loop, anomalies and signoff — is not separate work: a Hawk config is a definition type, so it falls out of steps 1–29. Its one Hawk-specific obligation is **step 8**, pulled to the front of execution for exactly that reason, plus two local caveats with no design content: `isolation: strict` hard-fails without `HAWK_RUNNER_PATCH_SANDBOX`, which only the Helm template sets, and `scan:` is rejected locally, so step 25 has no Hawk path until this group.
+
+**Stage 2 — Steward inside the pod — lands after ship.** It is architecture rather than configuration, it is the one stage needing a change on someone else's roadmap, and the three stages before it de-risk it. Nothing above waits on it.
+
+### Step 30 — Blocking launch and exit codes
+
+**Delivers** `steward launch --wait-signoff`: a process that holds the pod open for the whole lifecycle Steward defines.
+
+- **Scope.** Workers as ordinary children rather than detached, since the runner is PID 1 and detaching buys nothing; the in-pod timer as a second driver of the same `reconcile`, sharing the run claim with an external tend; the exit-code mapping.
+- **Refs.** hawk §7, §7.1, §8; exec §11.3.
+- **Done when** the mapping is exercised end to end, including the non-obvious row: **terminal without signoff exits 0**, because a non-zero exit trips `backoffLimit` and the restarted runner resurrects the eval.
+- **Also settles** hawk §12 q2 — how long a parked run waits before its deadline fires, and what the timeout writes.
+
+### Step 31 — The relay surface
+
+**Delivers** driving a pod-resident Steward from outside.
+
+- **Scope.** A loopback TCP server inside the pod — Inspect's control channel cannot be borrowed, since the bind is hardcoded `AF_UNIX` with a PID-derived path and a `SO_PEERCRED` check, and `acp_server`'s `int → TCP 127.0.0.1:<port>` path is the precedent. A `steward --remote` client shaped by the relay's limits: **one connection per command**, because a five-session-per-principal cap and a 900-second idle timeout that keepalives do not reset both punish a pooled client. Recording a relay signoff as claimed-but-unverified, and declining to add a shared-token scheme below a real gate.
+- **Refs.** hawk §9, §9.1, §9.2.
+- **Done when** a full tend cycle runs over `hawk attach` without approaching either limit.
+
+### Step 32 — The Hawk call site ⚠ Hawk-side
+
+**Delivers** Hawk invoking Steward instead of `eval_set_from_config`.
+
+- **Scope.** A runner type or flag at the one call site in `run_eval_set.py`. Not Steward's code.
+- **Refs.** hawk §11; config §8.3.
+- **Also settles** hawk §12 q4 — whether a resumed Hawk job is the same Steward run, which decides whether the journal survives a pod restart at all.
+
+## 9. Why this order
+
+Six ordering choices are load-bearing. The rest of the sequence is just dependencies.
 
 **`reconcile` before any process exists (6 before 7).** It is the component most likely to be subtly wrong and the cheapest to test exhaustively. Building the fleet first would mean debugging scheduling logic by watching it.
 
-**Test infrastructure ahead of its subject (4 before 5–6, 11 before the recovery work).** The fixture generator is what makes observed state and `reconcile` tables instead of fixtures, and the fault harness lands at the first point where all the recovery claims have machinery behind them — so it grows with each later step rather than being retrofitted onto all of them at once. Both read backwards. Both are the reason the steps after them are cheap.
+**Test infrastructure ahead of its subject (4 before 5–6, 12 before the recovery work).** The fixture generator is what makes observed state and `reconcile` tables instead of fixtures, and the fault harness lands at the first point where all the recovery claims have machinery behind them — so it grows with each later step rather than being retrofitted onto all of them at once. Both read backwards. Both are the reason the steps after them are cheap.
 
-**Concurrency tuning split across the M2 gate (9 and 16).** The mechanism — the control channel client — is a wire protocol testable against one live worker, and `pause` and adjudication need it anyway, so it lands early in execution. The policy — signal, envelope, ratchet — needs the tend summary to carry the signal, so it lands immediately after step 15. Nothing breaks without the policy; the run is only slower, which is why the M2 gate does not wait for it.
+**Once-per-run ownership as a general step, not a Hawk one (8).** Flow and Hawk hit the same wall from opposite sides — one wastefully, one unsafely — and the ask is one mechanism. Filing it under Hawk is how it ends up implemented twice, so it sits in execution beside the spawn it constrains.
 
-**Notification before adjudication (19 before 20).** Anomalies need somewhere to escalate, notification is independently testable, and the channel's shape constrains the lifecycle.
+**Concurrency tuning split across the M2 gate (10 and 17).** The mechanism — the control channel client — is a wire protocol testable against one live worker, and `pause` and adjudication need it anyway, so it lands early in execution. The policy — signal, envelope, ratchet — needs the tend summary to carry the signal, so it lands immediately after step 16. Nothing breaks without the policy; the run is only slower, which is why the M2 gate does not wait for it.
 
-**The runbook last (28).** Argued in §7 above. It is the one step placed by an argument about *how design happens* rather than by a dependency.
+**Notification before adjudication (20 before 21).** Anomalies need somewhere to escalate, notification is independently testable, and the channel's shape constrains the lifecycle.
 
-Two steps are placed by external dependency rather than by design, and both are called out where they appear: **sandbox division (23)** would sit near step 12 if upstream items 9 and 10 existed, and **smoke (26)** would sit near step 12 if item 8 did.
+**The runbook last before ship (29).** Argued in §7 above. It is the one step placed by an argument about *how design happens* rather than by a dependency.
 
-## 9. What this plan does not decide
+Two steps are placed by external dependency rather than by design, and both are called out where they appear: **sandbox division (24)** would sit near step 13 if upstream items 9 and 10 existed, and **smoke (27)** would sit near step 13 if item 8 did.
+
+## 10. What this plan does not decide
 
 - **The internals of any step.** Each gets a design pass, starting from its **Refs** line.
 - **Sizing.** [roadmap.md](roadmap.md) §3 declines to attempt dates and this document does too.
+- **Where ship falls** between the M3 gate and step 29. Only that it falls before §8.
 - **The open questions.** Twenty-odd remain across the docs, distributed over the steps that own them. None blocks step 1.
-- **The one real gap.** Nothing surfaces an agent's mistake ([roadmap.md](roadmap.md) §7). It belongs to step 21 and is not yet solved there.
+- **The one real gap.** Nothing surfaces an agent's mistake ([roadmap.md](roadmap.md) §7). It belongs to step 22 and is not yet solved there.

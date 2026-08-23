@@ -5,7 +5,7 @@ Nine documents. **Start with [roadmap.md](roadmap.md)** for what exists and what
 | | covers | status |
 |---|---|---|
 | [roadmap.md](roadmap.md) | **What is built, what is next, and what is deliberately not being built.** Four milestones, the deferral list with reasons, and when each upstream item bites. | The cut and sequence settled |
-| [plan.md](plan.md) | **The order of construction.** Twenty-eight independently designable and testable steps, each citing the sections its design pass starts from, with the milestone gates located precisely. | Sequence and gates settled; step internals are per-step work |
+| [plan.md](plan.md) | **The order of construction.** Thirty-two independently designable and testable steps, each citing the sections its design pass starts from, with the milestone gates located precisely and Hawk's in-pod stage after ship. | Sequence and gates settled; step internals are per-step work |
 | [configuration.md](configuration.md) | How a *definition* — any program culminating in one `eval_set()` call — becomes a **manifest** of resolved tasks, via capture mode. | **Implemented** |
 | [execution.md](execution.md) | How a manifest becomes **running processes**: worker mode, the shared log directory, recovery, and the reconcile loop. | Protocol landed upstream; runner unbuilt |
 | [scheduling.md](scheduling.md) | What `reconcile` actually **decides**: one task per process, launching everything up to a core-count ceiling, spawning task-major, how the three concurrency knobs are set, when scan passes run, and why a failed task is adjudicated rather than retried. | Settled |
