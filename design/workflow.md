@@ -121,9 +121,7 @@ launching would:
 | purely additive | **the agent, unasked** — the human typed the instruction; asking whether they meant it is the interruption this design exists to remove |
 | anything that archives | **escalate, always** — a one-character change to a task arg reads identically to a deliberate removal, and quietly buys a re-run of everything |
 
-Budget does not appear as a third axis. Spend is a gate on *any* work Steward commits, wherever it came from; stating it here would put one rule in two places.
-
-Two consequences follow. **A cron-only driver detects drift but never applies it** — cron is the backstop for keeping existing work moving, not for accepting new instructions, and it cannot weigh whether a delta looks like a mistake. And **whether the agent auto-applies additive changes at all is a `policy.md` line**, defaulting to yes: it is a standing rule about granted autonomy, which is exactly what that file is for.
+Two consequences follow. **The timer detects drift but never applies it** — a scheduled tend keeps existing work moving; accepting *new instructions* means weighing whether a delta looks like a mistake, which is judgement and therefore the agent's ([execution.md](execution.md), *Driving and judging are separate roles that usually coincide*). So an edited definition sits as an observation until an agent collects it. And **whether the agent auto-applies additive changes at all is a `policy.md` line**, defaulting to yes: it is a standing rule about granted autonomy, which is exactly what that file is for.
 
 The mid-edit hazard survives this but stops mattering. An intermediate save that is additive gets applied early and the next tend picks up the rest, so the final state is right and only the start is staggered — convergence is forgiving that way. One that is syntactically broken fails capture and is noise. One that is valid but wrong is only harmful when it archives, and that is gated.
 
@@ -889,6 +887,24 @@ Three properties it needs:
 - **Accepting known holes must be explicit, not blocked.** Real evals ship with failures nobody intends to fix. Refusing to sign until everything is clean would just push people to fake resolutions, so signoff records accepted exceptions by name — "2 samples accepted as errored" is a signed statement, not a silent gap.
 - **It is an attestation, not access control.** Nothing can stop an agent from running the command, so the design does not pretend to: it records the signer, and the runbook states plainly that the agent never signs. A forged signature is then visible rather than prevented, which is the same bargain a commit author line makes.
 - **It can be invalidated.** A scan landing after signoff, or a later invalidation, re-opens anomalies. The signature stays in the journal as a record of what was believed at the time, and a fresh one is required.
+
+### Curation is part of the attestation too
+
+A re-run leaves its predecessor behind. Over a project with several adjudications, `logs/` accumulates superseded attempts, failed ones, and cancelled ones alongside the results that count — and somebody reading that directory in six months has to know that `latest_completed_task_eval_logs` semantics decide which log is real.
+
+**So signoff curates: superseded, failed, and cancelled attempts move to `logs-archive/`, leaving `logs/` holding exactly what the attestation covers.** Nothing is deleted, which is the point — *Steward never destroys a result* is unchanged, and the archive sitting beside the log directory makes that promise visible rather than merely true.
+
+**The argument for doing it here is not tidiness, it is that this is the only moment "superseded" is unambiguous.** Mid-run the answer flickers: a log may be superseded by an attempt still in flight, the newest log by timestamp may be incomplete while an older one is complete, and a re-run authorized at 11pm may itself fail and leave its predecessor as the current result after all. Signoff is the point where every task has settled and the attestation has pinned a manifest digest, so *the signed set* is exactly definable — and it is definable at no other time.
+
+It also makes publication coherent by construction. `--publish` indexes what is in `logs/`, and this section already notes that archiving a signed log removes its store row; doing both inside one command means the store and the directory cannot disagree about which log is the result.
+
+Three details worth fixing now rather than discovering:
+
+- **The predicate is "most recent *completed*", not "newest".** Where the latest attempt is incomplete and an earlier one finished, the earlier one is current and the later one is the attempt to archive. Getting this backwards archives the result and keeps the wreckage.
+- **Steward has to compute that itself, or wait.** `latest_completed_task_eval_logs` encodes exactly this predicate and is private and exported nowhere, so curation either reimplements it — simple, and free to drift — or rides on [execution.md](execution.md)'s upstream item 6, which proposed the `archive_dir` for precisely this. That moves item 6 earlier than the roadmap first placed it.
+- **Resume is unaffected, and it is worth checking rather than assuming.** The rule that a log must never move exists because resume matches logs where they are — but a *superseded* log is by definition not a resume target, and the current one stays put. A later invalidation that re-opens the project resumes from a log that was never archived.
+
+Because a workspace is a project rather than a run, this happens once per signoff rather than once ever, and each pass curates what that signoff covered. Signoff reports what it moved, in the journal entry and on stdout.
 
 ### Publication is part of the attestation
 
