@@ -190,6 +190,8 @@ The external coding agent supplies the judgement, over the relay. So there are t
 
 The alternative, an external agent as sole driver, is rejected. A pod is expensive and an agent can stop being called; a run that stalls because nobody woke up leaves a live pod burning money with no worker running. The timer is the floor, not the ceiling.
 
+This split is not peculiar to Hawk, and [execution.md](execution.md), *Driving and judging are separate roles that usually coincide*, now states it generally: driving is mechanical so a clock suffices, judging is not so only an agent will do. The pod is simply the deployment where the two roles land in different places.
+
 ## The relay surface
 
 `hawk attach --port N` opens a loopback TCP listener on the operator's machine and pumps its bytes to the runner pod over an authenticated WebSocket. Hawk's own description of it (`hawk/cli/acp.py`):
@@ -250,7 +252,7 @@ The ordering means the interesting design risk (stage 2) is de-risked by the two
 
 2. **How long a parked run waits.** A pod blocked on a signoff that never comes is a real cost. Hawk's own `approval_timeout_minutes` defaults to seven days, which is precedent for a long bound rather than no bound — but the deadline's default, whether it is configurable per run, and what a timeout writes to the journal are unsettled.
 
-3. **Whether Steward divides infra budgets automatically or requires them restated.** Dividing automatically is convenient and guesses at intent; requiring a restatement is explicit and adds a step to every Hawk config. The `max_sandboxes` case is the hard one, since Hawk computes it at runtime and the user never wrote it down. This is [workflow.md](workflow.md)'s open question 8 with a ceiling that is already written down and already wrong — so it may be the case that settles the general policy rather than a special case of it.
+3. **Whether Steward divides infra budgets automatically or requires them restated.** *Resolved — automatically, and only where it means something.* [scheduling.md](scheduling.md) establishes that the three knobs are not one budget: `max_samples` is per-task and never was a fleet share, `max_connections` coordinates itself through rate limits across any number of processes, and only `max_sandboxes` is a genuine allocation. So the answer to the hard case is that Hawk computing it at runtime is exactly what makes it *safe* to divide — an explicitly set `max_sandboxes` is by construction a statement about the host, which is the case the general rule handles best, and no restatement is asked of anyone. The intent-guessing worry applied to a division of everything; it does not survive dividing only the one knob that is a division.
 
 4. **`job_id` reuse on resume.** `hawk eval-set --eval-set-id <id>` relaunches into the same log directory with the same `job_id`. Steward's run claim is keyed to a run; whether a resumed Hawk job is the same Steward run (resuming its journal) or a new one (with a second journal over one log directory) is undecided, and the answer determines whether the journal survives a pod restart at all.
 

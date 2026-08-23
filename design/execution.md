@@ -482,7 +482,7 @@ Take both. The first is the real fix and costs nothing, since the selection docu
 
 "Supervisor" here means *whatever is currently driving the reconcile loop* — in the current design a coding agent scheduling `tend` calls, with `cron` as a backstop (see *The reconcile core, and its drivers*). The claim, the in-flight record, and the registry apply to every driver equally.
 
-**This section designs the detached case, which the current plan does not build.** It is kept because it is the only driver with a lifecycle worth designing, and because writing it down is what established that the lifecycle is a cost rather than a capability — the argument for agent-driven tending is largely assembled from the paragraphs below. Read it as the specification that would be implemented *if* the utilization evidence ever calls for a daemon, not as work in the queue.
+**This section designs the detached case, which the current plan does not build.** It is kept because it is the only driver with a lifecycle worth designing, and because writing it down is what established that the lifecycle is a cost rather than a capability — the argument for a short-lived tend on a timer is largely assembled from the paragraphs below. Read it as the specification that would be implemented *if* something ever calls for a stateful supervisor, not as work in the queue. Note the timer that now guarantees the cadence is emphatically **not** this: it carries no state between tends and holds no claim of its own (*Drivers, one core*).
 
 **The run and the supervisor have separate lifetimes.** Requirement 4 says the *run* outlives the process that started it, and detached workers achieve that by themselves. If the supervisor dies, workers keep running and keep writing logs; what stops is *supervision* — no new tasks scheduled, no scan passes, no requeues, no adjudication. That is a real degradation but a graceful one, and it is why both levels detach rather than making workers children of the supervisor: either layer can die without taking the other with it, and a replacement supervisor adopts the survivors from the in-flight record.
 
@@ -532,7 +532,7 @@ Which means the view and the supervisor are separable, and should be separated:
 Three properties follow, all of them good:
 
 - **Views need no claim.** The claim is a *writer's* lock. Any number of TUIs can watch one run, and a human and an agent can watch the same run simultaneously. Directives issued from a TUI still go to the supervisor, which serializes them, so even an interactive view stays safe.
-- **A view works without a supervisor.** With none live, `steward tui` renders read-only from the log directory — a finished run, or one whose supervisor died. Same fallback as `steward status`, same reason: the log directory is ground truth. Under agent-driven tending this is not the fallback but the *ordinary* case: between tends there is no process to attach to, and the TUI is simply `steward status` on a repeat, watching workers it does not own.
+- **A view works without a supervisor.** With none live, `steward tui` renders read-only from the log directory — a finished run, or one whose supervisor died. Same fallback as `steward status`, same reason: the log directory is ground truth. With tending done by a short-lived timer-driven verb this is not the fallback but the *ordinary* case: between tends there is no process to attach to, and the TUI is simply `steward status` on a repeat, watching workers it does not own.
 - **There is no attached-versus-detached mode to choose.** With `launch` non-blocking and the loop driven by scheduled `tend` calls, a view is only ever a separate process watching from outside. The two code paths that this section was originally reconciling never come into existence.
 
 One consequence survives regardless of whether a view is ever built, because it applies to any interactive surface Steward grows: Ctrl+C must detach the *view*, not the run. Inspect's Ctrl+C cancels an eval, but a Steward run is a longer-lived thing that a coding agent may have started and a human may merely be visiting, so "leaving" and "stopping" must be different gestures — `steward stop` for the latter, with the TUI saying so on exit. This is the `docker attach` / `tmux` convention rather than the `inspect eval` one, and it removes a genuine "did I just kill my overnight sweep?" hazard.
@@ -562,35 +562,59 @@ Committing to that shape buys three things that are hard to get any other way:
 - **Crash recovery is the normal code path.** There is no separate resume routine to get wrong; recovery is just the next call, exercised constantly.
 - **Driver independence.** A wedged long-lived process stops being frightening: kill it, and anything else can drive the same function.
 
-**Drivers, one core.** The intended arrangement is that **the coding agent is the only driver**, scheduling `steward tend` on an interval of roughly ten minutes.
+**Drivers, one core.** The mechanical tend is **guaranteed by a timer**; the agent is a judgement client that may be attached, periodic, or absent.
 
-| driver | status |
+| driver | role |
 |---|---|
-| **the coding agent** — schedules `steward tend` | the design centre |
-| `cron` calling `steward tend` | near-free backstop if the agent stops tending |
-| detached long-lived supervisor | **not currently justified** — see below |
+| **a system timer** — `cron`, `systemd`, `launchd`, or Hawk's in-pod loop | the floor. Runs `steward tend` on an interval, always |
+| **Steward's own detached ticker** | the fallback where no system facility exists |
+| **the coding agent** — calling `steward tend` when it wants one now | not the schedule; a client that can also force a turn |
+| detached long-lived supervisor holding a claim | **still rejected** — see below |
 
-**Why the agent, and not a daemon.** If the agent schedules the tend, the two halves that *The supervisor decides, and what it escalates* splits apart — mechanical continuity and judgement — come back together: the agent sees each reconcile as it happens, can adjudicate in the moment instead of accumulating a queue, and *is* the escalation path rather than needing one.
+**This is not the daemon that was rejected, and the distinction is the whole point.** The rejected thing was a long-lived *supervisor*: a process that holds the run claim for hours, needs a heartbeat protocol to detect wedging, and blocks its own replacement when it hangs. What is being scheduled here is the existing short-lived verb — a timer wakes, `steward tend` runs for seconds, takes the claim, releases it, exits. Every property the no-daemon argument bought survives untouched, because they were properties of the *claim's lifetime* and of `reconcile` being pure, not of who called it.
 
-The strongest argument for a daemon was low-latency tier-2 requeue, and it does not survive scrutiny. Deciding that a sample's failure was transient is **judgement**, and this design explicitly says the mechanical layer does not exercise judgement. So a daemon would either apply crude rules or escalate — and if it escalates, the latency is agent-bound anyway. The daemon never had a real claim to that work. Requeue that genuinely warrants no human involvement is rare; a ten-minute delay on the rest is invisible next to a task that runs for hours.
+**Why the agent cannot be the floor.** An agent is turn-based: it acts when a human speaks, when a background job completes, or when a scheduled wake-up fires, and never in between ([agent.md](agent.md)). So an agent-scheduled run is silent by construction whenever no agent is in session — and silence is indistinguishable from a healthy run. Worse, the design has steadily added responsibilities to the agent, so an absent one now stops *everything* rather than merely delaying judgement. Making the mechanical half a timer separates those failures:
+
+- **With a timer and no agent:** the fleet keeps converging, logs land, scans drain, `status.md` stays current, mechanical notifications fire. What accumulates is judgement — unruled anomalies, unprobed scan results.
+- **With no timer and no agent:** nothing happens at all, and nothing says so.
+
+The first is a run waiting for a decision. The second is a stalled run that looks identical to a healthy one. Only the first is acceptable overnight.
+
+This is also just [hawk.md](hawk.md)'s answer generalized. The pod already runs an in-pod timer as the floor with an external agent supplying judgement over the relay, on the reasoning that *a pod is expensive and an agent can stop being called*. That reasoning was never Hawk-specific; see *Driving and judging are separate roles that usually coincide*.
+
+**The three agent postures this admits**, all of which now work:
+
+| posture | how it learns a tend happened | latency to judgement |
+|---|---|---|
+| **attached, reactive** | a monitor on the tend output or the journal wakes it | seconds |
+| **attached, periodic** | checks on its own cadence, or calls `tend` to force one | its own interval |
+| **transient** | reads accumulated state on attach, as runbook policy | until someone opens a session |
+
+The third is the common case and the one the old arrangement served worst: somebody opens a session in the morning and the agent reads what the night produced. Cold pickup ([agent.md](agent.md)) is exactly this procedure, which is why it runs several times a night rather than only when a stranger arrives.
+
+**The ticker fallback is small, and must stay small.** Where no system scheduler is available, `launch` spawns a detached process whose entire behaviour is *sleep, run `steward tend`, repeat*. It holds no state between iterations, takes no claim of its own, and is reaped and observed exactly like a worker. It is not a supervisor and must not become one — the moment it carries state between tends, the wedging problem it was designed around comes back. Its one real weakness against `cron` is that it does not survive a host reboot, which is a reason to prefer a system facility rather than a reason to grow the ticker.
+
+**`launch` arms a timer or refuses.** A timer nobody armed is the failure this whole section exists to prevent, so it cannot be a step in a runbook that someone remembers, and it cannot be a warning either — a warning at launch is read once, by someone who is about to walk away. Detection is ordinary: prefer a system scheduler where one is usable, fall back to the ticker, name the choice in the launch output. **If neither can be armed, the launch fails**, saying what it tried.
+
+The escape hatch is explicit and recorded, following the pattern `signoff --force` already sets: `--no-timer` launches unsupervised, writes that fact to the journal, and makes `status.md` say the run is unsupervised for as long as it stays that way. The point is not to forbid hand-driving a short run — that is legitimate — but to make an unsupervised run *look* unsupervised, rather than looking exactly like a healthy one.
+
+**Confirming it is a separate problem, because the timer cannot detect its own absence.** Two things cover it, and neither costs anything. The first tend records that it ran, so a journal with no tend event an interval after launch means the timer never fired. And `status.md` states its own age ([workflow.md](workflow.md) open question 5), which is what a remote observer reads — a file that stopped changing is the only signal that supervision stopped, whoever was providing it.
+
+**Two ages, not one.** Because tends are formally *collected* by an agent ([agent.md](agent.md), *Tend output is collected*), `status.md` reports both how long since the last tend and how long since the last collection. The pair separates the two ways supervision fails: a stale tend age means the timer stopped, a stale collection age means nobody is exercising judgement. Either alone is ambiguous; together they say which half is missing.
 
 **What a ten-minute interval actually costs** is slot utilization, not responsiveness: a worker that finishes at t=0 leaves its slot idle until the next tend. **That cost is now largely gone**, because [scheduling.md](scheduling.md) launches every pending task at once rather than feeding a capped pool — slot idle requires slots, and below the core-count ceiling there are none. What survives is the residue: sweeps large enough to queue behind the ceiling still leave a freed core idle until the next tend, scaling as `interval/2 ÷ mean task duration`. Batching was the fix named here for the short-task case and is no longer available, having been ruled out with the slots it existed to fill.
 
-**Two things get materially simpler without a long-lived process.**
+**Two things stay simple, and they are why the claim's lifetime was the real question all along.**
 
-- **The claim becomes short-lived** — held for the seconds a `tend` runs, not the hours a run lasts. That very nearly dissolves the wedging problem, which was the daemon's worst failure mode: no heartbeat protocol is needed, because a claim older than a generous `tend` timeout is unambiguously stale. This is conditional on the invariant that a tend spawns and reaps but never does long work itself (see *A scan is a detached process, not part of a tend*) — the moment anything unbounded runs inline, the short claim and everything it buys are gone.
-- **The failure mode is benign.** If nothing tends the run, workers finish what they are doing, their logs land, and the run simply stops progressing. It pauses; it does not break. The next `tend` from anyone resumes it. Compare a wedged daemon, which holds its claim and blocks its own replacement.
+- **The claim is short-lived** — held for the seconds a `tend` runs, not the hours a run lasts. That dissolves the wedging problem: no heartbeat protocol is needed, because a claim older than a generous `tend` timeout is unambiguously stale. This is conditional on the invariant that a tend spawns and reaps but never does long work itself (see *A scan is a detached process, not part of a tend*) — the moment anything unbounded runs inline, the short claim and everything it buys are gone. It is also what makes a timer and an agent racing each other a non-event: two callers of a pure function, serialized by a lock held for seconds.
+- **The failure mode is benign.** If nothing tends the run, workers finish what they are doing, their logs land, and the run stops progressing. It pauses; it does not break, and the next `tend` from anyone resumes it.
 
-**What would justify adding the daemon later** is a measurable signal, not a preference: sustained slot idle that batching cannot absorb. The pure-function core keeps that option open at no cost — the daemon would be a driver of the same `reconcile`, not a rewrite.
+Two requirements the design must honour regardless of driver:
 
-It does impose two requirements the design must honour:
+- **Idempotence and claim discipline are non-negotiable.** Any driver may tend late, not at all, twice, or be interrupted mid-`tend`. A pure function plus the run claim plus the `intent`-before-spawn entry covers this — a repeated `tend` is a no-op, an interrupted one is reconciled by the next — but it means those pieces are load-bearing rather than defensive.
+- **The output must be compact and structured.** Agent context is the scarce resource, so a `tend` must *summarize* rather than dump log headers. That is a real API constraint on `steward tend` ([agent.md](agent.md), *The tend summary*), and it makes the interval an economic choice as well as a utilization one.
 
-- **Idempotence and claim discipline are non-negotiable.** An agent is an unreliable scheduler in a specific way: it may tend late, not at all, twice, or be interrupted mid-`tend`. A pure function plus the run claim plus the `intent`-before-spawn entry already covers this — a repeated `tend` is a no-op, an interrupted one is reconciled by the next — but it means those pieces are load-bearing rather than defensive.
-- **The output must be compact and structured.** Agent context is the scarce resource, so a `tend` must *summarize* — "3 finished, 2 errored, spawned 3, one arm needs a decision" — not dump a thousand log headers into the conversation. That is a real API constraint on `steward tend`: a small JSON summary designed for agent consumption, with detail available on request. It also makes the tend interval an economic choice (tokens) as well as a utilization one.
-
-The one thing an agent cannot promise is cadence: its reliability is its harness's reliability across session boundaries. That is what the `cron` row is for — the same verb, on a timer, costing one crontab line.
-
-**A nice unification falls out.** The `summary` a tend prints *is* the status update. An agent reads it inline and decides; a human sees it on stdout; a `cron` driver appends it to a file. One artifact, three consumers — rather than a status file invented separately for the absent reader.
+**A nice unification falls out.** The `summary` a tend prints *is* the status update. An agent reads it inline and decides; a human sees it on stdout; a timer-driven tend leaves it in `status.md` and the journal for whoever arrives next. One artifact, three consumers — rather than a status file invented separately for the absent reader.
 
 ### `status` and `tend` are one function, two dispositions
 
@@ -634,6 +658,96 @@ So **epochs cannot be raised on a running eval**, and should not be: epochs is s
 **Letting the running worker finish is unambiguously right here**, which is not true of the superseded case it resembles. Its output is epoch 1, and epoch 1 is exactly what the extension will reuse — so preempting it discards samples that were going to count, and buys nothing, since two workers cannot share a task (one task means one log). The cost is latency: a task six hours from finishing starts its new epochs in six hours. That is the eventual-consistency the convergence model trades for, and the alternative is strictly worse rather than merely different.
 
 **One hazard in the other direction, worth verifying rather than assuming.** `PATCH /tasks/{id}/config` accepts `time_limit`, `token_limit`, and `message_limit` — and all three *are* in `task_identifier`. If a patched value reaches the log's `eval.config`, then `task_identifier(EvalLog)` no longer matches the manifest entry that scheduled it, and the log correlates to nothing. The override machinery it routes through suggests these layer at runtime rather than being written back, but that is an inference. Until it is checked, Steward should treat those three as not-to-be-patched; the concurrency knobs it actually wants for tuning are unaffected either way.
+
+## When the substrate fails
+
+Everything above assumes the machine works. Three ways it stops, all of which a multi-day run meets eventually.
+
+**Credentials for the log store expire mid-run.** This is the one most likely to be missed, because the analogous problem is already solved next door: Hawk refreshes model tokens for the duration of a run, and *nothing refreshes the log store's credentials*. A sweep that runs for three days on a session token issued for twelve hours loses the ability to write its own results partway through, having done all the work.
+
+**The disk fills**, which takes out `.eval` writes, sandbox images, `.steward/`, and Steward's own logging together.
+
+**`log_dir` becomes unwritable** for any other reason — a revoked policy, a deleted bucket, a mount that went away.
+
+### The hazard is that a substrate failure wears the costume of an eval failure
+
+`fail_on_error=False` absorbs everything sample-shaped, so a log store that stops accepting writes surfaces as **a wave of errored samples** rather than as an infrastructure alarm. The classing is honest as far as it goes — the exception type will say `OSError` or an S3 error, and [workflow.md](workflow.md)'s class key puts them all in one anomaly — but the ordinary *response* to a wave of errored samples is a re-run, and re-running into a store that is still broken burns the work twice.
+
+This is the same shape as the provider outage that *Considered and declined: pausing a failing model* worked through, and it gets the same answer for the same reason: no mechanical response, because by the time a tend sees the pattern the damage is done, and the correct action depends on a fact Steward cannot check. What it gets instead is a **runbook rule**: a class whose exception is a storage or filesystem error is a *substrate* class, and no re-run is proposed for one until the substrate has been verified by hand. Re-running is not wrong here, it is merely premature, and the ordering is what matters.
+
+### Detection is free; recovery is not Steward's
+
+No polling is needed. Steward writes to the workspace and reads the log directory on every tend, so a failing substrate is *observed* rather than watched for — and a tend that cannot write is exactly the event `steward.log` exists for ([workflow.md](workflow.md), *`steward.log`*).
+
+What Steward does about it is narrow, and deliberately so. It **stops scheduling** — spawning more workers into a directory that cannot be written multiplies the loss — **notifies with kind `stopped`**, and leaves running workers alone, since a worker that still holds its own handle may complete normally and one that does not will error into the ordinary path. It does not retry, rotate credentials, or fail over: those need authority and knowledge Steward has neither of.
+
+One honest gap follows from the disk case. A full disk fails the `steward.log` write too, so the condition most in need of a record is the one least able to leave one. That is why the escalation goes out through the notification channel rather than relying on a file, and why "the files stopped changing" remains the outermost signal that something is wrong.
+
+## Clocks
+
+Stated once, because it is the kind of thing that is decided implicitly and inconsistently otherwise.
+
+**Every instant Steward records is UTC, ISO-8601, with an explicit offset.** Journal events, `steward.log` lines, the claim, status timestamps, signoff. Never local time — a workspace is read on a different machine than it was written on often enough that a naive local timestamp is a latent bug, and it costs nothing to be right from the start.
+
+**Durations that gate behaviour come from a monotonic source where one is available**, because wall clocks jump: NTP corrects them, VMs resume with them stale, and a suspended laptop resumes hours later. Tend intervals and in-process timing are monotonic.
+
+**Claim staleness is the exception, and it is safe by accident rather than by design.** A claim's age is its file mtime against the current wall clock, and no monotonic reading of another process's file exists — so a clock jump can misjudge it. Both directions are survivable, which is worth checking rather than assuming: a jump that makes a live claim look stale causes a second tend, which idempotence and the `intent` record already make a no-op; a jump that makes a stale claim look fresh delays the next tend until the timeout passes. Neither corrupts anything, and a generous timeout absorbs any plausible correction.
+
+**Never compare a local instant against a remote store's.** Object mtimes in S3 come from the bucket's clock, not the runner's, and the two are not related. Freshness of anything in `log_dir` is judged by its *content* — the log's own recorded timestamps, its status — never by subtracting an object mtime from local `now`. This is the one clock rule that is a correctness constraint rather than hygiene.
+
+Git's commit metadata stays what [workflow.md](workflow.md) already calls it: a corroborating record of when a decision was committed, not a source Steward reads.
+
+## Topology: what must be co-located, and what must not
+
+Everything above describes one machine, because that is the case the design was written against. Three real deployments exist and they differ in ways that matter, so it is worth extracting the constraint that generates them rather than describing each.
+
+### One constraint, and it is narrower than it looks
+
+Three things Steward depends on are **machine-local by construction**:
+
+- **The run claim** is a file in the workspace, and its staleness rule is a local clock against a local mtime.
+- **Control discovery** is a directory of files carrying pids and process start times, and a liveness check against a pid is meaningful only on the host that owns it.
+- **The in-flight record** names pids on the host that spawned them.
+
+`log_dir`, by contrast, is frequently **not** local — S3 is the common case, and *Syncing the workspace out* exists precisely because the log store may be the only thing a remote observer can reach.
+
+So the constraint is:
+
+> **`steward tend` must execute on the host running the workers.** The *agent* may be anywhere it can execute commands there.
+
+That distinction is the whole of the flexibility. An agent on a laptop driving a rented box over ssh satisfies it; an agent that can only read the S3 bucket does not. Distributing workers across hosts is a different and much larger question ([open question 4](#open-questions)) — it needs worker discovery and a real lease with a fencing token, and nothing here assumes it.
+
+### Three deployments
+
+| | workers | `tend` runs | judgement | how a person is reached |
+|---|---|---|---|---|
+| **workstation** | local | local agent | same agent | the conversation |
+| **remote runner** | a rented or internal box, often no git and no inbound network | agent's shell on that box (a harness there, or ssh from elsewhere) | same agent | notifications out, workspace synced to a bucket; replying needs a session on the box |
+| **Hawk pod** | in the pod | an **in-pod timer** | an external agent over the relay | notifications out; commands in over the relay ([hawk.md](hawk.md), *The relay surface*) |
+
+The middle row is the one the S3 sync was designed for and the one the documents otherwise draw least. Two things about it are worth stating because they are easy to assume away: the agent needs **model access from that box**, which an air-gapped runner must provision deliberately; and the human's reply path is a session on a machine they may not normally use, which is the practical content of [workflow.md](workflow.md) open question 2.
+
+### Driving and judging are separate roles that usually coincide
+
+[hawk.md](hawk.md) settles the pod case by splitting them — an in-pod timer runs the mechanical tend while an external agent supplies judgement, both calling the same pure `reconcile`. That is not a Hawk peculiarity. It is the design's own mechanical/judgement line applied to the driver, and stating it generally resolves an apparent contradiction with [agent.md](agent.md)'s *the cadence is a dependency*:
+
+- **Driving is mechanical** — reconcile, spawn, reap, sync — so anything with a clock can do it.
+- **Judging is not**, so only an agent can, and only while one is in session.
+
+Where a timer exists, the mechanical floor is covered and an absent agent degrades *judgement alone*: work keeps converging, anomalies accumulate unruled, scans bank unprobed. Where no timer exists — the workstation and runner rows — the agent is both roles and its absence stops everything, which is why arming its cadence is a launch step rather than a habit.
+
+The two never conflict, and the reason is already built: the claim is held for the seconds a tend takes rather than the hours a run lasts, so an external `steward tend` racing an internal timer is exactly the case the short claim was designed for.
+
+### The supervisor spends from the budget it is tuning
+
+An agent is a model client. In the runner and pod topologies its calls usually go through the same proxy and the same account as the eval — which makes it an **N+1th consumer that no part of the resource design counts.** [scheduling.md](scheduling.md) says Steward owns both factors of total concurrency, and that is true of the eval and false of the fleet, because the supervisor is also in the bucket.
+
+Two consequences, and the second is the one that bites:
+
+- The agent's own requests contribute, marginally, to the rate-limit signal it reads as evidence of headroom. The magnitude is small — a handful of requests per tend against an eval running hundreds of concurrent samples — but the loop is real and worth naming rather than discovering.
+- **Supervision degrades exactly when the run is most loaded.** An eval that saturates the account rate-limits the agent too, so tends get slow or fail at the moment a tend most needs to land, and an escalation waits behind the very congestion it exists to report.
+
+The fix is not machinery. **A separate key for the supervisor** removes it entirely and is the right answer where an account can be provisioned that way. Failing that, the envelope is already the place this belongs: [workflow.md](workflow.md) makes the concurrency ceiling a policy decision, and a ceiling set at the account's true limit leaves the supervisor nothing. Leave headroom, and say that is what it is for.
 
 ## Changes required in inspect_ai
 
@@ -719,9 +833,7 @@ That is the better trade and worth understanding rather than working around. Sil
 
    Until it exists, `options["scanners"]` in the manifest lets Steward refuse a scanning definition at enumeration time with a clear explanation rather than failing every worker.
 
-10. **Tend cadence, and the evidence that would justify a daemon.** This question changed shape once [scheduling.md](scheduling.md) settled on launching every task at once. Slot idle was the cost that mattered — `interval/2 ÷ mean task duration` whenever concurrency was capped below the task count — and it now arises only in the uncommon case where pending tasks exceed the core ceiling, with batching rejected as the mitigation because the problem it solved mostly went away.
-
-    What replaces it is a set of latencies that are all about *response* rather than utilization: how long a crashed worker stays dead, how long a rate-limited fleet runs under-provisioned before the agent raises it (the agent being the only thing that can, per *The signal is mechanical; the decision is not*), how long a finished scan waits to be reaped before the next log is picked up. Ten minutes is still a guess. Agent context per call remains the counter-pressure a daemon would not pay, so the optimum is not "as often as possible". The in-flight record can supply the measurements (`exited` to next observation), and whether the residue ever exceeds what a daemon costs to operate is still what decides if the detached driver gets built.
+10. **The tend interval.** *The question changed twice and is now much smaller.* It is no longer "who guarantees the cadence" — a timer does (*Drivers, one core*) — nor is it slot idle, which mostly vanished when [scheduling.md](scheduling.md) chose to launch every task at once. What remains is a straightforward tradeoff with no measurements behind it: a shorter interval reaps dead workers sooner, spawns queued work sooner, and drains scans sooner; a longer one writes less to the journal and gives an arriving agent less to read. Ten minutes is still a guess. Note the context argument weakened considerably — most tends are now read by nobody at the time they run, so their cost is storage and an arriving agent's catch-up rather than sixty full reads a night.
 
 11. **Eval-set-scoped hooks fire nowhere.** Selection mode returns at `evalset.py:648`; `emit_eval_set_start` and `emit_eval_set_end` are at `:899` and `:937`. A worker never reaches them, correctly — it is not running an eval set. But Steward does not emit them either, so any hook registered at eval-set scope is silently dropped, while the same hook's run- and sample-scoped handlers keep firing. Found concretely in Hawk, where it costs two metrics and, more seriously, arms nothing for a stuck-eval watchdog ([hawk.md](hawk.md)); it applies to any platform that registers at that scope. Either Steward emits the pair around the run it owns — the honest reading, since it *is* the eval set — or Inspect grows a way for an external runner to, which is the same shape as the shared directory operations above. Whichever, the current state is a silent gap rather than a decision.
 

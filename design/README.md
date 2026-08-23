@@ -1,6 +1,6 @@
 # Design
 
-Five documents. The first three read in order, each starting where the previous ends; scheduling gives execution's reconcile loop its policy, and hawk is one platform's integration and depends on all of them.
+Seven documents. The first three read in order, each starting where the previous ends; scheduling gives execution's reconcile loop its policy, agent describes the only thing that operates any of it, testing says how the whole thing is held to its claims, and hawk is one platform's integration and depends on all of them.
 
 | | covers | status |
 |---|---|---|
@@ -8,11 +8,13 @@ Five documents. The first three read in order, each starting where the previous 
 | [execution.md](execution.md) | How a manifest becomes **running processes**: worker mode, the shared log directory, recovery, and the reconcile loop. | Protocol landed upstream; runner unbuilt |
 | [scheduling.md](scheduling.md) | What `reconcile` actually **decides**: one task per process, launching everything up to a core-count ceiling, spawning task-major, how the three concurrency knobs are set, when scan passes run, and why a failed task is adjudicated rather than retried. | Settled |
 | [workflow.md](workflow.md) | What a person actually **does** — `init` through `signoff` — the project, convergence, adjudication, notification, and resource tuning. | Lifecycle settled; adjudication still being figured out |
+| [agent.md](agent.md) | The **coding agent** as a system component: its four judgement responsibilities, its three possible postures over a timer-guaranteed run, cold pickup, what it may do unasked, and what it must never do. | Responsibilities, postures, and bounds settled; tend schema open |
+| [testing.md](testing.md) | How the design's **recovery claims** are held to account: four layers from a pure-function table to agent scenarios, and fault injection as the primary mode rather than a hardening pass. | Layering and faults settled; agent tier sketched |
 | [hawk.md](hawk.md) | Running under **Hawk**: its config as a definition, its infra config at runtime, a blocking `launch`, and the relay an external agent drives it through. | Stage 0 implemented (configs read and run); runtime stages sketched |
 
 ## The shape in one paragraph
 
-A definition is executed once under `INSPECT_EVAL_SET_CAPTURE` to enumerate its tasks. Steward then spawns one worker per task, each re-executing the definition under `INSPECT_EVAL_SET_SELECTION` so that side effects (registered models, `set_model_info`, dynamically built `Model` objects) are present in every process, but eval-set orchestration is skipped — Steward owns scheduling, retries, the log directory's metadata, and completion. A coding agent drives the loop by calling `steward tend` every ten minutes or so; each tend reconciles on-disk state against the manifest, spawns and reaps, and returns a compact summary. Anomalies are adjudicated with the human, and the run ends when a person signs off.
+A definition is executed once under `INSPECT_EVAL_SET_CAPTURE` to enumerate its tasks. Steward then spawns one worker per task, each re-executing the definition under `INSPECT_EVAL_SET_SELECTION` so that side effects (registered models, `set_model_info`, dynamically built `Model` objects) are present in every process, but eval-set orchestration is skipped — Steward owns scheduling, retries, the log directory's metadata, and completion. A timer calls `steward tend` every ten minutes or so; each tend reconciles on-disk state against the manifest, spawns and reaps, and returns a compact summary. A coding agent reads those summaries — reactively, periodically, or in bulk when it next attaches — and supplies the judgement the mechanical layer refuses to. Anomalies are adjudicated with the human, and the run ends when a person signs off.
 
 ## Decisions that shape everything else
 
@@ -20,7 +22,7 @@ A definition is executed once under `INSPECT_EVAL_SET_CAPTURE` to enumerate its 
 - **A workspace is a project, not a run.** One evolving definition, one log directory holding its current results, one archive holding everything superseded, one journal. Work converges toward the manifest rather than happening in identified episodes, so amending is just `launch` again.
 - **Steward never deletes an eval log.** Superseded, removed, and failed logs move to a sibling archive. Curating the directory is allowed; destroying a result is not.
 - **Workers run `eval()`, not `eval_set()`.** Removing the competing orchestrator is what makes a flat, shared log directory safe, which is what keeps `inspect view` and `samples_df` working live and unmodified.
-- **The coding agent is the only driver.** No daemon: the reconcile core is a pure function, the run claim is short-lived, and a missed tend pauses a run rather than breaking it.
+- **A timer guarantees the mechanical tend; the agent supplies judgement.** No long-lived supervisor — `reconcile` is a pure function and the claim is held for the seconds a tend takes, so a timer, an agent, or both can call it. That split is what makes an absent agent survivable: the fleet keeps converging and only decisions accumulate. The agent tunes, groups, investigates, and writes ([agent.md](agent.md)), and may be attached, periodic, or merely transient.
 - **A tend spawns and reaps; it never does long work itself.** Scans, task workers, and adjudication re-runs are all detached children.
 - **`fail_on_error=False`.** Everything runs to the end; anomalies are settled afterwards rather than aborting a run mid-flight. Because that absorbs every sample-shaped failure, a task that fails anyway has failed structurally — so it is adjudicated, never restarted automatically.
 - **One automatic tier, then adjudication.** A sample gets the `retry_on_error` attempts its definition asked for; every further attempt, at sample or task level, is a ruling. `policy.md` may grant that ruling in advance, but nothing is pre-authorized by default, and Steward has **no** automatic response to an error class.
@@ -30,7 +32,7 @@ A definition is executed once under `INSPECT_EVAL_SET_CAPTURE` to enumerate its 
 
 ## Where the open questions live
 
-Each document ends with its own numbered list. Roughly: configuration.md holds definition-boundary questions, execution.md holds process, recovery, and scanning questions, workflow.md holds product, adjudication, and resource-allocation questions, and hawk.md holds the ones that only arise inside someone else's platform. Answers cross documents in three places — execution.md's *what "resolved" means* is answered in workflow.md, workflow.md's smoke run depends on the selection overrides described in execution.md, and configuration.md's deferred Hawk support is answered in hawk.md.
+Each document ends with its own numbered list. Roughly: configuration.md holds definition-boundary questions, execution.md holds process, recovery, and scanning questions, workflow.md holds product and adjudication questions, agent.md holds ones about the driver and its cadence, testing.md holds ones about the harness itself, and hawk.md holds the ones that only arise inside someone else's platform. Answers cross documents in three places — execution.md's *what "resolved" means* is answered in workflow.md, workflow.md's smoke run depends on the selection overrides described in execution.md, and configuration.md's deferred Hawk support is answered in hawk.md.
 
 ## Upstream dependencies
 

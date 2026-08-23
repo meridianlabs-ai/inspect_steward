@@ -137,10 +137,10 @@ If the definition evolves, an attestation has to name what it covered. It pins t
 |---|---|---|
 | `steward init [--type evalset\|flow] [--no-git]` | human | Scaffold the workspace: bootstrap `AGENTS.md`, a starter definition, `policy.md`, a repository and `.gitignore`. |
 | `steward runbook` | agent | Emit the current mechanics — how to tend, what never to do. Ships with the package so it cannot go stale. |
-| `steward launch [--smoke] [--accept-archive]` | agent | Capture the manifest, report the delta, commit it as desired state, spawn, **return**. The only verb that reads the definition, and therefore the amend path too — call it again after an edit. `--smoke` runs a bounded rehearsal first — see *Smoke first*. |
-| `steward tend` | agent, ~q10m | One turn of the loop: reconcile, spawn, reap, rewrite `status.md`, append to the journal, and report which scan results have landed and which look worth investigating. Never blocks. |
+| `steward launch [--smoke] [--accept-archive] [--no-timer]` | agent | Capture the manifest, report the delta, commit it as desired state, spawn, **arm the tend timer or fail**, and **return**. The only verb that reads the definition, and therefore the amend path too — call it again after an edit. `--smoke` runs a bounded rehearsal first — see *Smoke first*. |
+| `steward tend` | **a timer, ~q10m**; an agent may also call it to force a turn | One turn of the loop: reconcile, spawn, reap, rewrite `status.md`, append to the journal, and report which scan results have landed and which look worth investigating. Never blocks. |
 | `steward status` | either | `tend --dry-run` — current state plus a preview of what the next tend would do. Read-only. |
-| `steward notify` | agent | Send the human a message that carries judgement, through Inspect's notification channel. |
+| `steward notify [--kind attention\|stopped]` | agent | Send the human a message that carries judgement, through Inspect's notification channel. The two terminal kinds are Steward's alone — see *Four kinds*. |
 | `steward signoff [--publish]` | **human only** | Attest that the results are accepted. Terminal journal entry; records who, when, and the exceptions accepted. `--publish` indexes the signed logs into the reuse store — see *Publication is part of the attestation*. |
 | `steward pause` / `steward stop` | either | Stop scheduling new work, or end the run. Neither is "leaving a view". |
 
@@ -206,6 +206,7 @@ my-sweep/
   analysis.md        # DURABLE — agent-authored, per task; what any of it meant
   anomalies.md       # rendered — caveats that reached the final data
   status.md          # rendered by every tend
+  steward.log        # rendered — whether the machinery worked; bounded, disposable
   logs/              # the flat log directory — the CURRENT definition's results
                      #   ...and where scanning.md / analysis.md are mirrored
   logs-archive/      # DURABLE — superseded, removed, and failed logs; never deleted
@@ -226,7 +227,7 @@ The obvious split — "human-readable top level, machine-owned `.steward/`" — 
 | **authored** | `policy.md`, `AGENTS.md`, the definition | the human's own work is gone |
 | **durable machine state** | `journal.jsonl`, `logs/`, `logs-archive/` | the audit trail, or the results, are gone |
 | **authored by the agent** | `scanning.md`, `analysis.md` | the investigation is gone, and it re-runs from scratch |
-| **disposable machine state** | everything in `.steward/`, `status.md`, `anomalies.md` | rebuilt on the next tend |
+| **disposable machine state** | everything in `.steward/`, `status.md`, `anomalies.md`, `steward.log` | rebuilt on the next tend, or simply gone with no loss |
 
 The fourth category is the newest and easy to mislabel as rendered. `scanning.md` and `analysis.md` are folded from the journal and the scan results *in part*, but which findings were noteworthy is judgement, and no replay recovers it — so they sit with the journal on the durable side and are mirrored into the log directory, which is the half of a run that outlives the workspace.
 
@@ -264,7 +265,7 @@ Its co-writability is worth noting but not worth building for: the need for huma
 
 ### The one file Steward must never write
 
-`status.md` and `anomalies.md` are generated, carry a header, and are expendable. `policy.md` is its counterexample, and the reason the line is worth drawing visibly in the directory listing: it is the human's own document, and the one thing Steward only ever *proposes* changes to.
+`status.md`, `anomalies.md`, and `steward.log` are generated, carry a header, and are expendable. `policy.md` is its counterexample, and the reason the line is worth drawing visibly in the directory listing: it is the human's own document, and the one thing Steward only ever *proposes* changes to.
 
 ### State is a fold over the journal
 
@@ -290,6 +291,7 @@ Event types, all sharing a `ts` (UTC ISO-8601) and `type` envelope:
 | type | carries | written by |
 |---|---|---|
 | `observation` | per-class instance counts, task states, concurrency settings in force, rate-limit episodes since the last tend | every tend |
+| `collected` | an agent has read and acted on everything up to this point — the high-water mark that makes "uncollected" computable | the agent, on attach and as it works |
 | `instance` | one new instance joining a class — sample or task ids, log location, error detail | as observed |
 | `opened` | a class seen for the first time — its computed key and first evidence | as observed |
 | `proposal` | the classes it covers, the action, the evidence, and the precedent behind it | the agent |
@@ -301,6 +303,21 @@ Event types, all sharing a `ts` (UTC ISO-8601) and `type` envelope:
 **Reasoning stays free text, and that turns out not to be the problem it looked like.** The worry was that prose cannot be matched against, so precedent lookup would need it constrained. It does not: **precedent keys on the class, not on the prose.** "You ruled on this class twice before" is a structural query over `ruling` records, and the reasoning is what a person then *reads* to decide whether the precedent applies. Constraining it would cost the only field that carries why, in exchange for a lookup that does not need it.
 
 Two consequences worth naming. Rulings recorded per class are what let a group decision be unpicked later — the fold sees twelve rulings sharing a proposal id, not one ruling over twelve things. And because every event is timestamped and appended, "this class started at 11pm and tripled by 2am" is a query, which is what makes the weight-based re-notification above computable at all.
+
+
+### `steward.log` — whether Steward itself worked
+
+The journal is the record of the *eval set*: what was observed about it and what was decided. A second record is needed for a different subject — **whether the machinery ran** — and mixing them makes both harder to read. A tend that crashed, a spawn that failed, a sync that timed out, a ticker that had to be restarted, a claim that was found stale and reaped: none of these is a fact about the eval, and none belongs in a fold that reconstructs anomaly state.
+
+So they go to `steward.log`, and the rule is a single question:
+
+> Is this a fact about **the eval set**, or about **Steward**? The first goes to the journal, the second to `steward.log`.
+
+It sits at the top level and is **disposable**, which is exactly the shape `status.md` already has — top-level so the sync carries it out without an exception to the deny list, disposable because nothing in it is irrecoverable. Being disposable also settles the growth question: an append-only log needs a bound, and truncating the oldest entries is free when nothing depends on them.
+
+**The split turns out to answer a question neither record could answer alone.** A successful tend writes an `observation` to the journal, so *"no tend for four hours"* is computable from the journal's silence — and *why* is in `steward.log`, where the failures went. Had the two shared a file, a run whose tends were crashing would look like a run with nothing to report.
+
+One honest limit: the conditions most worth logging are the ones most likely to prevent logging. A full disk fails the `steward.log` write along with everything else, which is why the substrate failures in [execution.md](execution.md) escalate through the notification channel rather than relying on a file.
 
 ### `init` and version control
 
@@ -418,7 +435,7 @@ The agent reads the summary and decides whether anything warrants a human. Most 
 
 Some runs happen on machines with no git, and sometimes no internet at all. The deployment worth designing for has exactly two pipes out: a localhost model endpoint that proxies, and an S3 bucket. On such a machine **the bucket is the only observability channel there is** — the alternative to syncing is shelling into the runner, which is precisely what an unattended overnight job should not require.
 
-So each tend mirrors the workspace's top-level files to object storage. Someone watching from another system reads `status.md` for progress, `analysis.md` for what has been found and what it means, `anomalies.md` for accumulating caveats, `journal.jsonl` for what has been decided, and the definition and `policy.md` for what is being run and under what rules — without touching the runner.
+So each tend mirrors the workspace's top-level files to object storage. Someone watching from another system reads `status.md` for progress, `analysis.md` for what has been found and what it means, `anomalies.md` for accumulating caveats, `journal.jsonl` for what has been decided, `steward.log` for whether the machinery is working, and the definition and `policy.md` for what is being run and under what rules — without touching the runner.
 
 It also completes the picture in one place: when `log_dir` is in the same bucket, the remote reader has the logs and the run's state side by side, and `inspect view` works against the same prefix.
 
@@ -436,11 +453,29 @@ The `.env` case deserves the explicit rule rather than an incidental one. Syncin
 
 A pleasant consequence of exclusionary-by-default: if a rendered `journal.md` is ever added, or a report, or anything else, it flows out with no configuration change.
 
+### What actually leaves, and why `.env` is not the whole of it
+
+The `.env` rule is correct and it is the easy case. The harder one is that the files being synced *on purpose* carry material lifted out of transcripts:
+
+- **`journal.jsonl`** holds error text and evidence — tracebacks, model output, sandbox paths, dataset content, and occasionally a credential that a library helpfully interpolated into an exception message.
+- **`analysis.md` and `scanning.md`** are an agent's writeup of what transcripts contained, and a good writeup quotes.
+- **`anomalies.md` and `status.md`** carry error text wherever it is the clearest way to say what happened.
+
+Usually the sync target is the same bucket as `log_dir`, which bounds the audience to the one that already has the transcripts — so this is not a new *audience*. **It is a large change in accessibility.** An `.eval` file is a zip that needs tooling to read; `journal.jsonl` is plain text that anyone with bucket read access can grep. The same information becomes far easier to extract, and easy extraction is what turns a theoretical exposure into a real one.
+
+**Steward does not attempt to redact.** A redactor that catches most secrets is worse than none, because it converts "this contains transcript material, treat it accordingly" into an implied guarantee that it does not. Three things instead, all cheap:
+
+- **Say it plainly**: the synced workspace carries transcript-derived content and deserves the access controls the transcripts deserve. When the sync target is not the log bucket, that is a decision someone should make deliberately rather than inherit.
+- **Bound the volume.** Error text in a journal event is truncated to a stated length with a pointer to the log, which a full traceback badly needs anyway — the journal is read by a fold on every tend, and an untruncated stack trace is both a size problem and gratuitous surface.
+- **Keep the deny list.** Dotfiles and directories stay excluded, for the reason above and because the failure of an allow-list is silent.
+
 ### It must never raise
 
-The sync is advisory. It is important — on an air-gapped runner it is the whole window — but it is not on the critical path of producing results, and an eval must never fail because a bucket was briefly unreachable. So: bounded timeout, failures caught and recorded in the journal, tend proceeds regardless. This also keeps it consistent with *a tend spawns and reaps; it never does long work itself* — a handful of small files with a timeout, not an unbounded transfer.
+The sync is advisory. It is important — on an air-gapped runner it is the whole window — but it is not on the critical path of producing results, and an eval must never fail because a bucket was briefly unreachable. So: bounded timeout, failures caught and recorded in `steward.log`, tend proceeds regardless — a sync failure is a fact about the machinery, not about the eval set. This also keeps it consistent with *a tend spawns and reaps; it never does long work itself* — a handful of small files with a timeout, not an unbounded transfer.
 
 **A failed sync is invisible from the far end**, which is the awkward part: the remote reader sees a `status.md` that simply stopped changing, and cannot tell a stalled run from a broken pipe. That promotes the status timestamp from a nicety to load-bearing — a remote observer detects sync failure precisely by noticing the file is old. It should say its age plainly rather than merely carrying a timestamp to be compared.
+
+Note the recursion, and that it resolves: the record of *why* the sync failed is in `steward.log`, which the sync is what would have carried out. So a remote reader sees staleness and nothing else, and diagnosing it means reaching the machine. That is acceptable because the alternative — a second, independent channel purely for reporting the first one's failure — costs more than it is worth for a monitoring pipe, and because the ages in `status.md` already distinguish the two failures that matter ([execution.md](execution.md), *Clocks*).
 
 The sync is **outbound only**. Editing `policy.md` in the bucket does not change the run; two-way sync would need conflict resolution nobody wants for a monitoring channel.
 
@@ -631,10 +666,29 @@ The entire value proposition is "don't bother me unless it matters," and both fa
 
 Two sources, and the distinction matters:
 
-- **Steward notifies mechanically** — run complete, no workers alive but tasks pending, a task exited without a log. Conditions with no judgement in them.
+- **Steward notifies mechanically** — the run reaching its gate, signoff, no workers alive but tasks pending, a task exited without a log. Conditions with no judgement in them.
 - **The agent notifies with judgement** — `steward notify`, carrying an interpretation: "the sonnet arm is failing systematically, I've paused it, here's why."
 
 The second is the valuable one and the reason `steward notify` should exist as a command rather than being Steward-internal. It also means the agent needs to know when *not* to use it, which is a policy question, not a mechanism question.
+
+### Four kinds, and two of them are not the agent's to send
+
+Every post carries a **kind**. It is not decoration: it sets how the post presents, and its whole job is keeping the one message that needs a person distinguishable from the ones that merely inform.
+
+| kind | means | sent by |
+|---|---|---|
+| `attention` | something worth knowing, and work continues — a class growing fast, a task that died, a scan finding, a re-run proposed | the agent |
+| `stopped` | nothing progresses until a person answers — a hard stop, or a question the agent is blocked on | the agent |
+| `gate` | tasks finished, scans drained, anomalies settled; the run is waiting on `signoff` | **Steward only** |
+| `complete` | signed off | **Steward only** |
+
+The split is the point. `attention` and `stopped` carry judgement, which is why they are the agent's. The other two are **terminal**, they are made **once**, and `steward notify` refuses them.
+
+**Why `complete` cannot be hand-sent.** Completion means a human adjudicated, not that the processes exited — that is the whole content of *Signoff*. A post saying otherwise would be a claim nobody made, and hand-written completions arrive in batches and bury the one post that actually needs attention.
+
+**`gate` is the handover, and it is a latch.** The first tend that finds the run settled posts it and records that it did; every later tend writes its files and posts nothing. So the channel going quiet *is* the signal that the automatic work is over. It needs no new state to implement — "the gate was posted" is a journal event, so the fold already knows. And because a workspace is a project rather than a run, a later `launch` that puts work back in flight reopens it: the latch clears, and the next settling posts again. That is the case a manual convention would get wrong, since a relaunch is exactly where nobody would think to re-arm anything.
+
+**Post freely.** With no channel configured, `notify()` is a silent no-op that never raises ([What Inspect already provides](#what-inspect-already-provides)) — so the agent never has to check whether notification is set up, and a machine with no target does not accumulate failures. The cost of an unnecessary `attention` is one line in a channel; the cost of a skipped `stopped` is a run that waits all night for an answer nobody knew was wanted.
 
 ### What Inspect already provides
 
@@ -730,6 +784,16 @@ tasks complete  →  scan drains  →  anomalies settle  →  human signs off
 ```
 
 Which is the concrete reason signoff sits after the scan rather than after the tasks, and another reason a run is not finished when its workers are.
+
+### Adjudicate as you go, because that collapses to the other thing anyway
+
+There is a coherent alternative worth recording, because a previous system in this shape chose it: hold *every* question for one blocking gate at the end, once all tasks have finished and all scans have drained. Its argument is real — a scan surfaces re-run candidates the error census cannot see, so ruling before the scans are in risks ruling twice, and an arm that just finished then needs nothing from anyone.
+
+**Steward adjudicates continuously instead, and the reason is that continuous adjudication contains the other option rather than competing with it.** An anomaly raised at 11pm that nobody answers is still sitting there at 8am, joined by everything raised since — which is precisely the single end-of-run gate, arrived at by doing nothing. The choice is therefore not between two behaviours but between one behaviour and a strict subset of it: asking as you go costs nothing when no one is listening, and when someone *is*, the night produces re-runs instead of a queue of questions to start the morning with. That is the whole premise of prioritizing re-runs ahead of fresh work ([scheduling.md](scheduling.md), *Approved re-runs go first*).
+
+The wasted-work risk the end-gate model worries about is real but small, and **the scan cadence is what shrinks it.** Because a pass spawns as soon as a log lands rather than accumulating (scheduling.md, *Scanning is scheduled work*), a task's findings usually arrive well before anyone gets around to ruling on its errors. Where they have not, the residual cost is a cheap re-run of errored samples that a later invalidation supersedes — against a night spent idle, that trade is not close.
+
+Two things follow for the agent. It should **hold a proposal whose task has not been scanned yet** where the re-run looks expensive and the scan looks imminent — judgement, not a rule. And it should ask only what it is genuinely blocked on; everything else accumulates and is answered together, which is the end-gate model reappearing as the default rather than as a policy.
 
 ### Scanning collects; investigation digs
 
@@ -939,7 +1003,7 @@ This is also the argument for the whole workspace being git-friendly: the record
 3. **What does Steward propose, and how confidently?** *Partly resolved.* The unit is settled — a proposal covers a set of classes, because real runs produce two or three causes rather than thirty flavours, and the ruling is recorded per class so the grouping stays unpickable. What a proposal must *carry* is not: an action alone is easier to accept than to check, and stated confidence is the field most likely to be miscalibrated and most likely to be leaned on at 3am. Precedent is the promising alternative to self-assessed confidence, since it grounds the proposal in the human's own past decisions rather than Steward's estimate of itself.
 4. **Who commits the journal?** `init` prepares the repository, but nothing in the workflow commits. If nobody does, the durability-through-git story quietly fails to happen. Candidates: the agent commits at milestones as a runbook instruction, `signoff` commits as its terminal act, or it stays the human's job. Auto-committing on every tend would collide with the user's own working tree, so the cadence matters as much as the owner.
 
-5. **`status.md` staleness.** With no agent tending and no cron, it silently goes stale. It should carry its own timestamp and say how old it is rather than reading as current. This matters more once the file is synced to a bucket: a remote reader cannot distinguish a stalled run from a broken sync by any other means, so the file's stated age is the only signal either has failed.
+5. **`status.md` staleness.** *Mostly resolved, and it needs two ages rather than one.* The file states how old it is, and separately how long since the last **collection** ([agent.md](agent.md)) — the pair distinguishes a stopped timer from an unattended run, which a single timestamp cannot. This matters most once the file is synced to a bucket, where a stated age is a remote reader's only evidence that anything has failed. What remains open is presentation: the age must read as a fact about the file rather than as part of the snapshot, or a reader skims past exactly the line that says the snapshot is worthless.
 6. **Multiple runs per directory.** *Resolved, and the question was the wrong shape* — see *A project, not a run*. A workspace is a **project**: one evolving definition, one log directory holding the current definition's results, one archive holding everything superseded, and one journal that is a project history. There is no run entity for anything to be "per", so claims key on the log directory, the manifest is whatever the last `launch` captured, and anomalies scope to the logs they concern. What remains is not a question but a consequence: every fold over the journal spans the project's whole history, which is what makes precedent accumulate.
 7. **How does a scanner result become an anomaly?** *Resolved — see *A scan result is a measurement, and only the agent can read it*.* It does not, mechanically: a result is a reading rather than an event, so no threshold Steward could apply would mean anything. A scanner *erroring* classes like any other error; a scanner *result* is judged by the agent, with Steward narrowing rather than judging — surfacing distributional outliers from `scan_results_df()`, which needs no semantics — and `tend` reporting which results have landed and which look worth a look. The product is `scanning.md` and `analysis.md`, per task, mirrored into the log directory. What survives is sharper than it was: successful reward hacking is *systematic*, so it produces no outlier at all — the most important finding is the one variance cannot see, which is why distributions are reported unconditionally and why cross-run comparison is load-bearing rather than a nicety. Also unresolved: an investigation pass wants different scanners than the broad pass, which a definition's single scanner configuration cannot express.
 
