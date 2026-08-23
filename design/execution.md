@@ -60,20 +60,24 @@ Selection is the execution counterpart to capture. Both are environment-variable
 | `INSPECT_EVAL_SET_CAPTURE` | Path to write a manifest. `eval_set()` resolves tasks, writes the manifest, and exits the process without running anything. |
 | `INSPECT_EVAL_SET_SELECTION` | Path to a selection document. `eval_set()` resolves tasks, runs only the selected ones through `eval()`, and skips all eval-set orchestration. |
 
-The selection document (`inspect_ai._eval.eval_set_selection`, schema version 1):
+The selection document (`inspect_ai._eval.eval_set_selection`, schema version 2):
 
 ```jsonc
 {
-  "version": 1,
+  "version": 2,
   "eval_set_id": "swe-sweep-2026-08",   // Steward-assigned; stamped into every log
   "tasks": [
     {
       "identifier": "<task_identifier from the manifest>",
       "resume": "logs/2026-08-19T…_mbpp_abc.eval"   // optional prior log to resume
     }
-  ]
+  ],
+  "log_dir": "s3://…/logs",             // optional operational overrides
+  "max_samples": 12
 }
 ```
+
+**The `log_dir` override reaches the boundary, and not one step earlier.** Anything a frontend writes on its way to `eval_set()` lands wherever the *definition* said — verified: a flow worker given only the override drops `flow.yaml` and `flow-requirements.txt` into the definition's log directory before the selection is ever read. So a worker needs both channels, exactly as a read does: the frontend's own `--log-dir` for the pre-boundary half and the selection override for the eval itself. This is the same pre-boundary seam as open question 1 and Hawk's installation problem, in its smallest form.
 
 `tasks` is a list rather than a single entry so a worker could host several when that is cheaper than several processes. Steward never does: [scheduling.md](scheduling.md) settles on exactly one task per process, so the list is permanently length 1 and the generality goes unused.
 

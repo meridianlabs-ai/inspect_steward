@@ -168,6 +168,7 @@ def default_concurrency(cls) -> int | None:
     """Default max_sandboxes for this provider (`None` means no maximum)"""
     return None
 
+
 # DockerSandboxEnvironment
 def default_concurrency(cls) -> int | None:
     return 2 * (os.cpu_count() or 1)

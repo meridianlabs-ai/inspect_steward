@@ -95,6 +95,7 @@ def read_eval_set(
     keys = compute_display_keys(capture.tasks)
     return Manifest(
         version=MANIFEST_VERSION,
+        identifier_version=capture.identifier_version,
         eval_set_id=capture.eval_set_id,
         source=ManifestSource(
             type=resolved_type,

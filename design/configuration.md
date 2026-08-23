@@ -111,6 +111,7 @@ The manifest is an **index into the definition, not a reconstruction of it**. Th
 ```jsonc
 {
   "version": 1,
+  "identifier_version": 3,        // which task_identifier computation produced the ids below
   "eval_set_id": "swe-sweep-2026-08",
   "definition": {
     "type": "evalset",            // evalset | flow
@@ -143,6 +144,8 @@ The manifest is an **index into the definition, not a reconstruction of it**. Th
 ```
 
 Because enumeration fully resolves tasks, the manifest carries per-task sample counts and epochs — the raw material for Steward's scheduling and progress estimation.
+
+**`identifier_version` is recorded because a manifest outlives the inspect_ai that produced it.** `task_identifier` is versioned (`TASK_IDENTIFIER_VERSION`) precisely so persisted identifiers can be recomputed when the computation changes, and Steward's manifest is persisted by design — committed as desired state, then read against a log directory on every tend for as long as the run lasts. Without the field, an inspect upgrade mid-run would leave every identifier unmatchable and the whole sweep would read as *not yet started*, which is the one misreading that costs a night of compute. Recording it makes the mismatch detectable; refusing on it belongs to `reconcile`.
 
 **Determinism requirement.** The contract assumes the definition produces the same task list on every execution: enumerate on Monday, execute task 7 on Tuesday, and the selection must still match. `task_identifier` is deterministic given the same tasks/args/models, so the requirement reduces to "the definition is deterministic with respect to its task list" (no time- or randomness-dependent task construction). Drift is detected, never papered over: a selected task that resolution fails to produce is a hard error naming the missing task, and the manifest's `content_hash` lets Steward warn when the definition file changed after enumeration. What that hash is and is not for is the subject of the next section.
 

@@ -12,11 +12,13 @@ Every other document works a topic to closure regardless of when it ships. This 
 
 **Everything else is unbuilt.** There is no `launch`, no `tend`, no workspace, no journal, no anomalies, no signoff — `steward init` is a stub that prints a sentence. The runner is the project.
 
-## 2. Verify one thing before building anything
+## 2. The one thing to verify first — verified
 
-Every scheduling decision rests on mapping a landed `.eval` back to a manifest task, and Steward's workers resolve **independently** — the same asymmetry that produced the `eval-set.json` `task_id` trap the design already found. Capture, run two workers under a selection, recompute `task_identifier` from each landed log, assert it matches the manifest.
+Every scheduling decision rests on mapping a landed `.eval` back to a manifest task, and Steward's workers resolve **independently** — the same asymmetry that produced the `eval-set.json` `task_id` trap the design already found.
 
-It is an afternoon, it is the assumption everything downstream inherits, and it lands as a **test** rather than a verification ([testing.md](testing.md)) — the property has to keep holding across Inspect upgrades, not merely hold today.
+**It holds**, across all three definition types, across concurrent workers sharing one flat directory, across a resume, and across a working-directory change. It is a **test** rather than a recorded verification ([testing.md](testing.md)) — the property has to keep holding across Inspect upgrades, not merely hold today — and the fixtures are shaped so that a field dropping out of the identifier surfaces as a collision rather than as a passing round trip ([plan.md](plan.md) step 1).
+
+One thing the work changed: the manifest now records `identifier_version`. It was being dropped, and a manifest is committed as desired state — so an inspect upgrade mid-run would have made every identifier unmatchable and a finished sweep would have read as one that never started.
 
 ## 3. Four milestones, each a capability rather than a percentage
 

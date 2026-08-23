@@ -26,15 +26,19 @@ Gates **M2**, **M3**, **M4** are [roadmap.md](roadmap.md) §3's milestones, loca
 
 Five steps that establish state, identity, and the decision function. None of them builds process machinery, which is why they are first: the component most likely to be subtly wrong is the cheapest one here to test exhaustively, and debugging it through a live fleet would be miserable.
 
-### Step 1 — Identifier correlation
+### Step 1 — Identifier correlation ✅ **done**
 
-**Delivers** the verified assumption everything downstream inherits: a landed `.eval` maps back to a manifest task.
+**Delivered** the verified assumption everything downstream inherits: a landed `.eval` maps back to a manifest task. `tests/evalset/test_selection.py` — six cases, each one worth its subprocess: two dimensional, three definition types, concurrency, resume.
 
-- **Scope.** Capture a manifest, hand-write two selection documents, run both workers, recompute `task_identifier` from each landed log, assert equality with the manifest. Cover the resume path and at least two definition types.
-- **Refs.** config §3, §4; testing §3; roadmap §2.
-- **Done when** it is a test in the suite, not a note in a file. The property has to keep holding across Inspect upgrades, and an identifier scheme that quietly changes shape is exactly what a one-off verification would miss.
+The property holds. What sharpened during the work is *which half* needed verifying: a worker matches its selection by recomputing identifiers from its own resolved tasks, so a selection that runs at all already proves capture↔resolve agreement across processes. The unexercised half is resolve↔**log** — the half `reconcile` reads — and upstream touches it only when validating a resume target.
 
-**Done by hand.** The selection documents are written by hand and the workers launched by hand; step 6 is where any of that gets automated. The point of doing it first is that five steps of work assume the answer, and this is the only step that could invalidate the architecture rather than merely complicate it. It is an afternoon.
+The fixtures are built so a field that silently dropped out of the hash would show up as a **collision** rather than a vacuous pass: fifteen tasks sharing one name and one args set, each differing in exactly one identity-relevant field (args, version, model, model args, model roles, solver chain, generate config, and every execution limit including the `output:<n>` token encoding). Fifteen shapes, fifteen distinct identifiers, fifteen logs, exact match. A second fixture covers the eval-set-level args, where the interesting case is a task whose own limits are *shadowed* by the eval set's — capture merges them into the hash while the log reads `eval.config`, and that merge round-trips.
+
+Three findings went back into the design:
+
+- **`identifier_version` was being dropped.** `EvalSetCapture` carries it; `read_eval_set()` discarded it. A manifest is committed as desired state and outlives an inspect upgrade, so a `TASK_IDENTIFIER_VERSION` bump would have made a finished sweep read as unstarted. Now carried (config §4); refusing on it is step 5.
+- **A selection's `log_dir` does not reach pre-boundary writes** (exec §4). A flow worker given only the override drops `flow.yaml` into the definition's log directory. A worker needs both channels — step 6.
+- **cwd does not break correlation**, contrary to the hazard upstream's error text warns about, because `definition_command` resolves the definition absolutely and flow anchors task files to the spec. Pinned as a test, so step 6 cannot quietly lose it.
 
 ### Step 2 — Workspace and `init`
 
@@ -69,7 +73,7 @@ The event *vocabulary* grows in nearly every later step. The envelope, the fold 
 
 **Delivers** the decision function. Pure, no clock, no processes.
 
-- **Scope.** `(manifest, inflight, observed) -> (actions, summary)`. The spawn set; the pool ceiling; the task-major transposition of spawn order; the initial per-worker `max_samples` allocation; the action vocabulary every later step consumes.
+- **Scope.** `(manifest, inflight, observed) -> (actions, summary)`. The spawn set; the pool ceiling; the task-major transposition of spawn order; the initial per-worker `max_samples` allocation; the action vocabulary every later step consumes. Refusing a manifest whose `identifier_version` does not match the running inspect, rather than reading its unmatchable identifiers as work not yet started (step 1).
 - **Refs.** exec §8.3, §8.1; sched §1.1, §2.1–2.5, §3.1–3.3.
 - **Done when** the table covers convergence, idempotence and every state from step 4 — and passes with no process ever started.
 
@@ -81,7 +85,7 @@ Sandbox division is *not* here; it is step 22, blocked upstream. `reconcile` div
 
 **Delivers** one detached worker running one task, landing one log.
 
-- **Scope.** Write the selection document; spawn detached with a clean environment; apply the static operational overrides (`log_dir`, `max_samples`); confirm the log lands with the identifier step 1 predicted; confirm worker mode writes no eval-set metadata.
+- **Scope.** Write the selection document; spawn detached with a clean environment; apply the static operational overrides (`log_dir`, `max_samples`) **through both channels** — the selection reaches the boundary, the frontend's own `--log-dir` reaches everything written before it (step 1); resolve the definition path absolutely, which is what makes the identifier cwd-independent (step 1); confirm the log lands with the identifier step 1 predicted; confirm worker mode writes no eval-set metadata.
 - **Refs.** exec §3, §4, §4.1; config §6.1, §6.2.
 - **Done when** N workers under `mockllm` land N correct logs in one shared directory.
 

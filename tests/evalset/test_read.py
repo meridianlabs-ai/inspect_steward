@@ -1,6 +1,7 @@
 from pathlib import Path
 
 import pytest
+from inspect_ai._eval.evalset import TASK_IDENTIFIER_VERSION
 from inspect_steward import Manifest, ReadEvalSetError, read_eval_set
 
 from ._hawk import requires_hawk
@@ -12,6 +13,9 @@ def test_read_eval_set(tmp_path: Path) -> None:
     manifest = read_eval_set(FIXTURES / "simple_evalset.py", cwd=tmp_path)
 
     assert manifest.source.type == "evalset"
+    # a manifest outlives the inspect that produced it, so it has to say which
+    # task_identifier computation its identifiers came from
+    assert manifest.identifier_version == TASK_IDENTIFIER_VERSION
     assert manifest.source.content_hash.startswith("sha256:")
     assert manifest.source.args == {}
     assert manifest.options["log_dir"] == "logs"

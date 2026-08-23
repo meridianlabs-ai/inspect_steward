@@ -38,6 +38,9 @@ class Manifest(BaseModel):
     version: int
     """Manifest schema version."""
 
+    identifier_version: int
+    """Version of the `task_identifier` computation that produced `tasks[].identifier`. A manifest outlives the inspect_ai it was read with, and an identifier computed under a different version cannot be matched against a log — so this records which computation the identifiers came from rather than leaving a silent mismatch to read as "nothing has run yet"."""
+
     eval_set_id: str | None = None
     """Eval set id as passed to `eval_set()` (if any)."""
 
