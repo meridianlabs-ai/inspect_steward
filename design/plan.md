@@ -67,16 +67,22 @@ Three decisions, each the opposite of how Steward treats a selection document �
 
 One thing measured rather than assumed, because the first version of the test could not have failed: **splitting a record across two writes** (payload, then newline) loses about a quarter of the events under four concurrent writers. Size is not the hazard and neither is the platform — a buffered whole-line append is safe on a local filesystem. So the guard is one `os.write` of a pre-built line, and the test's docstring records what it does and does not catch.
 
-### Step 4 — Observed state, and the fixtures that prove it 🔧
+### Step 4 — Observed state, and the fixtures that prove it 🔧 ✅ **done**
 
-**Delivers** the read half of convergence — a log directory becomes a structured observation — together with the ability to synthesize such a directory without running an eval.
+**Delivered** the read half of convergence — `observe_logs` turns a log directory into attempts grouped by identifier, `observe_tasks` reads those against a manifest — and `tests/_logs.py`, which synthesizes such a directory without running anything. `tests/evalset/test_observe.py`, 23 cases, 1.2s, **zero process launches**.
 
-- **Scope, the generator.** Write `json`-format logs directly with a chosen `task_id` / `task_identifier` / status / sample counts / errors / invalidations. Two logs for one identifier, so supersession has something to act on. Which tests must use a real `.eval` zip instead, and whether that boundary can be enforced rather than remembered.
-- **Scope, the reader.** Per identifier, the current log and its predecessors; completeness against epochs; the holes case (a `success` log permanently missing samples); errored and invalidated sample counts; identifiers present in the directory but absent from the manifest.
-- **Refs.** testing §2, §1, §7 q3; workflow §2.1, §2.2; exec §5.8, §5.1; config §3, §4.
-- **Done when** eight states are producible and read correctly, table-driven: complete-clean, complete-with-errors, complete-but-short, started-never-finished, superseded, invalidated, orphaned, unreadable — plus the mid-run `.eval` case where there is no `header.json`.
+Four decisions:
 
-**Generator and reader are one step because they are mutually defining.** A log-directory generator cannot be tested except by reading its output, and the reader cannot be tested except against generated input; "eight states are producible" is not a verifiable claim on its own. The generator is nonetheless the higher-leverage half, and it is what makes step 5 a table rather than a fixture suite.
+- **The split is at the filesystem boundary, not at the manifest.** `observe_logs` does the I/O and knows nothing about what was supposed to run, which is what lets it serve `logs-archive/` and the flow store — neither of which has a manifest to compare against. Completeness is a second, pure function, so step 5's inputs stay pure.
+- **Four states, one carrying a reason.** `complete`, `incomplete`, `missing`, `orphaned` — deliberately the domain of the action vocabulary rather than a taxonomy of log conditions. Every incomplete task takes the same action, so *why* (`started`, `short`, `invalidated`, `error`, `cancelled`, `no_results`) is reporting material. Complete-clean and complete-with-errors are one state and a count, for the same reason: both mean *do not spawn*, and the errored samples are step 18's queue.
+- **Attempts order by `eval.created`, and the latest *successful* one is current.** Both halves diverge from upstream, which sorts by mtime and takes the newest whatever its status. Mtime is not intrinsic — restoring a log from the archive rewrites it, and the archive is a cache the design intends to hit — while `created` survives even the mid-run header fallback. And a deliberate re-run that errored must not displace a good result (exec §5.8).
+- **An unreadable log costs one log, never the directory** — step 3's rule, applied to the other thing Steward reads on a schedule. Not hypothetical: a worker's zip has no readable header for the moment between creation and its first journal entry, and a tend that raised on that is a tend that never ran.
+
+Two things measured or read rather than assumed. **Header reads are concurrent**, because an `.eval` header read genuinely awaits on I/O where a `json` one is synchronous inside its `async def` — so the fixtures can prove the reader right and can say nothing about its speed, and a local benchmark over them would argue for exactly the wrong thing. And **the mid-run `.eval` case is layer 1 after all**: a zip with one member, `_journal/start.json`, reproduces it in ten lines.
+
+Two findings, both recorded upstream (exec §12, items 6 and 11): `read_eval_log_headers_async` raises on any single unreadable file, so a scheduled reader cannot use it; and the capture manifest discards the epochs *reducer*, so a reducer-only change reads as complete where `eval_set()` would re-score. A third went to workflow §2.1 — **renaming the definition file orphans the entire run**, since `task_file` is in the identifier, and the workspace's fixed definition name is what makes Steward immune.
+
+**Generator and reader were one step because they are mutually defining.** Neither is testable alone. What made the generator trustworthy is that one `_eval_spec()` builds the `EvalSpec` both the manifest row and every log derive from, so they agree on the identifier by construction rather than by a literal repeated twice.
 
 ### Step 5 — `reconcile`
 
@@ -417,6 +423,8 @@ Three rules follow, and they are the opposite of the instinct:
 3. **Reach for a subprocess only when the process boundary is the subject.** [testing.md](testing.md) §1's layer 1 — `reconcile` over a synthesized log directory — is microseconds, and it is where most of this plan's correctness lives.
 
 **Which steps genuinely need real workers**: 1 (done), 6–9, 11, and parts of 12, 14, 20, and 23–25 — call it ten. Steps 2–5, 10, 13, 15–19, 21–22, and 26–28 are layer 1 or near it: synthesized state, pure functions, no eval runs at all. **Budget ~12 launches for a layer-2 step**, which is roughly 35s serial and under 10s with `-n auto`. Ten such steps lands the whole suite near five minutes serial and one to two minutes on CI. That is the line; a step that wants more should say why in its design pass.
+
+**Running total after step 4**: 127 offline tests, 22s with `-n auto`, essentially all of it step 1's eleven launches. Steps 2–4 added 56 tests and about 3s between them — which is the shape the budget predicted, and the reason the fixture generator was worth building before anything that consumes it.
 
 **Levers held in reserve**, in the order they become worth their complexity: cache captures across tests in a session (deterministic by the contract in configuration.md §4, so it is safe — but xdist gives each worker its own cache, so it pays off only once a single xdist worker runs many tests); share one worker run across several assertions; and, last, split the suite so layer 2 runs on a different cadence than layer 1.
 

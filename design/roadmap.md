@@ -10,7 +10,9 @@ Every other document works a topic to closure regardless of when it ships. This 
 
 **The upstream protocol has landed.** Capture mode, selection mode with its resume path, the error-handling overrides that make worker mode mean what it says, and the schema-v2 operational overrides (`log_dir`, `max_samples`).
 
-**Everything else is unbuilt.** There is no `launch`, no `tend`, no workspace, no journal, no anomalies, no signoff — `steward init` is a stub that prints a sentence. The runner is the project.
+**The foundations are built.** `steward init` creates a real workspace; `journal.jsonl` is an append-only record that survives a torn write and an event type from a later version; and a log directory reads back as structured state against a manifest, with a fixture generator that produces one without running anything ([plan.md](plan.md) steps 1–4).
+
+**Nothing runs yet.** There is no `launch`, no `tend`, no `reconcile`, no anomalies, no signoff. Not one process has been spawned by Steward. The runner is the project.
 
 ## 2. The one thing to verify first — verified
 
@@ -37,8 +39,8 @@ The milestones name *capabilities*; [plan.md](plan.md) decomposes them into twen
 
 The sequence matters more than the list, and one ordering choice is worth stating: **`reconcile` is built and exhaustively tested before anything spawns a process.** It is a pure function over a synthesized log directory, it is the component most likely to be subtly wrong, and it is the cheapest thing here to test. Building the process machinery first would mean debugging scheduling logic through a fleet.
 
-1. **The workspace and the journal.** `init` for real — the directory, `.gitignore`, git detection, the scaffolded definition — plus the append-only record and the fold that everything else reads state from.
-2. **The log-directory fixture generator and the observed-state reader**, built together because neither is testable without the other ([testing.md](testing.md)).
+1. **The workspace and the journal.** *Done.* `init` for real — the directory, `.gitignore`, git detection, the placeholder definition — plus the append-only record and the fold that everything else reads state from.
+2. **The log-directory fixture generator and the observed-state reader.** *Done*, and built together because neither is testable without the other ([testing.md](testing.md)).
 3. **`reconcile`**, table-driven: spawn set, ceilings, spawn order, completeness, convergence.
 4. **Spawn and reap.** Selection documents, detached workers, the in-flight record with `intent` before spawn, liveness against control discovery, self-identifying workers for the invisible-worker window — plus Steward taking ownership of the **once-per-run pre-boundary work**, which is what makes a Flow or Hawk fan-out safe rather than merely wasteful.
 5. **The control channel client**, which `pause`, adjudication, and concurrency retuning all sit on.
@@ -90,7 +92,8 @@ Scanning is the largest piece and the most valuable — three steps in [plan.md]
 | 8 — dataset `limit` override | M4 (smoke) | no smoke gate; a rehearsal would run the whole dataset |
 | 5 — early pruning | M2 **at scale** | small sweeps are fine; per-worker memory scales with the whole manifest, so a large one is not. A precondition for launching wide, not for launching |
 | 9, 10 — `max_sandboxes` override and sandbox type in the manifest | M2 **on Docker** | k8s and unsandboxed evals are unaffected. On a Docker host the fleet asks for `workers × 2 × cores` containers, which is the one failure mode with no backpressure signal |
-| 6 — public directory operations (incl. `archive_dir`) | **M3** | signoff curates into `logs-archive/`, and the predicate it needs — `latest_completed_task_eval_logs` — is private and exported nowhere. Steward reimplements it, which is small but free to drift against the definition of "superseded" that `eval_set()` uses |
+| 6 — public directory operations (incl. `archive_dir`) | **M3** | signoff curates into `logs-archive/`, and the predicate it needs — `latest_completed_task_eval_logs` — is private and exported nowhere. Steward reimplements it, which is small but free to drift against the definition of "superseded" that `eval_set()` uses. Its second half — a batched header read that degrades instead of raising — Steward has already reimplemented, and would keep doing so |
+| 11 — epochs reducer in the manifest | never blocking | a reducer-only change reads as complete where `eval_set()` would re-score. Silent rather than loud, which is why it is worth one field |
 
 **Two items touch M3, and both have workarounds** — Steward can carry Apprise itself, and it can compute supersession itself. Nothing blocks M2 except at scale or on Docker, which is worth knowing: the runner can be built and proven before any of this lands.
 

@@ -1,0 +1,279 @@
+"""A log directory read as state, and the fixtures that produce one.
+
+Every case here is synthesized: no eval runs, no worker is launched, and the
+whole file is a few dozen sub-kilobyte files in `tmp_path`. That is the point
+of the generator (testing.md, *the fixture generator is the highest-leverage
+thing to build*) — the eight states a log directory can be in are eight
+function calls rather than eight process launches.
+
+The reader and the generator are tested together because neither is testable
+alone: a generator's only proof is that a reader agrees with it.
+"""
+
+from pathlib import Path
+from typing import Any
+
+import pytest
+from inspect_steward._evalset.observe import (
+    IncompleteReason,
+    ObservedLogs,
+    TaskState,
+    observe_logs,
+    observe_tasks,
+    summarize_states,
+)
+
+from .._logs import (
+    SynthTask,
+    synth_manifest,
+    write_log,
+    write_running_eval,
+    write_unreadable,
+)
+
+TASK = SynthTask("probe", samples=10, epochs=1)
+
+EARLIER = "2026-08-23T18:00:00+00:00"
+LATER = "2026-08-23T20:00:00+00:00"
+LATEST = "2026-08-23T22:00:00+00:00"
+
+
+def observe(
+    log_dir: Path, *tasks: SynthTask
+) -> list[tuple[TaskState, IncompleteReason | None]]:
+    """Read a directory against a manifest naming `tasks`, in manifest order then orphans."""
+    observed = observe_tasks(synth_manifest(tasks), observe_logs(log_dir))
+    return [(task.state, task.reason) for task in observed.tasks]
+
+
+@pytest.mark.parametrize(
+    ("log", "expected"),
+    [
+        pytest.param({}, (TaskState.COMPLETE, None), id="complete_clean"),
+        pytest.param(
+            {"completed": 7}, (TaskState.COMPLETE, None), id="complete_with_errors"
+        ),
+        pytest.param(
+            {"total": 6},
+            (TaskState.INCOMPLETE, IncompleteReason.SHORT),
+            id="complete_but_short",
+        ),
+        pytest.param(
+            {"status": "started"},
+            (TaskState.INCOMPLETE, IncompleteReason.STARTED),
+            id="started_never_finished",
+        ),
+        pytest.param(
+            {"invalidated": True},
+            (TaskState.INCOMPLETE, IncompleteReason.INVALIDATED),
+            id="invalidated",
+        ),
+        pytest.param(
+            {"error": "the provider went away"},
+            (TaskState.INCOMPLETE, IncompleteReason.ERROR),
+            id="error",
+        ),
+        pytest.param(
+            {"status": "cancelled", "total": 4},
+            (TaskState.INCOMPLETE, IncompleteReason.CANCELLED),
+            id="cancelled",
+        ),
+        pytest.param(
+            {"total": 0},
+            (TaskState.INCOMPLETE, IncompleteReason.NO_RESULTS),
+            id="no_results",
+        ),
+        pytest.param(None, (TaskState.MISSING, None), id="missing"),
+    ],
+)
+def test_states(
+    log: dict[str, Any] | None,
+    expected: tuple[TaskState, IncompleteReason | None],
+    tmp_path: Path,
+) -> None:
+    if log is not None:
+        write_log(tmp_path, TASK, **log)
+
+    assert observe(tmp_path, TASK) == [expected]
+
+
+def test_errored_samples_are_a_count_not_a_state(tmp_path: Path) -> None:
+    # worker mode forces fail_on_error=False, so a task finishes success
+    # carrying its errored samples: they are step 18's queue, not a reason to
+    # run the task again
+    write_log(tmp_path, TASK, completed=7)
+
+    observed = observe_tasks(synth_manifest([TASK]), observe_logs(tmp_path))
+
+    assert observed.tasks[0].state == TaskState.COMPLETE
+    assert observed.tasks[0].errored_samples == 3
+    assert observed.tasks[0].required_samples == 10
+
+
+def test_attempts_order_by_created(tmp_path: Path) -> None:
+    for created in (LATER, EARLIER, LATEST):
+        write_log(tmp_path, TASK, status="error", error="boom", created=created)
+
+    logs = observe_logs(tmp_path)
+
+    assert [attempt.created for attempt in logs.attempts[TASK.identifier]] == [
+        LATEST,
+        LATER,
+        EARLIER,
+    ]
+    current = logs.current(TASK.identifier)
+    assert current is not None and current.created == LATEST
+    assert len(logs.superseded(TASK.identifier)) == 2
+
+
+def test_the_latest_successful_attempt_wins(tmp_path: Path) -> None:
+    # deliberately not upstream's rule, which takes the newest attempt whatever
+    # its status: a re-run that errored must not displace a good result
+    write_log(tmp_path, TASK, created=EARLIER)
+    write_log(tmp_path, TASK, status="error", error="boom", created=LATER)
+
+    observed = observe_tasks(synth_manifest([TASK]), observe_logs(tmp_path))
+    task = observed.tasks[0]
+
+    assert task.state == TaskState.COMPLETE
+    assert task.current is not None and task.current.created == EARLIER
+    assert [attempt.created for attempt in task.superseded] == [LATER]
+
+
+def test_an_orphan_keeps_its_attempts(tmp_path: Path) -> None:
+    # an identifier the definition no longer names: the archive path, which
+    # needs the paths as well as the fact
+    removed = SynthTask("removed")
+    write_log(tmp_path, TASK)
+    write_log(tmp_path, removed, created=EARLIER)
+    write_log(tmp_path, removed, status="error", error="boom", created=LATER)
+
+    observed = observe_tasks(synth_manifest([TASK]), observe_logs(tmp_path))
+    orphan = observed.tasks[-1]
+
+    assert [task.state for task in observed.tasks] == [
+        TaskState.COMPLETE,
+        TaskState.ORPHANED,
+    ]
+    assert orphan.identifier == removed.identifier
+    assert orphan.task is None
+    assert orphan.key == "removed"
+    assert orphan.current is not None and len(orphan.superseded) == 1
+
+
+def test_an_unreadable_log_costs_one_log(tmp_path: Path) -> None:
+    # the journal's rule, applied to the other thing Steward reads on a
+    # schedule: a tend that raised on a half-written file is a tend that never
+    # ran
+    write_log(tmp_path, TASK)
+    broken = write_unreadable(tmp_path)
+
+    logs = observe_logs(tmp_path)
+
+    assert logs.count == 1
+    assert not logs.intact
+    assert len(logs.unreadable) == 1
+    assert logs.unreadable[0].location.endswith(broken.name)
+    assert logs.unreadable[0].reason
+    # and it reaches the caller that decides whether to complain
+    assert observe_tasks(synth_manifest([TASK]), logs).unreadable == logs.unreadable
+
+
+def test_a_mid_run_eval_has_no_header(tmp_path: Path) -> None:
+    # an .eval being written has no header.json; the reader falls back to
+    # _journal/start.json, which still carries everything the identifier needs
+    write_running_eval(tmp_path, TASK, created=LATER)
+
+    logs = observe_logs(tmp_path)
+    attempt = logs.current(TASK.identifier)
+
+    assert attempt is not None
+    assert attempt.identifier == TASK.identifier
+    assert attempt.status == "started"
+    assert attempt.created == LATER
+    assert attempt.total_samples == 0
+    assert observe(tmp_path, TASK) == [(TaskState.INCOMPLETE, IncompleteReason.STARTED)]
+
+
+def test_json_and_eval_agree_on_the_identifier(tmp_path: Path) -> None:
+    # the guard on the generator itself: cheap json fixtures are only worth
+    # anything if they identify the same way the format production writes does
+    write_log(tmp_path, TASK, created=EARLIER, format="json")
+    write_log(tmp_path, TASK, created=LATER, format="eval")
+
+    logs = observe_logs(tmp_path)
+
+    assert list(logs.attempts) == [TASK.identifier]
+    assert logs.count == 2
+
+
+def test_a_missing_directory_is_an_empty_observation(tmp_path: Path) -> None:
+    logs = observe_logs(tmp_path / "never-created")
+
+    assert logs.attempts == {}
+    assert logs.intact
+    assert observe(tmp_path / "never-created", TASK) == [(TaskState.MISSING, None)]
+
+
+@pytest.mark.parametrize(
+    ("manifest_epochs", "log_epochs", "expected"),
+    [
+        (1, 1, (TaskState.COMPLETE, None)),
+        (3, 1, (TaskState.INCOMPLETE, IncompleteReason.SHORT)),
+        (3, 3, (TaskState.COMPLETE, None)),
+    ],
+)
+def test_raising_epochs_makes_the_same_task_incomplete(
+    manifest_epochs: int,
+    log_epochs: int,
+    expected: tuple[TaskState, IncompleteReason | None],
+    tmp_path: Path,
+) -> None:
+    # epochs are held outside task_identifier deliberately, so this is the same
+    # task with more work to do rather than a new one (workflow.md §2.1)
+    task = SynthTask("probe", samples=10, epochs=manifest_epochs)
+    write_log(tmp_path, task, total=10 * log_epochs, epochs=log_epochs)
+
+    assert observe(tmp_path, task) == [expected]
+    assert len(observe_logs(tmp_path).attempts) == 1
+
+
+def test_a_directory_with_no_manifest_reads_fine(tmp_path: Path) -> None:
+    # logs-archive/ and the flow store key on identifier alone, which is why
+    # the manifest is not an argument to the read
+    archive = tmp_path / "logs-archive"
+    write_log(archive, TASK)
+    write_log(archive, SynthTask("removed"))
+
+    logs = observe_logs(archive)
+
+    assert isinstance(logs, ObservedLogs)
+    assert len(logs.attempts) == 2
+    assert logs.intact
+
+
+def test_scan_output_underneath_the_log_dir_is_not_a_log(tmp_path: Path) -> None:
+    # a log directory is flat by design and scans live beneath it, so the read
+    # is deliberately not recursive
+    write_log(tmp_path, TASK)
+    write_log(tmp_path / "scans" / "scan_id=abc", SynthTask("scanned"))
+
+    assert list(observe_logs(tmp_path).attempts) == [TASK.identifier]
+
+
+def test_summarize_states(tmp_path: Path) -> None:
+    done, running, never = SynthTask("done"), SynthTask("running"), SynthTask("never")
+    write_log(tmp_path, done)
+    write_log(tmp_path, running, status="started")
+    write_log(tmp_path, SynthTask("removed"))
+
+    observed = observe_tasks(
+        synth_manifest([done, running, never]), observe_logs(tmp_path)
+    )
+
+    assert summarize_states(observed.tasks) == {
+        "complete": 1,
+        "incomplete": 1,
+        "missing": 1,
+        "orphaned": 1,
+    }
