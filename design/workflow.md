@@ -151,7 +151,7 @@ Anomaly state — what is open, what was proposed, what was ruled and how — is
 
 ### `init` and version control
 
-The durability story assumes version control — `journal.jsonl` survives and is reviewable because it is committed — but nothing so far makes that happen. So `init` takes care of it:
+Where version control is available, `journal.jsonl` survives and is reviewable because it is committed — but nothing so far makes that happen, so `init` takes care of it. (On machines with no git or no network, the S3 sync described under *Syncing the workspace out* plays this role instead; `init` treats a missing git as an ordinary condition, not an error.)
 
 - **`git init` if, and only if, there is no repository already.** Detection walks up from the directory: a Steward workspace created inside an existing project (`evals/sweep-2026-08/` in a monorepo) belongs to that repository, and initialising a nested one there is a footgun rather than a convenience. Announce it when it happens, and allow `--no-git` for people who mean it.
 - **Write a local `.gitignore` either way**, listing `.steward/` and `logs/`. Scoping the rules to a nested `.gitignore` means Steward never edits a file it does not own — the parent project's own ignore rules stay untouched. Append missing entries idempotently if one already exists.
@@ -254,6 +254,49 @@ The agent schedules `steward tend` every ~10 minutes (see execution.md, *The rec
 4. **never blocks** — everything long-running is a detached child
 
 The agent reads the summary and decides whether anything warrants a human. Most tends warrant nothing and should produce no output beyond the file rewrite.
+
+## Syncing the workspace out
+
+Some runs happen on machines with no git, and sometimes no internet at all. The deployment worth designing for has exactly two pipes out: a localhost model endpoint that proxies, and an S3 bucket. On such a machine **the bucket is the only observability channel there is** — the alternative to syncing is shelling into the runner, which is precisely what an unattended overnight job should not require.
+
+So each tend mirrors the workspace's top-level files to object storage. Someone watching from another system reads `status.md` for progress, `anomalies.md` for accumulating caveats, `journal.jsonl` for what has been decided, and the definition and `policy.md` for what is being run and under what rules — without touching the runner.
+
+It also completes the picture in one place: when `log_dir` is in the same bucket, the remote reader has the logs and the run's state side by side, and `inspect view` works against the same prefix.
+
+### The policy is exclusionary
+
+The point of syncing is to carry out artifacts nobody predicted — an analysis an agent wrote, a note a human left, a report a scaffold generated. An allow-list defeats that by construction: anything unanticipated is silently left behind, which is the failure you notice last and regret most. So everything at the top level goes, minus a short deny list:
+
+| excluded | why |
+|---|---|
+| directories | `logs/` syncs by other means (or *is* the target); `.steward/` is disposable machine state |
+| dotfiles | keeps `.gitignore` out, and more importantly keeps a stray `.env` from being pushed to a bucket |
+| `AGENTS.md`, `CLAUDE.md` | agent bootstrap, static and meaningless to a remote reader |
+
+The `.env` case deserves the explicit rule rather than an incidental one. Syncing is an **outbound data flow**, and a workspace is a directory humans put things in.
+
+A pleasant consequence of exclusionary-by-default: if a rendered `journal.md` is ever added, or a report, or anything else, it flows out with no configuration change.
+
+### It must never raise
+
+The sync is advisory. It is important — on an air-gapped runner it is the whole window — but it is not on the critical path of producing results, and an eval must never fail because a bucket was briefly unreachable. So: bounded timeout, failures caught and recorded in the journal, tend proceeds regardless. This also keeps it consistent with *a tend spawns and reaps; it never does long work itself* — a handful of small files with a timeout, not an unbounded transfer.
+
+**A failed sync is invisible from the far end**, which is the awkward part: the remote reader sees a `status.md` that simply stopped changing, and cannot tell a stalled run from a broken pipe. That promotes the status timestamp from a nicety to load-bearing — a remote observer detects sync failure precisely by noticing the file is old. It should say its age plainly rather than merely carrying a timestamp to be compared.
+
+The sync is **outbound only**. Editing `policy.md` in the bucket does not change the run; two-way sync would need conflict resolution nobody wants for a monitoring channel.
+
+### What this means for git
+
+The durability argument earlier leans on version control, and these machines have none. Neither mechanism is universal, so they are alternatives rather than a stack:
+
+| environment | how the record leaves the machine |
+|---|---|
+| ordinary workstation | git, as described under *`init` and version control* |
+| air-gapped runner | this sync — the bucket is both durability and observability |
+
+`init` must therefore treat git as unavailable-and-fine rather than an error, and the sync target should default to the parent prefix of `log_dir` when that is remote, so the common case needs no configuration.
+
+One conclusion this does *not* overturn, though it dents its reasoning: *why there is no `journal.md`* argued partly that append-only JSONL diffs cleanly in git, serving the technical reader. That argument is worth nothing here. The decision still stands on reversibility — adding the render later is cheap, and the exclusionary sync would carry it out automatically — but if remote readers turn out to want a rendered journal, this is the environment that will ask for it.
 
 ## Resource allocation
 
@@ -614,7 +657,7 @@ This is also the argument for the whole workspace being git-friendly: the record
 3. **What does Steward propose, and how confidently?** The `proposal` field is what lets a human agree in one word, so it carries most of the value — and most of the risk, since a plausible wrong proposal is easier to accept than to check.
 4. **Who commits the journal?** `init` prepares the repository, but nothing in the workflow commits. If nobody does, the durability-through-git story quietly fails to happen. Candidates: the agent commits at milestones as a runbook instruction, `signoff` commits as its terminal act, or it stays the human's job. Auto-committing on every tend would collide with the user's own working tree, so the cadence matters as much as the owner.
 
-5. **`status.md` staleness.** With no agent tending and no cron, it silently goes stale. It should carry its own timestamp and say how old it is rather than reading as current.
+5. **`status.md` staleness.** With no agent tending and no cron, it silently goes stale. It should carry its own timestamp and say how old it is rather than reading as current. This matters more once the file is synced to a bucket: a remote reader cannot distinguish a stalled run from a broken sync by any other means, so the file's stated age is the only signal either has failed.
 6. **Multiple runs per directory.** Policy is clearly per-project; claims, manifests, and anomalies are per-run. Whether one directory hosts a series of runs (with `logs/` accumulating) or each run gets its own is unresolved, and it determines whether `journal.jsonl` is a project history or a run record.
 7. **How does a scanner result become an anomaly?** Scanners write values, not verdicts, so something has to decide which values mean trouble. Whether scanners are *declared* as anomaly-producing, whether Steward applies thresholds to their output, or whether it takes a purpose-built scanner to say so, is unresolved — and it gates the most valuable anomaly source in the design. Related: an investigation pass wants different scanners than the broad pass, and a definition supplies only one scanner configuration.
 
