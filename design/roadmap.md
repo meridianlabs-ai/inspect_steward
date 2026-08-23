@@ -10,9 +10,9 @@ Every other document works a topic to closure regardless of when it ships. This 
 
 **The upstream protocol has landed.** Capture mode, selection mode with its resume path, the error-handling overrides that make worker mode mean what it says, and the schema-v2 operational overrides (`log_dir`, `max_samples`).
 
-**The foundations are built.** `steward init` creates a real workspace; `journal.jsonl` is an append-only record that survives a torn write and an event type from a later version; and a log directory reads back as structured state against a manifest, with a fixture generator that produces one without running anything ([plan.md](plan.md) steps 1–4).
+**The foundations are built, decision included.** `steward init` creates a real workspace; `journal.jsonl` is an append-only record that survives a torn write and an event type from a later version; a log directory reads back as structured state against a manifest, with a fixture generator that produces one without running anything; and `reconcile` turns that state into the set of workers to spawn, in the order to spawn them ([plan.md](plan.md) steps 1–5).
 
-**Nothing runs yet.** There is no `launch`, no `tend`, no `reconcile`, no anomalies, no signoff. Not one process has been spawned by Steward. The runner is the project.
+**Nothing runs yet.** There is no `launch`, no `tend`, no in-flight record, no anomalies, no signoff. Not one process has been spawned by Steward. The runner is the project — but the component most likely to be subtly wrong is built and tested before anything can spawn.
 
 ## 2. The one thing to verify first — verified
 
@@ -41,7 +41,7 @@ The sequence matters more than the list, and one ordering choice is worth statin
 
 1. **The workspace and the journal.** *Done.* `init` for real — the directory, `.gitignore`, git detection, the placeholder definition — plus the append-only record and the fold that everything else reads state from.
 2. **The log-directory fixture generator and the observed-state reader.** *Done*, and built together because neither is testable without the other ([testing.md](testing.md)).
-3. **`reconcile`**, table-driven: spawn set, ceilings, spawn order, completeness, convergence.
+3. **`reconcile`**, table-driven: spawn set, ceilings, spawn order, completeness, convergence. *Done.*
 4. **Spawn and reap.** Selection documents, detached workers, the in-flight record with `intent` before spawn, liveness against control discovery, self-identifying workers for the invisible-worker window — plus Steward taking ownership of the **once-per-run pre-boundary work**, which is what makes a Flow or Hawk fan-out safe rather than merely wasteful.
 5. **The control channel client**, which `pause`, adjudication, and concurrency retuning all sit on.
 6. **The run claim**, short-lived, with staleness reaping.

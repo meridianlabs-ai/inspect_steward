@@ -84,13 +84,20 @@ Two findings, both recorded upstream (exec §12, items 6 and 11): `read_eval_log
 
 **Generator and reader were one step because they are mutually defining.** Neither is testable alone. What made the generator trustworthy is that one `_eval_spec()` builds the `EvalSpec` both the manifest row and every log derive from, so they agree on the identifier by construction rather than by a literal repeated twice.
 
-### Step 5 — `reconcile`
+### Step 5 — `reconcile` ✅ **done**
 
-**Delivers** the decision function. Pure, no clock, no processes.
+**Delivered** the decision function — `(manifest, inflight, observed, pool, paused) -> (actions, queued, summary)`, pure, and the pool ceiling beside it in `available_cores()`. `tests/schedule/`, 38 cases, 1.2s, no process ever started.
 
-- **Scope.** `(manifest, inflight, observed) -> (actions, summary)`. The spawn set; the pool ceiling; the task-major transposition of spawn order; the initial per-worker `max_samples` allocation; the action vocabulary every later step consumes. Refusing a manifest whose `identifier_version` does not match the running inspect, rather than reading its unmatchable identifiers as work not yet started (step 1).
-- **Refs.** exec §8.3, §8.1; sched §1.1, §2.1–2.5, §3.1–3.3.
-- **Done when** the table covers convergence, idempotence and every state from step 4 — and passes with no process ever started.
+Four decisions:
+
+- **The state enum *is* the action vocabulary.** Step 4's four states map one to one onto what to do — `complete` leave it, `incomplete` resume it, `missing` spawn it, `orphaned` report it — so `reconcile` has no classification logic of its own. Every incomplete task resumes whatever went wrong; there is deliberately no branch on the reason, because resume reuses exactly the samples worth keeping.
+- **A manifest from a different inspect raises rather than reports.** Unmatchable identifiers make every task read *missing* and every log read *orphaned*, so a finished sweep would re-run from scratch — and a summary carrying that looks entirely normal. A returned flag asks every future consumer to remember to check it; an exception cannot be forgotten. Step 12's `tend` catches it in one place and says `steward launch`.
+- **`archive` is not in the vocabulary yet.** Orphans are named in the summary and nothing acts on them. An action nobody can execute is a stub, and a tend computing twelve archive actions every ten minutes and running none of them is noise. It arrives with the launch gate (step 14) and signoff's sweep (step 21).
+- **The queue holds `SpawnWorker`s, not identifiers** — the same decision deferred, so *approved re-runs go first* (step 20) becomes a sort rather than a second code path.
+
+The crash-recovery case is the one worth naming: **a live worker and one that died mid-run leave exactly the same thing in the log directory** — a `started` log with no results. Only the in-flight record separates them, which is why `reconcile` takes it, and getting it wrong means either double-spawning a live task or never recovering a dead one. It has its own test.
+
+Two findings. **`max_samples` is not in the capture manifest**, so scheduling.md's *yield to whatever the definition set* silently cannot happen; recorded as part of upstream item 10, and `reconcile` reads the key anyway so the day it lands nothing else changes. And **§2.2's ceiling formula is the initial-launch case**: `min(cores, pending)` spawns nothing when fourteen of sixteen cores are busy and two tasks are waiting. The general form is `min(cores − running, pending)` — a wording fix, now in the doc and in a test.
 
 Sandbox division is *not* here; it is step 22, blocked upstream. `reconcile` divides one budget at this step and grows a second later.
 
@@ -424,7 +431,7 @@ Three rules follow, and they are the opposite of the instinct:
 
 **Which steps genuinely need real workers**: 1 (done), 6–9, 11, and parts of 12, 14, 20, and 23–25 — call it ten. Steps 2–5, 10, 13, 15–19, 21–22, and 26–28 are layer 1 or near it: synthesized state, pure functions, no eval runs at all. **Budget ~12 launches for a layer-2 step**, which is roughly 35s serial and under 10s with `-n auto`. Ten such steps lands the whole suite near five minutes serial and one to two minutes on CI. That is the line; a step that wants more should say why in its design pass.
 
-**Running total after step 4**: 127 offline tests, 22s with `-n auto`, essentially all of it step 1's eleven launches. Steps 2–4 added 56 tests and about 3s between them — which is the shape the budget predicted, and the reason the fixture generator was worth building before anything that consumes it.
+**Running total after step 5**: 165 offline tests, 22s with `-n auto` — the same 22s the suite took at step 1, because step 1's eleven launches are still essentially all of it. Steps 2–5 added 94 tests and about 4s between them, which is the shape the budget predicted and the reason the fixture generator was worth building before anything that consumes it.
 
 **Levers held in reserve**, in the order they become worth their complexity: cache captures across tests in a session (deterministic by the contract in configuration.md §4, so it is safe — but xdist gives each worker its own cache, so it pays off only once a single xdist worker runs many tests); share one worker run across several assertions; and, last, split the suite so layer 2 runs on a different cadence than layer 1.
 

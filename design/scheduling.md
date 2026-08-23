@@ -60,6 +60,8 @@ Every pending task gets a worker immediately, bounded only by a ceiling. There i
 
 The ceiling is **`min(cores, pending tasks)`**, overridable by the user. It follows directly from the process model: past core count, another process stops buying parallelism, because there is no core for it to run on. The queue exists for what is left over, and is frequently empty.
 
+**Written that way it is the initial-launch case, and a tend is not always one.** The ceiling bounds *concurrent workers*, so once some are already running the spawn count is `min(cores − running, pending)` — which reduces to the form above when nothing is running. Reading the shorter form literally on a later tend gets it backwards: fourteen running and two pending on a sixteen-core box gives `min(16, 2) = 2`, a ceiling already exceeded, so nothing spawns — when in fact two cores are free and both tasks should start.
+
 `eval_set()` carries the precedent for having a ceiling at all — `max_tasks` defaults to `max(len(models), 10)` — but its number does not transfer, because its tasks are coroutines sharing one interpreter and Steward's are processes:
 
 | | `eval_set` `max_tasks` | Steward's ceiling |
@@ -123,6 +125,8 @@ The first row is the surprise. Because `max_samples` is per *task*, a worker run
 Steward always writes an explicit `max_samples` into the selection, **defaulting to 40** and yielding to whatever the definition set. Explicit is the point: it is the difference between a `ResizableLimiter` the control channel can retune mid-eval and a `DynamicSampleLimiter` that tracks the model's connection controller and cannot be adjusted at all ([workflow.md](workflow.md), *Setting `max_samples` explicitly is what makes it a knob*).
 
 The cost is real and worth stating: leaving it unset would let sample concurrency ride the adaptive controller, which is genuinely better at finding the right level *within one process*. Steward gives that up because per-process adaptation cannot see the fleet, and coordination across workers is the thing only Steward can do.
+
+**"Yielding to whatever the definition set" does not work yet, and the reason is one missing field.** `eval_set()`'s capture records `log_dir`, `retry_attempts`, `limit`, `epochs`, `tags`, `metadata`, the error-handling trio, and `scanners` in the manifest's `options` — but not `max_samples`. So a definition asking for 60 gets Steward's 40, and nobody is told. It is the same one-line addition as `max_sandboxes` ([execution.md](execution.md), *Changes required*, item 10) and belongs beside it; until then Steward reads the key anyway, so the day it lands the definition's value simply starts winning.
 
 40 is a starting point, not an answer. It is deliberately modest, because the ratchet is asymmetric — raising a limit takes effect immediately, lowering one only stops new acquires and waits for in-flight samples to drain — so climbing from a low setpoint is cheap and descending from a high one is not. Users who know their eval sets it in the definition and Steward honours that.
 
