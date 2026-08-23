@@ -1,0 +1,10 @@
+# Steward workspace. Scoped to this directory so the parent project's own
+# ignore rules stay untouched.
+#
+# `logs/` and `logs-archive/` are ignored because .eval files are large
+# archives, outputs rather than source, and shared through a log store rather
+# than through git. Ignored is not the same as disposable: they are DURABLE,
+# and only `.steward/` is safe to delete.
+.steward/
+logs/
+logs-archive/

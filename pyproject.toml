@@ -82,7 +82,7 @@ dist = ["twine", "build"]
 [tool.hatch.build]
 only-packages = true
 exclude = ["docs/", "tests/"]
-artifacts = ["src/**/*.yaml", "src/**/*.md"]
+artifacts = ["src/**/*.yaml", "src/**/*.md", "src/**/*.txt"]
 
 [tool.hatch.version]
 source = "vcs"

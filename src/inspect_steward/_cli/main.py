@@ -2,6 +2,7 @@ import click
 
 from .. import __version__
 from .init import init_command
+from .runbook import runbook_command
 from .tasks import tasks_command
 
 
@@ -12,6 +13,7 @@ def steward() -> None:
 
 
 steward.add_command(init_command)
+steward.add_command(runbook_command)
 steward.add_command(tasks_command)
 
 

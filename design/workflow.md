@@ -133,7 +133,7 @@ If the definition evolves, an attestation has to name what it covered. It pins t
 
 | command | who calls it | what it does |
 |---|---|---|
-| `steward init [--type evalset\|flow] [--no-git]` | human | Scaffold the workspace: bootstrap `AGENTS.md`, a starter definition, `policy.md`, a repository and `.gitignore`. |
+| `steward init [DIR] [--type evalset\|flow\|hawk] [--no-git]` | human | Create the workspace: bootstrap `AGENTS.md`, a definition placeholder, `policy.md`, a repository, `.gitignore`, and the journal's first event. Only ever creates — a second run keeps what is there. |
 | `steward runbook` | agent | Emit the current mechanics — how to tend, what never to do. Ships with the package so it cannot go stale. |
 | `steward launch [--smoke] [--accept-archive] [--no-timer]` | agent | Capture the manifest, report the delta, commit it as desired state, spawn, **arm the tend timer or fail**, and **return**. The only verb that reads the definition, and therefore the amend path too — call it again after an edit. `--smoke` runs a bounded rehearsal first — see *Smoke first*. |
 | `steward tend` | **a timer, ~q10m**; an agent may also call it to force a turn | One turn of the loop: reconcile, spawn, reap, rewrite `status.md`, append to the journal, and report which scan results have landed and which look worth investigating. Never blocks. |
@@ -214,7 +214,11 @@ my-sweep/
 
 `logs-archive/` is a sibling rather than a child of `logs/` because log discovery recurses by default; nesting it would hide nothing. Both are gitignored for the same reason — `.eval` files are large archives, and outputs rather than source.
 
-`init --type evalset|flow` scaffolds a starter definition, so a new directory is runnable rather than a set of empty conventions. It should still accept an existing definition and merely wrap it — the contract is deliberately "any program culminating in one `eval_set()` call", and `init` should not imply otherwise.
+`init --type evalset|flow|hawk` places an **empty definition placeholder** — the type chooses the filename (`evalset.py`, `flow.yaml`, `hawk.yaml`) and nothing more. An earlier draft had it scaffold a starter definition "so a new directory is runnable rather than a set of empty conventions"; that lost, because a generated example is a guess at what is being measured and has to be deleted before it can be useful. What a genuinely good starting point contains is a question worth answering on its own, and until it is, a placeholder says where the definition goes without pretending to be one. `init` still accepts an existing definition and merely wraps it — the contract is deliberately "any program culminating in one `eval_set()` call", and `init` should not imply otherwise.
+
+**The definition is found by name, not by inspection.** `.gitignore`-style discovery over the three conventional filenames, rather than `detect_definition_type`, which reads the file: an *empty* `.yaml` validates as both a flow spec and a hawk config and would be reported ambiguous. Content-based detection happens at `tasks` and `launch`, by which point there is content.
+
+**`init` only ever creates.** Everything authored in a workspace is someone's work, so a second run reports each path as created or kept rather than restoring a pristine copy over it. `.gitignore` is the single exception and gains missing entries idempotently, because those entries are Steward's rather than the author's.
 
 ### 5.1 Three categories, and the one that matters
 
@@ -288,6 +292,7 @@ Event types, all sharing a `ts` (UTC ISO-8601) and `type` envelope:
 
 | type | carries | written by |
 |---|---|---|
+| `initialized` | the workspace exists, and which definition filename it expects | `init`, once |
 | `observation` | per-class instance counts, task states, concurrency settings in force, rate-limit episodes since the last tend | every tend |
 | `collected` | an agent has read and acted on everything up to this point — the high-water mark that makes "uncollected" computable | the agent, on attach and as it works |
 | `instance` | one new instance joining a class — sample or task ids, log location, error detail | as observed |
