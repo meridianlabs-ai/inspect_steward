@@ -23,8 +23,8 @@ A definition is executed once under `INSPECT_EVAL_SET_CAPTURE` to enumerate its 
 
 ## Where the open questions live
 
-Each document ends with its own numbered list. Roughly: configuration.md holds definition-boundary questions, execution.md holds process, recovery, and scanning questions, and workflow.md holds product, adjudication, and resource-allocation questions. Two answers live across documents — execution.md's *what "resolved" means* is answered in workflow.md, and workflow.md's resource levers depend on execution.md's overrides channel.
+Each document ends with its own numbered list. Roughly: configuration.md holds definition-boundary questions, execution.md holds process, recovery, and scanning questions, and workflow.md holds product, adjudication, and resource-allocation questions. Two answers live across documents — execution.md's *what "resolved" means* is answered in workflow.md, and workflow.md's smoke run depends on the selection overrides described in execution.md.
 
 ## Upstream dependencies
 
-execution.md's *Changes required in inspect_ai* is the single list of what Steward needs from Inspect. Items 1–3 have landed; the overrides channel, early pruning, public directory operations, and notification-outside-an-eval have not.
+execution.md's *Changes required in inspect_ai* is the single list of what Steward needs from Inspect. Items 1–4 have landed (capture, selection, error-handling overrides, operational overrides); early pruning, public directory operations, and notification-outside-an-eval have not.

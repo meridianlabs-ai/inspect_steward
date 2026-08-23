@@ -79,7 +79,7 @@ The interception protocol is environment-based so that any conforming program wo
 |---|---|
 | `INSPECT_EVAL_SET_CAPTURE` | Path to write the manifest. `eval_set()` resolves tasks, writes the manifest, and exits the process. |
 | `INSPECT_EVAL_SET_SELECTION` | Path to a selection document (`{version, eval_set_id, tasks: [{identifier, resume?}]}` — `inspect_ai._eval.eval_set_selection`). `eval_set()` runs only matching tasks, through `eval()`, and performs no eval-set orchestration. |
-| `INSPECT_EVAL_SET_OVERRIDES` | Whitelisted *operational* `eval_set()` kwarg overrides (`log_dir`, `display`, `log_level`, `retry_attempts`, `ctl_server`, ...) so Steward can control worker runtime behavior without editing definitions. Nothing on the whitelist can change what an eval means; the one option Steward does override semantically (`fail_on_error`) is applied by selection mode itself rather than routed through here. |
+| *(operational overrides)* | Carried in the selection document rather than a channel of their own: `log_dir` and `max_samples` let Steward control worker runtime behavior without editing definitions. Neither changes what an eval means, and neither participates in task identity. The one option Steward overrides semantically (`fail_on_error`) is applied by selection mode itself. |
 
 The protocol lives in **inspect_ai** — `eval_set()` honors these variables natively. Flow and Hawk then conform with zero code changes, `python evalset.py` works directly under Steward, and any future frontend gets Steward support for free.
 
@@ -252,7 +252,7 @@ The right shape is the one used for Flow: **Hawk's runner is itself a conforming
 1. Capture mode: `INSPECT_EVAL_SET_CAPTURE` honored by `eval_set()` — resolve, write manifest, exit the process. *Landed.*
 2. Selection mode: `INSPECT_EVAL_SET_SELECTION` honored at the boundary (Layer 1), plus drift errors. *Landed.*
 3. Automatic pruning in the resolver and the `@task` registry wrapper (Layer 2), including the placeholder task mechanism.
-4. Overrides channel: `INSPECT_EVAL_SET_OVERRIDES` for the whitelisted operational kwargs (including `log_dir`). Note the matching `INSPECT_EVAL_*` environment variables are click bindings on Inspect's own CLI only, which neither a raw script nor `flow run` goes through — so they are not a shortcut. The error-handling options this once had to carry (`fail_on_error`, `continue_on_fail`) are instead hard-coded by selection mode, and `retry_on_error` stays with the definition. *Selection-mode part landed.*
+4. Operational overrides: carried by the selection document (`log_dir`, `max_samples`) rather than a separate channel. An environment variable could not serve — `INSPECT_LOG_DIR` and its siblings are *defaults*, and `eval_set()` declares `log_dir` with no default, so a definition's explicit argument always wins. The error-handling options this once had to carry (`fail_on_error`, `continue_on_fail`) are hard-coded by selection mode instead, and `retry_on_error` stays with the definition. *Landed.*
 5. Public (or at least stable) exposure of `task_identifier` and the manifest models, which today live in `inspect_ai._eval.evalset`. *Partly landed:* `task_identifier` is public; the capture and selection models stay private as versioned wire formats.
 6. The single-`eval_set()`-call constraint (a second call under capture or selection is an error) is not yet enforced.
 

@@ -85,6 +85,7 @@ my-sweep/
   evalset.py         # authored — scaffolded by `init --type evalset` (or flow)
 
   journal.jsonl      # DURABLE — append-only event log; the source of truth
+  anomalies.md       # rendered — caveats that reached the final data
   status.md          # rendered by every tend
   logs/              # the flat eval-set log directory
 
@@ -101,7 +102,7 @@ The obvious split — "human-readable top level, machine-owned `.steward/`" — 
 |---|---|---|
 | **authored** | `policy.md`, `AGENTS.md`, the definition | the human's own work is gone |
 | **durable machine state** | `journal.jsonl` | the audit trail is gone |
-| **disposable machine state** | everything in `.steward/`, `status.md` | rebuilt on the next tend |
+| **disposable machine state** | everything in `.steward/`, `status.md`, `anomalies.md` | rebuilt on the next tend |
 
 `journal.jsonl` therefore sits at the top level, beside the authored files, where a file nobody can regenerate belongs. Nothing in `.steward/` is irreplaceable, which makes it safe to delete — a property worth more than a tidy listing.
 
@@ -135,7 +136,7 @@ Its co-writability is worth noting but not worth building for: the need for huma
 
 ### The one file Steward must never write
 
-`status.md` is generated, carries a header, and is expendable. `policy.md` is its counterexample, and the reason the line is worth drawing visibly in the directory listing: it is the human's own document, and the one thing Steward only ever *proposes* changes to.
+`status.md` and `anomalies.md` are generated, carry a header, and are expendable. `policy.md` is its counterexample, and the reason the line is worth drawing visibly in the directory listing: it is the human's own document, and the one thing Steward only ever *proposes* changes to.
 
 ### State is a fold over the journal
 
@@ -241,7 +242,7 @@ Not deleted the moment a smoke passes, though — reading a transcript or two af
 
 Nothing about a smoke needs special machinery. It is a run with a sample limit, a time cap, and a different log directory — launched, tended, and reported like any other, then recorded in the journal as part of the same story.
 
-**It does have one upstream dependency**, and it is the first concrete motivation for a change execution.md previously argued for only in the abstract. Redirecting a definition's `log_dir` needs the overrides channel (execution.md, *Changes required in inspect_ai*, item 4): Flow accepts `--log-dir`, but a raw `evalset.py` provides no way in, so `--smoke` against a plain script cannot send its logs anywhere but where the definition says. Until `INSPECT_EVAL_SET_OVERRIDES` exists, smoke works for Flow definitions and not for script ones.
+**Its one upstream dependency has landed.** Redirecting a definition's `log_dir` needs an override the definition cannot pre-empt, which no environment variable can supply — `eval_set()` declares `log_dir` with no default, so every definition passes it explicitly and `INSPECT_LOG_DIR` always loses. Selection documents now carry optional `log_dir` and `max_samples` overrides (execution.md, item 4), so smoke works for script definitions as well as Flow ones.
 
 ## The tend loop
 
@@ -441,7 +442,7 @@ Inspect's existing `notify()` call sites are human-in-the-loop moments — `requ
 
 Adjudication needs a data structure, not just a conversation. Without one, an unresolved problem is only ever a sentence in a summary — which means at a ten-minute cadence it gets re-discovered and re-reported on every tend, and nothing can tell whether it was already raised, already ruled on, or already fixed.
 
-An **anomaly** is anything observed in the run that may need a decision: a cluster of errored samples, samples that hit a token or time limit, a task that scored uniformly zero, a worker that died repeatedly, spend trending past its cap, a scan pass that failed, or — see below — something a scan pass *found*. It is not stored directly: anomalies are **folded out of `journal.jsonl`** (see *State is a fold over the journal*), cached in `.steward/`, and surfaced through `status.md`. Each tend appends what it observed and what it decided; current state is the replay.
+An **anomaly** is anything observed in the run that may need a decision: a cluster of errored samples, samples that hit a token or time limit, a task that scored uniformly zero, a worker that died repeatedly, spend trending past its cap, a scan pass that failed, or — see below — something a scan pass *found*. Samples cut short by an **operator** limit count — including those a tool-approval monitor terminated; samples that exhausted a limit their own task declared do not, since that is the measurement working as designed (see *`anomalies.md`*). It is not stored directly: anomalies are **folded out of `journal.jsonl`** (see *State is a fold over the journal*), cached in `.steward/`, and surfaced through `status.md`. Each tend appends what it observed and what it decided; current state is the replay.
 
 The fields that earn their place:
 
@@ -450,6 +451,7 @@ The fields that earn their place:
 | `id` | **stable across tends** — the whole point |
 | `class` | the grouping key; 47 samples become one decidable item |
 | `evidence` | sample ids, error text, time window, counts |
+| `effect` | how the final data is marked, when the ruling is *accept* — the field `anomalies.md` reports |
 | `state` | `open` → `investigating` → `proposed` → `ruled` → `resolved`, or `accepted` |
 | `proposal` | what Steward suggests, so the human can agree in one word |
 | `ruling` | the decision and its reasoning |
@@ -503,7 +505,7 @@ So **prior rulings for a class are attached to the anomaly** wherever it surface
 
 Steward can compute that no anomaly is open. Only a person can say **I accept these results**. Those are different claims, and conflating them is how a run ends up looking certified because a machine ran out of things to flag.
 
-`steward signoff` is that attestation: the terminal event in the journal, recording who, when, and what was true at the time — task counts, samples resolved, exceptions accepted.
+`steward signoff` is that attestation: the terminal event in the journal, recording who, when, and what was true at the time — task counts, samples resolved, exceptions accepted. Those accepted exceptions are exactly the contents of [`anomalies.md`](#anomaliesmd--the-caveats-that-reached-the-data), so signing off is also the moment the caveat list stops changing.
 
 Three properties it needs:
 
@@ -514,6 +516,61 @@ Three properties it needs:
 The result is a lifecycle with two distinct terminal states rather than one overloaded boolean: **resolved** (computed — nothing is open) and **signed off** (attested — a person accepted it). A run can be resolved and unsigned, or signed with exceptions, and those are usefully different things to report.
 
 
+
+## `anomalies.md` — the caveats that reached the data
+
+The journal answers *was this run conducted properly*. A different reader asks a different question — *what caveats apply to these numbers* — and that reader is writing up the results, or reading the write-up, and may never open the journal at all. They need something short, and they need it to be honest.
+
+**The filter is whether an anomaly left a mark on the final data**, and the state machine already draws that line:
+
+| resolution | in the data? | example |
+|---|---|---|
+| **resolved** | no | 47 rate-limit failures, invalidated, re-ran clean |
+| **accepted** | **yes** | 2 samples re-ran twice, still failed, accepted as errored |
+
+So `anomalies.md` is a fold over `journal.jsonl` filtered to `accepted` — no new state, no second record, and it cannot disagree with the journal because it is derived from it. A run with four hundred journal events may have three entries here, and that brevity is the point: it is quotable as footnotes.
+
+Each entry needs what a footnote needs, and one field the journal's ruling may not carry explicitly:
+
+- **what happened** — the class, in a sentence
+- **scope** — how many samples, which tasks and models
+- **why it was accepted** — the ruling's reasoning, verbatim
+- **who accepted it, and when**
+- **effect on the data** — the report-facing field: `n` excluded, or samples truncated at a limit, or an arm dropped
+
+That last one is what makes the file usable rather than merely accurate. A reader needs the denominator: *"998 of 1000 samples scored; 2 excluded — sandbox startup failures, accepted after two re-runs."*
+
+**Operator-limited samples belong here; task-limited samples emphatically do not.** A sample that exhausts the token, time, turn, or message limit its task declared has produced a *result* — the eval said "you get this much budget", and not finishing inside it is precisely what the measurement was for. Footnoting those would be reporting the eval's own design as a caveat.
+
+An **operator** limit is different in kind: it comes from outside the eval's design, imposed by whoever is running it rather than by the task author. That sample was cut short by something the task never specified, so its result does not measure what the task set out to measure. It is in the data, it may be biased, and nothing about it looks like a failure.
+
+Inspect draws exactly this line already, so detection is exact rather than heuristic. `EvalSampleLimitType` is `"context" | "time" | "working" | "message" | "token" | "turn" | "cost" | "operator" | "custom"` — `operator` is its own type, distinct from every task-declared limit. The rule is a field comparison, not a judgement:
+
+| `EvalSampleLimit.type` | verdict |
+|---|---|
+| `token`, `time`, `turn`, `message`, `working`, `cost`, `context` | a result — not an anomaly |
+| `operator` | **an anomaly** — raise it |
+
+That is worth noticing against open question 1, where classifying anomalies is otherwise the hard, unresolved part of this design. Here the taxonomy already exists upstream and Steward only has to read it.
+
+### Approval terminations
+
+A sample killed by a tool-approval monitor arrives as `type="operator"` too — `TerminateSampleError` is caught and recorded as `EvalSampleLimit(type="operator", limit=1)`, the same shape as a bridge or manual termination. That is convenient: they need no special handling, falling out of the operator-limit rule above and into `anomalies.md` like any other externally-truncated sample.
+
+**No attempt is made to decide whether a termination is a defect or a finding.** For an eval whose subject *is* the approval system, a caveat entry reads oddly — the monitor firing is the result. That discordance is left to the people running such evals, because the alternative is a policy question asked of every project to serve a rare one.
+
+**Distinguishing terminations from other operator limits is the awkward part**, and it is a cost question rather than a possibility question. Two signals exist, both in the transcript:
+
+| signal | quality |
+|---|---|
+| `SampleLimitEvent.message` == `"Tool call approver requested termination."` | works, but discriminating on an English string is fragile |
+| **`ApprovalEvent` with `decision == "terminate"`** | structured, and carries `approver`, the blocked `call`, and `explanation` |
+
+Both require reading events, which is what we want scanners to avoid — messages where possible, events only when necessary. And the reason is *already computed and then discarded*: `TerminateSampleError.reason` reaches the transcript's `SampleLimitEvent` but is dropped when the sample's own `EvalSampleLimit` is built, which carries only `type` and a numeric `limit`. `EvalSampleSummary.limit` is thinner still — the type name as a bare string.
+
+So the cheap fix is upstream and small: carry the reason onto `EvalSampleLimit`, and surface it in the summary. Detection then happens at the **summary** level, cheaper than messages, and Steward reads events only when investigating a specific sample — which is where reading events is affordable anyway.
+
+The alternative considered was a side-channel: approvers appending to a `terminations.jsonl` in the working directory. It was rejected as a second source of truth living outside the log, in a design that otherwise insists the log directory is ground truth. Re-runs are the concrete failure — invalidate a sample, run it again, and the file holds both attempts with nothing marking which is live, a problem the log does not have. Ownership across concurrent workers sharing a directory is unresolved, and a free-form format is one Steward cannot consume, so it would become an unversioned schema every approver author had to implement.
 
 ## Adjudication is a conversation, and it has rules
 
