@@ -22,13 +22,15 @@ Two markers appear:
 
 Gates **M2**, **M3**, **M4** are [roadmap.md](roadmap.md) §3's milestones, located precisely. **Ship** is not pinned to one of them here; the only thing this document fixes about it is that it falls before §8.
 
+Every step's design pass also has a **test budget** to respect — see §10, which is measured rather than guessed and is the one constraint that binds across all thirty-two steps at once.
+
 ## 2. Foundations — nothing spawns a process yet
 
 Five steps that establish state, identity, and the decision function. None of them builds process machinery, which is why they are first: the component most likely to be subtly wrong is the cheapest one here to test exhaustively, and debugging it through a live fleet would be miserable.
 
 ### Step 1 — Identifier correlation ✅ **done**
 
-**Delivered** the verified assumption everything downstream inherits: a landed `.eval` maps back to a manifest task. `tests/evalset/test_selection.py` — six cases, each one worth its subprocess: two dimensional, three definition types, concurrency, resume.
+**Delivered** the verified assumption everything downstream inherits: a landed `.eval` maps back to a manifest task. `tests/evalset/test_selection.py` — five cases offline plus one behind `network`, eleven process launches, 33s serial and under 10s with `-n auto` (§10).
 
 The property holds. What sharpened during the work is *which half* needed verifying: a worker matches its selection by recomputing identifiers from its own resolved tasks, so a selection that runs at all already proves capture↔resolve agreement across processes. The unexercised half is resolve↔**log** — the half `reconcile` reads — and upstream touches it only when validating a resume target.
 
@@ -383,7 +385,33 @@ Six ordering choices are load-bearing. The rest of the sequence is just dependen
 
 Two steps are placed by external dependency rather than by design, and both are called out where they appear: **sandbox division (22)** would sit across steps 5 and 6 if upstream items 9 and 10 existed, and **smoke (27)** would sit beside launch if item 8 did.
 
-## 10. What this plan does not decide
+## 10. The test budget
+
+Thirty-two steps each adding "just a few end-to-end tests" is how a suite reaches twenty minutes, and by then no one runs it before pushing. Step 1 measured what the cost actually is, so the rest of the plan can be held to a number instead of an intention.
+
+**The unit of cost is the process launch, not the task and not the sample.** Measured on this machine:
+
+| | |
+|---|---|
+| bare interpreter | 0.03s |
+| `import inspect_ai` | 1.3s |
+| capture — 2 tasks / 15 tasks | 2.50s / **2.31s** |
+| one worker — 2 tasks / 15 tasks | 3.18s / **3.43s** |
+| four workers, concurrently | 3.32s |
+
+Fifteen tasks capture *faster* than two; thirteen extra tasks in a worker cost a quarter-second; four concurrent workers cost what one does. **Roughly 3s per launch, and the eval inside it is free.** Half the 3s is importing inspect_ai, which no amount of fixture care will avoid.
+
+Three rules follow, and they are the opposite of the instinct:
+
+1. **Count launches, not tests.** Step 1 runs five non-network cases in 33s because it launches eleven processes. Cutting a *test* saves nothing if it does not cut a launch; folding two assertions into one run saves 3s every time.
+2. **Put more into each definition, not more definitions.** Step 1's dimensional fixture covers fifteen identity fields in one worker. Splitting it into fifteen focused tests would have been the same coverage for 45× the cost, and the shared-name construction that makes a dropped field collide is only possible *because* they share a run.
+3. **Reach for a subprocess only when the process boundary is the subject.** [testing.md](testing.md) §1's layer 1 — `reconcile` over a synthesized log directory — is microseconds, and it is where most of this plan's correctness lives.
+
+**Which steps genuinely need real workers**: 1 (done), 6–9, 11, and parts of 12, 14, 20, and 23–25 — call it ten. Steps 2–5, 10, 13, 15–19, 21–22, and 26–28 are layer 1 or near it: synthesized state, pure functions, no eval runs at all. **Budget ~12 launches for a layer-2 step**, which is roughly 35s serial and under 10s with `-n auto`. Ten such steps lands the whole suite near five minutes serial and one to two minutes on CI. That is the line; a step that wants more should say why in its design pass.
+
+**Levers held in reserve**, in the order they become worth their complexity: cache captures across tests in a session (deterministic by the contract in configuration.md §4, so it is safe — but xdist gives each worker its own cache, so it pays off only once a single xdist worker runs many tests); share one worker run across several assertions; and, last, split the suite so layer 2 runs on a different cadence than layer 1.
+
+## 11. What this plan does not decide
 
 - **The internals of any step.** Each gets a design pass, starting from its **Refs** line.
 - **Sizing.** [roadmap.md](roadmap.md) §3 declines to attempt dates and this document does too.

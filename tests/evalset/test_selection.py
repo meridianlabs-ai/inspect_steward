@@ -84,19 +84,13 @@ def test_identifier_correlates_across_identity_dimensions(
 @pytest.mark.parametrize(
     "fixture",
     [
-        "simple_evalset.py",
         "flow_spec.py",
         pytest.param("hawk_config.yaml", marks=[requires_hawk, pytest.mark.network]),
     ],
 )
 def test_identifier_correlates_by_definition_type(fixture: str, tmp_path: Path) -> None:
-    # deliberately run from a *different* directory than the one the definition
-    # was captured in. A task's source file is part of its identity and inspect
-    # warns that a worker running from elsewhere may not match, but Steward is
-    # immune by construction: `definition_command` resolves the definition
-    # absolutely, and flow anchors task files to the spec rather than to the
-    # process. Folding that into the breadth test costs nothing and means one
-    # run per definition type rather than two.
+    # only the frontends: plain `eval_set()` definitions are covered by every
+    # other test in this file, and a test here costs two interpreter startups
     other = tmp_path / "elsewhere"
     other.mkdir()
     manifest, logs = run_whole_definition(fixture, tmp_path, cwd=other)
@@ -105,15 +99,22 @@ def test_identifier_correlates_by_definition_type(fixture: str, tmp_path: Path) 
 
 def test_identifier_correlates_across_concurrent_workers(tmp_path: Path) -> None:
     # the production shape: one task per worker, all of them writing into one
-    # flat directory at the same time
+    # flat directory at the same time. Four workers cost the same wall time as
+    # one, so this also carries the working-directory case: a task's source file
+    # is part of its identity and inspect warns that a worker running from
+    # elsewhere may not match, but Steward is immune by construction --
+    # `definition_command` resolves the definition absolutely. If that stops
+    # being true, correlation breaks silently and this fails.
     definition = FIXTURES / "sweep_evalset.py"
     manifest = read_eval_set(definition, cwd=tmp_path)
     logs = tmp_path / "logs"
+    other = tmp_path / "elsewhere"
+    other.mkdir()
 
     results = run_workers(
         definition,
         [selection([task.identifier], logs) for task in manifest.tasks],
-        cwd=tmp_path,
+        cwd=other,
     )
     assert all(result.ok for result in results), [r.stdout for r in results if not r.ok]
 
