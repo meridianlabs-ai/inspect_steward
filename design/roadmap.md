@@ -35,32 +35,33 @@ The milestones name *capabilities*; [plan.md](plan.md) decomposes them into twen
 
 The sequence matters more than the list, and one ordering choice is worth stating: **`reconcile` is built and exhaustively tested before anything spawns a process.** It is a pure function over a synthesized log directory, it is the component most likely to be subtly wrong, and it is the cheapest thing here to test. Building the process machinery first would mean debugging scheduling logic through a fleet.
 
-1. **The workspace.** `init` for real — the directory, `.gitignore`, git detection, the scaffolded definition. Everything else writes here.
-2. **The log-directory fixture generator**, which is test infrastructure and belongs before the thing it tests ([testing.md](testing.md)).
+1. **The workspace and the journal.** `init` for real — the directory, `.gitignore`, git detection, the scaffolded definition — plus the append-only record and the fold that everything else reads state from.
+2. **The log-directory fixture generator and the observed-state reader**, built together because neither is testable without the other ([testing.md](testing.md)).
 3. **`reconcile`**, table-driven: spawn set, ceilings, spawn order, completeness, convergence.
-4. **Spawn and reap.** Selection documents, detached workers, the in-flight record with `intent` before spawn, liveness against control discovery, self-identifying workers for the invisible-worker window.
-5. **The run claim**, short-lived, with staleness reaping.
-6. **`status` and `tend`** as one function with two dispositions.
+4. **Spawn and reap.** Selection documents, detached workers, the in-flight record with `intent` before spawn, liveness against control discovery, self-identifying workers for the invisible-worker window — plus Steward taking ownership of the **once-per-run pre-boundary work**, which is what makes a Flow or Hawk fan-out safe rather than merely wasteful.
+5. **The control channel client**, which `pause`, adjudication, and concurrency retuning all sit on.
+6. **The run claim**, short-lived, with staleness reaping.
 7. **Fault injection** over the above — the recovery claims are load-bearing and unobservable on a good run.
+8. **`status` and `tend`** as one function with two dispositions, writing `status.md`.
+9. **The timer**, and then **`launch`** — in that order, because launch is *capture, commit, arm, tend* and therefore a composition of the two items before it rather than a peer of either.
 
 What M2 deliberately lacks: it does not notice anything. Tasks run, logs land, a human reads `status`. Errors are visible as counts, not as anomalies with a lifecycle.
 
 ### 3.2 M3 — walk away
 
-1. **The journal** and the fold, including per-tend `observation` events.
-2. **The timer**, and `launch` arming it or refusing.
-3. **Anomalies** — classes from exception type plus raising frame, the state machine, proposals spanning classes, precedent.
-4. **Notification**, with the four kinds. Depends on **upstream item 7** or on Steward carrying Apprise itself.
-5. **Adjudication actions** — `invalidate_samples` plus respawn-with-`resume`.
-6. **`signoff`**, `anomalies.md`, the gate latch, and curation into `logs-archive/`.
-7. **The tend summary and its queue**, which is the agent's whole surface at this milestone. The **runbook is deliberately not written here** — it is a set of rules for operating machinery, and the rules are discovered by building the steps above rather than guessed ahead of them ([plan.md](plan.md) §7).
-8. **The sync**, `steward.log`, and the two ages.
+1. **The tend summary and its queue**, which is the agent's whole surface at this milestone.
+2. **The tuning policy** — the growth signal, the envelope, the asymmetric ratchet. Only the judgement is here; the mechanism landed in M2 because `pause` and adjudication needed it anyway.
+3. **`steward.log` and the sync**, with the two ages.
+4. **Anomalies** — the three levels (instance, class computed from exception type plus raising frame, proposal grouped across classes), the state machine, per-class ruling records, precedent. One data model, so it is built at once.
+5. **Notification**, with the four kinds. Depends on **upstream item 7** or on Steward carrying Apprise itself.
+6. **Adjudication actions** — `invalidate_samples` plus respawn-with-`resume`.
+7. **`signoff`**, `anomalies.md`, the gate latch, and curation into `logs-archive/`.
 
-Concurrency tuning splits across this boundary: the control-channel mechanism lands in M2, because `pause` and adjudication need it anyway, and the tuning *policy* lands here, because the growth signal arrives in the tend summary.
+The **runbook is deliberately not written here** — it is a set of rules for operating machinery, and the rules are discovered by building the items above rather than guessed ahead of them ([plan.md](plan.md) §7).
 
 ### 3.3 M4 — close the loop
 
-Scanning is the largest piece and the most valuable: a third boundary mode, Steward as single writer, the distribution reporting that makes results triageable, and `scanning.md` / `analysis.md` mirrored into the log directory. The smoke gate and store publication are small by comparison. Note archiving is **not** here — it moved into M3 with signoff, since curation is part of the attestation rather than a later tidy-up.
+Scanning is the largest piece and the most valuable — three steps in [plan.md](plan.md), because the boundary mode, the scheduling of passes, and the distribution reporting have different dependencies and different failure modes: a third boundary mode with Steward as single writer, scan passes as detached children a tend spawns and reaps, the distribution reporting that makes results triageable, and `scanning.md` / `analysis.md` mirrored into the log directory. The smoke gate and store publication are small by comparison. Note archiving is **not** here — it moved into M3 with signoff, since curation is part of the attestation rather than a later tidy-up.
 
 ## 4. What is deferred, and why
 
@@ -69,6 +70,7 @@ Scanning is the largest piece and the most valuable: a third boundary mode, Stew
 | **In-flight requeue** | one of the adjudicated tier's two mechanisms, and the other reaches the same samples. It saves a respawn, not a decision. | someone measures the respawn cost and minds it |
 | **The flow store read half** | a cache. It makes a re-launch cheaper and changes no result. | reuse across projects becomes common |
 | **Log cleanup *during* a run** | Steward never deletes, so `cleanup_older_eval_logs` is never called: superseded logs simply accumulate while the run is live, and `latest_completed_task_eval_logs` semantics pick the right one at read time. Curation happens **at signoff** instead ([workflow.md](workflow.md), *Curation is part of the attestation too*), which is the only moment "superseded" is unambiguous. | — |
+| **Steward inside a Hawk pod** (Hawk Stage 2) | **deferred past ship.** Hawk *local* is not separate work — a Hawk config is a definition type, so Stage 1 falls out of the milestones above. Stage 2 is architecture rather than configuration (a blocking launch, an in-pod driver, a relay RPC surface) and it is the one piece needing a change on someone else's roadmap. | the pod is where campaigns actually run |
 | **A TUI** | `status` on a repeat, over the same surface. Pleasant, not load-bearing. | someone watches runs often enough to want it |
 | **Cross-host runs** | needs worker discovery and a real lease with a fencing token — a different architecture, not a feature | a sweep outgrows one machine |
 | **A stateful supervisor** | the timer covers the mechanical floor without any of the wedging problems | measured slot idle a timer cannot absorb |
@@ -95,8 +97,8 @@ Scanning is the largest piece and the most valuable: a third boundary mode, Stew
 [hawk.md](hawk.md) already stages itself, and the stages line up rather than competing:
 
 - **Hawk Stage 0** — read and run a Hawk config. Done, and it is part of M1.
-- **Hawk Stage 1** — run a Hawk config outside the pod. This is **not separate work**: it falls out of M2 and M3, because a Hawk config is a definition type. Its one Hawk-specific obligation is the pre-boundary work that must not be per-worker, which bites the moment Steward spawns a second worker itself.
-- **Hawk Stage 2** — Steward inside the pod. The only stage needing a change on Hawk's side (one call site), and the only one that adds architecture — the in-pod timer and the relay RPC surface. It sits after M3, since it is a deployment of the loop rather than part of building it.
+- **Hawk Stage 1** — run a Hawk config outside the pod. This is **not separate work**: it falls out of M2 and M3, because a Hawk config is a definition type. Its one obligation is the pre-boundary work that must not be per-worker, which bites the moment Steward spawns a second worker itself — and which is **not** a Hawk step. Flow hits the same wall wastefully where Hawk hits it unsafely, so it is one general mechanism, built early in M2 ([plan.md](plan.md) step 7).
+- **Hawk Stage 2** — Steward inside the pod. The only stage needing a change on Hawk's side (one call site), and the only one that adds architecture — the blocking launch, the in-pod driver, and the relay RPC surface. **It lands after ship**, not merely after M3: nothing above waits on it, and the three stages before it de-risk it ([plan.md](plan.md) §8).
 
 ## 7. What "done" means for the design
 
