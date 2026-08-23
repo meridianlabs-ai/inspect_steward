@@ -48,16 +48,19 @@ class ManifestVersionError(Exception):
 
 @dataclass(frozen=True)
 class Pool:
-    """The worker pool's two settings.
+    """What the operator asked of the worker pool.
 
-    They are one budget spent twice — `workers × max_samples` is the fleet's total concurrent samples — and Steward owns both factors, which is what makes its load on a provider deterministic rather than emergent (scheduling.md, *Total concurrency is one budget spent twice*).
+    Its two knobs are one budget spent twice — `workers × max_samples` is the fleet's total concurrent samples — and Steward owns both factors, which is what makes its load on a provider deterministic rather than emergent (scheduling.md, *Total concurrency is one budget spent twice*).
     """
 
     max_workers: int = DEFAULT_MAX_WORKERS
-    """Ceiling on concurrent workers."""
+    """Ceiling on concurrent workers. Steward's alone: a definition has nothing to say about it, since worker mode runs one task per process and `max_tasks` is moot."""
 
-    max_samples: int = DEFAULT_MAX_SAMPLES
-    """Sample concurrency per worker, unless the definition asked for something else."""
+    max_samples: int | None = None
+    """Sample concurrency per worker, or `None` for no operator preference.
+
+    `None` rather than the default itself, because the two are not the same claim: *no preference* yields to whatever the definition asked for, and a number is an instruction that does not. See `resolve_max_samples`.
+    """
 
 
 @dataclass(frozen=True)
@@ -200,7 +203,7 @@ def reconcile(
         )
 
     running = inflight.running_identifiers
-    max_samples = _max_samples(manifest, pool)
+    max_samples = resolve_max_samples(manifest, pool)
 
     pending = [
         _spawn(observation, max_samples)
@@ -278,14 +281,36 @@ def _spawn(observation: TaskObservation, max_samples: int) -> SpawnWorker:
     )
 
 
-def _max_samples(manifest: Manifest, pool: Pool) -> int:
-    """Sample concurrency for a worker, yielding to what the definition asked for.
+def resolve_max_samples(manifest: Manifest, pool: Pool) -> int:
+    """Sample concurrency for a worker: three sources, most specific first.
 
-    The definition wins because how many samples a task should run at once is a property of the eval. Capture does not record it today, so this reads a key that is never present — deliberately, so that the day it lands nothing else has to change. See execution.md, *Changes required in inspect_ai*.
+    | | |
+    |---|---|
+    | the **operator's** `Pool.max_samples` | somebody typed a number for this run, so nothing outranks it |
+    | the **definition's** `max_samples` | how many samples a task should run at once is a property of the eval, and its author knows the workload |
+    | `DEFAULT_MAX_SAMPLES` | nobody expressed a preference |
+
+    The distinction between the first two is why `Pool.max_samples` is optional rather than pre-filled with the default. Collapsing them gets it wrong in one direction or the other — Steward's own fallback silently outranking a definition, or an explicit operator instruction silently losing to one — and neither is visible from the resulting number.
+
+    Whichever wins is written into the selection explicitly. That is a starting point rather than a ceiling: step 16's tuning changes where a worker ends up, not where it begins.
+
+    Args:
+        manifest: Captured desired state.
+        pool: What the operator asked for.
+
+    Returns:
+        Sample concurrency for every worker this reconcile spawns.
     """
+    if pool.max_samples is not None:
+        return pool.max_samples
+
+    # options is free-form and deserialized, so a manifest written by another
+    # version can carry anything here; a definition that set nothing carries None
     requested: Any = manifest.options.get("max_samples")
     return (
-        requested if isinstance(requested, int) and requested > 0 else pool.max_samples
+        requested
+        if isinstance(requested, int) and requested > 0
+        else DEFAULT_MAX_SAMPLES
     )
 
 

@@ -126,13 +126,23 @@ The first row is the surprise. Because `max_samples` is per *task*, a worker run
 
 ### 3.2 `max_samples` — set explicitly, so it can be steered
 
-Steward always writes an explicit `max_samples` into the selection, **defaulting to 40** and yielding to whatever the definition set. Explicit is the point: it is the difference between a `ResizableLimiter` the control channel can retune mid-eval and a `DynamicSampleLimiter` that tracks the model's connection controller and cannot be adjusted at all ([workflow.md](workflow.md), *Setting `max_samples` explicitly is what makes it a knob*).
+Steward always writes an explicit `max_samples` into the selection. Explicit is the point: it is the difference between a `ResizableLimiter` the control channel can retune mid-eval and a `DynamicSampleLimiter` that tracks the model's connection controller and cannot be adjusted at all ([workflow.md](workflow.md), *Setting `max_samples` explicitly is what makes it a knob*).
 
 The cost is real and worth stating: leaving it unset would let sample concurrency ride the adaptive controller, which is genuinely better at finding the right level *within one process*. Steward gives that up because per-process adaptation cannot see the fleet, and coordination across workers is the thing only Steward can do.
 
-**"Yielding to whatever the definition set" does not work yet, and the reason is one missing field.** `eval_set()`'s capture records `log_dir`, `retry_attempts`, `limit`, `epochs`, `tags`, `metadata`, the error-handling trio, and `scanners` in the manifest's `options` — but not `max_samples`. So a definition asking for 60 gets Steward's 40, and nobody is told. It is the same one-line addition as `max_sandboxes` ([execution.md](execution.md), *Changes required*, item 10) and belongs beside it; until then Steward reads the key anyway, so the day it lands the definition's value simply starts winning.
+**Three parties can have an opinion about the number, and they rank by how specifically they asked:**
 
-40 is a starting point, not an answer. It is deliberately modest, because the ratchet is asymmetric — raising a limit takes effect immediately, lowering one only stops new acquires and waits for in-flight samples to drain — so climbing from a low setpoint is cheap and descending from a high one is not. Users who know their eval sets it in the definition and Steward honours that.
+| | |
+|---|---|
+| the **operator**, on the launch that is happening now | wins outright — somebody typed it |
+| the **definition** | next: how many samples a task should run at once is a property of the eval, and its author knows the workload |
+| **40** | nobody expressed a preference |
+
+The middle row is the one that needed something from upstream, and it now has it: `eval_set()`'s capture records `max_samples` in the manifest's `options`, so a definition asking for 60 gets 60 instead of being silently replaced by Steward's 40. Before that field existed there was no read-side workaround either — a landed log records only the *effective* value, which is whatever Steward imposed.
+
+The middle and bottom rows have to stay distinguishable, which is why Steward's default is not simply the initial value of the operator's setting. Collapse them and one of two things goes silently wrong: Steward's own fallback outranks a definition, or an explicit `--max-samples` loses to one. Neither is visible from the number that comes out.
+
+Whoever wins, 40 is a starting point and not an answer. It is deliberately modest because the ratchet is asymmetric — raising a limit takes effect immediately, lowering one only stops new acquires and waits for in-flight samples to drain — so climbing from a low setpoint is cheap and descending from a high one is not.
 
 ### 3.3 `max_connections` — left adaptive, because AIMD coordinates itself
 

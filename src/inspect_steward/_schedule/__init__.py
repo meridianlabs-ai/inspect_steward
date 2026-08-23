@@ -11,6 +11,7 @@ from .reconcile import (
     SpawnWorker,
     Summary,
     reconcile,
+    resolve_max_samples,
 )
 
 __all__ = [
@@ -26,4 +27,5 @@ __all__ = [
     "SpawnWorker",
     "Summary",
     "reconcile",
+    "resolve_max_samples",
 ]

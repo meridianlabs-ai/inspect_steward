@@ -308,12 +308,24 @@ def test_paused_still_reaps() -> None:
 @pytest.mark.parametrize(
     ("options", "pool", "expected"),
     [
-        pytest.param({}, POOL, DEFAULT_MAX_SAMPLES, id="default"),
-        pytest.param({}, Pool(8, max_samples=12), 12, id="pool_override"),
-        # not recorded by capture today; read anyway so the day it lands the
-        # definition's value simply starts winning
-        pytest.param({"max_samples": 60}, POOL, 60, id="the_definition_wins"),
+        pytest.param({}, POOL, DEFAULT_MAX_SAMPLES, id="nobody_asked"),
+        # the definition's author knows the workload, so it beats Steward's
+        # fallback — which is why Pool.max_samples defaults to None rather
+        # than to DEFAULT_MAX_SAMPLES
+        pytest.param({"max_samples": 60}, POOL, 60, id="the_definition_beats_default"),
         pytest.param({"max_samples": None}, POOL, DEFAULT_MAX_SAMPLES, id="unset"),
+        pytest.param({}, Pool(max_samples=12), 12, id="the_operator_asked"),
+        # and someone who typed a number for this run outranks the definition
+        pytest.param(
+            {"max_samples": 60},
+            Pool(max_samples=12),
+            12,
+            id="the_operator_beats_the_definition",
+        ),
+        # a manifest from another version could carry anything under this key
+        pytest.param(
+            {"max_samples": "lots"}, POOL, DEFAULT_MAX_SAMPLES, id="nonsense_ignored"
+        ),
     ],
 )
 def test_max_samples(options: dict[str, Any], pool: Pool, expected: int) -> None:
