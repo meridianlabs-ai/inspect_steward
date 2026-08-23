@@ -341,7 +341,7 @@ The directory is "eval-set conforming" throughout — it has the same files with
 
 A task can end up with more than one log: a first attempt that failed, then a resumed attempt. That is the same situation `eval_set()` produces on retry, and Steward resolves it the same way — the latest successful log for an identifier wins, and the final sweep clears superseded failed logs to the archive rather than deleting them. Steward keeps them in place until then, because the attempt history is exactly the diagnostic material it exists to reason about.
 
-## 6. Recovery: retry, requeue, adjudication
+## 6. Recovery: one automatic tier, then adjudication
 
 The model rests on **`fail_on_error=False`**: sample errors never mark a task failed, so a task that reaches the end of its dataset finishes `status="success"` whatever residue of errored samples it carries. Because the whole design depends on it, worker mode **hard-codes it** rather than routing it through configuration — a definition asking for fail-fast is asking for a completion decision that belongs to the runner. `continue_on_fail` needs no override at all: it is moot once `fail_on_error` is `False` (`_should_eval_fail` returns `False`, so the mid-run abort it guards can never fire).
 
@@ -351,30 +351,30 @@ The point of forcing `fail_on_error=False` is to convert a binary task outcome i
 
 The definition's own `fail_on_error`, `continue_on_fail`, and `retry_on_error` are recorded in the capture manifest's `options`, so Steward can see what it is honouring and what it is overriding rather than having to guess.
 
-Recovery therefore happens at three tiers, in increasing order of how much judgement each requires. Whole-task failure is not a fourth: it lands in tier 3 with the unit enlarged, since nothing at that level is retried without a ruling ([scheduling.md](scheduling.md), *Failure is adjudicated, not retried*).
+Recovery therefore happens at two tiers — one automatic, one adjudicated with two mechanisms. Whole-task failure is not a fourth: it lands in tier 3 with the unit enlarged, since nothing at that level is retried without a ruling ([scheduling.md](scheduling.md), *Failure is adjudicated, not retried*).
 
-### 6.1 Tier 1 — in-eval sample retry (no judgement)
+### 6.1 The automatic tier: in-eval sample retry
 
 `retry_on_error` handles transient sample failures inside the worker, with no supervision, at whatever count the definition set. Two properties matter:
 
 - **Retries do not hold a concurrency slot.** Inspect performs the retry recursion deliberately outside the sample semaphore (`_eval/task/run.py`, the `retry_on_error > 0` branch after the sample scope exits), so a retrying sample releases its `max_samples` slot and re-enters at the back of the sample queue. No head-of-line blocking, no deadlock against the cap. The only observable effect is ordering — retries land behind pending samples and so tend to finish late in a task.
 - **Exhaustion is terminal but not fatal.** A sample that burns all three attempts is recorded errored, and (with `fail_on_error=False`) the task carries on.
 
-### 6.2 Tier 2 — in-flight requeue (adjudicated, live)
+### 6.2 The adjudicated tier, mechanism one: in-flight requeue
 
 Inspect's control channel exposes `POST /evals/{eval_id}/sample/requeue`, alongside `GET /evals/{id}/samples` (listing plus status histogram) and `GET /evals/{id}/sample` (summary **plus error detail**). That is the full loop needed to act on a failure *while the task is still running*: read the error detail and re-open the sample's slot without waiting for the task to end. The sample re-runs inside a task that is already warm, with no respawn and no resume read. Requeue is idempotent — a repeat lands in the already-queued rows and reports `changed: False`.
 
-**Steward never does this on its own.** An earlier draft had this tier acting automatically on a confident transient classification, with a per-sample requeue budget to stop it looping against a provider that stays down. That is now a ruling like any other, for the reason below.
+**Steward never does this on its own.** An earlier draft had requeue acting automatically on a confident transient classification, with a per-sample requeue budget to stop it looping against a provider that stays down. That is now a ruling like any other, for the reason below.
 
 The mechanism matters anyway, because it is what makes an *early* ruling cheap. A human who rules at 2am on a sandbox blip gets those samples re-run in the task still running rather than after it finishes.
 
-### 6.3 The authority line is not where the tiers divide
+### 6.3 Two tiers, not three
 
-The three tiers are divided by **mechanism** — inside the eval, into a live task, into a finished one. The line that decides who may act falls somewhere else, and stating it plainly retires two open questions:
+An earlier draft numbered three tiers, dividing them by **mechanism** — inside the eval, into a live task, into a finished one. That is one distinction too many, because the line that decides *who may act* falls in a different place and is the one that matters:
 
-> **Tier 1 is automatic. Tiers 2 and 3 are adjudicated.** A sample gets the attempts its definition asked for — Steward's assumed default is 3 — and when those are gone, further attempts are a conversation between the human and the agent, not a rule Steward executes.
+> **One tier is automatic; the rest is adjudicated.** A sample gets the attempts its definition asked for — Steward's assumed default is 3 — and when those are gone, further attempts are a conversation between the human and the agent, not a rule Steward executes.
 
-So tiers 2 and 3 are one decision with two mechanisms, chosen by whether the task is still running. Neither has a budget, because neither loops: nothing can requeue without a ruling in between, which is the same argument that makes task restarts affordable to ask about ([scheduling.md](scheduling.md), *No automatic restart*).
+So there are two tiers, and the second has two mechanisms chosen by a detail: whether the task is still running. Requeue and invalidate-plus-resume reach the same samples and answer to the same authority; picking between them is an implementation question, not a decision anyone makes. Neither has a budget, because neither loops — nothing can requeue without a ruling in between, which is the same argument that makes task restarts affordable to ask about ([scheduling.md](scheduling.md), *No automatic restart*).
 
 Three things follow.
 
@@ -394,11 +394,11 @@ An outage looks like the one place a mechanical response might beat adjudication
 
 **What declining it avoids is not small.** Hard pause holds a sample while its `time_limit` keeps running — Inspect names this explicitly as "the operator's risk with `pause --now`" (`working_limit` is protected, since held time is credited as waiting time). A sample killed that way records as a limit exhaustion, which [workflow.md](workflow.md) treats as *the measurement working as designed* rather than an anomaly — so an over-long pause would silently launder a Steward-caused failure into an accepted result. Guarding that meant computing each pause's bound from the tightest remaining `time_limit` among the samples it held, journalling every pause window, and reclassifying limit exhaustions falling inside one. All of it in service of a response that arrives too late.
 
-So the rule stays clean, with no exception to reason about: **tier 1 is automatic, everything past it is adjudicated.** A provider outage produces a cluster of errored samples on one model, which is one anomaly with many instances and one ruling — and re-running errored samples on resume is free.
+So the rule stays clean, with no exception to reason about: **the automatic tier is `retry_on_error`, everything past it is adjudicated.** A provider outage produces a cluster of errored samples on one model, which is one anomaly with many instances and one ruling — and re-running errored samples on resume is free.
 
 Hard pause remains available as an *action*, since a human or agent may well want it — "the provider is down, hold everything on sonnet" is a reasonable ruling. It carries the `time_limit` caveat above wherever it is used, and note that model gates key on a task's **primary** model, so role and grader models need task-scoped pauses instead (the manifest carries `model_roles`, so Steward knows which tasks those are).
 
-### 6.5 Tier 3 — post-completion adjudication (real judgement)
+### 6.5 The adjudicated tier, mechanism two: invalidate and resume
 
 When a task finishes, its errored samples are an explicit queue of unresolved work. Steward reviews them and can re-run them by respawning the worker with `resume` pointing at the log. Inspect's resume path already distinguishes the two cases Steward cares about (`eval_log_sample_source` in `_eval/task/run.py`):
 
@@ -423,7 +423,7 @@ With tiers 1–3 covering sample failures, whole-task recovery narrows to what n
 - **Hangs.** A sample past its `time_limit` or `working_limit` records a limit event, not an exception, so `retry_on_error` never fires.
 - **The process dying** — OOM, host loss, SIGKILL. Not an error from Inspect's point of view at all.
 
-All three are handled the same way, and **not automatically**: a failed task opens an anomaly, and respawn-with-`resume` is the action a ruling authorizes ([scheduling.md](scheduling.md), *Failure is adjudicated, not retried*). That makes this less a fourth mechanism than tier 3 arriving from a different direction — post-completion adjudication, where the unit happens to be a task rather than a sample. The reasoning is short: `fail_on_error=False` has already absorbed everything sample-shaped, so what reaches this level is mostly structural and mostly deterministic, and respawning a definition that will not import spends money to arrive where it started. Rarity is what makes asking affordable, and classed anomalies are what keep one reboot from costing forty questions.
+All three are handled the same way, and **not automatically**: a failed task opens an anomaly, and respawn-with-`resume` is the action a ruling authorizes ([scheduling.md](scheduling.md), *Failure is adjudicated, not retried*). That makes this less a separate mechanism than the adjudicated tier arriving from a different direction, where the unit happens to be a task rather than a sample. The reasoning is short: `fail_on_error=False` has already absorbed everything sample-shaped, so what reaches this level is mostly structural and mostly deterministic, and respawning a definition that will not import spends money to arrive where it started. Rarity is what makes asking affordable, and classed anomalies are what keep one reboot from costing forty questions.
 
 And a worker performs **no task-level retry of its own** — worker mode forces `task_retry_attempts=0` regardless of the definition's `retry_attempts`. Honouring the definition's value would multiply Steward's attempt budget by it and leave a failed log per in-process attempt in the shared directory. With three sample attempts already inside, an in-process task loop would be a third multiplier on the same failures.
 
@@ -455,7 +455,7 @@ PIDs are recycled, are meaningful only on one host, and — critically — are *
 | `launched` | after the spawn returns | host, pid, process start time, control socket path |
 | `exited` | when the worker is reaped or observed gone | exit status, observed-at |
 
-Current state is *derived* by replaying the record, never stored. An `intent` with no `launched` is the ambiguous case, and it is the one that matters: on restart Steward reconciles it against the log directory and the control discovery directory before deciding anything — and when neither can see it yet, which is a longer window than it sounds, the quarantine rule below decides.
+Current state is *derived* by replaying the record, never stored. An `intent` with no `launched` is the ambiguous case: on restart Steward reconciles it against the log directory and the control discovery directory before deciding anything — and when neither can see it yet, which is a longer window than it sounds, the process table does (below).
 
 Process start time is recorded alongside the pid specifically to defeat PID recycling: a live process whose start time differs from the recorded one is a different process.
 
@@ -469,12 +469,9 @@ Ground truth is the log directory, and for a worker that has reached its eval th
 
 **There is one window where it is wrong, and it is not brief.** A worker becomes visible to both ground-truth sources at the same moment — the control server writes its discovery file and the recorder opens its log — and that moment is *after* everything the definition does on the way to `eval_set()`. For a plain script that is imports: a second or two. For Flow it is the measured ~1.1s of spec resolution, `flow.yaml`, and the directory scan (open question 1). For Hawk it is `uv pip install` into the running interpreter, secrets resolution against Secrets Manager, and building the entire cross product ([hawk.md](hawk.md), *Pre-boundary work that must not be per-worker*) — plausibly minutes. Throughout that window a live worker has no log, no discovery entry, and cannot be found by scanning anything. The only thing that knows it exists is its `intent` record.
 
-So the record is load-bearing for at-most-once spawning, and two mechanisms make that safe rather than merely hoped for:
+**Self-identifying workers close the window**, and they cost nothing. Steward writes each worker its own selection document at a known path and passes that path in argv, so the process table answers *"is a worker for this task already running?"* without consulting any record at all — from the instant the process exists, rather than from the instant its eval starts. That restores the plain reading of *the log directory is ground truth*: the fallback stops having a hole in it, and the record goes back to being an accelerator.
 
-- **Self-identifying workers.** Steward writes each worker its own selection document at a known path and passes that path in argv, so the process table answers "is a worker for this task already running?" without consulting any record at all. This closes the window rather than waiting it out, and it is what restores the plain reading of *the log directory is ground truth* — the fallback stops having a hole in it, so the record goes back to being an accelerator.
-- **Quarantine.** A task the manifest wants, with no log and no live process, is not respawned until a full tend interval has passed since the last `intent` naming it. This covers what the first cannot: the sub-second gap between writing `intent` and the process existing, and a spawn that failed in between. A tend that would otherwise double-spawn reports the task as *starting* instead, and the next tend either finds it or acts.
-
-Take both. The first is the real fix and costs nothing, since the selection document has to be written anyway; the second bounds the residue. The cost of quarantine is one tend interval of latency on a genuinely lost spawn, against paying twice for the same task — and a double-spawn is not loud: two workers resolve independently, take different `task_id` uuids, and both logs land, so the duplicate reads as an ordinary retry rather than as an error.
+**One gap survives and is deliberately left open**: the sub-second window between writing `intent` and the process appearing in the process table, and a spawn that failed inside it. An earlier draft closed this with a quarantine rule — no respawn until a full tend interval had passed since the last `intent` — and that is not worth its cost. It introduces a wall-clock timing rule into a design that otherwise has none, and a *starting* state that exists only to express it, in exchange for avoiding an outcome that is merely wasteful: two workers resolve independently, take different `task_id` uuids, and both logs land, so a double-spawn reads as an ordinary retry rather than as an error. Paying a tend interval of latency on every genuinely lost spawn to avoid a rare duplicate is the wrong trade.
 
 > **Not to be confused with the journal.** [workflow.md](workflow.md) uses *journal* for `journal.jsonl`, the durable record of anomalies and adjudication rulings — the one file in a workspace that cannot be reconstructed. The in-flight record described here is its opposite: disposable, machine-only, and rebuildable from the log directory at any time.
 
@@ -647,7 +644,7 @@ Workers run with Inspect's control server enabled, so each has a live HTTP endpo
 
 Steward finds a worker's endpoint by pid via the discovery directory, correlated to a task through the in-flight record.
 
-The endpoints most relevant to this document are the ones tier 2 recovery is built on — `GET /evals/{id}/samples`, `GET /evals/{id}/sample`, and `POST /evals/{id}/sample/requeue` — plus the runtime-tuning directives (`POST /config` for per-sample limits, the pause/resume latches at process, task, and model scope). Model-scoped pause is worth noting alongside requeue: when the classification is "this provider is down", pausing the model is the correct response and requeueing individual samples is not.
+The endpoints most relevant to this document are the ones in-flight requeue is built on — `GET /evals/{id}/samples`, `GET /evals/{id}/sample`, and `POST /evals/{id}/sample/requeue` — plus the runtime-tuning directives (`POST /config` for per-sample limits, the pause/resume latches at process, task, and model scope). Model-scoped pause is worth noting alongside requeue: when the classification is "this provider is down", pausing the model is the correct response and requeueing individual samples is not.
 
 #### 8.5.1 The channel changes how work runs, never what work exists
 
@@ -821,9 +818,9 @@ That is the better trade and worth understanding rather than working around. Sil
 
 6. **Torn reads of the directory manifests.** Steward is the only writer of `eval-set.json` and `logs.json`, but both writes are truncate-in-place, so a concurrent *reader* can still catch a partial file — and `eval-set.json` has a live reader in the viewer (`read_eval_set_info_async`, which validates with no error handling). Rewriting it as logs land makes the window recur throughout the run rather than once. Either Steward writes these atomically, or the writers in Inspect become atomic. The latter is better for everyone, since `eval_set()` has the same exposure today.
 
-7. **Error classification.** *Resolved, and reduced first.* Nothing automatic turns on "was this failure transient?" any more (see *The authority line is not where the tiers divide*), so what remained was **grouping** — and that is settled in [workflow.md](workflow.md), *Three levels: instance, class, proposal*. A class is the exception type plus its raising frame, recoverable from the traceback since `eval_error()` builds it with `format_traceback(exc_type, ...)`; message text stays out of the key because ids and hostnames split one cause into forty. Fine classes are then collapsed for the human by a proposal spanning several of them, with the ruling recorded per class. One upstream nicety, not a blocker: `EvalError` is three strings with no type field, and `eval_error()` receives `exc_type` and discards it after formatting — adding `type: str | None` would hand this straight over.
+7. **Error classification.** *Resolved, and reduced first.* Nothing automatic turns on "was this failure transient?" any more (see *Two tiers, not three*), so what remained was **grouping** — and that is settled in [workflow.md](workflow.md), *Three levels: instance, class, proposal*. A class is the exception type plus its raising frame, recoverable from the traceback since `eval_error()` builds it with `format_traceback(exc_type, ...)`; message text stays out of the key because ids and hostnames split one cause into forty. Fine classes are then collapsed for the human by a proposal spanning several of them, with the ruling recorded per class. One upstream nicety, not a blocker: `EvalError` is three strings with no type field, and `eval_error()` receives `exc_type` and discards it after formatting — adding `type: str | None` would hand this straight over.
 
-8. **Recovery authority.** *Resolved — see *The authority line is not where the tiers divide* and *Considered and declined: pausing a failing model*.* Tier 1 is automatic at whatever `retry_on_error` the definition set; everything past it is a ruling, so there is no requeue budget to size and no automatic response to an error class. Pausing a failing model was the one candidate exception and it fails on timing: a sample dies within minutes of an outage, well inside a tend interval, so the response would arrive after the fleet it protects. The work it would have saved is better saved by Inspect's checkpointing, which survives host loss as well. `policy.md` may pre-authorize a class of re-run, which is a ruling made earlier rather than an exception.
+8. **Recovery authority.** *Resolved — see *Two tiers, not three* and *Considered and declined: pausing a failing model*.* Tier 1 is automatic at whatever `retry_on_error` the definition set; everything past it is a ruling, so there is no requeue budget to size and no automatic response to an error class. Pausing a failing model was the one candidate exception and it fails on timing: a sample dies within minutes of an outage, well inside a tend interval, so the response would arrive after the fleet it protects. The work it would have saved is better saved by Inspect's checkpointing, which survives host loss as well. `policy.md` may pre-authorize a class of re-run, which is a ruling made earlier rather than an exception.
 
 9. **Steward-orchestrated scanning.** The shape is settled (see *How Steward would take the scan over*): a third boundary mode, `INSPECT_EVAL_SET_SCAN`, that executes the definition and scans the named logs as single writer. Unbuilt, and these remain open:
    - ~~**Cadence.**~~ *Resolved in [scheduling.md](scheduling.md), *Scanning is scheduled work*: drain eagerly. A scan takes no worker slot, so the many-short-processes objection costs little, and findings arrive last and re-open resolved runs — latency is the thing worth optimizing. One log per pass, batching only when scans fall behind, which is exactly when per-pass startup is being paid too often.*

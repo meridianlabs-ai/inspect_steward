@@ -56,7 +56,7 @@ Each fault below exists to falsify a specific claim, and the claim is what the t
 | fault | claim under test |
 |---|---|
 | kill a worker after its log lands | reaping is correct; no respawn of finished work |
-| kill a worker *before* its log lands | the quarantine rule holds — no respawn within one tend interval |
+| kill a worker *before* its log lands | the process table, not the log directory, is what prevents a respawn |
 | kill a worker during pre-boundary startup | the invisible-worker window behaves as designed, not as a double-spawn |
 | delete `.steward/` mid-run | state rebuilds from the log directory; nothing durable is lost |
 | delete `.steward/` *while a worker is starting* | the one case that is **not** safe — a duplicate log lands and reads as an ordinary retry |

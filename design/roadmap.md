@@ -36,7 +36,7 @@ The sequence matters more than the list, and one ordering choice is worth statin
 1. **The workspace.** `init` for real — the directory, `.gitignore`, git detection, the scaffolded definition. Everything else writes here.
 2. **The log-directory fixture generator**, which is test infrastructure and belongs before the thing it tests ([testing.md](testing.md)).
 3. **`reconcile`**, table-driven: spawn set, ceilings, spawn order, completeness, convergence.
-4. **Spawn and reap.** Selection documents, detached workers, the in-flight record with `intent` before spawn, liveness against control discovery, the quarantine rule for the invisible-worker window.
+4. **Spawn and reap.** Selection documents, detached workers, the in-flight record with `intent` before spawn, liveness against control discovery, self-identifying workers for the invisible-worker window.
 5. **The run claim**, short-lived, with staleness reaping.
 6. **`status` and `tend`** as one function with two dispositions.
 7. **Fault injection** over the above — the recovery claims are load-bearing and unobservable on a good run.
@@ -62,7 +62,7 @@ Scanning is the largest piece and the most valuable: a third boundary mode, Stew
 
 | deferred | reason | reconsider when |
 |---|---|---|
-| **In-flight requeue (tier 2)** | now adjudicated rather than automatic, so tier 3's respawn-with-`resume` reaches the same samples. It saves a respawn, not a decision. | someone measures the respawn cost and minds it |
+| **In-flight requeue** | one of the adjudicated tier's two mechanisms, and the other reaches the same samples. It saves a respawn, not a decision. | someone measures the respawn cost and minds it |
 | **The flow store read half** | a cache. It makes a re-launch cheaper and changes no result. | reuse across projects becomes common |
 | **Log cleanup *during* a run** | Steward never deletes, so `cleanup_older_eval_logs` is never called: superseded logs simply accumulate while the run is live, and `latest_completed_task_eval_logs` semantics pick the right one at read time. Curation happens **at signoff** instead ([workflow.md](workflow.md), *Curation is part of the attestation too*), which is the only moment "superseded" is unambiguous. | — |
 | **A TUI** | `status` on a repeat, over the same surface. Pleasant, not load-bearing. | someone watches runs often enough to want it |

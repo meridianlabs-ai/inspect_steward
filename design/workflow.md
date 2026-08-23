@@ -233,7 +233,7 @@ The fourth category is the newest and easy to mislabel as rendered. `scanning.md
 
 **Losing `.steward/` mostly fails in the safe direction.** Anomalies re-derive from the log directory, since the errored samples are right there; the manifest is re-captured from the definition; in-flight records are rebuilt from the logs. Nothing durable is lost, because the rulings — the part that could not be recovered — are not in there.
 
-**The exception is workers that are starting**, and it is worth stating because "disposable" invites deleting the directory at any moment. A worker is invisible to both the log directory and control discovery until its eval actually begins, which is after everything its definition does on the way to `eval_set()` — a second or two for a script, plausibly minutes for a Hawk config (execution.md, *The in-flight record is an accelerator, with one window where it is not*). Delete `.steward/` inside that window and the next tend finds a task with no log and no live process, and spawns it again; both workers then land a log under different task ids, so the duplicate reads as an ordinary retry rather than as an error. What is lost is money and directory clarity, not a result — and self-identifying workers plus the quarantine rule narrow it considerably. Still: delete it when nothing is starting, not as a reflex.
+**The exception is workers that are starting**, and it is worth stating because "disposable" invites deleting the directory at any moment. A worker is invisible to both the log directory and control discovery until its eval actually begins, which is after everything its definition does on the way to `eval_set()` — a second or two for a script, plausibly minutes for a Hawk config (execution.md, *The in-flight record is an accelerator, with one window where it is not*). Steward normally covers that window by looking for the worker's own selection document in the process table, and deleting `.steward/` takes that away too: the next tend finds a task with no log, no live match, and no record, and spawns it again. Both workers land a log under different task ids, so the duplicate reads as an ordinary retry rather than as an error. What is lost is money and directory clarity, not a result. Still: delete it when nothing is starting, not as a reflex.
 
 The usual reason to delete a state directory — a stuck claim — does not arise here, because the claim is held only for the seconds a tend runs and one older than a generous tend timeout is reaped as stale (execution.md, *The reconcile core and its drivers*). There is deliberately no `steward unclaim`: it would be a command for a failure mode the short-lived claim already removed.
 
@@ -305,7 +305,11 @@ Two consequences worth naming. Rulings recorded per class are what let a group d
 
 ### 5.7 `steward.log` — whether Steward itself worked
 
-The journal is the record of the *eval set*: what was observed about it and what was decided. A second record is needed for a different subject — **whether the machinery ran** — and mixing them makes both harder to read. A tend that crashed, a spawn that failed, a sync that timed out, a ticker that had to be restarted, a claim that was found stale and reaped: none of these is a fact about the eval, and none belongs in a fold that reconstructs anomaly state.
+The journal is the record of the *eval set*: what was observed about it and what was decided. A tend that crashed, a spawn that failed, a sync that timed out, a ticker restarted, a claim found stale and reaped — none of these is a fact about the eval, and they go to `steward.log` instead.
+
+**A second file needs a real justification, because the obvious alternative is cheaper.** The journal already carries a `type` on every event and is already consumed by a fold that ignores types it does not care about, so machinery events could simply be more types. One file, one append path, one thing to sync. Legibility is *not* the argument against that: the journal is JSONL read by a fold, and `analysis.md` and `anomalies.md` are the human-facing renderings.
+
+**The argument is durability.** `journal.jsonl` is committed to git — that is where *A small integrity bonus falls out* comes from, and it is the file the design calls irreplaceable. Appending a spawn error and a sync result every ten minutes would bloat a record meant to be reviewed, and would dirty the working tree on a cadence, which is the thing that makes `revision.dirty` useless in a Steward workspace to begin with. Machinery is high-volume, low-value, and disposable; decisions are the opposite. They want different lifetimes, so they get different files.
 
 So they go to `steward.log`, and the rule is a single question:
 
@@ -964,18 +968,7 @@ A sample killed by a tool-approval monitor arrives as `type="operator"` too — 
 
 **No attempt is made to decide whether a termination is a defect or a finding.** For an eval whose subject *is* the approval system, a caveat entry reads oddly — the monitor firing is the result. That discordance is left to the people running such evals, because the alternative is a policy question asked of every project to serve a rare one.
 
-**Distinguishing terminations from other operator limits is the awkward part**, and it is a cost question rather than a possibility question. Two signals exist, both in the transcript:
-
-| signal | quality |
-|---|---|
-| `SampleLimitEvent.message` == `"Tool call approver requested termination."` | works, but discriminating on an English string is fragile |
-| **`ApprovalEvent` with `decision == "terminate"`** | structured, and carries `approver`, the blocked `call`, and `explanation` |
-
-Both require reading events, which is what we want scanners to avoid — messages where possible, events only when necessary. And the reason is *already computed and then discarded*: `TerminateSampleError.reason` reaches the transcript's `SampleLimitEvent` but is dropped when the sample's own `EvalSampleLimit` is built, which carries only `type` and a numeric `limit`. `EvalSampleSummary.limit` is thinner still — the type name as a bare string.
-
-So the cheap fix is upstream and small: carry the reason onto `EvalSampleLimit`, and surface it in the summary. Detection then happens at the **summary** level, cheaper than messages, and Steward reads events only when investigating a specific sample — which is where reading events is affordable anyway.
-
-The alternative considered was a side-channel: approvers appending to a `terminations.jsonl` in the working directory. It was rejected as a second source of truth living outside the log, in a design that otherwise insists the log directory is ground truth. Re-runs are the concrete failure — invalidate a sample, run it again, and the file holds both attempts with nothing marking which is live, a problem the log does not have. Ownership across concurrent workers sharing a directory is unresolved, and a free-form format is one Steward cannot consume, so it would become an unversioned schema every approver author had to implement.
+**Distinguishing a termination from any other operator limit is left to investigation.** An earlier draft worked through how Steward might do it mechanically, and the answer was always "read transcript events", which is the one thing scanners are meant to avoid. It is unnecessary: terminations are rare, they are already in `anomalies.md` as externally-truncated samples, and reading a transcript for a handful of samples is exactly what an agent investigating an anomaly does anyway (*Scanning collects; investigation digs*). The mechanism would have served only to save a person from looking at something they should look at.
 
 ## 15. Adjudication is a conversation, and it has rules
 

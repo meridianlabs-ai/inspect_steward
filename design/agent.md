@@ -47,11 +47,15 @@ Because the floor is guaranteed, the agent's relationship to the run is a choice
 
 ### 2.2 Tend output is collected, and collection is a recorded act
 
-"The agent reads what accumulated" is a hope unless something records that it did. **Collection makes it a state transition**: an agent reads the uncollected tends, acts on them, and then acknowledges up to a high-water mark, which lands in the journal like any other event.
+`tend` emits a structured summary whether or not anyone is listening, and most of them run unread. So the summaries are a **queue** that an occasionally-connected agent drains: it takes the unacknowledged ones in order, acts on them, and acknowledges its position, which lands in the journal like any other event.
 
-Reading and acknowledging are **separate steps**, deliberately. Reading is cheap, idempotent, and side-effect-free — any number of readers, no claim. Acknowledging is an assertion that the work is done. An agent that dies mid-processing has acknowledged nothing, so the next one re-reads the same delta, which is exactly the right failure: re-reading costs context, and missing an anomaly costs a night.
+**The queue is what a snapshot cannot replace, and that is the crux.** `status.md` says what is true *now*; it cannot say that an anomaly class grew from three instances to forty overnight, that a task died at 1am and was respawned, or that a rate-limit episode came and went at 3. That series is exactly what tuning and grouping decisions need, and a fresh session has no memory to reconstruct it from. Without a mark, an arriving agent has no "familiar ground" to read backwards to — it either re-reads everything or guesses where to start.
 
-What this buys is a quantity nothing else measures:
+Reading and acknowledging are **separate steps**, deliberately — the ordinary at-least-once shape. Reading is cheap, idempotent, and side-effect-free: any number of readers, no claim. Acknowledging asserts the work is done. An agent that dies mid-processing has acknowledged nothing, so the next one re-reads the same items, which is the right failure direction: redelivery costs context, and a dropped item costs a night.
+
+Acknowledgment is a **position, not per-item**, because the journal is ordered and an agent works through it in order. One number, not a set.
+
+A second thing falls out for free — a quantity nothing else measures:
 
 > **Open anomalies measure the human's backlog. Uncollected tends measure the agent's.**
 
@@ -133,7 +137,7 @@ The bounds are already set by decisions in other documents; collected here becau
 - **Write `policy.md`.** Steward proposes; the human writes.
 - **Move or delete a log.** Not even an empty cancelled one, and not into a folder named for discards. Resume matches logs where they are.
 
-**Only with a ruling** — every re-run past tier 1, at sample or task level ([execution.md](execution.md), *The authority line is not where the tiers divide*). `policy.md` may grant that ruling in advance, in which case acting on it is executing a decision already made.
+**Only with a ruling** — every re-run past the automatic tier, at sample or task level ([execution.md](execution.md), *Two tiers, not three*). `policy.md` may grant that ruling in advance, in which case acting on it is executing a decision already made.
 
 **Stop and ask** on: a smoke gate that still fails after two attempts; identity or resume errors, where the manifest and the logs disagree about what the eval *is*; numbers that fail sanity; anything requiring a destructive or irreversible action; persistent credential failures; or a non-converging loop — the same task failing across three launches, or logs accumulating for one task. A stop is not a teardown: healthy work keeps running, and the journal gets a final entry with state and a hypothesis.
 
