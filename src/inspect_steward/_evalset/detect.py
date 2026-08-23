@@ -84,7 +84,10 @@ def detect_definition_type(
 
 
 def _detect_python(path: Path) -> DefinitionType:
-    tree = ast.parse(path.read_text(), filename=str(path))
+    # bytes rather than `read_text()`, which decodes with the locale encoding:
+    # `ast.parse` applies Python's own source encoding rules (utf-8, or a PEP
+    # 263 coding declaration), which is what actually running the file will do
+    tree = ast.parse(path.read_bytes(), filename=str(path))
 
     imports_flow = False
     references_eval_set = False
@@ -173,7 +176,10 @@ _YAML_FORMATS: list[_YamlFormatSpec] = [
 
 def _detect_yaml(path: Path) -> DefinitionType:
     try:
-        loaded = yaml.safe_load(path.read_text())
+        # bytes for the same reason as the Python branch: YAML declares its own
+        # encoding (utf-8, or utf-16 by BOM) and PyYAML applies that rule to a
+        # bytes input, where `read_text()` would apply the locale's instead
+        loaded = yaml.safe_load(path.read_bytes())
     except yaml.YAMLError as ex:
         # a parse error is a `ValueError` to callers like every other bad
         # definition; `yaml.YAMLError` is not one, and would reach the CLI as

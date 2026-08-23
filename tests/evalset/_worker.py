@@ -1,10 +1,10 @@
-"""Run eval-set workers by hand, for testing selection (worker) mode.
+"""Run eval-set workers by hand, for the case production never has.
 
-Steward has no worker machinery yet — spawning is step 6 of the implementation
-plan, where it becomes detached, environment-hygienic, and recorded. What is
-needed *before* that is a way to put a selection document in front of a
-definition and see what lands, which is all this does: build the command the
-same way a read does, add `INSPECT_EVAL_SET_SELECTION` beside it, and wait.
+Steward spawns one task per worker, detached (`inspect_steward._worker`), and
+`tests/worker/test_spawn.py` exercises that. The protocol allows a selection to
+carry several tasks, and this runs one that does — which is what keeps a
+fifteen-task identity fixture down to a single interpreter startup instead of
+fifteen. Attached and blocking, so a caller gets a return code and output back.
 
 Not named `test_*`, so pytest does not collect it.
 """

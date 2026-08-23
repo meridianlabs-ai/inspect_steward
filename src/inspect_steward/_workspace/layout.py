@@ -66,6 +66,11 @@ class Workspace:
         return self.root / ".steward"
 
     @property
+    def workers(self) -> Path:
+        """`.steward/workers/` — one selection document and one output file per spawned worker."""
+        return self.state / "workers"
+
+    @property
     def status(self) -> Path:
         """`status.md` — rewritten by every tend."""
         return self.root / "status.md"

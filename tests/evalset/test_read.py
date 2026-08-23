@@ -19,6 +19,10 @@ def test_read_eval_set(tmp_path: Path) -> None:
     assert manifest.source.content_hash.startswith("sha256:")
     assert manifest.source.args == {}
     assert manifest.options["log_dir"] == "logs"
+    # present but unset: `resolve_max_samples` yields to a definition that asked
+    # for a value, and only a key that is always there makes "asked for nothing"
+    # distinguishable from an older capture that could not say
+    assert manifest.options["max_samples"] is None
 
     assert [task.name for task in manifest.tasks] == ["addition", "echo"]
     addition, echo = manifest.tasks

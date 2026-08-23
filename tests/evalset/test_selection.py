@@ -16,17 +16,22 @@ validating a resume target; a run that never resumes never touches it at all.
 
 These tests are the guard, and they are tests rather than a one-off
 verification because the property has to keep holding across inspect upgrades.
+
+The *production* shape — one task per worker, spawned detached — is covered in
+`tests/worker/test_spawn.py`, which exercises the real spawn. What is left here
+is the case production never has: one worker running a whole manifest, which is
+what keeps a fifteen-task fixture affordable.
 """
 
 from pathlib import Path
 
 import pytest
 from inspect_ai._eval.evalset import task_identifier
-from inspect_ai.log import EvalLog, list_eval_logs
+from inspect_ai.log import EvalLog
 from inspect_steward import Manifest, read_eval_set
 
 from ._hawk import requires_hawk
-from ._worker import DEFAULT_EVAL_SET_ID, landed_logs, run_workers, selection
+from ._worker import landed_logs, run_workers, selection
 
 FIXTURES = Path(__file__).parent / "fixtures"
 
@@ -95,58 +100,3 @@ def test_identifier_correlates_by_definition_type(fixture: str, tmp_path: Path) 
     other.mkdir()
     manifest, logs = run_whole_definition(fixture, tmp_path, cwd=other)
     assert_correlates(manifest, logs)
-
-
-def test_identifier_correlates_across_concurrent_workers(tmp_path: Path) -> None:
-    # the production shape: one task per worker, all of them writing into one
-    # flat directory at the same time. Four workers cost the same wall time as
-    # one, so this also carries the working-directory case: a task's source file
-    # is part of its identity and inspect warns that a worker running from
-    # elsewhere may not match, but Steward is immune by construction --
-    # `definition_command` resolves the definition absolutely. If that stops
-    # being true, correlation breaks silently and this fails.
-    definition = FIXTURES / "sweep_evalset.py"
-    manifest = read_eval_set(definition, cwd=tmp_path)
-    logs = tmp_path / "logs"
-    other = tmp_path / "elsewhere"
-    other.mkdir()
-
-    results = run_workers(
-        definition,
-        [selection([task.identifier], logs) for task in manifest.tasks],
-        cwd=other,
-    )
-    assert all(result.ok for result in results), [r.stdout for r in results if not r.ok]
-
-    landed = landed_logs(logs)
-    assert_correlates(manifest, landed)
-    # the runner owns the eval set id; workers stamp what they are told
-    assert {log.eval.eval_set_id for log in landed} == {DEFAULT_EVAL_SET_ID}
-
-
-def test_identifier_correlates_on_resume(tmp_path: Path) -> None:
-    definition = FIXTURES / "simple_evalset.py"
-    manifest = read_eval_set(definition, cwd=tmp_path)
-    identifier = manifest.tasks[0].identifier
-    logs = tmp_path / "logs"
-
-    first = run_workers(definition, [selection([identifier], logs)], cwd=tmp_path)
-    assert first[0].ok, first[0].stdout
-    prior = list_eval_logs(str(logs))[0].name
-
-    resumed = run_workers(
-        definition,
-        [selection([identifier], logs, resume={identifier: prior})],
-        cwd=tmp_path,
-    )
-    assert resumed[0].ok, resumed[0].stdout
-
-    # both attempts correlate to the one task -- which is also the supersession
-    # case: two logs for one identifier in a shared directory
-    landed = landed_logs(logs)
-    assert len(landed) == 2
-    assert {task_identifier(log, None) for log in landed} == {identifier}
-
-    # a resume naming another task's log is rejected by inspect itself, in the
-    # same code path this test exercises. Not re-tested here: it is upstream's
-    # behaviour and upstream's to cover, and asserting it costs two more workers.

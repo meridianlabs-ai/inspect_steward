@@ -12,7 +12,9 @@ Every other document works a topic to closure regardless of when it ships. This 
 
 **The foundations are built, decision included.** `steward init` creates a real workspace; `journal.jsonl` is an append-only record that survives a torn write and an event type from a later version; a log directory reads back as structured state against a manifest, with a fixture generator that produces one without running anything; and `reconcile` turns that state into the set of workers to spawn, in the order to spawn them ([plan.md](plan.md) steps 1–5).
 
-**Nothing runs yet.** There is no `launch`, no `tend`, no in-flight record, no anomalies, no signoff. Not one process has been spawned by Steward. The runner is the project — but the component most likely to be subtly wrong is built and tested before anything can spawn.
+**Steward spawns workers.** `Fleet.spawn` writes a selection document and launches a detached process for one task, and the log it lands recomputes to the identifier that asked for it — so the cycle capture → reconcile → spawn → land → reconcile closes, and the second reconcile has nothing left to do (step 6).
+
+**No run is supervised yet.** There is no `launch`, no `tend`, no in-flight record, no anomalies, no signoff — a worker can be started but nothing yet knows it is running or notices when it stops. The runner is the project, and the components most likely to be subtly wrong were built and tested before the machinery that drives them.
 
 ## 2. The one thing to verify first — verified
 
@@ -42,7 +44,7 @@ The sequence matters more than the list, and one ordering choice is worth statin
 1. **The workspace and the journal.** *Done.* `init` for real — the directory, `.gitignore`, git detection, the placeholder definition — plus the append-only record and the fold that everything else reads state from.
 2. **The log-directory fixture generator and the observed-state reader.** *Done*, and built together because neither is testable without the other ([testing.md](testing.md)).
 3. **`reconcile`**, table-driven: spawn set, ceilings, spawn order, completeness, convergence. *Done.*
-4. **Spawn and reap.** Selection documents, detached workers, the in-flight record with `intent` before spawn, liveness against control discovery, self-identifying workers for the invisible-worker window — plus Steward taking ownership of the **once-per-run pre-boundary work**, which is what makes a Flow or Hawk fan-out safe rather than merely wasteful.
+4. **Spawn and reap.** Selection documents and detached workers: *done*. Still to come — the in-flight record with `intent` before spawn, liveness against control discovery, self-identifying workers for the invisible-worker window, and Steward taking ownership of the **once-per-run pre-boundary work**, which is what makes a Flow or Hawk fan-out safe rather than merely wasteful.
 5. **The control channel client**, which `pause`, adjudication, and concurrency retuning all sit on.
 6. **The run claim**, short-lived, with staleness reaping.
 7. **Fault injection** over the above — the recovery claims are load-bearing and unobservable on a good run.
@@ -81,6 +83,7 @@ Scanning is the largest piece and the most valuable — three steps in [plan.md]
 | **Spend management** | declined outright, not deferred ([workflow.md](workflow.md), *Spend is not Steward's to manage*) | — |
 | **Sharding one task across processes** | declined outright ([scheduling.md](scheduling.md), *No sharding*) | — |
 | **Batching tasks into one worker** | declined outright — the slot idle it existed to absorb went away with capped pools | — |
+| **Windows** | declined outright ([execution.md](execution.md), *Detachment and the in-flight record*). Detachment, the control socket, and process-table identification are all POSIX mechanisms; a Windows port is a second execution model rather than a flag, and the failure without one is silent | — |
 
 ## 5. Upstream, ordered by when it bites
 

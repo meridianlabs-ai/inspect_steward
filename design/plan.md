@@ -30,7 +30,7 @@ Five steps that establish state, identity, and the decision function. None of th
 
 ### Step 1 — Identifier correlation ✅ **done**
 
-**Delivered** the verified assumption everything downstream inherits: a landed `.eval` maps back to a manifest task. `tests/evalset/test_selection.py` — five cases offline plus one behind `network`, eleven process launches, 33s serial and under 10s with `-n auto` (§10).
+**Delivered** the verified assumption everything downstream inherits: a landed `.eval` maps back to a manifest task. `tests/evalset/test_selection.py` — originally five cases offline plus one behind `network`, eleven process launches, 33s serial and under 10s with `-n auto` (§10). Step 6 took two of them: the concurrent fleet and the resume were the production shape, and they belong on the production spawn. What is left here is the case production never has — one worker running a whole fifteen-task manifest.
 
 The property holds. What sharpened during the work is *which half* needed verifying: a worker matches its selection by recomputing identifiers from its own resolved tasks, so a selection that runs at all already proves capture↔resolve agreement across processes. The unexercised half is resolve↔**log** — the half `reconcile` reads — and upstream touches it only when validating a resume target.
 
@@ -40,7 +40,7 @@ Three findings went back into the design:
 
 - **`identifier_version` was being dropped.** `EvalSetCapture` carries it; `read_eval_set()` discarded it. A manifest is committed as desired state and outlives an inspect upgrade, so a `TASK_IDENTIFIER_VERSION` bump would have made a finished sweep read as unstarted. Now carried (config §4); refusing on it is step 5.
 - **A selection's `log_dir` does not reach pre-boundary writes** (exec §4). A flow worker given only the override drops `flow.yaml` into the definition's log directory. A worker needs both channels — step 6.
-- **cwd does not break correlation**, contrary to the hazard upstream's error text warns about, because `definition_command` resolves the definition absolutely and flow anchors task files to the spec. Pinned as a test, so step 6 cannot quietly lose it.
+- **cwd does not break correlation**, contrary to the hazard upstream's error text warns about, because `definition_command` resolves the definition absolutely and flow anchors task files to the spec. Pinned as a test — which now runs against the real spawn, where losing it would matter.
 
 ### Step 2 — Workspace and `init` ✅ **done**
 
@@ -86,7 +86,7 @@ Two findings, both recorded upstream (exec §12, items 6 and 11): `read_eval_log
 
 ### Step 5 — `reconcile` ✅ **done**
 
-**Delivered** the decision function — `(manifest, inflight, observed, pool, paused) -> (actions, queued, summary)`, pure. `tests/schedule/`, 27 cases, 1.4s, no process ever started.
+**Delivered** the decision function — `(manifest, inflight, observed, pool, paused) -> (actions, queued, summary)`, pure. `tests/schedule/`, 29 cases, 1.4s, no process ever started.
 
 Four decisions:
 
@@ -109,13 +109,26 @@ Sandbox division is *not* here; it is step 22, blocked upstream. `reconcile` div
 
 ## 3. Execution — processes, and the machinery that survives them
 
-### Step 6 — Worker spawn
+### Step 6 — Worker spawn ✅ **done**
 
-**Delivers** one detached worker running one task, landing one log.
+**Delivered** `Fleet.spawn(action)` — a `SpawnWorker` becomes a selection document and a detached process, and the log it lands recomputes to the identifier that asked for it. `tests/worker/test_spawn.py`, 8 cases, 13s, 12 process launches; half of them need none.
 
-- **Scope.** Write the selection document; spawn detached with a clean environment; apply the static operational overrides (`log_dir`, `max_samples`) **through both channels** — the selection reaches the boundary, the frontend's own `--log-dir` reaches everything written before it (step 1); resolve the definition path absolutely, which is what makes the identifier cwd-independent (step 1); confirm the log lands with the identifier step 1 predicted; confirm worker mode writes no eval-set metadata.
-- **Refs.** exec §3, §4, §4.1; config §6.1, §6.2.
-- **Done when** N workers under `mockllm` land N correct logs in one shared directory.
+The loop now closes end to end: capture → reconcile → spawn → land → reconcile, and the second reconcile returns no actions.
+
+Four decisions:
+
+- **`spawn` builds its own command.** `log_dir` has to reach both the frontend, which writes before `eval_set()` is ever called, and the selection, which reaches the boundary — and a caller that passes one and forgets the other gets a flow worker dropping `flow.yaml` into the definition's log directory (step 1 measured it). Taking a prepared `DefinitionCommand` would leave that gap open forever; building it inside is what makes the two channels one parameter. `max_samples` needs only the selection: nothing before the boundary runs samples.
+- **Each worker's output goes to a file** beside its selection, merged and appended. `DEVNULL` is what a Hawk worker dying in `uv pip install` would leave behind, and `PIPE` is a deadlock waiting for a reader who has exited. It is the only account of the pre-boundary window (exec §7.3) and it is cheap — a `plain` display leaves twenty legible lines per worker.
+- **The handle carries its `Popen`.** Detached is not reparented: `start_new_session` detaches from the terminal, and a worker stays its spawner's child until the spawner exits. Dropping the reference is worse than keeping it — `Popen.__del__` files the child in `subprocess._active`, where the next `Popen()` reaps it, so a later `waitpid` fails intermittently. The field is documented as valid only while this process lives; step 8's record is what survives.
+- **The eval set id is resolved once, by the caller.** `resolve_eval_set_id` is a one-line delegation to upstream's `eval_set_id_for_log_dir`, which reads-or-mints-and-writes `.eval-set-id` idempotently and refuses a conflicting id. Worker mode never touches that file (exec §4.1), so keeping it out of `spawn` is what keeps *once, at run start* a visible constraint rather than an accident.
+
+Three things read rather than assumed. **The control server needs nothing at spawn**: it is on by default and binds a per-pid socket, so N workers cannot collide, and `INSPECT_EVAL_CTL_SERVER` is a CLI envvar that a definition script never consults — no ambient environment can switch a worker's control surface off. **A worker prints no launch handoff**, because the handoff and the ctl pointer are armed by the CLI; Steward knows the pid because it spawned it. And **`INSPECT_EVAL_SET_CAPTURE` must be stripped**, not merely left unset — capture and selection are mutually exclusive, so a worker inheriting an exported capture path would die at startup instead of running.
+
+Two corrections to execution.md. **§7.3's "passes that path in argv" is not implementable**: argv is Steward's to compose only for a raw script, and a Flow or Hawk worker is that platform's CLI, where an extra positional argument is a parse error — exactly the two types whose pre-boundary window is long enough to need self-identification. The marker is the environment (`INSPECT_EVAL_SET_SELECTION` already *is* the path), read with `psutil.Process.environ()`, verified readable for a same-user detached child. And **§7.1's `exited` row overstated the exit status**: a tend exits in seconds while its workers run for hours, so by the time anything observes one gone it has been reparented and its status reaped by init. *Observed gone* is what the record can promise, which is why the reap action carries nothing else.
+
+One decision the step forced: **Steward is POSIX-only, declined rather than deferred.** `start_new_session` is silently ignored on Windows, so a worker there stays attached to its console and dies with it — the central guarantee failing quietly. A port needs `creationflags` plus a second story for AF_UNIX control sockets, `getsid`, process-table identification, and the signals step 11 sends, which is a second execution model rather than a flag. Declared in the package metadata and refused at the spawn, because a classifier is metadata `pip` does not enforce and a platform that appears to work is worse than one that does not.
+
+One finding for later: **a definition declaring a scanner cannot be run by Steward today** — worker mode rejects scanners outright (exec §4.2), so the worker exits with an upstream `PrerequisiteError`. The capture manifest records `scanners` in `options`, so `launch` can refuse early with a better message. Step 14, and answered properly at step 23.
 
 ### Step 7 — Once-per-run pre-boundary work ⚠ frontend-side
 
@@ -437,7 +450,7 @@ Three rules follow, and they are the opposite of the instinct:
 
 **Which steps genuinely need real workers**: 1 (done), 6–9, 11, and parts of 12, 14, 20, and 23–25 — call it ten. Steps 2–5, 10, 13, 15–19, 21–22, and 26–28 are layer 1 or near it: synthesized state, pure functions, no eval runs at all. **Budget ~12 launches for a layer-2 step**, which is roughly 35s serial and under 10s with `-n auto`. Ten such steps lands the whole suite near five minutes serial and one to two minutes on CI. That is the line; a step that wants more should say why in its design pass.
 
-**Running total after step 5**: 165 offline tests, 22s with `-n auto` — the same 22s the suite took at step 1, because step 1's eleven launches are still essentially all of it. Steps 2–5 added 94 tests and about 4s between them, which is the shape the budget predicted and the reason the fixture generator was worth building before anything that consumes it.
+**Running total after step 6**: 162 offline tests, 23s with `-n auto`. Step 6 is the first layer-2 step since step 1 and it came in at 12 launches, exactly the budget — but eight of those are *relocated* rather than new, because the two step-1 selection tests that ran the production shape moved onto the real spawn instead of being duplicated beside it. Wall time moved by about a second, which is rule 1 working.
 
 **Levers held in reserve**, in the order they become worth their complexity: cache captures across tests in a session (deterministic by the contract in configuration.md §4, so it is safe — but xdist gives each worker its own cache, so it pays off only once a single xdist worker runs many tests); share one worker run across several assertions; and, last, split the suite so layer 2 runs on a different cadence than layer 1.
 

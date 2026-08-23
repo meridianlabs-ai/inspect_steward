@@ -6,6 +6,18 @@ authors = [{ name = "Meridian Labs" }]
 readme = "README.md"
 requires-python = ">=3.12"
 license = { text = "MIT License" }
+# POSIX only, and deliberately so: Steward's central requirement is that a run
+# outlives the process that started it, which it achieves by spawning workers
+# into their own session. Windows has no equivalent that `subprocess` reaches
+# the same way, and the rest of the design leans the same direction (AF_UNIX
+# control sockets, process-table identification). Supporting it would be a
+# second execution model rather than a flag, so it is declined rather than
+# deferred. Classifiers are metadata, not enforcement — pip will still install
+# here; nothing pretends the guarantee holds.
+classifiers = [
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+]
 dependencies = [
     "inspect-ai>=0.3.259", # TODO: floor at the first release with eval-set capture (and drop the git source below)
     "inspect-scout>=0.4.46",
