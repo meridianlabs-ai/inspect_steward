@@ -1,6 +1,6 @@
 # Scheduling
 
-**Status: the process model, the worker pool, spawn order, all three concurrency knobs, scan cadence, and failure handling are settled. Spend is the remaining gap.**
+**Status: settled. The process model, the worker pool, spawn order, all three concurrency knobs, scan cadence, and failure handling are decided; spend is declined outright.**
 
 [execution.md](execution.md) establishes that the architecture is a pure function — `reconcile(manifest, inflight, log_dir) -> (actions, summary)` — and argues at length for its *properties*: testable, idempotent, driver-independent. It does not say what the function decides. This document is that half.
 
@@ -87,7 +87,7 @@ Order only matters when pending work exceeds the ceiling — below it everything
 
 **The manifest arrives model-major.** `eval_resolve_tasks` loops models on the outside and tasks within, so a three-task, two-model sweep enumerates as every task on the first model, then every task on the second (verified against `sweep_evalset.py`). Spawning in that order is the worst available choice, for two independent reasons:
 
-- **An interrupted run is uncomparable.** Stop at the halfway point and one model is complete and the other untouched — the arms cannot be set against each other at all. And interruption is not exotic here: a spend cap, a deadline, `steward stop`, or a projection that says forty hours instead of four are all in this design already.
+- **An interrupted run is uncomparable.** Stop at the halfway point and one model is complete and the other untouched — the arms cannot be set against each other at all. And interruption is not exotic here: a deadline, `steward stop`, and a projection that says forty hours instead of four are all in this design already.
 - **One rate-limit bucket is saturated while the others idle.** Sixteen concurrent tasks on one model hammer a single provider's quota; sixteen spread across five models use five quotas. Model-major ordering is throughput-pessimal for the same reason it is science-pessimal.
 
 The fix is not a reordering, which is what makes it easy to accept: **it is a transposition.** The user wrote a task order and a model order; the model-major nesting is `eval_resolve_tasks`'s choice, not theirs. Steward spawns task-major — preserving both sequences exactly as written, and flipping only the axis nobody expressed an intent about:
@@ -148,7 +148,7 @@ So the two decisions interlock: **bounding sandboxes correctly is what makes gro
 
 Because the signal reduces to "were there scale-downs this interval", it is tempting to encode the whole rule in `tend` and let the mechanical layer ramp on its own. **It stays with the agent.** `tend` reports the signal; the agent decides whether to act on it.
 
-The reason is that *no rate limits* establishes only that the provider has room, and having room is not the same as wanting more. The judgement that follows draws on things `tend` has no way to weigh — how much budget remains against how much of the run does, whether an arm is already producing anomalies that make going faster a way to break more samples, whether a deadline makes throughput worth spending against, whether this provider rate-limited an hour ago and has simply gone quiet since. That is run history and project policy, which is exactly the material the agent exists to hold and a threshold rule cannot represent.
+The reason is that *no rate limits* establishes only that the provider has room, and having room is not the same as wanting more. The judgement that follows draws on things `tend` has no way to weigh — whether an arm is already producing anomalies that make going faster a way to break more samples, whether a deadline makes the risk worth taking, whether the box is also hosting something else, whether this provider rate-limited an hour ago and has simply gone quiet since. That is run history and project policy, which is exactly the material the agent exists to hold and a threshold rule cannot represent.
 
 It also keeps a line the design draws everywhere else intact: [workflow.md](workflow.md)'s *the envelope is policy, the tuning is the agent's job*. An autonomous ramp in `tend` would be the first policy the mechanical layer executes on its own, and the first place where a bad rule ships in the binary rather than being arguable in a runbook.
 
@@ -260,7 +260,7 @@ The queue is unaffected: an unscanned log stays unscanned and stays counted, so 
 
 The objection to this is obvious and turns out not to hold: a host reboots at 3am, forty workers die, and now forty approvals stand between the run and progress. But anomalies are *classed*, not itemized ([workflow.md](workflow.md), *Rule on classes, not instances*) — forty tasks killed by one reboot are **one anomaly with forty instances, and one ruling restarts all of them**. The cost of always asking is one question per cause, which is a rate a person can sustain.
 
-So the attempt ceiling this document set out to choose is **zero**, and there is no number to tune. What bounds recurrence is not a counter but the record: every restart required a ruling, rulings accumulate as precedent, and a class that keeps returning is visible as such rather than hidden inside a retry count that resets. That is the mechanism the design already has for this, and it is strictly more informative than the one it replaces.
+So the attempt ceiling this document set out to choose is **zero**, and there is no number to tune. The same line runs one level down: a sample gets the `retry_on_error` attempts its definition asked for, and past those every further attempt is adjudicated too ([execution.md](execution.md), *The authority line is not where the tiers divide*). Standing authorization is the pressure valve at both levels — `policy.md` may admit a class of restart in advance, which is a ruling made earlier rather than an exception to the rule. What bounds recurrence is not a counter but the record: every restart required a ruling, rulings accumulate as precedent, and a class that keeps returning is visible as such rather than hidden inside a retry count that resets. That is the mechanism the design already has for this, and it is strictly more informative than the one it replaces.
 
 This also removes a mechanism rather than adding one. [execution.md](execution.md) treats whole-task retry as a fourth thing standing beside the three recovery tiers; it is really the third tier again — post-completion adjudication, with respawn-and-`resume` as the action a ruling authorizes.
 
@@ -302,6 +302,4 @@ The starvation risk that would normally argue for capping this at a fraction of 
 
 ## Open questions
 
-1. **Spend is not yet designed.** `--max-spend` is a launch argument and the cap is an input to the schedule, so it belongs in this document — but nothing here yet says where in-flight spend is read from, how it is attributed per arm, or what happens when the cap is hit. Next session.
-
-*Resolved and written above: the process model, the pool and its ceilings, spawn order, all three concurrency knobs and who grows them, scan cadence, redistribution on completion, and task failure handling.*
+None outstanding. Spend was the last one, and it is resolved as a won't-do: Steward does not track, project, cap, or act on spend. The reasoning is in [workflow.md](workflow.md), *Spend is not Steward's to manage* — briefly, Inspect ships no prices so Steward would have to own a price table; a cap observed at the tend interval is soft by construction and cannot stop what motivates wanting it; firing one would add a trigger rather than a capability, since `stop`, `pause`, and archiving an arm already exist; and the real control is the manifest, which enumerates everything before a dollar is spent.

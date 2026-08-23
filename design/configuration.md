@@ -8,7 +8,7 @@ How users define what an evaluation run contains, and how Steward turns that def
 
 Steward is an autonomous evaluation runner: it launches, monitors, scales, diagnoses, and remedies on behalf of a human. That role imposes three requirements on configuration:
 
-1. **Static enumeration.** Steward must be able to produce the full list of tasks (resolved task × model × solver combinations) *before* running anything, so it can schedule them, run them in their own processes, track completion, and estimate progress and cost.
+1. **Static enumeration.** Steward must be able to produce the full list of tasks (resolved task × model × solver combinations) *before* running anything, so it can schedule them, run them in their own processes, track completion, and estimate progress.
 
 2. **Meet users where they are.** There are three ways people already define eval sets, and Steward must support all of them without forcing migration:
    - A plain Python file that ends in a call to `eval_set()` — the code users naturally write today.
@@ -142,7 +142,7 @@ The manifest is an **index into the definition, not a reconstruction of it**. Th
 }
 ```
 
-Because enumeration fully resolves tasks, the manifest carries per-task sample counts and epochs — the raw material for Steward's scheduling, progress estimation, and cost projection.
+Because enumeration fully resolves tasks, the manifest carries per-task sample counts and epochs — the raw material for Steward's scheduling and progress estimation.
 
 **Determinism requirement.** The contract assumes the definition produces the same task list on every execution: enumerate on Monday, execute task 7 on Tuesday, and the selection must still match. `task_identifier` is deterministic given the same tasks/args/models, so the requirement reduces to "the definition is deterministic with respect to its task list" (no time- or randomness-dependent task construction). Drift is detected, never papered over: a selected task that resolution fails to produce is a hard error naming the missing task, and the manifest's `content_hash` lets Steward warn when the definition file changed after enumeration. What that hash is and is not for is the subject of the next section.
 
@@ -209,7 +209,7 @@ Full runner design is in [execution.md](execution.md); the parts that constrain 
 
 - **One flat log directory.** Every worker writes into the definition's own `log_dir`, and each writes exactly one `.eval` file, which inspect writes atomically. Because worker mode removes the competing orchestrator, this is safe by construction, and `inspect view` and `samples_df` work against the directory live and unmodified. Steward is the single writer of the shared eval-set metadata. (An earlier draft specified per-task subdirectories; that avoided contention only by moving it, since each worker still ran a full orchestrator over its own directory — see execution.md.)
 
-- **Recovery** runs in three tiers rather than as a single retry setting. Selection mode hard-codes `fail_on_error=False` (and task-retry-off), so a task runs its whole dataset and finishes `success` carrying whatever errored samples remain; `retry_on_error` stays the definition author's to set. Those samples become an explicit adjudication queue: Steward can requeue them in flight over the control channel when the cause looks transient, or re-run them after completion by respawning with `resume` (errored samples re-run automatically; `invalidate_samples` forces a re-run of completed-but-suspect ones). Whole-task retry is Steward's alone and narrows to process death and errors outside sample scope; workers run with in-process task retry disabled so budgets cannot multiply. The consequence for configuration: **a worker exiting 0 with a `success` log says nothing about whether the work is good** — the log is the only ground truth.
+- **Recovery** runs in three tiers rather than as a single retry setting. Selection mode hard-codes `fail_on_error=False` (and task-retry-off), so a task runs its whole dataset and finishes `success` carrying whatever errored samples remain; `retry_on_error` stays the definition author's to set. Those samples become an explicit adjudication queue, and everything past tier 1 is adjudicated rather than automatic: a ruling authorizes either an in-flight requeue over the control channel or a post-completion re-run by respawning with `resume` (errored samples re-run automatically on resume; `invalidate_samples` forces a re-run of completed-but-suspect ones), the choice being only whether the task is still running. Whole-task retry is Steward's alone and narrows to process death and errors outside sample scope; workers run with in-process task retry disabled so budgets cannot multiply. The consequence for configuration: **a worker exiting 0 with a `success` log says nothing about whether the work is good** — the log is the only ground truth.
 
 - **Supervision channel.** Workers run with inspect's control server enabled (`ctl_server`), giving Steward a live channel to query state and adjust runtime behavior of a running eval — which is Steward's whole purpose. Details in [execution.md](execution.md).
 
@@ -282,7 +282,7 @@ Deployment-wise Hawk keeps its platform — CLI, API server, Helm release, runne
 
 ## Open questions
 
-1. **Retry responsibility.** *Resolved, and reframed:* the question was the wrong shape. Rather than dividing one retry mechanism, Steward runs `fail_on_error=False` so sample failures never fail a task, which turns recovery into three tiers — in-eval `retry_on_error`, in-flight requeue over the control channel, and post-completion adjudication (invalidate + resume). Whole-task retry is Steward's alone and shrinks to process death and errors outside sample scope; worker mode forces in-process task retry off so budgets cannot multiply. What remains open is the classification and escalation policy the tiers depend on. See [execution.md](execution.md).
+1. **Retry responsibility.** *Resolved, and reframed:* the question was the wrong shape. Rather than dividing one retry mechanism, Steward runs `fail_on_error=False` so sample failures never fail a task, which turns recovery into three mechanisms — in-eval `retry_on_error`, in-flight requeue over the control channel, and post-completion invalidate-plus-resume — divided by *authority* into one automatic tier and one adjudicated one. Only `retry_on_error` runs unsupervised; past it, further attempts are a decision, which is why Steward carries no requeue budget. Whole-task retry is Steward's alone and shrinks to process death and errors outside sample scope; worker mode forces in-process task retry off so budgets cannot multiply. See [execution.md](execution.md), *The authority line is not where the tiers divide*.
 
 2. **Aggregate view across per-task log dirs.** *Moot:* there are no per-task directories. One flat directory means `inspect view`, `samples_df`, bundling, and log listing work unmodified, and Steward is the single writer of `.eval-set-id`, `eval-set.json`, and `logs.json`.
 

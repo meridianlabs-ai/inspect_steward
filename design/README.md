@@ -6,7 +6,7 @@ Five documents. The first three read in order, each starting where the previous 
 |---|---|---|
 | [configuration.md](configuration.md) | How a *definition* — any program culminating in one `eval_set()` call — becomes a **manifest** of resolved tasks, via capture mode. | Implemented |
 | [execution.md](execution.md) | How a manifest becomes **running processes**: worker mode, the shared log directory, recovery, and the reconcile loop. | Protocol landed upstream; runner unbuilt |
-| [scheduling.md](scheduling.md) | What `reconcile` actually **decides**: one task per process, launching everything up to a core-count ceiling, spawning task-major, how the three concurrency knobs are set, when scan passes run, and why a failed task is adjudicated rather than retried. | Everything but spend is settled |
+| [scheduling.md](scheduling.md) | What `reconcile` actually **decides**: one task per process, launching everything up to a core-count ceiling, spawning task-major, how the three concurrency knobs are set, when scan passes run, and why a failed task is adjudicated rather than retried. | Settled |
 | [workflow.md](workflow.md) | What a person actually **does** — `init` through `signoff` — the project, convergence, adjudication, notification, and resource tuning. | Lifecycle settled; adjudication still being figured out |
 | [hawk.md](hawk.md) | Running under **Hawk**: its config as a definition, its infra config at runtime, a blocking `launch`, and the relay an external agent drives it through. | Stage 0 implemented (configs read and run); runtime stages sketched |
 
@@ -23,6 +23,7 @@ A definition is executed once under `INSPECT_EVAL_SET_CAPTURE` to enumerate its 
 - **The coding agent is the only driver.** No daemon: the reconcile core is a pure function, the run claim is short-lived, and a missed tend pauses a run rather than breaking it.
 - **A tend spawns and reaps; it never does long work itself.** Scans, task workers, and adjudication re-runs are all detached children.
 - **`fail_on_error=False`.** Everything runs to the end; anomalies are settled afterwards rather than aborting a run mid-flight. Because that absorbs every sample-shaped failure, a task that fails anyway has failed structurally — so it is adjudicated, never restarted automatically.
+- **One automatic tier, then adjudication.** A sample gets the `retry_on_error` attempts its definition asked for; every further attempt, at sample or task level, is a ruling. `policy.md` may grant that ruling in advance, but nothing is pre-authorized by default, and Steward has **no** automatic response to an error class.
 - **Mechanics ship with the package (`steward runbook`); policy lives with the project (`policy.md`).** Steward proposes changes to policy and never writes it.
 - **The workspace syncs outward on every tend.** Runs happen on machines with no git and sometimes no internet, where an S3 bucket is the only observability channel. The sync is exclusionary (everything top-level but dotfiles, directories, and agent bootstrap) and never raises.
 - **A platform is a definition type, not a second architecture.** Flow's CLI and Hawk's runner are both programs culminating in one `eval_set()` call, so Steward runs *their* entrypoints and intercepts at the boundary rather than re-deriving what they do.

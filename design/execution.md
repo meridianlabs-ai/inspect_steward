@@ -360,13 +360,43 @@ Recovery therefore happens at three tiers, in increasing order of how much judge
 - **Retries do not hold a concurrency slot.** Inspect performs the retry recursion deliberately outside the sample semaphore (`_eval/task/run.py`, the `retry_on_error > 0` branch after the sample scope exits), so a retrying sample releases its `max_samples` slot and re-enters at the back of the sample queue. No head-of-line blocking, no deadlock against the cap. The only observable effect is ordering — retries land behind pending samples and so tend to finish late in a task.
 - **Exhaustion is terminal but not fatal.** A sample that burns all three attempts is recorded errored, and (with `fail_on_error=False`) the task carries on.
 
-### Tier 2 — in-flight requeue (cheap judgement, live)
+### Tier 2 — in-flight requeue (adjudicated, live)
 
-Inspect's control channel exposes `POST /evals/{eval_id}/sample/requeue`, alongside `GET /evals/{id}/samples` (listing plus status histogram) and `GET /evals/{id}/sample` (summary **plus error detail**). That is the full loop Steward needs to act on a failure *while the task is still running*: read the error detail, classify the cause, and re-open the sample's slot if the cause was transient — cluster pressure, a model API outage, a sandbox hiccup — rather than a genuine failure.
+Inspect's control channel exposes `POST /evals/{eval_id}/sample/requeue`, alongside `GET /evals/{id}/samples` (listing plus status histogram) and `GET /evals/{id}/sample` (summary **plus error detail**). That is the full loop needed to act on a failure *while the task is still running*: read the error detail and re-open the sample's slot without waiting for the task to end. The sample re-runs inside a task that is already warm, with no respawn and no resume read. Requeue is idempotent — a repeat lands in the already-queued rows and reports `changed: False`.
 
-This is strictly better than waiting for the end when the classification is confident: the sample re-runs inside the task that is already warm, with no respawn and no resume read. Requeue is idempotent (a repeat lands in the already-queued rows and reports `changed: False`), and it re-opens a *terminal* sample's slot, so it deliberately goes beyond the configured `retry_on_error` budget.
+**Steward never does this on its own.** An earlier draft had this tier acting automatically on a confident transient classification, with a per-sample requeue budget to stop it looping against a provider that stays down. That is now a ruling like any other, for the reason below.
 
-**That last point needs a guard.** Inspect enforces no per-sample requeue ceiling — the endpoint will keep accepting. A naive "error looks transient → requeue" rule loops forever against a model API that stays down. Steward must carry its own per-sample requeue budget and an escalation path when it is spent.
+The mechanism matters anyway, because it is what makes an *early* ruling cheap. A human who rules at 2am on a sandbox blip gets those samples re-run in the task still running rather than after it finishes.
+
+### The authority line is not where the tiers divide
+
+The three tiers are divided by **mechanism** — inside the eval, into a live task, into a finished one. The line that decides who may act falls somewhere else, and stating it plainly retires two open questions:
+
+> **Tier 1 is automatic. Tiers 2 and 3 are adjudicated.** A sample gets the attempts its definition asked for — Steward's assumed default is 3 — and when those are gone, further attempts are a conversation between the human and the agent, not a rule Steward executes.
+
+So tiers 2 and 3 are one decision with two mechanisms, chosen by whether the task is still running. Neither has a budget, because neither loops: nothing can requeue without a ruling in between, which is the same argument that makes task restarts affordable to ask about ([scheduling.md](scheduling.md), *No automatic restart*).
+
+Three things follow.
+
+**Steward carries no requeue budget.** The guard existed to stop an automatic rule from looping; with no automatic rule there is nothing to bound. Inspect's lack of a per-sample ceiling stops being a hazard.
+
+**Error classification stops being a decision input.** Its remaining job is *grouping* — turning 47 errored samples into one decidable anomaly rather than 47 — which is a presentation problem, not a control problem. That is a large reduction in what a taxonomy has to be right about: a bad grouping produces a confusing anomaly, where a bad automatic classification produced wasted money and a wrong retry. It also removes the redundancy, since Inspect has already asked "is this transient?" twice before Steward sees the error (`ModelAPI.should_retry`, which itself distinguishes `rate_limit` from `transient`, and then `retry_on_error`).
+
+**A pre-authorization is a ruling made earlier, not an exception to this.** `policy.md` may admit a class of re-run — *"sandbox provisioning failures may be re-run without asking"* — and Steward acting on it is executing a decision the human already made, recorded where anyone can read it. That is the same standing-authority move [workflow.md](workflow.md) makes for scaling, and it is what keeps the rule from meaning "wake someone up for every flaky container". Nothing is pre-authorized by default.
+
+### Considered and declined: pausing a failing model
+
+An outage looks like the one place a mechanical response might beat adjudication. With `fail_on_error=False`, the default behaviour when a provider dies is not "wait" but **destroy** — every in-flight sample burns its `retry_on_error` attempts against a dead endpoint, errors terminally, and takes its sandbox and accumulated conversation with it. Inspect's hard pause (`pause --now`) would park each sample before its next `generate` with the sandbox intact, and one model-scoped call reaches every task on that model. On a long-episode agentic benchmark that is hours of work saved.
+
+**It does not work, for a timing reason that no amount of policy fixes.** A sample dies within a few minutes of the outage starting: the model API exhausts its own backoff, then `retry_on_error` restarts the sample from the top twice more, each attempt failing at its first call. The tend interval is ten minutes. By the time a tend could observe the error cluster and issue the pause, **the fleet it would have protected is already gone.** Closing that gap means either polling faster than a tend — which is a daemon, and [the driver argument](#the-supervisor) rejects one — or putting the response in-process beside `should_retry`, which is Inspect's layer and not Steward's to build.
+
+**The loss it was protecting against also has a better answer already.** Inspect ships checkpointing — `Checkpointer` with time, token, and turn triggers, restic-backed sandbox state capture, and a retry path that scans for the latest committed checkpoint. A checkpointed sample resumes rather than restarting, which beats pausing on every axis: it survives worker death and host loss and not just provider outages, it has no interaction with sample limits, it needs no unpause trigger, and it belongs to the definition author alongside `retry_on_error`. Where hours of agentic work are at stake, that is the mechanism to reach for.
+
+**What declining it avoids is not small.** Hard pause holds a sample while its `time_limit` keeps running — Inspect names this explicitly as "the operator's risk with `pause --now`" (`working_limit` is protected, since held time is credited as waiting time). A sample killed that way records as a limit exhaustion, which [workflow.md](workflow.md) treats as *the measurement working as designed* rather than an anomaly — so an over-long pause would silently launder a Steward-caused failure into an accepted result. Guarding that meant computing each pause's bound from the tightest remaining `time_limit` among the samples it held, journalling every pause window, and reclassifying limit exhaustions falling inside one. All of it in service of a response that arrives too late.
+
+So the rule stays clean, with no exception to reason about: **tier 1 is automatic, everything past it is adjudicated.** A provider outage produces a cluster of errored samples on one model, which is one anomaly with many instances and one ruling — and re-running errored samples on resume is free.
+
+Hard pause remains available as an *action*, since a human or agent may well want it — "the provider is down, hold everything on sonnet" is a reasonable ruling. It carries the `time_limit` caveat above wherever it is used, and note that model gates key on a task's **primary** model, so role and grader models need task-scoped pauses instead (the manifest carries `model_roles`, so Steward knows which tasks those are).
 
 ### Tier 3 — post-completion adjudication (real judgement)
 
@@ -475,7 +505,7 @@ That argument establishes the need for a *cadence*, though, not the need for a *
 So the division is by *kind of work*, not by reliability:
 
 - **The supervisor keeps the run alive.** Mechanical continuity: maintain the worker pool, record what it launches, run scan passes, requeue within budget, keep the eval-set metadata and status current. All of it policy execution, none of it judgement.
-- **The agent (or human) decides what the run means.** Is this error class systemic or incidental? Is this arm worth continuing? Is this score anomalous enough to invalidate? Should the budget be raised?
+- **The agent (or human) decides what the run means.** Is this error class systemic or incidental? Is this arm worth continuing? Is this score anomalous enough to invalidate? Should this run keep going at all?
 
 The supervisor's other job is therefore to **leave a good trail for the intelligent-but-absent party**: an escalation queue it refuses to act on alone, and a periodic written summary. That is what makes something like an hourly `status.md` load-bearing rather than decorative — it is the handoff artifact the agent reads when it next appears, and the reason a run can be picked up cold.
 
@@ -487,7 +517,7 @@ This division softens considerably when the agent is itself the driver: it sees 
 
 > **Superseded in part.** [workflow.md](workflow.md) concludes there should be no `steward tui`: a live view presumes a present human, which is the case Steward is explicitly not built for, and `steward status` plus `inspect view` covers what someone actually wants on returning. This section is retained because its *separation* argument — that a view is a client of the same surface as everything else, needing no claim and no live supervisor — is what made that conclusion safe to reach. Read `steward tui` below as "a view, if one is ever built".
 
-The display is an aggregate — tasks by state, sample progress, the adjudication queue, spend — assembled from the worker control endpoints and the log directory. It cannot be Inspect's own display relayed, because workers are separate detached processes writing their own output elsewhere. That constraint turns out to be a gift: the display is a **client of the same surface** everything else uses, not a privileged view of in-process state.
+The display is an aggregate — tasks by state, sample progress, the adjudication queue, token usage — assembled from the worker control endpoints and the log directory. It cannot be Inspect's own display relayed, because workers are separate detached processes writing their own output elsewhere. That constraint turns out to be a gift: the display is a **client of the same surface** everything else uses, not a privileged view of in-process state.
 
 Which means the view and the supervisor are separable, and should be separated:
 
@@ -511,7 +541,7 @@ Beyond the TUI, the same surface is reached through the CLI: `steward status`, `
 
 Two layers of control channel then stack, and the direction matters:
 
-- **agent → supervisor** (Steward's own surface): status, pause, abandon an arm, resolve samples, adjust budgets.
+- **agent → supervisor** (Steward's own surface): status, pause, abandon an arm, resolve samples, retune concurrency.
 - **supervisor → workers** (Inspect's `ctl`): requeue, retune limits, pause a model.
 
 An agent *can* read a worker's endpoint directly and that is harmless. It should not issue directives there: requeue budgets and escalation state live with the claim holder, and a second party issuing directives puts that accounting in two places. Reads fan out; writes go through the supervisor.
@@ -677,9 +707,9 @@ That is the better trade and worth understanding rather than working around. Sil
 
 6. **Torn reads of the directory manifests.** Steward is the only writer of `eval-set.json` and `logs.json`, but both writes are truncate-in-place, so a concurrent *reader* can still catch a partial file — and `eval-set.json` has a live reader in the viewer (`read_eval_set_info_async`, which validates with no error handling). Rewriting it as logs land makes the window recur throughout the run rather than once. Either Steward writes these atomically, or the writers in Inspect become atomic. The latter is better for everyone, since `eval_set()` has the same exposure today.
 
-7. **Error classification.** Tiers 2 and 3 both turn on "was this failure transient?", and nothing answers that today. The inputs are available (`GET /evals/{id}/sample` returns error detail; logged samples carry their error and the `error_retries` history of prior attempts), but the taxonomy — provider outage, rate limit, cluster pressure, sandbox failure, agent-caused, genuine task failure — and how confidently each can be inferred is unresolved. Everything Steward does automatically rests on this, so it deserves its own design.
+7. **Error classification.** *Resolved, and reduced first.* Nothing automatic turns on "was this failure transient?" any more (see *The authority line is not where the tiers divide*), so what remained was **grouping** — and that is settled in [workflow.md](workflow.md), *Three levels: instance, class, proposal*. A class is the exception type plus its raising frame, recoverable from the traceback since `eval_error()` builds it with `format_traceback(exc_type, ...)`; message text stays out of the key because ids and hostnames split one cause into forty. Fine classes are then collapsed for the human by a proposal spanning several of them, with the ruling recorded per class. One upstream nicety, not a blocker: `EvalError` is three strings with no type field, and `eval_error()` receives `exc_type` and discards it after formatting — adding `type: str | None` would hand this straight over.
 
-8. **Requeue budget and escalation.** Inspect enforces no per-sample requeue ceiling, so Steward needs its own: how many tier-2 requeues a sample gets before it drops to tier-3 adjudication, and what escalates to the human. Related: when the classification is provider-wide, the right action is a model-scoped pause rather than per-sample requeues, and Steward needs a rule for choosing between them.
+8. **Recovery authority.** *Resolved — see *The authority line is not where the tiers divide* and *Considered and declined: pausing a failing model*.* Tier 1 is automatic at whatever `retry_on_error` the definition set; everything past it is a ruling, so there is no requeue budget to size and no automatic response to an error class. Pausing a failing model was the one candidate exception and it fails on timing: a sample dies within minutes of an outage, well inside a tend interval, so the response would arrive after the fleet it protects. The work it would have saved is better saved by Inspect's checkpointing, which survives host loss as well. `policy.md` may pre-authorize a class of re-run, which is a ruling made earlier rather than an exception.
 
 9. **Steward-orchestrated scanning.** The shape is settled (see *How Steward would take the scan over*): a third boundary mode, `INSPECT_EVAL_SET_SCAN`, that executes the definition and scans the named logs as single writer. Unbuilt, and these remain open:
    - ~~**Cadence.**~~ *Resolved in [scheduling.md](scheduling.md), *Scanning is scheduled work*: drain eagerly. A scan takes no worker slot, so the many-short-processes objection costs little, and findings arrive last and re-open resolved runs — latency is the thing worth optimizing. One log per pass, batching only when scans fall behind, which is exactly when per-pass startup is being paid too often.*
