@@ -86,7 +86,7 @@ Two findings, both recorded upstream (exec §12, items 6 and 11): `read_eval_log
 
 ### Step 5 — `reconcile` ✅ **done**
 
-**Delivered** the decision function — `(manifest, inflight, observed, pool, paused) -> (actions, queued, summary)`, pure, and the pool ceiling beside it in `available_cores()`. `tests/schedule/`, 38 cases, 1.2s, no process ever started.
+**Delivered** the decision function — `(manifest, inflight, observed, pool, paused) -> (actions, queued, summary)`, pure. `tests/schedule/`, 27 cases, 1.4s, no process ever started.
 
 Four decisions:
 
@@ -97,7 +97,11 @@ Four decisions:
 
 The crash-recovery case is the one worth naming: **a live worker and one that died mid-run leave exactly the same thing in the log directory** — a `started` log with no results. Only the in-flight record separates them, which is why `reconcile` takes it, and getting it wrong means either double-spawning a live task or never recovering a dead one. It has its own test.
 
-Two findings. **`max_samples` is not in the capture manifest**, so scheduling.md's *yield to whatever the definition set* silently cannot happen; recorded as part of upstream item 10, and `reconcile` reads the key anyway so the day it lands nothing else changes. And **§2.2's ceiling formula is the initial-launch case**: `min(cores, pending)` spawns nothing when fourteen of sixteen cores are busy and two tasks are waiting. The general form is `min(cores − running, pending)` — a wording fix, now in the doc and in a test.
+Two things changed in the design while building it.
+
+**`max_samples` was not in the capture manifest**, so scheduling.md's *yield to whatever the definition set* silently could not happen — a definition asking for 60 got Steward's 40 and nobody was told, and the log records only the effective value so there was no read-side workaround. Fixed upstream: `options` now carries `max_samples`, no schema bump needed since `options` is a free-form dict, and `reconcile` reads it.
+
+**The ceiling stopped being derived from cores.** §2.2's argument — *past core count another process buys no parallelism* — misreads the workload: a worker is on the CPU in bursts and waiting on a model API in between, so ten workers on four cores is ordinary. One process per task buys isolation of those bursts, not core saturation, which makes the ceiling a resource guard rather than a parallelism budget. It is now a flat **10**, matching where `eval_set()`'s own `max_tasks` starts, and expected to be raised. That deleted `available_cores()` and its cgroup reading — the cgroup lie is still real, but it now surfaces only inside Docker's `default_concurrency()` at step 22, where §3.6 records it. Recoverable from `f1e1822` if that step wants it. The formula also needed the running-workers term: `min(ceiling − running, pending)`, since eight running and five pending under a ceiling of ten is two spawns, not five.
 
 Sandbox division is *not* here; it is step 22, blocked upstream. `reconcile` divides one budget at this step and grows a second later.
 

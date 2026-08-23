@@ -1,5 +1,6 @@
 from .reconcile import (
     DEFAULT_MAX_SAMPLES,
+    DEFAULT_MAX_WORKERS,
     Action,
     InFlight,
     ManifestVersionError,
@@ -11,10 +12,10 @@ from .reconcile import (
     Summary,
     reconcile,
 )
-from .resources import available_cores, cores_from_cgroup
 
 __all__ = [
     "DEFAULT_MAX_SAMPLES",
+    "DEFAULT_MAX_WORKERS",
     "Action",
     "InFlight",
     "ManifestVersionError",
@@ -24,7 +25,5 @@ __all__ = [
     "RunningWorker",
     "SpawnWorker",
     "Summary",
-    "available_cores",
-    "cores_from_cgroup",
     "reconcile",
 ]

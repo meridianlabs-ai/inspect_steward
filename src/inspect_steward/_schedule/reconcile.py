@@ -24,6 +24,14 @@ from .._evalset.observe import (
     TaskState,
 )
 
+DEFAULT_MAX_WORKERS = 10
+"""Starting ceiling on concurrent workers.
+
+Deliberately **not** derived from core count. A worker is on the CPU in bursts — transcript construction, serialization, compression, scoring — and waiting on a model API in between, so ten workers on four cores is ordinary rather than oversubscribed. What one process per task buys is isolation of those bursts, not core saturation, which makes the ceiling a resource guard rather than a parallelism budget: a number to tune, not a formula to derive (scheduling.md, *Launch everything, up to a ceiling*).
+
+Ten is where `eval_set()`'s own `max_tasks` default starts, and it is expected to be raised.
+"""
+
 DEFAULT_MAX_SAMPLES = 40
 """Starting sample concurrency per worker.
 
@@ -45,8 +53,8 @@ class Pool:
     They are one budget spent twice — `workers × max_samples` is the fleet's total concurrent samples — and Steward owns both factors, which is what makes its load on a provider deterministic rather than emergent (scheduling.md, *Total concurrency is one budget spent twice*).
     """
 
-    max_workers: int
-    """Ceiling on concurrent workers. Cores, in practice — see `available_cores`."""
+    max_workers: int = DEFAULT_MAX_WORKERS
+    """Ceiling on concurrent workers."""
 
     max_samples: int = DEFAULT_MAX_SAMPLES
     """Sample concurrency per worker, unless the definition asked for something else."""

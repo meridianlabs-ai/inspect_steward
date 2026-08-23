@@ -23,7 +23,9 @@ This overturns a trade-off recorded in [workflow.md](workflow.md), which weighed
 
 The selection document accepts a *list* of tasks so that one worker can host several — added for definitions whose import cost dominates, and for batches of very short tasks. Steward always writes exactly one entry, and the generality goes unused.
 
-It is not merely unnecessary but unmotivated. Batching existed to solve **slot idle**: with a capped pool and a ten-minute tend interval, a worker finishing at t=0 leaves its slot empty until the next tend, which hurts most when tasks are short. Launching every task at once removes slots as a concept, so the problem batching solved does not arise. The constraint that came with it — *batch only tasks sharing a model, or the process's initial limit is wrong for some of them* — disappears at the same time.
+It is not merely unnecessary but unmotivated. Batching existed to solve **slot idle**: with a capped pool and a ten-minute tend interval, a worker finishing at t=0 leaves its slot empty until the next tend, which hurts most when tasks are short.
+
+An earlier draft dismissed that outright, on the grounds that launching every task at once removes slots as a concept. **That was true only of a cores-derived ceiling on a large box**, and the ceiling is now a flat ten (§2.2) — so slots and slot idle both exist again. The dismissal has to be earned rather than assumed, and it is: the cost is `interval/2 ÷ mean task duration`, which for hours-long tasks against a ten-minute interval is a fraction of a percent, and the two levers that address it directly — a shorter interval, a higher ceiling — are knobs rather than mechanisms. Batching would buy the same thing while dragging in its own constraint: *batch only tasks sharing a model, or the process's initial limit is wrong for some of them*.
 
 What remains is the startup cost itself, which batching would have amortized: Flow's measured ~1.1s of pre-boundary work, and Hawk's far worse `uv pip install` per invocation. Those are real, and they are now squarely the frontends' problem rather than something Steward can paper over by running fewer processes — which is the honest place for them, and the reason the upstream ask in [execution.md](execution.md) open question 1 matters more than it did.
 
@@ -56,34 +58,36 @@ A process costs an interpreter and its imports, once. A concurrent sample costs 
 
 ### 2.2 Launch everything, up to a ceiling
 
-Every pending task gets a worker immediately, bounded only by a ceiling. There is no queue in the common case, because a typical sweep has fewer tasks than the ceiling allows.
+Every pending task gets a worker immediately, bounded only by a ceiling. What is left over queues.
 
-The ceiling is **`min(cores, pending tasks)`**, overridable by the user. It follows directly from the process model: past core count, another process stops buying parallelism, because there is no core for it to run on. The queue exists for what is left over, and is frequently empty.
+The ceiling is **10 concurrent workers**, overridable by the user. The queue exists for what is left over, and is frequently empty.
 
-**Written that way it is the initial-launch case, and a tend is not always one.** The ceiling bounds *concurrent workers*, so once some are already running the spawn count is `min(cores − running, pending)` — which reduces to the form above when nothing is running. Reading the shorter form literally on a later tend gets it backwards: fourteen running and two pending on a sixteen-core box gives `min(16, 2) = 2`, a ceiling already exceeded, so nothing spawns — when in fact two cores are free and both tasks should start.
+**It is deliberately not derived from core count, and an earlier draft of this section got that wrong.** The reasoning it used — *past core count another process buys no parallelism, because there is no core for it to run on* — misreads the workload. A worker is on the CPU in **bursts**: transcript construction, JSON serialization, `.eval` compression, non-model scoring. Between the bursts it is waiting on a model API and using no core at all. So ten workers on four cores is entirely ordinary; they rarely contend, and when they do it costs latency on a burst rather than throughput on the run.
 
-`eval_set()` carries the precedent for having a ceiling at all — `max_tasks` defaults to `max(len(models), 10)` — but its number does not transfer, because its tasks are coroutines sharing one interpreter and Steward's are processes:
+What one-process-per-task actually buys is **isolation of those bursts** (and of crashes), not core saturation. The ceiling is therefore a resource guard — memory, file descriptors, how much simultaneous spike a box should be asked to absorb — and a guard is a number a user tunes, not a formula derived from hardware.
 
-| | `eval_set` `max_tasks` | Steward's ceiling |
-|---|---|---|
-| CPU | N tasks share one core | N tasks get N cores |
-| memory | one address space | N interpreters |
+**This is where the GIL argument stops.** §1.1 is right that *one process saturates at most one core*, and that is why several tasks must not share a process — their bursts would serialize behind one another. It does not follow that N processes need N cores, and treating it as though it did produced a ceiling that was simultaneously too small on a laptop and far too large on a big box.
 
-Note what is deliberately *not* inherited. That default's second clause — at least one slot per model — gives `eval_set()` a stratification guarantee for free: no arm can starve while another runs. Plain `min(cores, pending)` does not. Rather than smuggle the property into the ceiling, it comes from spawn order instead (see below), which delivers the same guarantee without a second knob.
+`eval_set()` carries the precedent, and having rejected its number for the wrong reason it turns out to be the right one: `max_tasks` defaults to `max(len(models), 10)`. The **10 transfers**; the per-model clause does not, because spawn order already delivers the stratification it exists for (see below) without a second knob.
 
-### 2.3 Cores means the cgroup's cores
+Two consequences worth stating, because the number is now flat:
 
-`os.cpu_count()` reports the host's processors, not the container's quota. A Kubernetes pod limited to 2 CPUs on a 64-core node reports 64 — so a cores-derived ceiling over-spawns by 32× in precisely the deployment where over-spawning kills the pod ([hawk.md](hawk.md)). Steward must read the cgroup CPU quota where one exists and fall back to `os.cpu_count()` otherwise. Hawk's own `memory_monitor` already polls the cgroup, so the precedent and the mechanism are both to hand.
+- **The fleet's default load is bounded and predictable.** `workers × max_samples` is 10 × 40 = 400 concurrent samples, whatever the machine. Under the old rule a 64-core box would have asked for 2,560 — which is a lot of provider concurrency to arrive at by reading `/proc`.
+- **The user is expected to raise it.** 10 is a floor to start from, in the same sense 40 is for `max_samples`: modest enough to be safe unattended, and the obvious thing to crank once a run is behaving.
 
-### 2.4 Memory is assumed adequate
+**Written as one number it is the initial-launch case, and a tend is not always one.** The ceiling bounds *concurrent workers*, so once some are already running the spawn count is `min(ceiling − running, pending)`. Reading it as "spawn up to ten" on a later tend double-counts: eight already running and five pending means two spawns, not five.
+
+**A queue is now the common case rather than the exception, and one earlier argument leaned on the opposite.** A cores-derived ceiling on a big box exceeded most sweeps, which is what let §1.2 say that launching everything at once "removes slots as a concept". At ten it does not: a forty-task sweep queues thirty. So **slot idle is real again** — a worker finishing at t=0 leaves its slot empty until the next tend, costing roughly `interval/2 ÷ mean task duration` of the pool. For the overnight sweeps Steward is for, where tasks run for hours against a ten-minute interval, that is a fraction of a percent and not worth machinery. It is worth knowing which levers apply if it ever is: **shorten the tend interval, or raise the ceiling** — not batching, which stays ruled out on its own terms (§1.2).
+
+### 2.3 Memory is assumed adequate
 
 There is deliberately no memory term in the ceiling. Two reasons, and the second is the substantive one.
 
 Nobody has measured per-worker memory, so any coefficient would be invented. More importantly, **the quantity it would describe is about to change shape.** Until Layer 2 pruning lands, every worker constructs every task in the eval set, datasets included — so per-worker memory scales with the whole manifest and grows each time someone adds a task. Once pruning lands it becomes roughly constant per worker. A memory formula written today would encode the un-pruned world and be wrong on the day the thing it was compensating for is fixed.
 
-So: assume memory is fine, and treat **Layer 2 pruning as a prerequisite for launch-all at scale** rather than as the optimization it is currently filed as ([execution.md](execution.md), *Changes required*, item 5). Verified absent from `inspect_ai` main as of `0db4111e`. If large sweeps turn out to exhaust memory before it lands, the right response is a launch-time check against a measured figure — a guard, not a term in the default, so that it can be removed cleanly.
+So: assume memory is fine, and treat **Layer 2 pruning as a prerequisite for raising the ceiling on a large manifest** rather than as the optimization it is currently filed as ([execution.md](execution.md), *Changes required*, item 5). Verified absent from `inspect_ai` main as of `0db4111e`. A flat ceiling of 10 bounds the default exposure at ten copies of the manifest rather than one per core, which makes the risk smaller than it was — but it is the *manifest* that scales, so a five-hundred-task sweep still meets it, and it meets it sooner for anyone who cranks the ceiling. If that happens before pruning lands, the right response is a launch-time check against a measured figure — a guard, not a term in the default, so that it can be removed cleanly.
 
-### 2.5 Spawn order transposes the crossing
+### 2.4 Spawn order transposes the crossing
 
 Order only matters when pending work exceeds the ceiling — below it everything runs at once and there is no queue to sequence. When it does matter, the default is actively bad rather than merely arbitrary.
 
@@ -180,12 +184,14 @@ def default_concurrency(cls) -> int | None:
 
 **`None` means elastic; an integer means host-bound.** k8s and every non-overriding provider are correctly elastic by default, and Docker declares a host budget. That is exactly the split [workflow.md](workflow.md) draws by hand in its sandbox table, available programmatically.
 
-**The hazard is quadratic, and the shape of the number says why.** Docker's `2 × cores` is plainly a statement about what one *host* supports — but it is applied per process, and Steward runs `cores` workers:
+**The hazard is the multiplication, and the shape of the number says why.** Docker's `2 × cores` is plainly a statement about what one *host* supports — but it is applied per process, and Steward runs a poolful:
 
 | box | containers requested |
 |---|---|
-| 16 cores | 16 workers × 32 = **512** |
-| 64 cores | 64 workers × 128 = **8,192** |
+| 16 cores | 10 workers × 32 = **320** |
+| 64 cores | 10 workers × 128 = **1,280** |
+
+A flat ceiling makes this linear in the worker count rather than quadratic in cores, which is a real improvement over the cores-derived ceiling an earlier draft assumed — 8,192 on a 64-core box became 1,280. It does not make it safe: 1,280 is still ten times what the provider says the host supports.
 
 So the rule follows from what the number already means:
 
@@ -193,14 +199,16 @@ So the rule follows from what the number already means:
 
 Per sandbox *type*, since tasks in one eval set may use different ones — the Docker tasks share a host budget and the k8s tasks do not compete for it.
 
-**Dividing floors at 1, and where the budget is smaller than the pool that overshoots it.** Ten containers across sixteen workers hands out sixteen, because a process-local limiter cannot go below one. An earlier draft fixed this with a second pool ceiling — capping the number of workers running host-bound-sandbox tasks at the budget — and that is more machinery than the case deserves. **It cannot arise from a provider default**: Docker asks for `2 × cores` and the pool is capped at cores, so the quotient is always 2. It arises only when someone sets `max_sandboxes` explicitly *and* sets it below the core count, which is a deliberate act by someone who can also lower the worker ceiling. So the rule is simply that the floor is 1, and an explicitly-tightened budget below the pool size is honoured per worker rather than in aggregate — stated as a known limit rather than defended with a second ceiling, because pool ceilings are load-bearing and having two of them is worse than the corner.
+**Dividing floors at 1, and where the budget is smaller than the pool that overshoots it.** Eight containers across ten workers hands out ten, because a process-local limiter cannot go below one. An earlier draft fixed this with a second pool ceiling — capping the number of workers running host-bound-sandbox tasks at the budget — and argued the case could not arise from a provider default, because the pool was capped at cores and Docker asks for `2 × cores`, so the quotient was always 2.
+
+**That argument died with the cores-derived ceiling and has not been replaced.** With a flat, user-tunable pool the quotient is `2 × cores ÷ ceiling`, which drops below 1 on any box with fewer than five cores at the default — and much further for anyone who cranks the ceiling, where fifty workers on a four-core box would take fifty containers against a budget of eight. The floor-at-1 rule is still probably right, and a second pool ceiling is still more machinery than a corner deserves, but "probably" is where this now stands rather than "cannot arise". **Revisit it when the division is actually built** — it is blocked on the two capture fields below, so nothing depends on settling it today.
 
 **Two things are missing before this can be implemented**, and both are narrow:
 
 - **The manifest cannot see the inputs.** Capture records no per-task sandbox type, and its `options` carries `log_dir`, `retry_attempts`, `limit`, `epochs`, `tags`, `metadata`, the error-handling trio, and `scanners` — but not `max_sandboxes`. Steward needs the sandbox *type name* per task (it can call `default_concurrency()` itself, since the provider package is installed in the same environment the workers run in) and `max_sandboxes` in options. A capture-schema addition.
 - **The selection document cannot carry the result.** It takes `log_dir` and `max_samples`, so a worker's sandbox limit cannot be set at spawn — only patched afterwards, by which point containers are open and the ratchet says lowering the limit will not reclaim them. A fourth operational override, on precisely the grounds the others were argued: operational, absent from `task_identifier`, and unreachable by environment variable.
 
-One wrinkle worth flagging rather than fixing here: Docker's `default_concurrency()` calls `os.cpu_count()`, which reports host processors rather than a container's quota — the same lie discussed under *Cores means the cgroup's cores*, this time inside Inspect. In a Hawk pod it is moot, because the infra config sets `max_sandboxes` explicitly and the default is never consulted. Elsewhere it is Inspect's to fix.
+One wrinkle worth flagging rather than fixing here: Docker's `default_concurrency()` calls `os.cpu_count()`, which reports the host's processors rather than a container's cgroup quota. A pod limited to 2 CPUs on a 64-core node reports 64, so the "host budget" Steward would divide is 32× the truth in precisely the deployment where over-allocating kills the pod ([hawk.md](hawk.md)). Reading the real number is not hard — the cgroup CPU quota is one file, `cpu.max` on v2 and a `cfs_quota_us`/`cfs_period_us` pair on v1, and Hawk's own `memory_monitor` already polls the cgroup — but it belongs wherever this division is built, not in the worker ceiling, which no longer derives from cores at all. In a Hawk pod it is moot regardless, because the infra config sets `max_sandboxes` explicitly and the default is never consulted. Elsewhere it is Inspect's to fix.
 
 ### 3.7 When a worker exits, only one thing needs redistributing
 
@@ -208,7 +216,7 @@ As a run drains, capacity frees. The question of what to do with it mostly disso
 
 **Redistribution presupposes an allocation, and two of the three knobs are not allocations.** `max_samples` is a per-worker constant that grows on a signal, not a share of a fleet total — and the drain phase is already handled by the mechanism above, because fewer live workers means less rate-limit pressure, which is the signal that says raise. Adding a rebalancing rule would be the growth rule under a second name, with a second set of thresholds to disagree with the first. `max_connections` is per-process and adaptive; each controller finds its own level and a shared 429 is what coordinates them. Neither has anything to hand back.
 
-**Slot reuse is real but only applies when there is a queue at all**, which is the uncommon case — the pool ceiling binds only when pending tasks exceed cores, and a typical sweep has fewer. When it does bind, a freed slot takes the next task in spawn order. That is backfill, not rebalancing, and it needs no policy beyond the order already chosen.
+**Slot reuse is real but only applies when there is a queue at all** — the pool ceiling binds only when pending tasks exceed it, which a small sweep does not and a large one does from the first tend. When it does bind, a freed slot takes the next task in spawn order. That is backfill, not rebalancing, and it needs no policy beyond the order already chosen.
 
 **`max_sandboxes` is the one genuine allocation, and its denominator is chosen so the question does not arise.** Divide by the number of *outstanding* tasks of that sandbox type, capped at the pool ceiling — not by the number of workers running right now:
 
@@ -224,7 +232,7 @@ That denominator only ever decreases, so each worker's share only ever increases
 
 ### 4.1 Immediately, because a scan is not competing for a core
 
-A scan pass costs a process, which under a `min(cores, pending)` ceiling looks like it should cost a task its core. It does not, and the pass should not be scheduled as though it did: a scan's work is reading transcripts and, for model-graded scanners, waiting on model calls. Transcript decompression and JSON parsing are real CPU but brief and bounded per log; the expensive part is I/O-bound. **A scan pass does not consume a worker slot**, and the pool ceiling counts task workers only.
+A scan pass costs a process, which under a worker ceiling looks like it should cost a task its slot. It does not, and the pass should not be scheduled as though it did: a scan's work is reading transcripts and, for model-graded scanners, waiting on model calls. Transcript decompression and JSON parsing are real CPU but brief and bounded per log; the expensive part is I/O-bound. **A scan pass does not consume a worker slot**, and the pool ceiling counts task workers only.
 
 So there is no reason to defer. A pass spawns as soon as there is something unscanned and no pass is running, rather than waiting for a threshold of logs to accumulate. Latency is the whole argument: [workflow.md](workflow.md) shows scan findings arriving last and re-opening runs that read as resolved, so anything that delays them pushes discovery closer to signoff, where a finding that needs a re-run costs the most. Deferring to a single terminal pass is the worst version of this and is rejected outright — it makes signoff block on a long serial job whose output may invalidate it.
 
@@ -279,7 +287,7 @@ The forensics still matter, but for proposing rather than deciding. Two bits are
 | no log, `SIGKILL`, several tasks at once | "resource exhaustion; reduce the pool and resume" |
 | `status="error"` after scoring | "every sample completed and the scorer threw; fix it and re-score rather than re-running" |
 
-Getting this wrong in the other direction was a real risk. A plain *did it write a log?* test collapses the first two rows — and the case it mistakes is the one launch-all makes most likely, since until Layer 2 pruning lands the probable failure of a large sweep is OOM during startup: no log, and read as permanent. Steward would decline to retry precisely the failure a smaller pool would fix.
+Getting this wrong in the other direction was a real risk. A plain *did it write a log?* test collapses the first two rows — and the case it mistakes is the likeliest one, since until Layer 2 pruning lands the probable failure of a large sweep is OOM during startup: no log, and read as permanent. Steward would decline to retry precisely the failure a smaller pool would fix.
 
 Note this is process forensics, not error classification. It reads how a worker died, never what its samples did, so it carries no dependency on the sample-error taxonomy ([execution.md](execution.md), open question 7).
 

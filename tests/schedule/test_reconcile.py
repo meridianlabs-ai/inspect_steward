@@ -21,6 +21,7 @@ from inspect_steward._evalset.observe import (
 )
 from inspect_steward._schedule import (
     DEFAULT_MAX_SAMPLES,
+    DEFAULT_MAX_WORKERS,
     InFlight,
     ManifestVersionError,
     Pool,
@@ -208,19 +209,33 @@ def test_below_the_ceiling_there_is_no_queue() -> None:
 
 
 def test_running_workers_take_slots_from_the_ceiling() -> None:
-    # the ceiling is on total workers, not on this turn's spawns: fourteen
-    # running and two pending on a sixteen-core box spawns both
-    manifest = synth_manifest([SynthTask("t", args={"n": n}) for n in range(16)])
-    observed = nothing_run(manifest)
-    fourteen = [
+    # the ceiling is on total workers, not on this turn's spawns: eight running
+    # and five pending under a ceiling of ten spawns two, not five
+    manifest = synth_manifest([SynthTask("t", args={"n": n}) for n in range(13)])
+    eight = [
         RunningWorker(identifier=task.identifier, pid=1000 + n, host="here")
-        for n, task in enumerate(manifest.tasks[:14])
+        for n, task in enumerate(manifest.tasks[:8])
     ]
 
-    result = reconcile(manifest, InFlight(running=fourteen), observed, pool=Pool(16))
+    result = reconcile(
+        manifest, InFlight(running=eight), nothing_run(manifest), pool=Pool()
+    )
 
     assert len(spawns(result)) == 2
-    assert result.queued == []
+    assert len(result.queued) == 3
+
+
+def test_the_default_ceiling_owes_nothing_to_the_hardware() -> None:
+    # a worker is on the CPU in bursts and waiting on a model in between, so
+    # the ceiling is a resource guard the user tunes, not a core count
+    manifest = synth_manifest([SynthTask("t", args={"n": n}) for n in range(30)])
+
+    default = reconcile(manifest, InFlight(), nothing_run(manifest), pool=Pool())
+    cranked = reconcile(manifest, InFlight(), nothing_run(manifest), pool=Pool(30))
+
+    assert DEFAULT_MAX_WORKERS == 10
+    assert len(spawns(default)) == 10 and len(default.queued) == 20
+    assert len(spawns(cranked)) == 30 and cranked.queued == []
 
 
 def test_convergence_and_idempotence() -> None:
