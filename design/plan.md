@@ -42,13 +42,18 @@ Three findings went back into the design:
 - **A selection's `log_dir` does not reach pre-boundary writes** (exec §4). A flow worker given only the override drops `flow.yaml` into the definition's log directory. A worker needs both channels — step 6.
 - **cwd does not break correlation**, contrary to the hazard upstream's error text warns about, because `definition_command` resolves the definition absolutely and flow anchors task files to the spec. Pinned as a test, so step 6 cannot quietly lose it.
 
-### Step 2 — Workspace and `init`
+### Step 2 — Workspace and `init` ✅ **done**
 
-**Delivers** a real `steward init`: the directory that everything else writes into.
+**Delivered** a real `steward init`, plus `Workspace` — the one place the layout is expressed, so no later step builds a path from a string. `tests/workspace/`, 19 cases, 4s, no subprocesses but `git init`.
 
-- **Scope.** The three-plus-one categories and which are committed; `.gitignore`; git detection and what happens without git; the scaffolded definition; refusing to overwrite. The one file Steward must never write.
-- **Refs.** workflow §5, §5.1, §5.4, §5.8, §5.9.
-- **Done when** `init` produces a workspace that a later step can open, and re-running it is safe.
+Two decisions taken during the work:
+
+- **The journal marks the workspace, and `init` opens it with a real `initialized` event.** Nothing else could mark it: `.steward/` is disposable, a definition can sit anywhere, and there is no `steward.yaml`. This pulls a minimal envelope and append path forward from step 3, which keeps the fold and the vocabulary where they belong, and it gives `Workspace.find()` something to walk up for (workflow §5.1).
+- **The definition placeholder is empty**, and `--type` chooses only its filename — including `hawk.yaml`, since with nothing being authored there was no reason to exclude it. workflow §5's promise of a runnable scaffold was amended rather than left contradicting the code; what a good starting point contains is deferred.
+
+A **skeletal `steward runbook`** ships too, so `AGENTS.md` can take its final shape now instead of naming a command that errors. Not a stub: agent.md §6's prohibitions and §5/§9's reading disciplines are settled, so it carries those for real and marks the operational sections *not yet written*.
+
+One test defect found and fixed: the pre-existing `test_cli_init` invoked `init` with no directory, which wrote a workspace into the repository and appended to its `.gitignore`. `init` was right; the test was not.
 
 ### Step 3 — The journal
 
@@ -246,7 +251,7 @@ Before adjudication rather than after, because anomalies need somewhere to escal
 >
 > An overnight run tends itself, notices what matters, escalates it, and ends in an attestation. This is the product. ([roadmap.md](roadmap.md) §3.2)
 >
-> One caveat stated plainly: the runbook is not written yet (step 29), so at this gate a human is in the loop each session. That is deliberate — see §7.
+> One caveat stated plainly: only the runbook's *bounds* exist at this gate — its operational half is step 29 — so a human is in the loop each session. That is deliberate; see §7.
 
 ## 6. Completeness and trust
 
@@ -320,17 +325,19 @@ One frontend caveat covering all three: **Hawk rejects `scan:` locally**, so non
 
 ## 7. The agent surface
 
-### Step 29 — `steward runbook`, `AGENTS.md`, and cold pickup
+### Step 29 — Filling the runbook, and cold pickup
 
 **Delivers** the prompt artifact that determines most of what a user experiences.
 
-- **Scope.** What the runbook says — cadence, the never-sign-off rule, smoke-first, what to escalate, how to tune inside the envelope, render-don't-replace. Cold pickup as a specified, testable procedure. The launch-time pre-authorization exchange. The agent scenarios of testing §5.
+The command and `AGENTS.md` already exist (step 2), carrying the bounds that were settled in advance. What is left is the half that had to be learned: the sections the skeleton marks *not yet written*.
+
+- **Scope.** Cadence and how it is armed; cold pickup as a specified, testable procedure; tuning inside the envelope; when to notify; the hard stops. The launch-time pre-authorization exchange. The agent scenarios of testing §5.
 - **Refs.** agent §3, §5, §6, §9; testing §5, §7 q2; workflow §10.7.
 - **Done when** the three bound scenarios pass — refusing signoff, raising a definition change as a question, notifying with kind `stopped` rather than only speaking into the conversation.
 
 **Deliberately last before ship, and after the M3 gate it appears to belong to.** A runbook is a set of rules for operating machinery, and rules written against machinery nobody has operated are guesses. Steps 15 through 21 each surface rules as a side effect of being built — what the summary makes obvious, what the anomaly lifecycle actually asks of a reader, which escalations turn out to matter — and those accumulate as notes rather than as a document. This step is where they become one.
 
-The cost is honest and worth naming: between the M3 gate and this step, running overnight means a human in the session each time, working from the design docs rather than from a runbook. That is a slower path to the same place, and it is also how the rules get discovered rather than invented.
+The split step 2 made keeps the cost of that honest. The **bounds** did not need discovering — they follow from decisions taken in other documents, so they ship from the start and an agent is never unbounded. What waits is the **operational** half, and until it lands, running overnight means a human in the session each time. That is a slower path to the same place, and it is also how the rules get discovered rather than invented.
 
 ## 8. Hawk in the pod — after ship
 
