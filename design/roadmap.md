@@ -20,6 +20,8 @@ It is an afternoon, it is the assumption everything downstream inherits, and it 
 
 ## 3. Four milestones, each a capability rather than a percentage
 
+The milestones name *capabilities*; [plan.md](plan.md) decomposes them into twenty-eight buildable steps and locates the gates precisely within that sequence. Where the two differ on ordering, plan.md is the finer instrument and says why.
+
 | | a user can | ships |
 |---|---|---|
 | **M1 — enumerate** | see what a definition resolves to, before running it | **done** |
@@ -51,8 +53,10 @@ What M2 deliberately lacks: it does not notice anything. Tasks run, logs land, a
 4. **Notification**, with the four kinds. Depends on **upstream item 7** or on Steward carrying Apprise itself.
 5. **Adjudication actions** — `invalidate_samples` plus respawn-with-`resume`.
 6. **`signoff`**, `anomalies.md`, the gate latch, and curation into `logs-archive/`.
-7. **The agent surface** — the tend summary, collection, `steward runbook`.
+7. **The tend summary and its queue**, which is the agent's whole surface at this milestone. The **runbook is deliberately not written here** — it is a set of rules for operating machinery, and the rules are discovered by building the steps above rather than guessed ahead of them ([plan.md](plan.md) §7).
 8. **The sync**, `steward.log`, and the two ages.
+
+Concurrency tuning splits across this boundary: the control-channel mechanism lands in M2, because `pause` and adjudication need it anyway, and the tuning *policy* lands here, because the growth signal arrives in the tend summary.
 
 ### 3.3 M4 — close the loop
 

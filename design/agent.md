@@ -45,7 +45,7 @@ Because the floor is guaranteed, the agent's relationship to the run is a choice
 
 **Reactive beats periodic where the harness supports it.** A monitor watching for a new anomaly or a landed scan costs nothing while nothing happens, where a periodic check pays context on every quiet interval. Sixty tends a night read in full is a real cost; sixty tends a night that only wake an agent when something changed is not.
 
-### 2.2 Tend output is collected, and collection is a recorded act
+### 2.2 Tend output is a queue the agent drains
 
 `tend` emits a structured summary whether or not anyone is listening, and most of them run unread. So the summaries are a **queue** that an occasionally-connected agent drains: it takes the unacknowledged ones in order, acts on them, and acknowledges its position, which lands in the journal like any other event.
 
