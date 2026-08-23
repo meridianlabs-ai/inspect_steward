@@ -55,15 +55,17 @@ A **skeletal `steward runbook`** ships too, so `AGENTS.md` can take its final sh
 
 One test defect found and fixed: the pre-existing `test_cli_init` invoked `init` with no directory, which wrote a workspace into the repository and appended to its `.gitignore`. `init` was right; the test was not.
 
-### Step 3 — The journal
+### Step 3 — The journal ✅ **done**
 
-**Delivers** append-only durable state, and the fold that reads it.
+**Delivered** the append-only record as something that can be read after a crash: a safe concurrent append, a damage-tolerant reader, and `summarize()` — the first fold, and the shape every later one takes. `tests/workspace/test_journal.py`, 14 cases, 2.2s.
 
-- **Scope.** The JSONL envelope (`ts`, `type`, payload); the event vocabulary as it stands today, extensible later; the fold; tolerance of a corrupt or truncated last line; UTC ISO-8601 everywhere.
-- **Refs.** workflow §5.5, §5.6, §5.2, §6.2; exec §10.
-- **Done when** a fold over a synthesized journal — including a torn tail — produces the expected state without raising.
+Three decisions, each the opposite of how Steward treats a selection document — and deliberately, because **a selection is input being validated before it changes what runs, while a journal is history being read**:
 
-The event *vocabulary* grows in nearly every later step. The envelope, the fold and the corruption behaviour do not, and those are what this step fixes.
+- **An unrecognised event type reads as a generic event.** A workspace outlives the Steward that wrote it, so refusing a file because a later version put something new in it would be the wrong trade. Selection documents forbid extras for exactly the opposite reason.
+- **Damage costs one line, never the file.** `read_journal` returns what it parsed *and* what it could not, with line numbers; a missing journal is an empty history rather than damage. Nothing raises, and nothing is swallowed — where a complaint goes is `steward.log`, step 17.
+- **Only `initialized` is typed.** The other eight types in workflow §5.6 arrive with the steps that write them; in particular the five anomaly types stay with step 18, which keeps the three-level model as one piece rather than transcribing a table ahead of the code that gives it meaning.
+
+One thing measured rather than assumed, because the first version of the test could not have failed: **splitting a record across two writes** (payload, then newline) loses about a quarter of the events under four concurrent writers. Size is not the hazard and neither is the platform — a buffered whole-line append is safe on a local filesystem. So the guard is one `os.write` of a pre-built line, and the test's docstring records what it does and does not catch.
 
 ### Step 4 — Observed state, and the fixtures that prove it 🔧
 
@@ -242,7 +244,7 @@ Before adjudication rather than after, because anomalies need somewhere to escal
 
 **Delivers** the attestation, and the end of the run.
 
-- **Scope.** The completion criterion and the gate latch; `anomalies.md`; approval terminations; curation into `logs-archive/`; what a stopped run leaves behind.
+- **Scope.** The completion criterion and the gate latch; `anomalies.md`; approval terminations; curation into `logs-archive/`; what a stopped run leaves behind. **Who commits the journal** (workflow open question 4) — `init` prepares the repository and nothing commits, so the durability-through-git story does not happen by itself; signoff is the natural owner as the terminal act, but the question is assigned here rather than answered, and a runbook instruction at step 29 is the live alternative.
 - **Refs.** workflow §13, §13.1, §14, §14.1, §2.2–2.4.
 - **Workaround.** Reimplement the supersession predicate (`latest_completed_task_eval_logs` is private and exported nowhere), accepting that it can drift from `eval_set()`'s definition.
 - **Done when** signoff refuses while anomalies are open, and curation moves rather than deletes.
