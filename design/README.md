@@ -6,7 +6,7 @@ Five documents. The first three read in order, each starting where the previous 
 |---|---|---|
 | [configuration.md](configuration.md) | How a *definition* — any program culminating in one `eval_set()` call — becomes a **manifest** of resolved tasks, via capture mode. | Implemented |
 | [execution.md](execution.md) | How a manifest becomes **running processes**: worker mode, the shared log directory, recovery, and the reconcile loop. | Protocol landed upstream; runner unbuilt |
-| [scheduling.md](scheduling.md) | What `reconcile` actually **decides**: one task per process, launching everything up to a core-count ceiling, and why a failed task is adjudicated rather than retried. | Process model, pool, and failure handling settled; ordering and allocation open |
+| [scheduling.md](scheduling.md) | What `reconcile` actually **decides**: one task per process, launching everything up to a core-count ceiling, spawning task-major, how the three concurrency knobs are set, when scan passes run, and why a failed task is adjudicated rather than retried. | Everything but spend is settled |
 | [workflow.md](workflow.md) | What a person actually **does** — `init` through `signoff` — the project, convergence, adjudication, notification, and resource tuning. | Lifecycle settled; adjudication still being figured out |
 | [hawk.md](hawk.md) | Running under **Hawk**: its config as a definition, its infra config at runtime, a blocking `launch`, and the relay an external agent drives it through. | Stage 0 implemented (configs read and run); runtime stages sketched |
 
@@ -33,4 +33,4 @@ Each document ends with its own numbered list. Roughly: configuration.md holds d
 
 ## Upstream dependencies
 
-execution.md's *Changes required in inspect_ai* is the single list of what Steward needs from Inspect. Items 1–4 have landed (capture, selection, error-handling overrides, operational overrides); early pruning, public directory operations, notification-outside-an-eval, and the dataset `limit` override a smoke run needs have not.
+execution.md's *Changes required in inspect_ai* is the single list of what Steward needs from Inspect. Items 1–4 have landed (capture, selection, error-handling overrides, operational overrides). Outstanding: early pruning, public directory operations, notification-outside-an-eval, the dataset `limit` override a smoke run needs, a `max_sandboxes` override, and a capture manifest that records each task's sandbox type.

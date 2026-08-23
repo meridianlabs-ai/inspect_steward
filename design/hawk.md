@@ -77,21 +77,26 @@ That last point generalizes. Because a worker is the whole runner again, everyth
 
 ## The budget hazard: per-process ceilings meet multiplied processes
 
-This is the one place where "run the runner N times" is actively wrong rather than merely wasteful.
+This is the one place where "run the runner N times" is actively wrong rather than merely wasteful — but not for the reason it first appears, and the difference decides what has to be fixed.
 
-Every concurrency ceiling in the infra config is written as a *per-process* budget, because Hawk has always had exactly one process:
+Every ceiling in the infra config is written as a budget for *one process*, because Hawk has always had exactly one. What matters is which of them were already being multiplied by something before worker mode arrived. [scheduling.md](scheduling.md) works this out in general; applied to Hawk's numbers:
 
-| field | default | under N workers |
-|---|---|---|
-| `max_samples` | **1000** | up to 1000 × N concurrent samples |
-| `max_tasks` | **1000** | moot — a worker runs one task, or the few its selection names |
-| `max_sandboxes` | computed | up to 500 × N sandboxes |
+| field | default | scope | under N workers |
+|---|---|---|---|
+| `max_samples` | **1000** | per *task* | 1000 × N — but N replaces `max_tasks`, so this **improves** |
+| `max_tasks` | **1000** | per process | moot — a worker runs one task |
+| `max_connections` | 100 hint | per process, adaptive | N independent controllers — **newly multiplied** |
+| `max_sandboxes` | computed | per process | 500 × N — **newly multiplied** |
 
-`max_sandboxes` is the sharpest, because it is not a static default but a runtime computation. `_apply_config_defaults` (`run_eval_set.py`) mutates the infra config in place, setting `max_sandboxes = min(total_max_connections * 2, 500)` — where `total_max_connections` is derived from the distinct provider keys across the loaded models and the adaptive-connections ceiling hint of 100. Each worker computes it independently, from its own single task, and each gets a number sized for the whole eval set.
+**`max_samples` is the false alarm.** It bounds concurrency *within a task*, not within a process, so single-process Hawk was already multiplying it by however many tasks ran at once — up to `max_tasks`, which is also 1000. Worker mode swaps that multiplier for the worker count, and the worker count is capped at cores. Fifty concurrent tasks in one process is 50,000 potential samples; sixteen workers is 16,000. The knob that looked like the hazard is the one worker mode makes *smaller*.
 
-So: **every concurrency knob in the infra config must be divided across workers.** This is [workflow.md](workflow.md)'s local-compute budget with a concrete adversary — a pod whose memory limit was sized for one process, hosting N. The selection document's `max_samples` override is how the division is expressed per worker, which is the second time that schema-v2 field has turned out to be the thing this integration needed.
+**`max_connections` is the one the table used to omit.** It is process-global and adaptive, so one process means one AIMD controller converging on what the provider will bear, and N processes mean N controllers each ramping independently toward the ceiling hint. This needs no fix: [scheduling.md](scheduling.md) argues that rate limits are the coordination mechanism — a shared 429 is felt by every controller at once, and they all cut together. Independent controllers on a shared bucket converge on a shared answer.
 
-The division is not uniform, for the reason workflow.md gives: different tasks with different models want different `max_samples`. So the infra config's value is the *envelope* to stay under, not a number to split evenly — the agent tunes within it and escalates when the right answer is unclear. What the agent may not do is exceed it, because unlike wall clock, exceeding this one kills the pod.
+**`max_sandboxes` is the real one**, and it is not a static default but a runtime computation. `_apply_config_defaults` (`run_eval_set.py`) mutates the infra config in place, setting `max_sandboxes = min(total_max_connections * 2, 500)` — where `total_max_connections` is derived from the distinct provider keys across the loaded models and the adaptive-connections ceiling hint of 100. Each worker computes it independently, from its own single task, and each gets a number sized for the whole eval set. There is no backpressure signal to discover the mistake with; the pod simply dies.
+
+Hawk lands cleanly on scheduling.md's rule, because computing the value explicitly is exactly the case that rule handles best: **an explicitly configured `max_sandboxes` is a host budget, and Steward divides it by the worker count.** No provider sniffing is needed — the infra config already committed to a number, and setting it means Docker's own `default_concurrency()` (whose `os.cpu_count()` misreads a pod's cgroup quota) is never consulted. What is missing is only the channel: the selection document cannot yet carry `max_sandboxes`, which is [execution.md](execution.md) upstream item 9.
+
+The narrower claim replaces the old blanket one: it is not that every knob must be divided, but that **the ones with no feedback signal must be**. Connections coordinate through rate limits; samples were never the multiplier they appeared to be; sandboxes have nothing, so Steward divides them. Within that bound the infra config's values stay an *envelope* rather than a quota to split evenly — different tasks with different models want different `max_samples`, so the agent tunes inside it and escalates when the right answer is unclear. What the agent may not do is exceed it, because unlike wall clock, exceeding this one kills the pod.
 
 ## Hook scope decides what survives worker mode
 
