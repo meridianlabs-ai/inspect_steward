@@ -320,7 +320,7 @@ The store is a **machine-level resource**, frequently shared: pointing several m
 
 Writing has no default beyond what policy says, since it is a decision on a command a human is present for. Someone who never signs off never publishes; someone whose project is exploratory can say so once in `policy.md` and stop being asked.
 
-There is deliberately no `steward.yaml` entry for either ([workflow.md](workflow.md), *There is no `steward.yaml`*): the location is environmental, and the publication rule is prose a human writes.
+Neither gets a `_steward.yaml` entry ([workflow.md](workflow.md), *A config file may not say anything the definition can*): the location is environmental, and the publication rule is prose a human writes.
 
 **This unifies with the archive**, since both are identifier-keyed caches — one project-local, one global. Convergence for a wanted identifier with no log in `logs/` consults them in cost order:
 
@@ -620,7 +620,17 @@ Two layers of control channel then stack, and the direction matters:
 - **agent → supervisor** (Steward's own surface): status, pause, abandon an arm, resolve samples, retune concurrency.
 - **supervisor → workers** (Inspect's `ctl`): requeue, retune limits, pause a model.
 
-An agent *can* read a worker's endpoint directly and that is harmless. It should not issue directives there: requeue budgets and escalation state live with the claim holder, and a second party issuing directives puts that accounting in two places. Reads fan out; writes go through the supervisor.
+An earlier draft drew the line at reads: an agent could read a worker's endpoint but not issue directives there, because "requeue budgets and escalation state live with the claim holder, and a second party issuing directives puts that accounting in two places." **The premise turned out to be false, and the line is in a different place.**
+
+`inspect ctl` records every applied change *in the eval log* — author, timestamp, old and new value, and the `--reason` the caller gives. So the accounting is in **one** place that both parties write to, not in the supervisor's memory; and Steward re-derives worker state from the channel on each tend rather than remembering what it set, which is the same convergence property everything else here rests on. An agent retuning a worker is therefore visible, attributable, and survivable.
+
+**The line that replaces it is primitive versus composition.**
+
+A **primitive** is one directive against one target, recoverable if wrong: read the fleet, retune one worker's `max_samples`, flush a log, pause one task. Those are `inspect ctl`'s, and an agent runs them itself. Steward wraps nothing — the same conclusion, for the same reason, as printing an `inspect acp` command rather than building an ACP client (*The parked worker*). Upstream maintains an agent output contract for exactly this consumer: `--json` throughout, enveloped reads and mutations, and failures in a closed vocabulary of error kinds meant to be branched on rather than scraped.
+
+A **composition** is Steward's, and gets a real command with tests behind it: an operation spanning several directives, several surfaces, or carrying a precondition that should not be re-derived from a prompt. Invalidate-and-resume is the archetype — choose samples in a landed log, invalidate them with provenance, and let the next tend respawn with `resume` — where the failure modes are invalidating a log a worker is still writing, or losing the provenance that makes the autonomy reviewable. In-flight requeue and a fleet-wide model latch that has to outlive a tend are the others.
+
+Two consequences worth stating. **Steward's own CLI stays small** — its vocabulary is run-scoped (`status`, `pause`, `resolve`, `signoff`) and worker-scoped primitives are simply not its business. And **Steward never undoes a latch it did not set**: a worker someone paused deliberately reads as paused-by-another, not as drift to correct.
 
 ### 8.3 The reconcile core, and its drivers
 
@@ -723,7 +733,9 @@ Workers run with Inspect's control server enabled, so each has a live HTTP endpo
 
 Steward finds a worker's endpoint by pid via the discovery directory, correlated to a task through the in-flight record.
 
-The endpoints most relevant to this document are the ones in-flight requeue is built on — `GET /evals/{id}/samples`, `GET /evals/{id}/sample`, and `POST /evals/{id}/sample/requeue` — plus the runtime-tuning directives (`POST /config` for per-sample limits, the pause/resume latches at process, task, and model scope). Model-scoped pause is worth noting alongside requeue: when the classification is "this provider is down", pausing the model is the correct response and requeueing individual samples is not.
+The endpoints most relevant to this document are the ones in-flight requeue is built on — `GET /evals/{id}/samples`, `GET /evals/{id}/sample`, and `POST /evals/{id}/sample/requeue` — plus the runtime-tuning directives (`PATCH /config` and `PATCH /tasks/{id}/config`, and the pause/resume latches at process, task, and model scope). Model-scoped pause is worth noting alongside requeue: when the classification is "this provider is down", pausing the model is the correct response and requeueing individual samples is not.
+
+**Tuning is task-scoped, which decides the call order.** `max_samples` — the one knob Steward actually steers ([scheduling.md](scheduling.md), *`max_samples` — set explicitly*) — lives on `PATCH /tasks/{id}/config`, not on the process-wide `PATCH /config`, which carries `max_connections`, `max_sandboxes`, and `max_subprocesses`. So a retune is always preceded by a listing, to learn the task id. That costs nothing, because the listing spans every process in one call and is what a tend reads anyway; and at one task per worker it resolves without matching, since the worker's row is the only one it has.
 
 #### 8.5.1 The channel changes how work runs, never what work exists
 
@@ -733,7 +745,9 @@ So **epochs cannot be raised on a running eval**, and should not be: epochs is s
 
 **Letting the running worker finish is unambiguously right here**, which is not true of the superseded case it resembles. Its output is epoch 1, and epoch 1 is exactly what the extension will reuse — so preempting it discards samples that were going to count, and buys nothing, since two workers cannot share a task (one task means one log). The cost is latency: a task six hours from finishing starts its new epochs in six hours. That is the eventual-consistency the convergence model trades for, and the alternative is strictly worse rather than merely different.
 
-**One hazard in the other direction, worth verifying rather than assuming.** `PATCH /tasks/{id}/config` accepts `time_limit`, `token_limit`, and `message_limit` — and all three *are* in `task_identifier`. If a patched value reaches the log's `eval.config`, then `task_identifier(EvalLog)` no longer matches the manifest entry that scheduled it, and the log correlates to nothing. The override machinery it routes through suggests these layer at runtime rather than being written back, but that is an inference. Until it is checked, Steward should treat those three as not-to-be-patched; the concurrency knobs it actually wants for tuning are unaffected either way.
+**One hazard in the other direction, now checked rather than inferred.** `PATCH /tasks/{id}/config` accepts `time_limit`, `token_limit`, and `message_limit`, and all three *are* in `task_identifier` — so if a patched value reached the log's `eval.config`, `task_identifier(EvalLog)` would stop matching the manifest entry that scheduled it and a finished task would read as an orphan. An earlier draft could only infer from the override machinery that they layer at runtime instead.
+
+**They do.** Patching a `token_limit` on a live worker and recomputing the identifier from the log it went on to land yields the identifier the manifest scheduled, unchanged — the three are live overrides read where each sample's limits are checked, and an applied change is written to a *separate* per-log record rather than back into the launch config. Pinned as a test, because it is a correlation property that would fail silently if it ever stopped holding. Steward still exposes only `max_samples`, which is the knob it steers; the point of the check is that the others are not a trap for whoever reaches for them next.
 
 ## 9. When the substrate fails
 
@@ -843,7 +857,7 @@ The fix is not machinery. **A separate key for the supervisor** removes it entir
 
    Hard-coding the error-handling options keeps this surface purely *operational*: nothing that can be overridden changes what an eval means. Had `fail_on_error` gone here, the channel would have needed two tiers to keep semantic overrides visible.
 
-5. **Automatic early pruning** (Layer 2 in configuration.md) — the `@task` registry wrapper returning placeholders for unselected tasks. *Not yet*, and it is what makes a worker's startup cost proportional to its own task rather than to the whole eval set. It has a Steward half, which is why it is a plan step rather than a pure wait: the wrapper matches on `(name, args_hash)`, so the selection document has to carry those as fields, and `extra="forbid"` means Steward cannot send them until the schema version that introduces them ([plan.md](plan.md) step 15).
+5. **Automatic early pruning** (Layer 2 in configuration.md) — the `@task` registry wrapper returning placeholders for unselected tasks. *Not yet*, and it is what makes a worker's startup cost proportional to its own task rather than to the whole eval set. It has a Steward half, which is why it is a plan step rather than a pure wait: the wrapper matches on `(name, args_hash)`, so the selection document has to carry those as fields, and `extra="forbid"` means Steward cannot send them until the schema version that introduces them ([plan.md](plan.md) step 17).
 
 6. **Public eval-set directory operations** (see *Sharing the directory operations with `eval_set()`*) — a documented public surface that both `eval_set()` and external runners call, so the preparation/cleanup protocol has one implementation rather than two that drift. Also rationalizes a surface that is already inconsistently half-public. Most of the cleanup band needs no change beyond export; the preparation half needs `validate_eval_set_prerequisites` and `write_eval_set_info` refactored to take identifiers and plain `EvalSetTask` rows instead of live `ResolvedTask`s. Low risk, and it retires a whole category of future divergence.
 
@@ -922,7 +936,7 @@ Two further items came out of asking what a *detached* worker can and cannot do:
 
 2. **What replaces flow's store.** *Resolved: nothing replaces it, because the mechanism keeps working — but Steward operates it, not the worker* — see *Steward owns both halves, because the store is not really Flow's*. `--store none` disabled two halves to fix one, and the repair is **not** to hand the write half back to workers: an `evalset` or `hawk` worker has no Flow code in it to index anything, so a store fed by workers is empty for two thirds of the projects that would benefit. Workers therefore run with the store off, Steward reads once at launch, and Steward writes at signoff.
 
-   **Only the first of those three is built.** The flow adapter passes `--no-store-read --no-store-write`; both of Steward's halves are step 29, in M4. Until then the store is **inert for Steward runs** — nothing indexes and nothing is reused — where before it was flow workers appending unattested rows on flow's `write=True` default. That is the correct interim state rather than a regression, for the reason *Publication is an act of signoff* gives, and what it costs is narrow: reuse *across* log directories for flow definitions, since reconcile already declines to re-run a task whose log is in this run's directory.
+   **Only the first of those three is built.** The flow adapter passes `--no-store-read --no-store-write`; both of Steward's halves are step 32, in M4. Until then the store is **inert for Steward runs** — nothing indexes and nothing is reused — where before it was flow workers appending unattested rows on flow's `write=True` default. That is the correct interim state rather than a regression, for the reason *Publication is an act of signoff* gives, and what it costs is narrow: reuse *across* log directories for flow definitions, since reconcile already declines to re-run a task whose log is in this run's directory.
 
    What remains open is narrower still and is recorded in the sections above: what filter policy governs reuse, and whether a log carrying accepted-as-errored samples is publishable at all.
 

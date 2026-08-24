@@ -26,7 +26,7 @@ One thing the work changed: the manifest now records `identifier_version`. It wa
 
 ## 3. Four milestones, each a capability rather than a percentage
 
-The milestones name *capabilities*; [plan.md](plan.md) decomposes them into thirty-four buildable steps and locates the gates precisely within that sequence. Where the two differ on ordering, plan.md is the finer instrument and says why.
+The milestones name *capabilities*; [plan.md](plan.md) decomposes them into thirty-six buildable steps and locates the gates precisely within that sequence. Where the two differ on ordering, plan.md is the finer instrument and says why.
 
 | | a user can | ships |
 |---|---|---|
@@ -95,11 +95,11 @@ Scanning is the largest piece and the most valuable — three steps in [plan.md]
 |---|---|---|
 | 7 — notification outside an eval | **M3** | Steward carries Apprise itself, duplicating `build_apprise` / `init_apprise`. Works, and is the one item with a genuine workaround |
 | 8 — dataset `limit` override | M4 (smoke) | no smoke gate; a rehearsal would run the whole dataset |
-| 5 — early pruning | M2 **at scale** | small sweeps are fine; per-worker memory scales with the whole manifest, so a large one is not. A precondition for launching wide, not for launching. Steward's half — emitting the identity facets the pruner matches on, plus the interim memory guard — is [plan.md](plan.md) step 15 |
+| 5 — early pruning | M2 **at scale** | small sweeps are fine; per-worker memory scales with the whole manifest, so a large one is not. A precondition for launching wide, not for launching. Steward's half — emitting the identity facets the pruner matches on, plus the interim memory guard — is [plan.md](plan.md) step 17 |
 | 9, 10 — `max_sandboxes` override and sandbox type in the manifest | M2 **on Docker** | k8s and unsandboxed evals are unaffected. On a Docker host the fleet asks for `workers × 2 × cores` containers, which is the one failure mode with no backpressure signal |
 | 6 — public directory operations (incl. `archive_dir`) | **M3** | signoff curates into `logs-archive/`, and the predicate it needs — `latest_completed_task_eval_logs` — is private and exported nowhere. Steward reimplements it, which is small but free to drift against the definition of "superseded" that `eval_set()` uses. Its second half — a batched header read that degrades instead of raising — Steward has already reimplemented, and would keep doing so |
 | 11 — epochs reducer in the manifest | never blocking | a reducer-only change reads as complete where `eval_set()` would re-score. Silent rather than loud, which is why it is worth one field |
-| 12, 13 — ACP on in worker mode, and the parked state on the control channel | **M3** | a detached worker has no path to a human: `approver: human` and `ask_user` land as errored samples in successful logs. Only definitions that ask for human interaction are affected, and they are affected completely. The two must land together — 12 without 13 replaces a loud errored sample with an invisible stall ([plan.md](plan.md) step 17) |
+| 12, 13 — ACP on in worker mode, and the parked state on the control channel | **M3** | a detached worker has no path to a human: `approver: human` and `ask_user` land as errored samples in successful logs. Only definitions that ask for human interaction are affected, and they are affected completely. The two must land together — 12 without 13 replaces a loud errored sample with an invisible stall ([plan.md](plan.md) step 19) |
 
 **Two items touch M3, and both have workarounds** — Steward can carry Apprise itself, and it can compute supersession itself. Nothing blocks M2 except at scale or on Docker, which is worth knowing: the runner can be built and proven before any of this lands.
 

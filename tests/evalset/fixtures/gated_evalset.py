@@ -24,11 +24,13 @@ def unhurried():
 
     One mockllm sample is over before a poll can see the eval at all, and a
     control socket that exists for less time than it takes to look for it is
-    not a socket any test can assert on.
+    not a socket any test can assert on. `STEWARD_TEST_SLEEP` raises it for a
+    test that has to ask the running eval several questions — each `inspect
+    ctl` invocation costs about 1.3s, so a handful of them outlast the default.
     """
 
     async def solve(state: TaskState, generate: Generate) -> TaskState:
-        await asyncio.sleep(5)
+        await asyncio.sleep(float(os.environ.get("STEWARD_TEST_SLEEP", "5")))
         return await generate(state)
 
     return solve

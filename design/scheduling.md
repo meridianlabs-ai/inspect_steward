@@ -132,6 +132,8 @@ The first row is the surprise. Because `max_samples` is per *task*, a worker run
 
 Steward always writes an explicit `max_samples` into the selection. Explicit is the point: it is the difference between a `ResizableLimiter` the control channel can retune mid-eval and a `DynamicSampleLimiter` that tracks the model's connection controller and cannot be adjusted at all ([workflow.md](workflow.md), *Setting `max_samples` explicitly is what makes it a knob*).
 
+**Retuning it is task-scoped, so a read comes first.** The knob is on the task's config, not the process's, and its selector is a `task_id` Steward does not know until it asks — so the tend's fleet listing is a precondition for moving the setpoint rather than an independent call. Two things make that free: the listing spans every process in one call, and at one task per worker the row that comes back is unambiguous without matching. The listing also reports `in_use` alongside the limit, which is what makes a *lowering* decision informed rather than hopeful — see §10.5 on why that direction is the slow one.
+
 The cost is real and worth stating: leaving it unset would let sample concurrency ride the adaptive controller, which is genuinely better at finding the right level *within one process*. Steward gives that up because per-process adaptation cannot see the fleet, and coordination across workers is the thing only Steward can do.
 
 **Three parties can have an opinion about the number, and they rank by how specifically they asked:**

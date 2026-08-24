@@ -20,7 +20,7 @@ A definition is executed once under `INSPECT_EVAL_SET_CAPTURE` to enumerate its 
 
 ## 2. Decisions that shape everything else
 
-- **The definition is the single source of truth** for what an eval set is. No second config file — there is deliberately no `steward.yaml`.
+- **The definition is the single source of truth** for what an eval set is. `_steward.yaml` carries Steward's own settings — fleet shape, tend interval — and is structurally barred from naming anything the definition owns.
 - **A workspace is a project, not a run.** One evolving definition, one log directory holding its current results, one archive holding everything superseded, one journal. Work converges toward the manifest rather than happening in identified episodes, so amending is just `launch` again.
 - **Steward never deletes an eval log.** Superseded, removed, and failed logs move to a sibling archive. Curating the directory is allowed; destroying a result is not.
 - **Workers run `eval()`, not `eval_set()`.** Removing the competing orchestrator is what makes a flat, shared log directory safe, which is what keeps `inspect view` and `samples_df` working live and unmodified.

@@ -237,7 +237,7 @@ The fourth category is the newest and easy to mislabel as rendered. `scanning.md
 
 `journal.jsonl` therefore sits at the top level, beside the authored files, where a file nobody can regenerate belongs. Nothing in `.steward/` is irreplaceable, which makes it disposable — a property worth more than a tidy listing.
 
-**The journal is also what marks a directory as a workspace**, and it is the only file that can be. `.steward/` is disposable, so its absence proves nothing; a definition can sit in any directory; and there is deliberately no `steward.yaml`. The journal is durable, Steward-specific, and present for exactly as long as the workspace is — which is why `init` opens it with a real `initialized` event rather than leaving it until the first launch. An empty file would have served as a marker, but a record of when the workspace came into being is the same cost and is worth having, and it means the account of what happened starts where the workspace does.
+**The journal is also what marks a directory as a workspace**, and it is the only file that can be. `.steward/` is disposable, so its absence proves nothing; a definition can sit in any directory; and `_steward.yaml` is optional, so its absence proves nothing either. The journal is durable, Steward-specific, and present for exactly as long as the workspace is — which is why `init` opens it with a real `initialized` event rather than leaving it until the first launch. An empty file would have served as a marker, but a record of when the workspace came into being is the same cost and is worth having, and it means the account of what happened starts where the workspace does.
 
 **Losing `.steward/` mostly fails in the safe direction.** Anomalies re-derive from the log directory, since the errored samples are right there; the manifest is re-captured from the definition; in-flight records are rebuilt from the logs. Nothing durable is lost, because the rulings — the part that could not be recovered — are not in there.
 
@@ -343,23 +343,26 @@ Where version control is available, `journal.jsonl` survives and is reviewable b
 
 **A small integrity bonus falls out.** Committing an append-only journal gives a second, independent record of when each decision was made — git's own metadata — and any edit to a past entry shows up in review as a *modification* rather than an append. It does not make the record tamper-proof, but it makes tampering visible in the course of ordinary review, which is most of the value.
 
-### 5.9 There is no `steward.yaml`
+### 5.9 A config file may not say anything the definition can
 
-Every candidate for it turned out to belong somewhere else:
+The original position here was that there is **no** config file at all, and most of it survives. Every candidate belonged somewhere else:
 
 | candidate | where it actually goes |
 |---|---|
 | definition pointer | discovered (`evalset.py` / `flow.yaml` in the directory) |
 | `log_dir` | defaults to `logs/` |
-| tend interval | the runbook, and the agent's scheduling |
 | notification channel | `INSPECT_EVAL_NOTIFICATION` — reference-only *by design*, so a config file is the wrong home |
 | log-reuse store location | `INSPECT_STEWARD_STORE` — a machine-level resource shared across projects, not a property of one |
 | whether to publish to it | a `signoff` decision, defaulting from `policy.md` — publishing a result for others to reuse is an attestation, not a setting |
 | eval configuration | the definition, which configuration.md establishes as the single source of truth |
 
-What is left over is per-run and belongs on the command line — `--smoke`, `--accept-archive`, a concurrency ceiling. A config file is for settings you re-apply across many invocations; a run is launched once. Where someone genuinely repeats a launch, a shell script or Makefile does the job and they have one anyway. (An earlier draft made the case with `--max-spend`; see *Spend is not Steward's to manage* for why that argument lost its example.)
+What is left over is mostly per-run and belongs on the command line — `--smoke`, `--accept-archive`. A config file is for settings you re-apply across many invocations; a run is launched once. (An earlier draft made the case with `--max-spend`; see *Spend is not Steward's to manage* for why that argument lost its example.)
 
-The stronger reason to refuse it is drift. configuration.md spends its length establishing that the definition is the single source of truth for what an eval set *is*; a second config file beside it is precisely the place where a contradicting `log_dir` or `model` ends up. Not creating it is cheaper than policing it.
+**Two rows did not survive, and they are why `_steward.yaml` exists** ([plan.md](plan.md) step 15). *Tend interval* was routed here to "the runbook, and the agent's scheduling", which does not hold: the runbook is prose, while cron and the ticker fallback both need a number, so it arrives as a `launch` flag — a standing property of a workspace showing up as a per-launch argument, which is the thing this section concedes config files are *for*. And **fleet shape** was never in the table, because until there was a choice about how tasks divide across processes there was nothing to express. Both affect Steward and neither is anything Inspect has an opinion about.
+
+**The drift objection is what the rule answers.** configuration.md spends its length establishing that the definition is the single source of truth for what an eval set *is*, and a second file beside it is precisely where a contradicting `log_dir` or `model` ends up. So the file may express only what the definition **cannot** — and the keys the definition owns are refused by name, with a message saying where they belong, rather than ignored. Unknown keys are rejected outright. That is the same posture a selection document takes and for the same reason: this is input, not history. Policing by schema is cheap; policing by discipline is what was being avoided.
+
+The underscore sorts it to the top of a directory listing, beside `AGENTS.md`.
 
 ## 6. Mechanics and policy are different documents
 

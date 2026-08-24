@@ -1,3 +1,14 @@
+from .ctl import (
+    ABSENT,
+    AUTHOR,
+    ConfigView,
+    Knob,
+    Samples,
+    TaskRow,
+    Unavailable,
+    list_tasks,
+    task_config,
+)
 from .inflight import (
     EXITED,
     INTENT,
@@ -20,20 +31,29 @@ from .spawn import (
 )
 
 __all__ = [
+    "ABSENT",
+    "AUTHOR",
     "EXITED",
     "INTENT",
     "LAUNCHED",
     "MAX_KEY_LENGTH",
+    "ConfigView",
     "Fleet",
+    "Knob",
+    "Samples",
     "ScannedWorker",
     "SpawnedWorker",
+    "TaskRow",
+    "Unavailable",
     "WorkerScan",
+    "list_tasks",
     "record_exited",
     "record_intent",
     "record_launched",
     "resolve_eval_set_id",
     "resolve_inflight",
     "scan_processes",
+    "task_config",
     "worker_selection",
     "worker_stem",
 ]
