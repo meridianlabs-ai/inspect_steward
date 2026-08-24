@@ -72,11 +72,11 @@ Selection is the execution counterpart to capture. Both are environment-variable
 | `INSPECT_EVAL_SET_CAPTURE` | Path to write a manifest. `eval_set()` resolves tasks, writes the manifest, and exits the process without running anything. |
 | `INSPECT_EVAL_SET_SELECTION` | Path to a selection document. `eval_set()` resolves tasks, runs only the selected ones through `eval()`, and skips all eval-set orchestration. |
 
-The selection document (`inspect_ai._eval.eval_set_selection`, schema version 2):
+The selection document (`inspect_ai._eval.eval_set_selection`, schema version 3):
 
 ```jsonc
 {
-  "version": 2,
+  "version": 3,
   "eval_set_id": "swe-sweep-2026-08",   // Steward-assigned; stamped into every log
   "tasks": [
     {
@@ -84,10 +84,20 @@ The selection document (`inspect_ai._eval.eval_set_selection`, schema version 2)
       "resume": "logs/2026-08-19T…_mbpp_abc.eval"   // optional prior log to resume
     }
   ],
-  "log_dir": "s3://…/logs",             // optional operational overrides
-  "max_samples": 12
+  "overrides": {                        // all optional; omitted keeps the definition's
+    "log_dir": "s3://…/logs",
+    "max_samples": 12,
+    "limit": 5,
+    "max_sandboxes": 8
+  }
 }
 ```
+
+**Three fields are the protocol; the rest are knobs, and they live in a container.** `version`, `eval_set_id`, and `tasks` are what a selection *is*. Everything else adjusts how one worker is operated, and at version 3 there are four of them — enough that leaving them beside the protocol fields reads as one flat bag of unrelated things. `overrides` is a `extra="forbid"` sub-model like its parent, so a misspelled key is still refused rather than dropped.
+
+The container does not save a schema version per field, and the design should not pretend otherwise: `extra="forbid"` already refuses an unknown key, and the version bump exists to turn that refusal into *"upgrade inspect-ai"* rather than *"unknown field"* — which is worth having either way. What it fixes is a category error, not a cost.
+
+**The rule for what may go in:** an override may change **how a worker is operated** — where its output goes, how fast it runs, how much of its dataset it runs, what surfaces it exposes — but never *what is evaluated*. The operative test is mechanical: nothing in the container participates in `task_identifier()`, so overriding it cannot desynchronize a worker from the capture manifest. That is why `limit` qualifies (the identifier hashes a task's execution limits, not its dataset slice) and `time_limit` does not.
 
 **The `log_dir` override reaches the boundary, and not one step earlier.** Anything a frontend writes on its way to `eval_set()` lands wherever the *definition* said — verified: a flow worker given only the override drops `flow.yaml` and `flow-requirements.txt` into the definition's log directory before the selection is ever read. So a worker needs both channels, exactly as a read does: the frontend's own `--log-dir` for the pre-boundary half and the selection override for the eval itself. This is the same pre-boundary seam as open question 1 and Hawk's installation problem, in its smallest form.
 
@@ -114,6 +124,8 @@ Everything in `eval_set()` below the selection branch is orchestration, and all 
 | `emit_eval_set_start` / `emit_eval_set_end` | **Nobody, today** — see open question 11 |
 
 Two things are *not* skipped. The worker still creates `log_dir` (`mkdir(exist_ok=True)` is idempotent and concurrency-safe), and it still runs the full `eval()` path, so every eval-set-level kwarg the definition set — epochs, limits, solver, generate config, tags, metadata, `retry_on_error` — applies exactly as it would have.
+
+**Three of those kwargs are exceptions, forced by worker mode rather than honoured.** `fail_on_error` is `False` and task-level retry is off, because both are completion decisions belonging to the runner; `acp_server` is on, because a detached worker has no other way to reach a human (*The parked worker*). All three are properties of what worker mode *means* rather than tunable policy, which is why none of them is an override — see items 3 and 12 in *Changes required in inspect_ai*. The values the definition asked for are recorded in the capture manifest's `options`, so a runner can see what it is overriding.
 
 ### 4.2 Scanning
 
@@ -501,6 +513,33 @@ Ground truth is the log directory, and for a worker that has reached its eval th
 
 > **Not to be confused with the journal.** [workflow.md](workflow.md) uses *journal* for `journal.jsonl`, the durable record of anomalies and adjudication rulings — the one file in a workspace that cannot be reconstructed. The in-flight record described here is its opposite: disposable, machine-only, and rebuildable from the log directory at any time.
 
+### 7.4 The parked worker
+
+Detachment costs a worker its human channel, and the loss is silent. Inspect dispatches human-in-the-loop requests **ACP → Textual panel → console** (`util/_input/builtin.py`). On a Steward worker the first is off, the second raises `NotImplementedError` because there is no Textual display, and the third drives Rich prompts against `stdin=DEVNULL`. `console_handler` catches only `KeyboardInterrupt`, so the resulting `EOFError` propagates into the tool call — and under `fail_on_error=False` a request for a human decision lands as **an errored sample in an otherwise successful log**. Not a hang, not a visible failure: an anomaly that does not say what it is.
+
+So worker mode turns the ACP server on (item 12), and a request parks until a client attaches instead. That creates a fourth in-flight condition, distinct from the three the record above can already tell apart:
+
+| condition | process | progress | resolution |
+|---|---|---|---|
+| running | alive | yes | itself |
+| hung | alive | no | a fault, adjudicated |
+| gone | dead | — | reaped, then rescheduled |
+| **parked** | **alive** | **no** | **a person** |
+
+**Detection rides the read a tend already performs.** The state lives on the eval primitive, not in the ACP layer: `ActiveSample.pending_interaction` returns `"approval" | "question" | None`, derived from two integer counters the routing shims increment on entry to the park and decrement in `finally`. The control server's sample listing walks the same `active_samples()` and already carries an `activity` field for the sample's in-flight operation, classified `tool` → `model` → `retry_wait`. Adding an approval/question branch at the front of that chain is a few lines on data the row builder already holds, in a function whose contract is *O(in-flight ops), never an event scan* — which is why this belongs on the control channel rather than being queried per sample over ACP.
+
+**It is not observable today, and it is worse than not observable — it is camouflaged.** The pending `ToolEvent` for a stage is created before its approval is awaited, so a sample parked for six hours reports `status: running, activity: {type: "tool"}`, indistinguishable from a tool call that has been running for six hours. Neither `InputEvent` nor `ApprovalEvent` helps: both are written only once the interaction concludes. That is why item 13 is not an optional nicety and must not land after item 12 — shipping the park without the signal would trade a loud errored sample for a blind stall.
+
+**Steward detects; it never answers.** Answering an approval is authority over what the eval does, and that is the human's ([agent.md](agent.md), *What the agent may do without asking*). So Steward's whole job is to notice and to say where to attach — and since the ACP discovery file is per-pid, carrying `{pid, eval_id, socket_path}`, and Steward already records the pid, the tend summary and `status.md` can print the `inspect acp` command that reaches that worker. Steward therefore needs no ACP client of its own. This is also, incidentally, the answer to *a detached run cannot be watched live*: any worker can be attached to, not only a parked one.
+
+**A park is not an anomaly, and should not be filed as one.** Anomalies in this design are post-hoc facts about landed logs — they have an exception type, a raising frame, a class, and precedent ([workflow.md](workflow.md), *Three levels*). A park has none of those. It is a live blocking condition on a running process, it resolves by someone answering rather than by someone ruling, and it leaves no trace once answered. It belongs in the tend queue as blocked work, not in `anomalies.md`.
+
+**And it is not deadlined.** Hawk bounds its equivalent with `approval_timeout_minutes` — one week, then auto-reject — implemented by wrapping the approval policy before handing it to `eval_set()`. Steward cannot do that, because the definition builds the policy, and should not want to: auto-rejecting a tool call silently changes what the eval measured, which is the same objection that rules out every other automatic answer to a question only a human can settle. A park waits.
+
+**A parked worker holds its slot.** It still holds its sandbox, its model connections, and its process, so excluding it from the worker ceiling would silently overrun the resource budget the ceiling exists to bound. The consequence follows and is intended: enough parked workers stall the fleet, and at the ceiling they stop it. Nothing should proceed while decisions pile up. `reconcile` must therefore read a parked worker as *running* — not restart it, not reap it, not count it toward a task needing a spawn.
+
+**This is the one thing that breaks the survivability claim.** Elsewhere this design says the fleet keeps converging while an absent agent's decisions merely accumulate ([README.md](README.md) §2, [agent.md](agent.md) §2). With parked workers holding slots that is no longer unconditional: a definition with human approvers accumulates decisions *and* loses throughput, to zero once every slot is parked. Nothing here can fix that — a human decision requires a human — so what keeps an overnight run viable is notification, and a park is exactly the *a run needs you* kind ([workflow.md](workflow.md), *Four kinds*). It is the strongest case yet for upstream item 7.
+
 ## 8. The supervisor
 
 "Supervisor" here means *whatever is currently driving the reconcile loop* — in the current design a coding agent scheduling `tend` calls, with `cron` as a backstop (see *The reconcile core, and its drivers*). The claim, the in-flight record, and the registry apply to every driver equally.
@@ -778,13 +817,15 @@ The fix is not machinery. **A separate key for the supervisor** removes it entir
 2. **Selection mode** — `INSPECT_EVAL_SET_SELECTION`, including the resume path and the mutual exclusion with capture. *Landed* (`_eval/eval_set_selection.py`, plus the branch in `eval_set()`).
 3. **Error-handling overrides** — *landed, as part of worker mode.* `fail_on_error=False` and task-retry-off are applied by selection mode itself, and the definition's requested values are recorded in the capture manifest's `options`. This deliberately avoids routing them through the overrides channel: they are not tunable policy, they are what selection mode *means*.
 
-4. **Operational overrides in the selection document** — *landed.* A selection may carry `log_dir` and `max_samples`, overriding what the definition passed (schema version 2; omitting either keeps the definition's value). This deliberately avoided a third env var: overrides only matter in selection mode, and the selection document is already a versioned channel the worker reads.
+4. **Operational overrides in the selection document** — *partly landed.* A selection may carry `log_dir` and `max_samples`, overriding what the definition passed (omitting either keeps the definition's value). This deliberately avoided a third env var: overrides only matter in selection mode, and the selection document is already a versioned channel the worker reads.
+
+   **They move into a container at version 3**, `EvalSetSelectionOverrides`, alongside items 8 and 9 — which is the bump those two already require, so the restructure rides a release that was happening anyway. The container is `extra="forbid"` like its parent, so typo safety is unchanged. It is a **clean break rather than a migration**: nothing here is shipped, Steward is the sole writer of a selection document, and no deployment reads version 1 or 2 — so the two fields move rather than being kept as accepted legacy, with no dual shape and no version floor. The honest accounting is that a container saves no version bumps (`extra="forbid"` already refuses an unknown key; the bump buys *"upgrade inspect-ai"* instead of *"unknown field"*, which is wanted regardless). What it fixes is that `version`, `eval_set_id`, and `tasks` are the protocol and the rest are knobs, and at version 3 there are four of them.
 
    An environment variable could not have served here. `INSPECT_LOG_DIR` and its siblings supply *defaults*, and `eval_set()` declares `log_dir` with no default — so every definition passes it explicitly and a default can never win. That is why `--smoke`'s log-directory half was blocked for script definitions: Flow could be redirected with `--log-dir`, a raw script had no way in at all.
 
-   Neither override participates in `task_identifier()`, so redirecting a worker cannot desynchronize it from the capture manifest. Both are operational by construction: they change where output goes and how fast it arrives, never what is evaluated.
+   No override participates in `task_identifier()`, so redirecting a worker cannot desynchronize it from the capture manifest. That is the operative test, and the rule it enforces is stated in *The selection protocol*: an override may change how a worker is **operated** — where its output goes, how fast it runs, how much of its dataset it runs, what surfaces it exposes — never what is evaluated.
 
-   Still unreached, and judged not worth a channel of their own: `log_level` (CLI-only) and `display` (`INSPECT_DISPLAY` is read generally, so it already works). `ctl_server` needs nothing — it defaults to enabled. `max_tasks` is moot in worker mode, where a worker runs one task. Two overrides *are* wanted and did not land here — the dataset `limit` a smoke run needs (item 8) and `max_sandboxes` (item 9). `max_samples` is neither of them.
+   Still unreached, and judged not worth a channel of their own: `log_level` (CLI-only) and `display` (`INSPECT_DISPLAY` is read generally, so it already works). `ctl_server` needs nothing — it defaults to enabled. `max_tasks` is moot in worker mode, where a worker runs one task. Two overrides *are* wanted and did not land here — the dataset `limit` a smoke run needs (item 8) and `max_sandboxes` (item 9). `max_samples` is neither of them. `acp_server` is wanted too and is deliberately **not** an override: it is forced by worker mode, for the reason item 11 gives.
 
    Hard-coding the error-handling options keeps this surface purely *operational*: nothing that can be overridden changes what an eval means. Had `fail_on_error` gone here, the channel would have needed two tiers to keep semantic overrides visible.
 
@@ -800,13 +841,13 @@ The fix is not machinery. **A separate key for the supervisor** removes it entir
 
 7. **Notification outside an eval** (see [workflow.md](workflow.md), *The gap: notifying from outside an eval*) — `inspect_ai.util.notify()` is a silent no-op unless an Apprise instance was installed by `eval_resolve_tasks`, so it does nothing when called from a Steward process. `build_apprise()` / `init_apprise()` already do exactly what is needed but are private. Exporting them (or a `notification_scope(config)` convenience) is the same public-surface move as item 6, and it is not Steward-specific — any script that runs evals and wants to be told when they finished hits it.
 
-8. **A dataset `limit` override in the selection document** (see [workflow.md](workflow.md), *Smoke first*) — the one thing a smoke run still cannot express, and the correction to a claim both documents used to make. `max_samples` bounds how many of a task's samples run concurrently; `limit` bounds how many run at all, and only the first of the two arrived in schema version 2. It belongs in the same channel on the same grounds: `task_identifier` hashes a task's *execution* limits — message, token, turn, time, working, cost — but not its dataset slice, so truncating a worker's dataset cannot desynchronize it from the capture manifest. Mechanically it is one field plus one `_FIELD_MIN_VERSION` entry at schema version 3, exactly as `log_dir` and `max_samples` were gated at version 2.
+8. **A dataset `limit` override in the selection document** (see [workflow.md](workflow.md), *Smoke first*) — the one thing a smoke run still cannot express, and the correction to a claim both documents used to make. `max_samples` bounds how many of a task's samples run concurrently; `limit` bounds how many run at all, and only the first of the two arrived in schema version 2. It belongs in the same channel on the same grounds: `task_identifier` hashes a task's *execution* limits — message, token, turn, time, working, cost — but not its dataset slice, so truncating a worker's dataset cannot desynchronize it from the capture manifest. Mechanically it is one field inside the version-3 `overrides` container (item 4), which is the bump it and item 9 jointly require.
 
    The version bump is not ceremony here, and the reason is worth recording: an unknown *facet hint* ignored by an older inspect costs nothing, but an ignored `limit` means a worker asked for two samples runs five thousand. The declared-version gate is what turns that into a refusal on the writer's machine instead of a surprise in the one deployment still running an older inspect.
 
    Its sibling is **not** wanted: `time_limit` is in the identifier, so the smoke's wall-clock cap must stay a Steward-side deadline rather than an override. Passing one through would change every task's identity and break the matching the smoke depends on.
 
-9. **A `max_sandboxes` override in the selection document** (see [scheduling.md](scheduling.md), *`max_sandboxes` — divided, but only where the host is the ceiling*) — the third operational override, on the same grounds as the first two: sandbox concurrency is process-global, absent from `task_identifier`, and unreachable by environment variable. It rides alongside item 8 at schema version 3.
+9. **A `max_sandboxes` override in the selection document** (see [scheduling.md](scheduling.md), *`max_sandboxes` — divided, but only where the host is the ceiling*) — the third operational override, on the same grounds as the first two: sandbox concurrency is process-global, absent from `task_identifier`, and unreachable by environment variable. It rides alongside item 8 in the version-3 `overrides` container.
 
    It is more urgent than its siblings, because the failure it prevents is not a slow run. Steward launches a poolful of workers, each independently resolving a sandbox limit that Docker computes as `2 × cores` — a *host* number applied per process. At the default ceiling of ten workers a 64-core box asks for 1,280 containers, and the ceiling is a knob a user is expected to raise. Patching after spawn does not help: by then the containers are open, and the ratchet only lowers a limit as in-flight samples drain.
 
@@ -825,6 +866,16 @@ The fix is not machinery. **A separate key for the supervisor** removes it entir
 The selection schema can grow the partial facets Layer 2 needs (`name`, `args_hash`, `model`, `sequence`), but **not for free** — an earlier draft of this paragraph said additive optional fields need no version bump, and what shipped decided otherwise. Both selection models are `extra="forbid"`, so an unknown field is refused rather than ignored, and every added field takes an `EVAL_SET_SELECTION_VERSION` bump plus a `_FIELD_MIN_VERSION` entry recording where it began. A document may not use a field newer than the version it declares.
 
 That is the better trade and worth understanding rather than working around. Silent tolerance of unknown fields is what makes a typo (`"resuem"`) read as *no resume at all*, and makes an ignored `limit` run five thousand samples where two were asked for. Forbidding extras converts both into a failure on the writer's own machine. The cost is that the version number moves more often than a purely additive scheme would need, which is bookkeeping rather than friction.
+
+Two further items came out of asking what a *detached* worker can and cannot do:
+
+12. **`acp_server` on in worker mode**, the way `fail_on_error=False` and task-retry-off already are — one line where those two are applied. Not an override and not a default a definition can decline: a detached worker's human-input dispatcher falls **ACP → Textual panel → console**, and with no display and a closed stdin the last of those raises `EOFError` into the tool call. So without this, `approver: human` and `ask_user` neither park nor fail loudly — they land as errored samples in successful logs (*The parked worker*).
+
+    It is a property of worker mode rather than of Steward. Any external runner spawning detached workers has the same dead chain, and only one of the three definition types Steward drives can set the flag itself today — Flow through `FlowOptions.acp_server`, while a raw `eval_set()` script has no channel at all (`INSPECT_EVAL_ACP_SERVER` is a click envvar on `inspect eval`, which a definition never goes through) and Hawk's is a single TCP port that N concurrent workers could not share anyway.
+
+13. **Project the pending human interaction into the control channel's sample row** — and land it *with* item 12 or before it, never after. The state already exists on the eval primitive: `ActiveSample.pending_interaction` returns `"approval" | "question" | None` from two integer counters, and ACP's `inspect/list_samples` already surfaces it as `SampleListing.pending`. The control server's listing walks the same `active_samples()` and already carries an `activity` field classified `tool` → `model` → `retry_wait`; this is an approval/question branch at the front of that chain, with `detail` carrying the tool function. A few lines, on data the row builder already holds, in a function whose contract is *O(in-flight ops), never an event scan* — so a tend learns which workers are parked from the listing it already fetches, with no second channel and no per-sample query.
+
+    **Without it a park is not merely invisible, it is camouflaged.** The stage's `ToolEvent(pending=True)` is created before its approval is awaited, so a sample parked for hours reports `activity: {type: "tool"}` — the same shape as a slow tool call. `InputEvent` and `ApprovalEvent` are both written only after the interaction concludes, so the transcript does not help either. Shipping item 12 alone would replace a loud errored sample with a silent stall, which is the wrong trade: the two are one change wearing two numbers.
 
 ## 13. Open questions
 
@@ -886,3 +937,5 @@ That is the better trade and worth understanding rather than working around. Sil
 11. **Eval-set-scoped hooks fire nowhere.** Selection mode returns at `evalset.py:648`; `emit_eval_set_start` and `emit_eval_set_end` are at `:899` and `:937`. A worker never reaches them, correctly — it is not running an eval set. But Steward does not emit them either, so any hook registered at eval-set scope is silently dropped, while the same hook's run- and sample-scoped handlers keep firing. Found concretely in Hawk, where it costs two metrics and, more seriously, arms nothing for a stuck-eval watchdog ([hawk.md](hawk.md)); it applies to any platform that registers at that scope. Either Steward emits the pair around the run it owns — the honest reading, since it *is* the eval set — or Inspect grows a way for an external runner to, which is the same shape as the shared directory operations above. Whichever, the current state is a silent gap rather than a decision.
 
 12. **What "resolved" means for an eval set.** *Answered in [workflow.md](workflow.md).* A run is **resolved** when no anomaly is open — anomaly state being a fold over `journal.jsonl` — and separately **signed off** when a person has attested to the results. Scan findings arrive last and can re-open a run that looked finished, which is why signoff follows the scan rather than the tasks. `EvalLog.invalidated` and per-sample `invalidation` records carry the provenance half. What remains open there is the anomaly *identity* scheme, not the definition.
+
+13. **How much of a parked request to render.** A queue entry saying *worker 7 is waiting on an approval* is nearly useless without saying what for, and the answer — the tool call, or the `ask_user` prompt — is **model-generated text**. Inspect already draws this line rather than assuming it away: the control channel withholds error messages and limit reasons behind `content=true` precisely because they are agent-influenced free text, and Steward's summaries are read by an agent that then acts. The tool *function name* is safely structural and is what item 13 puts in `activity.detail`; whether `status.md` and the tend summary should also carry arguments or prompt text, quoted and attributed, is unsettled (*The parked worker*). Nothing blocks on it — a name plus an attach command is already actionable.

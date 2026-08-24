@@ -63,7 +63,7 @@ It turns out not to matter, for two reasons worth recording because they were th
 - **The `log_prior_attempt` scan is cheap locally.** `main` calls it before `eval_set_from_config`, and it reads up to 5,000 log headers 32-wide. That is expensive against the pod's S3 `log_dir` — but a local run's synthesized `log_dir` is a relative `logs/<random job id>/` that does not exist, so the scan finds nothing. Under capture it is waste measured in milliseconds, not an S3 round trip. (Per *worker* it is still the growing cost Flow has; see *Pre-boundary work that must not be per-worker*.)
 - **Capture never touches the directory at all.** It exits at `evalset.py:585` before `log_dir` is used, verified by the absence of any `logs/` directory after a read.
 
-The levers that do the work are the selection document's `log_dir` and `max_samples`, which apply uniformly to every definition type and are how a smoke run reaches a temp directory whatever the frontend. In the pod the question disappears from a different direction: there the infra config is the platform's, handed to the runner, and Steward is a consumer of it rather than its author — which is what *What Steward must honour* is about.
+The levers that do the work are the selection document's `log_dir` and `max_samples` overrides, which apply uniformly to every definition type and are how a smoke run reaches a temp directory whatever the frontend. In the pod the question disappears from a different direction: there the infra config is the platform's, handed to the runner, and Steward is a consumer of it rather than its author — which is what *What Steward must honour* is about.
 
 ## 3. What Steward must honour
 

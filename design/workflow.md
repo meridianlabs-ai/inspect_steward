@@ -427,9 +427,9 @@ Not deleted the moment a smoke passes, though — reading a transcript or two af
 
 Almost nothing about a smoke needs special machinery. It is a run with a sample limit, a time cap, and a different log directory — launched, tended, and reported like any other, then recorded in the journal as part of the same story. The cap is the one exception, for the reason below.
 
-**Half its upstream dependency has landed.** Redirecting a definition's `log_dir` needs an override the definition cannot pre-empt, which no environment variable can supply — `eval_set()` declares `log_dir` with no default, so every definition passes it explicitly and `INSPECT_LOG_DIR` always loses. Selection documents now carry that override (execution.md, item 4), so the log-directory half works for script definitions as well as Flow ones.
+**Half its upstream dependency has landed.** Redirecting a definition's `log_dir` needs an override the definition cannot pre-empt, which no environment variable can supply — `eval_set()` declares `log_dir` with no default, so every definition passes it explicitly and `INSPECT_LOG_DIR` always loses. Selection documents carry that override in their `overrides` container (execution.md, item 4), so the log-directory half works for script definitions as well as Flow ones.
 
-**The sample slice does not, and a name collision is what hid it: `max_samples` is concurrency, not a limit.** The override that landed beside `log_dir` bounds how many of a task's samples run *at once*; a smoke needs `eval_set()`'s separate `limit`, which bounds how many run *at all*. Nothing in the selection document supplies that today — see execution.md, item 8, where it is a small ask for the same reason the others were: `task_identifier` hashes a task's *execution* limits (message, token, turn, time, working, cost) and not its dataset slice, so truncating a worker's dataset cannot desynchronize it from the capture manifest.
+**The sample slice does not, and a name collision is what hid it: `max_samples` is concurrency, not a limit.** The override that landed beside `log_dir` bounds how many of a task's samples run *at once*; a smoke needs `eval_set()`'s separate `limit`, which bounds how many run *at all*. Nothing in the selection document supplies that today — see execution.md, item 8, where it is one more entry in the same container for the same reason the others were: `task_identifier` hashes a task's *execution* limits (message, token, turn, time, working, cost) and not its dataset slice, so truncating a worker's dataset cannot desynchronize it from the capture manifest.
 
 **The time cap is Steward's to enforce, and this is where the obvious implementation is wrong.** `time_limit` *is* in the identifier, so passing one through would change every task's identity and break selection matching against the very manifest the smoke was captured from. The fifteen minutes is therefore a wall-clock deadline Steward applies by stopping the smoke's workers — which is what it had to be regardless, since the cap bounds the *rehearsal* rather than each sample within it.
 
@@ -443,6 +443,16 @@ The agent schedules `steward tend` every ~10 minutes (see execution.md, *The rec
 4. **never blocks** — everything long-running is a detached child
 
 The agent reads the summary and decides whether anything warrants a human. Most tends warrant nothing and should produce no output beyond the file rewrite.
+
+**One thing in the summary always warrants a human: a parked worker.** A worker that has stopped on a tool approval or an `ask_user` is alive, holding its slot, and waiting for a person — nobody else may answer ([agent.md](agent.md), *What the agent may do without asking*). Reconcile learns which workers are parked from the same control-channel read it already performs for liveness ([execution.md](execution.md), *The parked worker*), so this costs no extra work per tend. Both `status.md` and the summary list them by task, with the command that attaches to one:
+
+```
+blocked: 2 workers waiting on a human
+  mbpp/gpt-5            approval  bash          4h12m   inspect acp --eval-id <id>
+  swebench/opus-5 (e2)  question                  38m   inspect acp --eval-id <id>
+```
+
+That command is also the general answer to *a detached run cannot be watched live*: any worker can be attached to and observed, not only a parked one.
 
 ## 9. Syncing the workspace out
 
@@ -691,11 +701,13 @@ Every post carries a **kind**. It is not decoration: it sets how the post presen
 | kind | means | sent by |
 |---|---|---|
 | `attention` | something worth knowing, and work continues — a class growing fast, a task that died, a scan finding, a re-run proposed | the agent |
-| `stopped` | nothing progresses until a person answers — a hard stop, or a question the agent is blocked on | the agent |
+| `stopped` | nothing progresses until a person answers — a hard stop, a question the agent is blocked on, or a **parked worker** | the agent, and Steward for a park |
 | `gate` | tasks finished, scans drained, anomalies settled; the run is waiting on `signoff` | **Steward only** |
 | `complete` | signed off | **Steward only** |
 
 The split is the point. `attention` and `stopped` carry judgement, which is why they are the agent's. The other two are **terminal**, they are made **once**, and `steward notify` refuses them.
+
+**A parked worker is the one `stopped` Steward sends itself, and the exception proves the rule.** It needs no judgement — reconcile can see it in the control-channel read it already performs ([execution.md](execution.md), *The parked worker*) — and it must not wait for an agent, because an absent agent plus a parked worker is precisely the silence-while-stalled that made the timer mechanical in the first place. So it is latched like `gate`: posted once when a worker parks, recorded in the journal, and re-armed when that park is answered. A worker that waits six hours produces one post, not thirty-six.
 
 **Why `complete` cannot be hand-sent.** Completion means a human adjudicated, not that the processes exited — that is the whole content of *Signoff*. A post saying otherwise would be a claim nobody made, and hand-written completions arrive in batches and bury the one post that actually needs attention.
 
@@ -748,6 +760,8 @@ The fields that earn their place:
 | `precedent` | prior rulings on this class, carried along rather than looked up |
 
 **Stable identity is the hard requirement**, and it is easy to get wrong. The key is the class — *not* the set of affected samples, because that set grows as more samples fail into the same class. Get this wrong and either the same anomaly notifies fifty times over an overnight run, or a growing problem keeps looking like a new one and never accumulates the weight that would justify escalating it.
+
+**A parked worker is deliberately not an anomaly**, and the boundary is worth drawing because it looks like one — it blocks, it needs a person, and it recurs across tends. Every field above fails on it. It has no class (nothing is grouped; each park is one worker asking one question), no evidence (nothing went wrong), no effect on the final data, no proposal Steward could make, and nothing to rule on — it resolves when someone *answers*, not when someone decides what to do about it, and it leaves no trace afterwards. An anomaly is a post-hoc fact about work that already happened; a park is a live condition on work that has stopped. It belongs in the tend summary and `status.md` as blocked work ([execution.md](execution.md), *The parked worker*), and never in `anomalies.md`. Its state is held by the worker, not by the journal — the fold has nothing to remember, because when the worker is answered the condition is simply gone.
 
 ### 12.1 Three levels: instance, class, proposal
 

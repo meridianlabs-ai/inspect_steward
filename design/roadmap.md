@@ -26,7 +26,7 @@ One thing the work changed: the manifest now records `identifier_version`. It wa
 
 ## 3. Four milestones, each a capability rather than a percentage
 
-The milestones name *capabilities*; [plan.md](plan.md) decomposes them into twenty-eight buildable steps and locates the gates precisely within that sequence. Where the two differ on ordering, plan.md is the finer instrument and says why.
+The milestones name *capabilities*; [plan.md](plan.md) decomposes them into thirty-four buildable steps and locates the gates precisely within that sequence. Where the two differ on ordering, plan.md is the finer instrument and says why.
 
 | | a user can | ships |
 |---|---|---|
@@ -57,12 +57,13 @@ What M2 deliberately lacks: it does not notice anything. Tasks run, logs land, a
 ### 3.2 M3 — walk away
 
 1. **The tend summary and its queue**, which is the agent's whole surface at this milestone.
-2. **The tuning policy** — the growth signal, the envelope, the asymmetric ratchet. Only the judgement is here; the mechanism landed in M2 because `pause` and adjudication needed it anyway.
-3. **`steward.log` and the sync**, with the two ages.
-4. **Anomalies** — the three levels (instance, class computed from exception type plus raising frame, proposal grouped across classes), the state machine, per-class ruling records, precedent. One data model, so it is built at once.
-5. **Notification**, with the four kinds. Depends on **upstream item 7** or on Steward carrying Apprise itself.
-6. **Adjudication actions** — `invalidate_samples` plus respawn-with-`resume`.
-7. **`signoff`**, `anomalies.md`, the gate latch, and curation into `logs-archive/`.
+2. **Human interaction in a detached worker** — a worker parked on a tool approval or an `ask_user`, surfaced as blocked work with a command that attaches to it. Depends on **upstream items 12 and 13**, which land together. Placed second because the summary is what it reports through, and because it is the one condition where walking away does not work: a parked worker holds its slot until a person answers.
+3. **The tuning policy** — the growth signal, the envelope, the asymmetric ratchet. Only the judgement is here; the mechanism landed in M2 because `pause` and adjudication needed it anyway.
+4. **`steward.log` and the sync**, with the two ages.
+5. **Anomalies** — the three levels (instance, class computed from exception type plus raising frame, proposal grouped across classes), the state machine, per-class ruling records, precedent. One data model, so it is built at once.
+6. **Notification**, with the four kinds. Depends on **upstream item 7** or on Steward carrying Apprise itself.
+7. **Adjudication actions** — `invalidate_samples` plus respawn-with-`resume`.
+8. **`signoff`**, `anomalies.md`, the gate latch, and curation into `logs-archive/`.
 
 The **runbook is deliberately not written here** — it is a set of rules for operating machinery, and the rules are discovered by building the items above rather than guessed ahead of them ([plan.md](plan.md) §7).
 
@@ -98,6 +99,7 @@ Scanning is the largest piece and the most valuable — three steps in [plan.md]
 | 9, 10 — `max_sandboxes` override and sandbox type in the manifest | M2 **on Docker** | k8s and unsandboxed evals are unaffected. On a Docker host the fleet asks for `workers × 2 × cores` containers, which is the one failure mode with no backpressure signal |
 | 6 — public directory operations (incl. `archive_dir`) | **M3** | signoff curates into `logs-archive/`, and the predicate it needs — `latest_completed_task_eval_logs` — is private and exported nowhere. Steward reimplements it, which is small but free to drift against the definition of "superseded" that `eval_set()` uses. Its second half — a batched header read that degrades instead of raising — Steward has already reimplemented, and would keep doing so |
 | 11 — epochs reducer in the manifest | never blocking | a reducer-only change reads as complete where `eval_set()` would re-score. Silent rather than loud, which is why it is worth one field |
+| 12, 13 — ACP on in worker mode, and the parked state on the control channel | **M3** | a detached worker has no path to a human: `approver: human` and `ask_user` land as errored samples in successful logs. Only definitions that ask for human interaction are affected, and they are affected completely. The two must land together — 12 without 13 replaces a loud errored sample with an invisible stall ([plan.md](plan.md) step 17) |
 
 **Two items touch M3, and both have workarounds** — Steward can carry Apprise itself, and it can compute supersession itself. Nothing blocks M2 except at scale or on Docker, which is worth knowing: the runner can be built and proven before any of this lands.
 

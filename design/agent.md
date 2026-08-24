@@ -29,6 +29,8 @@ Combine that with the four jobs above and the failure compounds: an absent agent
 
 **What that buys is a clean separation of what breaks.** With a timer running and no agent in session, the fleet converges, logs land, scans drain, `status.md` stays current, and mechanical notifications fire. What accumulates is judgement: anomalies unruled, scan results unprobed, `analysis.md` unwritten. That is a run waiting for a decision, which is a fine thing to be at 4am — as opposed to a stalled run that looks exactly like a healthy one.
 
+**One condition breaks that separation, and it is not the agent's absence but the human's.** A worker parked on an approval or an `ask_user` holds its slot while making no progress ([execution.md](execution.md), *The parked worker*), and only a person can release it — not the timer, and not the agent, which is barred from answering (§6). So a definition with human approvers is the one case where the fleet does *not* keep converging: throughput degrades as workers park, and reaches zero when the ceiling is full of them. The compensation is that it is loud rather than silent — parked workers are reported in every summary and in `status.md`, and a park is a notification kind — but the claim above holds for every other condition and not for this one.
+
 ### 2.1 Three postures, all of them supported
 
 Because the floor is guaranteed, the agent's relationship to the run is a choice rather than an obligation:
@@ -58,6 +60,8 @@ Acknowledgment is a **position, not per-item**, because the journal is ordered a
 A second thing falls out for free — a quantity nothing else measures:
 
 > **Open anomalies measure the human's backlog. Uncollected tends measure the agent's.**
+
+A third quantity sits with the first: **parked workers measure the human's backlog in the present tense.** An open anomaly is work already done that nobody has ruled on; a parked worker is work that has stopped until someone answers. Both wait on a person, but only the second costs throughput while it waits, which is why it belongs in the summary as blocked work rather than in `anomalies.md`.
 
 They are orthogonal, and both matter. Zero open anomalies with six uncollected tends means nothing has gone wrong and nobody has looked. Zero uncollected with three open means someone looked and the decisions are with the human. Only the second is a healthy overnight state, and before collection existed the two were indistinguishable.
 
@@ -136,6 +140,7 @@ The bounds are already set by decisions in other documents; collected here becau
 - **Edit the definition.** It is the human's statement of what is being measured, and an agent's edit to it is afterwards indistinguishable from theirs. Read it, run it, and raise anything that looks wrong as a *question* rather than as a change. This includes adding a comment explaining what the eval set is for — an agent handed a definition was never told why it exists, and a plausible rationale in the file is worse than none, because a later reader cannot tell it from the author's.
 - **Write `policy.md`.** Steward proposes; the human writes.
 - **Move or delete a log.** Not even an empty cancelled one, and not into a folder named for discards. Resume matches logs where they are.
+- **Answer a parked approval or `ask_user`.** A worker that has stopped for a human decision ([execution.md](execution.md), *The parked worker*) is asking whether the eval may do something, and answering is authority over what is being measured — the same authority that puts editing the definition on this list. The distinction from the ruling below is real and worth holding: a ruling decides whether to *re-run* work that already happened, while an approval decides what happens *next*, inside a sample, and leaves no record anyone reviews afterwards. Surface it, name the worker, print the command that attaches to it, notify — and wait.
 
 **Only with a ruling** — every re-run past the automatic tier, at sample or task level ([execution.md](execution.md), *Two tiers, not three*). `policy.md` may grant that ruling in advance, in which case acting on it is executing a decision already made.
 
