@@ -72,14 +72,15 @@ Each fault below exists to falsify a specific claim, and the claim is what the t
 | delete `.steward/` *while a worker is starting* | the one case that is **not** safe — a duplicate log lands and reads as an ordinary retry |
 | corrupt a journal line | the fold degrades legibly rather than crashing |
 | truncate the journal mid-write | the last event is lost, earlier state is intact |
-| stale the claim | a stale claim is reaped rather than blocking forever |
+| kill a tend holding the claim | the lock goes with the process; the next tend takes it with nothing to reap |
+| wedge a tend holding the claim | it is killed and the claim taken, rather than blocking the run until morning |
 | hold the claim | a second tend refuses rather than proceeding |
 | race two tends | idempotence — one spawn, not two |
 | run the same tend twice | a no-op |
 | make `log_dir` unwritable | scheduling stops, notification fires, running workers are left alone |
 | fill the disk | the same, without depending on `steward.log` |
 | expire log-store credentials | the errors class as *substrate*, and no re-run is proposed |
-| jump the wall clock backwards | claim staleness misjudges safely in both directions |
+| jump the wall clock backwards | a holder looks young, so the tend refuses rather than killing it |
 
 **Two rules keep this suite from becoming flaky**, and they matter more than the list:
 

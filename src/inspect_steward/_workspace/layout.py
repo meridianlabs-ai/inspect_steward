@@ -66,6 +66,14 @@ class Workspace:
         return self.root / ".steward"
 
     @property
+    def claim(self) -> Path:
+        """`.steward/claim` — the lock a writing command holds for as long as it runs.
+
+        In the workspace rather than in `log_dir`, which two workspaces could share: `log_dir` is frequently S3, where the atomic primitive this needs is not reliably available. So the claim covers one workspace on one machine, the same boundary as the in-flight record.
+        """
+        return self.state / "claim"
+
+    @property
     def workers(self) -> Path:
         """`.steward/workers/` — one selection document and one output file per spawned worker."""
         return self.state / "workers"
