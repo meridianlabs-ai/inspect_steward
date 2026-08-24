@@ -1,9 +1,10 @@
 import os
 import sys
+import warnings
 from pathlib import Path
 
 import pytest
-from inspect_steward._evalset.command import definition_command
+from inspect_steward._evalset.command import definition_command, warn_if_venv_declared
 from inspect_steward._evalset.detect import DefinitionType
 
 from ._hawk import requires_hawk
@@ -35,8 +36,18 @@ def test_command_flow() -> None:
         "inspect_flow._cli.main",
         "run",
         str(path.resolve()),
+        # the pre-boundary artifacts and the pre-run log scan go here, not to
+        # the run's directory
         "--log-dir",
         "/tmp/scratch",
+        "--no-log-dir-create-unique",
+        # both store halves are Steward's
+        "--no-store-read",
+        "--no-store-write",
+        # in this interpreter, as hawk's --direct below: a per-worker venv
+        # would run the eval in a grandchild Steward is not tracking
+        "--set",
+        "execution_type=inproc",
     ]
 
 
@@ -83,3 +94,30 @@ def test_command_flow_args(args: dict[str, object], expected: list[str]) -> None
 def test_command_args_require_flow(fixture: str, type: DefinitionType) -> None:
     with pytest.raises(ValueError, match="only supported for flow"):
         definition_command(FIXTURES / fixture, type, args={"x": 1})
+
+
+@pytest.mark.parametrize(
+    ("name", "content", "type", "expected"),
+    [
+        ("spec.yaml", "execution_type: venv\n", "flow", True),
+        ("spec.yml", "execution_type: venv\n", "flow", True),
+        ("spec.yaml", "execution_type: inproc\n", "flow", False),
+        ("spec.yaml", "tasks: []\n", "flow", False),
+        # the same declaration in a file the check does not read: a hawk config
+        # has no such field, and a Python spec builds its FlowSpec in code
+        ("config.yaml", "execution_type: venv\n", "hawk", False),
+        ("spec.py", "execution_type = 'venv'\n", "flow", False),
+        # neither a broken document nor a non-mapping is this check's to report
+        ("spec.yaml", "tasks: [\n", "flow", False),
+        ("spec.yaml", "[]\n", "flow", False),
+    ],
+)
+def test_warn_if_venv_declared(
+    name: str, content: str, type: DefinitionType, expected: bool, tmp_path: Path
+) -> None:
+    path = tmp_path / name
+    path.write_text(content, encoding="utf-8")
+    with warnings.catch_warnings(record=True) as recorded:
+        warnings.simplefilter("always")
+        warn_if_venv_declared(path, type)
+    assert bool(recorded) is expected

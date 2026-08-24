@@ -7,7 +7,7 @@ from typing import Any
 
 from inspect_ai._eval.eval_set_manifest import EvalSetCapture
 
-from .command import DefinitionCommand, definition_command
+from .command import DefinitionCommand, definition_command, warn_if_venv_declared
 from .detect import DefinitionType, detect_definition_type
 from .display import compute_display_keys
 from .manifest import (
@@ -77,10 +77,17 @@ def read_eval_set(
         raise ValueError(f"Definition file '{definition_path}' does not exist.")
 
     resolved_type = detect_definition_type(definition_path, type)
+    # here rather than in `definition_command`, which every worker calls: the
+    # definition is read once per launch, so this is where a once-per-run
+    # observation about the definition belongs
+    warn_if_venv_declared(definition_path, resolved_type)
+
     with tempfile.TemporaryDirectory() as tmp_dir:
         # a scratch log directory keeps pre-boundary side effects (e.g. the
         # flow.yaml flow writes before its eval_set() call) out of the
-        # definition's real log directory
+        # definition's real log directory. Workers do the same with a directory
+        # of their own -- the frontend channel never carries the run's log
+        # directory, for either a read or a run.
         command = definition_command(
             definition_path,
             resolved_type,

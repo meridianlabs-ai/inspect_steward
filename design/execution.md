@@ -51,6 +51,18 @@ The definition still calls `eval_set()` — that is the contract, and it is what
 
 Each worker therefore writes exactly one `.eval` file, and Inspect writes those atomically (temp file + `os.replace`). That is the whole safety argument for a shared directory: the only thing a worker touches is a file no other worker knows about.
 
+**What a process costs, measured** — spawn to landed log, `mockllm`, warm environment, per definition type:
+
+| | one worker | four concurrent | over baseline |
+|---|---|---|---|
+| `evalset` script | 3.0s | 3.3s | — |
+| Flow spec | 4.2s | 4.7s | **+1.2s** |
+| Hawk config | 3.5s | 4.0s | **+0.5s** |
+
+Two things to read out of it. **A frontend costs about a second, not the minutes this document elsewhere estimates** — and Hawk, the one described as the expensive case, is *cheaper* than Flow once its environment is warm, because Flow pays a `uv pip freeze` and `uv pip compile` on every worker while Hawk's install is a satisfied no-op. **And four concurrent workers cost roughly what one does** — half a second more, not four times — which is the empirical form of the argument in [scheduling.md](scheduling.md) for a flat worker ceiling.
+
+The caveats are where the minutes actually live, and none of them is exercised above: a **cold** environment pays Hawk's real install once (4.4s vs 2.7s here, and unbounded for a config declaring `packages:`); a config with `secrets:` adds a Secrets Manager round trip **per worker**; and both frontends scan the log directory at startup, which over S3 is latency-bound rather than free. The numbers are a floor, not a promise.
+
 ## 4. The selection protocol
 
 Selection is the execution counterpart to capture. Both are environment-variable interceptions at the `eval_set()` boundary, and they are mutually exclusive.
@@ -78,6 +90,8 @@ The selection document (`inspect_ai._eval.eval_set_selection`, schema version 2)
 ```
 
 **The `log_dir` override reaches the boundary, and not one step earlier.** Anything a frontend writes on its way to `eval_set()` lands wherever the *definition* said — verified: a flow worker given only the override drops `flow.yaml` and `flow-requirements.txt` into the definition's log directory before the selection is ever read. So a worker needs both channels, exactly as a read does: the frontend's own `--log-dir` for the pre-boundary half and the selection override for the eval itself. This is the same pre-boundary seam as open question 1 and Hawk's installation problem, in its smallest form.
+
+**And the two channels deliberately carry different directories.** An earlier draft had the frontend channel carry the run's log directory too, on the grounds that a frontend's artifacts are wanted there. They are not: the work behind them is once-per-*run* and every worker repeats it, so pointing N workers at one directory means N concurrent writes to the same two paths and N scans of a directory that grows all run. Each worker therefore gets a scratch directory of its own (`.steward/workers/<stem>/`), and the run's log directory is reached only through the selection. Reads already did this; workers now do the same thing for the same reason.
 
 `tasks` is a list rather than a single entry so a worker could host several when that is cheaper than several processes. Steward never does: [scheduling.md](scheduling.md) settles on exactly one task per process, so the list is permanently length 1 and the generality goes unused.
 
@@ -259,7 +273,7 @@ Nothing about the store is actually Flow-specific. It is keyed on `task_identifi
 
 So Steward takes both halves:
 
-- **Workers run with `store=none`** — which is where this started, but now for the opposite reason. The function moved to the single writer rather than being discarded.
+- **Workers run with `store=none`** — which is where this started, but now for the opposite reason. The function moved to the single writer rather than being discarded. *Implemented*: the flow worker command passes `--no-store-read --no-store-write`.
 - **Steward reads once, at launch.** It holds precisely the input `search_for_logs(set[str])` wants: the manifest's identifiers. One query, one copy per match, no race, and the copied logs then satisfy the convergence check like any other landed log.
 - **Steward writes at signoff, and only then** — see below. Not as logs land.
 
@@ -475,7 +489,7 @@ Inspect already maintains a discovery directory — `<inspect_data_dir>/control/
 
 Ground truth is the log directory, and for a worker that has reached its eval the claim holds exactly: a record that is lost, truncated, or stale degrades Steward to scanning the log directory and the discovery directory to rebuild state — slower, never wrong.
 
-**There is one window where it is wrong, and it is not brief.** A worker becomes visible to both ground-truth sources at the same moment — the control server writes its discovery file and the recorder opens its log — and that moment is *after* everything the definition does on the way to `eval_set()`. For a plain script that is imports: a second or two. For Flow it is the measured ~1.1s of spec resolution, `flow.yaml`, and the directory scan (open question 1). For Hawk it is `uv pip install` into the running interpreter, secrets resolution against Secrets Manager, and building the entire cross product ([hawk.md](hawk.md), *Pre-boundary work that must not be per-worker*) — plausibly minutes. Throughout that window a live worker has no log, no discovery entry, and cannot be found by scanning anything. The only thing that knows it exists is its `intent` record.
+**There is one window where it is wrong, and it is not brief.** A worker becomes visible to both ground-truth sources at the same moment — the control server writes its discovery file and the recorder opens its log — and that moment is *after* everything the definition does on the way to `eval_set()`. For a plain script that is imports: a second or two. For Flow it is the measured ~1.2s of spec resolution and the requirements freeze (open question 1). For Hawk it is `uv pip install` into the running interpreter, secrets resolution against Secrets Manager, and building the entire cross product ([hawk.md](hawk.md), *Pre-boundary work that must not be per-worker*) — measured at ~0.5s warm on a plain config, but unbounded on a cold environment or one declaring `packages:`, since it is a real dependency install. Throughout that window a live worker has no log, no discovery entry, and cannot be found by scanning anything. The only thing that knows it exists is its `intent` record.
 
 **Self-identifying workers close the window**, and they cost nearly nothing. Steward writes each worker its own selection document at a known path, and that path is in the worker's environment — `INSPECT_EVAL_SET_SELECTION` is how the worker is told to be a worker at all — so the process table answers *"is a worker for this task already running?"* without consulting any record at all, from the instant the process exists rather than from the instant its eval starts. That restores the plain reading of *the log directory is ground truth*: the fallback stops having a hole in it, and the record goes back to being an accelerator.
 
@@ -774,7 +788,7 @@ The fix is not machinery. **A separate key for the supervisor** removes it entir
 
    Hard-coding the error-handling options keeps this surface purely *operational*: nothing that can be overridden changes what an eval means. Had `fail_on_error` gone here, the channel would have needed two tiers to keep semantic overrides visible.
 
-5. **Automatic early pruning** (Layer 2 in configuration.md) — the `@task` registry wrapper returning placeholders for unselected tasks. *Not yet*, and it is what makes a worker's startup cost proportional to its own task rather than to the whole eval set.
+5. **Automatic early pruning** (Layer 2 in configuration.md) — the `@task` registry wrapper returning placeholders for unselected tasks. *Not yet*, and it is what makes a worker's startup cost proportional to its own task rather than to the whole eval set. It has a Steward half, which is why it is a plan step rather than a pure wait: the wrapper matches on `(name, args_hash)`, so the selection document has to carry those as fields, and `extra="forbid"` means Steward cannot send them until the schema version that introduces them ([plan.md](plan.md) step 15).
 
 6. **Public eval-set directory operations** (see *Sharing the directory operations with `eval_set()`*) — a documented public surface that both `eval_set()` and external runners call, so the preparation/cleanup protocol has one implementation rather than two that drift. Also rationalizes a surface that is already inconsistently half-public. Most of the cleanup band needs no change beyond export; the preparation half needs `validate_eval_set_prerequisites` and `write_eval_set_info` refactored to take identifiers and plain `EvalSetTask` rows instead of live `ResolvedTask`s. Low risk, and it retires a whole category of future divergence.
 
@@ -824,11 +838,28 @@ That is the better trade and worth understanding rather than working around. Sil
 
    The last two are also **truncate-in-place writes to shared paths** (`_config/write.py`, `_launcher/freeze.py`). Content is identical across workers, so divergence is not the risk; a concurrent *reader* (e.g. `flow list`) catching a half-written file is. It held up under test, but that is one trial of an unsynchronized write, not a guarantee.
 
-   The clean fix is on Flow's side and is small: a way to skip the pre-boundary artifacts when an external runner owns the log directory — either a flag Steward passes, or Flow noticing `INSPECT_EVAL_SET_SELECTION` and skipping `write_config_file` / `write_flow_requirements` / the log scan. Steward would then have one worker write those artifacts once, or write them itself. Accepted as-is until it hurts.
+   **Two thirds of it is fixed, without a Flow change.** All three items key off `spec.log_dir`, and `flow run` takes `--log-dir` — so a worker is given a scratch directory of its own for the pre-boundary half while the selection carries the run's (see *The selection protocol*). The two writes then land in a directory no other worker knows about, and the scan finds it empty. Safe because the scan's result never reaches `eval_set()`: `_runner/run.py` uses `logs_result` only for the pre- and post-run display and for the store. Re-measured, one flow worker against a plain-`eval_set()` baseline of 3.0s:
 
-   **This is not a Flow question.** Hawk has the same shape and a sharper version of it — its pre-boundary work includes `uv pip install` into the running interpreter on every invocation, so N workers mutate one shared environment concurrently rather than merely duplicating reads ([hawk.md](hawk.md), *Pre-boundary work that must not be per-worker*). Any frontend Steward drives will divide its startup into per-process work, which must repeat, and per-run work, which must not. The general ask — **a way for an external runner to declare that it owns the once-per-run work** — is one protocol question with one answer, and it is better asked once of the boundary than twice of two frontends. `INSPECT_EVAL_SET_SELECTION` is already the signal that an external runner is present; what is missing is any obligation on a frontend to notice it.
+   | | empty log dir | 150 logs |
+   |---|---|---|
+   | shared log directory (before) | 4.36s | 4.79s |
+   | per-worker scratch (after) | 4.14s | 4.21s |
 
-2. **What replaces flow's store.** *Resolved: nothing replaces it, because it keeps working* — see *Flow's store, and who is allowed to read it*. `--store none` disabled two halves to fix one. Workers keep the write half; Steward performs the read half itself, once per launch. What remains open is narrower and is recorded there: whether the lookup runs for non-flow definitions, and what filter policy governs reuse.
+   So the growing term is gone — the old path was paying ~2.4ms per log in the directory, which is ~12s per worker at the 5,000 Hawk's equivalent scan caps at — and the two shared-path writes are gone with it.
+
+   **What is left is the freeze, and it is the whole ~1.1s.** The original attribution spread that figure across spec resolution, `flow.yaml`, and the scan; measured on an empty directory it is almost entirely `write_flow_requirements`, which shells out twice (`uv pip freeze`, then `uv pip compile --generate-hashes`, the second reaching the index). It cannot be skipped from outside — its only early return is `if dry_run or not spec.log_dir`, and an empty `log_dir` makes the run raise a few lines later — so it can only be redirected, which is what the scratch directory does.
+
+   The clean fix for that remainder is still on Flow's side and is still small: a way to skip the pre-boundary artifacts when an external runner owns the run. **A second, smaller ask came out of the redirection itself.** `flow run` records its log directory as a global `last_log_dir` (`_launcher/launch.py`, unconditional), so pointing Flow at scratch leaves that pointer aimed at a disposable directory and a later bare `flow run --resume` resumes nothing. Steward accepts this rather than writing another tool's user-global file, and the fix is the same shape as the first: a way for an external runner to say it owns the run, or simply a knob for the application-data directory. See [configuration.md](configuration.md), *Inspect Flow specs*.
+
+   **This is not a Flow question.** Hawk has the same shape and a sharper version of it — its pre-boundary work includes `uv pip install` into the running interpreter on every invocation ([hawk.md](hawk.md), *Pre-boundary work that must not be per-worker*), and unlike Flow it exposes no `--log-dir` to redirect, so its equivalent scan cannot even be pointed away. Any frontend Steward drives will divide its startup into per-process work, which must repeat, and per-run work, which must not. The general ask — **a way for an external runner to declare that it owns the once-per-run work** — is one protocol question with one answer, and it is better asked once of the boundary than twice of two frontends. `INSPECT_EVAL_SET_SELECTION` is already the signal that an external runner is present; what is missing is any obligation on a frontend to notice it.
+
+   **Redirection only works where the work produces files.** Where it produces *process state* — Hawk resolves secrets into `os.environ` and sets provider variables for gateway routing — there is nothing to point elsewhere, and the answer needs a second half: the frontend must be able to **report** what it resolved, so the runner can hand it to each worker. `DefinitionCommand.env` is already shaped to carry that. This is the part of the ask that no amount of cleverness on Steward's side reaches.
+
+2. **What replaces flow's store.** *Resolved: nothing replaces it, because the mechanism keeps working — but Steward operates it, not the worker* — see *Steward owns both halves, because the store is not really Flow's*. `--store none` disabled two halves to fix one, and the repair is **not** to hand the write half back to workers: an `evalset` or `hawk` worker has no Flow code in it to index anything, so a store fed by workers is empty for two thirds of the projects that would benefit. Workers therefore run with the store off, Steward reads once at launch, and Steward writes at signoff.
+
+   **Only the first of those three is built.** The flow adapter passes `--no-store-read --no-store-write`; both of Steward's halves are step 29, in M4. Until then the store is **inert for Steward runs** — nothing indexes and nothing is reused — where before it was flow workers appending unattested rows on flow's `write=True` default. That is the correct interim state rather than a regression, for the reason *Publication is an act of signoff* gives, and what it costs is narrow: reuse *across* log directories for flow definitions, since reconcile already declines to re-run a task whose log is in this run's directory.
+
+   What remains open is narrower still and is recorded in the sections above: what filter policy governs reuse, and whether a log carrying accepted-as-errored samples is publishable at all.
 
 3. **Worker startup cost without Layer 2 pruning.** Every worker currently constructs every task in the eval set, including datasets, to compute identifiers. For a large sweep this dominates, and it is paid in parallel across the pool rather than amortized. Per-worker memory therefore scales with the manifest rather than with the task, which is why scheduling.md treats Layer 2 as a **prerequisite for raising the ceiling on a large manifest** rather than an optimization. The flat ten-worker ceiling bounds the default exposure at ten copies of the manifest, which makes this smaller than it was under a cores-derived ceiling but does not remove it — the manifest is what scales. Batching was previously named as the mitigation; it is ruled out on its own terms. Verified still absent from `inspect_ai` main as of `0db4111e`.
 

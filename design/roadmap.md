@@ -12,7 +12,7 @@ Every other document works a topic to closure regardless of when it ships. This 
 
 **The foundations are built, decision included.** `steward init` creates a real workspace; `journal.jsonl` is an append-only record that survives a torn write and an event type from a later version; a log directory reads back as structured state against a manifest, with a fixture generator that produces one without running anything; and `reconcile` turns that state into the set of workers to spawn, in the order to spawn them ([plan.md](plan.md) steps 1–5).
 
-**Steward spawns workers.** `Fleet.spawn` writes a selection document and launches a detached process for one task, and the log it lands recomputes to the identifier that asked for it — so the cycle capture → reconcile → spawn → land → reconcile closes, and the second reconcile has nothing left to do (step 6).
+**Steward spawns workers.** `Fleet.spawn` writes a selection document and launches a detached process for one task, and the log it lands recomputes to the identifier that asked for it — so the cycle capture → reconcile → spawn → land → reconcile closes, and the second reconcile has nothing left to do (step 6). A fan-out over a Flow definition keeps that frontend's once-per-run work in each worker's own scratch directory rather than contending over the shared one; Hawk's equivalent cannot be redirected and remains an ask, but it is waste rather than corruption (step 7).
 
 **No run is supervised yet.** There is no `launch`, no `tend`, no in-flight record, no anomalies, no signoff — a worker can be started but nothing yet knows it is running or notices when it stops. The runner is the project, and the components most likely to be subtly wrong were built and tested before the machinery that drives them.
 
@@ -44,12 +44,13 @@ The sequence matters more than the list, and one ordering choice is worth statin
 1. **The workspace and the journal.** *Done.* `init` for real — the directory, `.gitignore`, git detection, the placeholder definition — plus the append-only record and the fold that everything else reads state from.
 2. **The log-directory fixture generator and the observed-state reader.** *Done*, and built together because neither is testable without the other ([testing.md](testing.md)).
 3. **`reconcile`**, table-driven: spawn set, ceilings, spawn order, completeness, convergence. *Done.*
-4. **Spawn and reap.** Selection documents and detached workers: *done*. Still to come — the in-flight record with `intent` before spawn, liveness against control discovery, self-identifying workers for the invisible-worker window, and Steward taking ownership of the **once-per-run pre-boundary work**, which is what makes a Flow or Hawk fan-out safe rather than merely wasteful.
+4. **Spawn and reap.** Selection documents, detached workers, and a frontend's **once-per-run pre-boundary work** kept out of the run's log directory: *done*. Still to come — the in-flight record with `intent` before spawn, liveness against control discovery, and self-identifying workers for the invisible-worker window.
 5. **The control channel client**, which `pause`, adjudication, and concurrency retuning all sit on.
 6. **The run claim**, short-lived, with staleness reaping.
 7. **Fault injection** over the above — the recovery claims are load-bearing and unobservable on a good run.
 8. **`status` and `tend`** as one function with two dispositions, writing `status.md`.
 9. **The timer**, and then **`launch`** — in that order, because launch is *capture, commit, arm, tend* and therefore a composition of the two items before it rather than a peer of either.
+10. **Worker startup at scale** — the identity facets that let inspect prune unselected tasks before constructing them, and a launch-time guard for the interval before that lands. Waits on upstream item 5; the gate does not wait on it, since ten workers on a modest manifest are fine today.
 
 What M2 deliberately lacks: it does not notice anything. Tasks run, logs land, a human reads `status`. Errors are visible as counts, not as anomalies with a lifecycle.
 
@@ -93,7 +94,7 @@ Scanning is the largest piece and the most valuable — three steps in [plan.md]
 |---|---|---|
 | 7 — notification outside an eval | **M3** | Steward carries Apprise itself, duplicating `build_apprise` / `init_apprise`. Works, and is the one item with a genuine workaround |
 | 8 — dataset `limit` override | M4 (smoke) | no smoke gate; a rehearsal would run the whole dataset |
-| 5 — early pruning | M2 **at scale** | small sweeps are fine; per-worker memory scales with the whole manifest, so a large one is not. A precondition for launching wide, not for launching |
+| 5 — early pruning | M2 **at scale** | small sweeps are fine; per-worker memory scales with the whole manifest, so a large one is not. A precondition for launching wide, not for launching. Steward's half — emitting the identity facets the pruner matches on, plus the interim memory guard — is [plan.md](plan.md) step 15 |
 | 9, 10 — `max_sandboxes` override and sandbox type in the manifest | M2 **on Docker** | k8s and unsandboxed evals are unaffected. On a Docker host the fleet asks for `workers × 2 × cores` containers, which is the one failure mode with no backpressure signal |
 | 6 — public directory operations (incl. `archive_dir`) | **M3** | signoff curates into `logs-archive/`, and the predicate it needs — `latest_completed_task_eval_logs` — is private and exported nowhere. Steward reimplements it, which is small but free to drift against the definition of "superseded" that `eval_set()` uses. Its second half — a batched header read that degrades instead of raising — Steward has already reimplemented, and would keep doing so |
 | 11 — epochs reducer in the manifest | never blocking | a reducer-only change reads as complete where `eval_set()` would re-score. Silent rather than loud, which is why it is worth one field |
@@ -105,7 +106,7 @@ Scanning is the largest piece and the most valuable — three steps in [plan.md]
 [hawk.md](hawk.md) already stages itself, and the stages line up rather than competing:
 
 - **Hawk Stage 0** — read and run a Hawk config. Done, and it is part of M1.
-- **Hawk Stage 1** — run a Hawk config outside the pod. This is **not separate work**: it falls out of M2 and M3, because a Hawk config is a definition type. Its one obligation is the pre-boundary work that must not be per-worker, which bites the moment Steward spawns a second worker itself — and which is **not** a Hawk step. Flow hits the same wall wastefully where Hawk hits it unsafely, so it is one general mechanism, built early in M2 ([plan.md](plan.md) step 7).
+- **Hawk Stage 1** — run a Hawk config outside the pod. This is **not separate work**: it falls out of M2 and M3, because a Hawk config is a definition type. Its one obligation was the pre-boundary work that must not be per-worker, and step 7 settled what that actually costs: Flow's is redirected into each worker's own scratch directory, and Hawk's is N× startup remote calls and N× redundant installs — waste, not corruption, since uv serializes installs and capture has already run one. Fan-out is not blocked; what remains is an ask on Hawk ([plan.md](plan.md) step 7).
 - **Hawk Stage 2** — Steward inside the pod. The only stage needing a change on Hawk's side (one call site), and the only one that adds architecture — the blocking launch, the in-pod driver, and the relay RPC surface. **It lands after ship**, not merely after M3: nothing above waits on it, and the three stages before it de-risk it ([plan.md](plan.md) §8).
 
 ## 7. What "done" means for the design

@@ -16,90 +16,20 @@ from inspect_ai._eval.eval_set_selection import (
     EVAL_SET_SELECTION_VERSION,
     read_eval_set_selection,
 )
-from inspect_ai._eval.evalset import task_identifier
 from inspect_ai.log import list_eval_logs, read_eval_log
-from inspect_steward import Manifest, read_eval_set
-from inspect_steward._evalset.observe import observe_logs, observe_tasks
-from inspect_steward._schedule import (
-    DEFAULT_MAX_SAMPLES,
-    InFlight,
-    Pool,
-    SpawnWorker,
-    reconcile,
+from inspect_steward import read_eval_set
+from inspect_steward._worker import resolve_eval_set_id, worker_selection, worker_stem
+
+from ._fleet import (
+    EVAL_SET_ID,
+    FIXTURES,
+    action,
+    fleet,
+    landed,
+    output,
+    spawn_all,
+    wait,
 )
-from inspect_steward._worker import (
-    Fleet,
-    SpawnedWorker,
-    resolve_eval_set_id,
-    worker_selection,
-    worker_stem,
-)
-
-# definition fixtures live beside the tests that read them; spawning runs the
-# same ones rather than growing a second set
-FIXTURES = Path(__file__).parents[1] / "evalset" / "fixtures"
-
-EVAL_SET_ID = "steward-test-eval-set"
-
-
-def fleet(definition: Path, workspace: Path, *, cwd: Path | None = None) -> Fleet:
-    """A fleet for one definition, with the eval set id resolved as a run would."""
-    log_dir = workspace / "logs"
-    return Fleet(
-        definition=definition,
-        type="evalset",
-        log_dir=str(log_dir),
-        eval_set_id=resolve_eval_set_id(str(log_dir), EVAL_SET_ID),
-        workers_dir=workspace / ".steward" / "workers",
-        cwd=cwd or workspace,
-    )
-
-
-def action(
-    identifier: str,
-    *,
-    key: str = "task@model",
-    resume: str | None = None,
-    attempt: int = 1,
-) -> SpawnWorker:
-    """A spawn decision, for the cases where reconcile would not produce one."""
-    return SpawnWorker(
-        identifier=identifier,
-        key=key,
-        resume=resume,
-        max_samples=DEFAULT_MAX_SAMPLES,
-        attempt=attempt,
-        reason=None,
-    )
-
-
-def spawn_all(manifest: Manifest, workers: Fleet) -> list[SpawnedWorker]:
-    """Reconcile an untouched log directory and spawn everything it asks for."""
-    observed = observe_tasks(manifest, observe_logs(workers.log_dir))
-    plan = reconcile(manifest, InFlight(), observed, pool=Pool())
-    spawns = [item for item in plan.actions if isinstance(item, SpawnWorker)]
-    assert len(spawns) == len(manifest.tasks), "expected every task pending"
-    return [workers.spawn(spawn) for spawn in spawns]
-
-
-def _output(worker: SpawnedWorker) -> str:
-    """What a worker printed, decoded as its display writes it."""
-    return worker.output.read_text(encoding="utf-8", errors="replace")
-
-
-def wait(workers: list[SpawnedWorker], timeout: float = 300) -> None:
-    """Wait for every worker, reporting what it printed if it failed."""
-    for worker in workers:
-        code = worker.process.wait(timeout=timeout)
-        assert code == 0, f"{worker.key} exited {code}:\n{_output(worker)}"
-
-
-def landed(log_dir: Path | str) -> list[str]:
-    """Every landed log's identifier, recomputed from the log itself."""
-    return [
-        task_identifier(read_eval_log(info, header_only=True), None)
-        for info in list_eval_logs(str(log_dir))
-    ]
 
 
 def test_the_selection_document_is_one_inspect_accepts(tmp_path: Path) -> None:
@@ -242,4 +172,4 @@ def test_a_death_before_the_boundary_leaves_evidence(tmp_path: Path) -> None:
 
     assert worker.process.wait(timeout=120) != 0
     assert not list_eval_logs(str(tmp_path / "logs"))
-    assert "definition failed during setup" in _output(worker)
+    assert "definition failed during setup" in output(worker)

@@ -4,7 +4,7 @@ A worker is one process running one task (execution.md *Worker model*): it re-ex
 
 Two things here are easy to get wrong and are therefore not left to the caller.
 
-**Both channels carry the log directory.** The selection's `log_dir` override reaches the `eval_set()` boundary and not one step earlier, so anything a frontend writes on its way there lands wherever the *definition* said. `spawn` builds the command itself rather than accepting one, so the frontend's own `--log-dir` and the selection override can never disagree.
+**Two log directories, deliberately different.** The selection's `log_dir` override reaches the `eval_set()` boundary and not one step earlier, so anything a frontend writes on its way there lands wherever it was *separately* told to. That work is once-per-run — resolved config, a requirements snapshot, a scan for prior logs — and every worker repeats it, so it is aimed at the worker's own scratch directory while the selection carries the run's. `spawn` builds the command itself rather than accepting one, so the two are always set together.
 
 **Workers are detached.** `start_new_session` puts each worker in its own session, so a Ctrl-C or a hangup aimed at the tend that spawned it does not reach it and the run survives the process that started it. Detached is not the same as reparented: a worker stays this process's child until this process exits, which is why `SpawnedWorker` can carry a live handle at all.
 
@@ -58,6 +58,9 @@ class SpawnedWorker:
 
     output: Path
     """Merged stdout and stderr. The only evidence a worker leaves during the window before its eval starts, where neither the log directory nor control discovery can see it."""
+
+    scratch: Path
+    """Where the definition's pre-boundary work lands (a frontend's resolved config, requirements snapshot, and prior-log scan). One per worker, so N of them never write the same path; empty for a definition that does no such work."""
 
     command: DefinitionCommand
     """The command the worker is running."""
@@ -119,12 +122,18 @@ class Fleet:
                 "make."
             )
 
-        command = definition_command(
-            self.definition, self.type, self.args, self.cwd, log_dir=self.log_dir
-        )
-
         self.workers_dir.mkdir(parents=True, exist_ok=True)
         stem = worker_stem(action)
+
+        # the frontend channel gets this worker's own scratch directory, never
+        # the run's: what a definition writes on its way to `eval_set()` is
+        # once-per-run work that every worker repeats, so aimed at the shared
+        # directory it is N concurrent writes to the same paths
+        scratch = self.workers_dir / stem
+        command = definition_command(
+            self.definition, self.type, self.args, self.cwd, log_dir=str(scratch)
+        )
+
         selection = self.workers_dir / f"{stem}.json"
         # utf-8 explicitly: inspect reads this file as bytes and parses it as
         # utf-8, so a locale-encoded write would make a non-ASCII identifier or
@@ -157,6 +166,7 @@ class Fleet:
             pid=process.pid,
             selection=selection,
             output=output,
+            scratch=scratch,
             command=command,
             process=process,
         )
