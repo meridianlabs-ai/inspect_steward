@@ -71,6 +71,14 @@ class Workspace:
         return self.state / "workers"
 
     @property
+    def inflight(self) -> Path:
+        """`.steward/inflight.jsonl` — what was spawned, appended before each launch.
+
+        The journal's opposite in every way that matters: machine-only, and rebuildable from the process table on the next resolve, which is why it lives under `.steward/` (execution.md, *Detachment and the in-flight record*).
+        """
+        return self.state / "inflight.jsonl"
+
+    @property
     def status(self) -> Path:
         """`status.md` — rewritten by every tend."""
         return self.root / "status.md"

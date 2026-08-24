@@ -2,14 +2,24 @@ import os
 import shutil
 import subprocess
 import sys
+import tempfile
+from collections.abc import Iterator
 from pathlib import Path
 
 import pytest
 
 
 @pytest.fixture(scope="session")
-def fake_home(tmp_path_factory: pytest.TempPathFactory) -> Path:
-    return tmp_path_factory.mktemp("home")
+def fake_home() -> Iterator[Path]:
+    """A home directory short enough to hold a unix socket.
+
+    Deliberately not `tmp_path_factory`, whose paths are long: inspect binds its control socket at `<data dir>/inspect_ai/control/<pid>.sock`, and under a home like `/private/var/folders/../pytest-of-user/pytest-93/popen-gw6/home0` that exceeds the 104-byte `sun_path` limit. Inspect's response is a warning and an eval that runs without a control surface — so a test asking anything of the control channel fails for a reason nowhere near the socket.
+    """
+    home = Path(tempfile.mkdtemp(prefix="stw-", dir="/tmp"))
+    try:
+        yield home
+    finally:
+        shutil.rmtree(home, ignore_errors=True)
 
 
 @pytest.fixture(scope="session")

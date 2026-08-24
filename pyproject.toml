@@ -23,6 +23,11 @@ dependencies = [
     "inspect-scout>=0.4.46",
     "click>=8.0",
     "pyyaml>=6.0",
+    # the process table is how Steward finds a worker that has not yet reached
+    # its eval, and so has no log and no control-discovery entry. inspect-ai
+    # depends on psutil too, but this is a direct import and a transitive
+    # dependency is not a promise.
+    "psutil>=5.9",
 ]
 
 [project.optional-dependencies]
@@ -74,6 +79,7 @@ dev = [
     "pytest-xdist",
     "pytest-dotenv",
     "pytest-timeout>=2.4.0",
+    "types-psutil", # psutil ships no inline types and pyright runs strict
     "inspect_flow>=0.12.0", # for the flow definition tests
     # for the hawk definition tests; 3.13+ only, so those tests skip on 3.12
     "hawk[cli,runner]>=2.4.0; python_version >= '3.13'",

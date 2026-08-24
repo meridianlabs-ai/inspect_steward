@@ -12,6 +12,7 @@ What this function decides is mechanical continuity: which workers to spawn and 
 """
 
 from dataclasses import dataclass, field
+from pathlib import Path
 from typing import Any
 
 from inspect_ai._eval.evalset import TASK_IDENTIFIER_VERSION
@@ -65,14 +66,37 @@ class Pool:
 
 @dataclass(frozen=True)
 class RunningWorker:
-    """A worker the in-flight record accounts for.
+    """A worker confirmed alive.
 
-    The resolved view, not the record: deciding whether a recorded worker is still alive means consulting the process table and the control discovery directory, which is I/O and belongs to whatever produces this.
+    The resolved view, not the record: deciding whether a recorded worker is still alive means reading the process table and the control discovery directory, which is I/O and belongs to whatever produces this.
     """
+
+    worker: str
+    """Worker stem — the name of its selection document and its output file, and what the record keys on."""
 
     identifier: str
     pid: int
     host: str
+
+    socket: Path | None = None
+    """Control socket, once the worker has bound one.
+
+    `None` means the process exists but has not reached its `eval_set()` boundary yet — the window where it has no log and no discovery entry either. That makes the window a state a summary can report rather than something inferred from absence (execution.md, *The in-flight record is an accelerator*).
+    """
+
+
+@dataclass(frozen=True)
+class DepartedWorker:
+    """A worker the record accounts for that is no longer running.
+
+    Distinct from `RunningWorker` in one field, and that field is the reason: a worker whose `intent` was written and whose spawn never returned has **no pid**, and inventing one to fit a shared shape would put a number in the record that never named a process.
+    """
+
+    worker: str
+    identifier: str
+    host: str
+    pid: int | None = None
+    """`None` for a worker that never launched."""
 
 
 @dataclass(frozen=True)
@@ -82,7 +106,7 @@ class InFlight:
     running: list[RunningWorker] = field(default_factory=list[RunningWorker])
     """Confirmed alive. These occupy a slot and suppress a respawn."""
 
-    departed: list[RunningWorker] = field(default_factory=list[RunningWorker])
+    departed: list[DepartedWorker] = field(default_factory=list[DepartedWorker])
     """Recorded but no longer alive. These need an `exited` entry and occupy nothing."""
 
     @property
@@ -118,7 +142,7 @@ class SpawnWorker:
 class ReapWorker:
     """Record that a worker is gone."""
 
-    worker: RunningWorker
+    worker: DepartedWorker
 
 
 Action = SpawnWorker | ReapWorker

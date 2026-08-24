@@ -44,6 +44,7 @@ def fleet(
         log_dir=str(log_dir),
         eval_set_id=resolve_eval_set_id(str(log_dir), EVAL_SET_ID),
         workers_dir=workspace / ".steward" / "workers",
+        inflight=workspace / ".steward" / "inflight.jsonl",
         cwd=cwd or workspace,
     )
 

@@ -2,9 +2,11 @@
 
 A worker is one process running one task (execution.md *Worker model*): it re-executes the definition so that every side effect of executing it is present, and a selection document intercepts `eval_set()` at its boundary so that only the selected task runs and no eval-set bookkeeping happens. That is what makes a flat, shared log directory safe — the only thing a worker touches is a file no other worker knows about.
 
-Two things here are easy to get wrong and are therefore not left to the caller.
+Three things here are easy to get wrong and are therefore not left to the caller.
 
 **Two log directories, deliberately different.** The selection's `log_dir` override reaches the `eval_set()` boundary and not one step earlier, so anything a frontend writes on its way there lands wherever it was *separately* told to. That work is once-per-run — resolved config, a requirements snapshot, a scan for prior logs — and every worker repeats it, so it is aimed at the worker's own scratch directory while the selection carries the run's. `spawn` builds the command itself rather than accepting one, so the two are always set together.
+
+**The intent is recorded before the process exists.** A crash between `Popen` returning and a record of it landing leaves a worker nothing knows about, so `spawn` writes `intent` first and `launched` after — a safety property, and safety properties belong inside the mechanism they protect rather than in a bracket the caller is trusted to write. The cost of ordering it this way is an occasional record of a worker that never started, which `resolve_inflight` reports departed.
 
 **Workers are detached.** `start_new_session` puts each worker in its own session, so a Ctrl-C or a hangup aimed at the tend that spawned it does not reach it and the run survives the process that started it. Detached is not the same as reparented: a worker stays this process's child until this process exits, which is why `SpawnedWorker` can carry a live handle at all.
 
@@ -32,6 +34,7 @@ from inspect_ai._util.file import safe_filename
 from .._evalset.command import DefinitionCommand, definition_command
 from .._evalset.detect import DefinitionType
 from .._schedule import SpawnWorker
+from .inflight import record_intent, record_launched
 
 MAX_KEY_LENGTH = 80
 """Longest display key a worker's file stem keeps. A key carries a task name, a solver, a model, and every distinguishing argument, so an argument sweep can produce a long one; the identifier hash beside it is what keeps two truncations apart."""
@@ -43,6 +46,9 @@ class SpawnedWorker:
 
     A handle rather than a record: everything here except `process` outlives this process, but nothing here is durable until the in-flight record is written.
     """
+
+    worker: str
+    """File stem, and the key everything else uses to name this worker: the selection document, the output file, and every line of the in-flight record."""
 
     identifier: str
     """Task identifier this worker was spawned for."""
@@ -89,7 +95,10 @@ class Fleet:
     """Eval set id stamped into every log (see `resolve_eval_set_id`)."""
 
     workers_dir: Path
-    """Directory holding each worker's selection document and output (`.steward/workers/`)."""
+    """Directory holding each worker's selection document and output (`.steward/workers/`). Absolute, which `Workspace` guarantees: it is what separates this workspace's workers from another's in the process table, and a relative one would be resolved against whatever directory happened to be scanning."""
+
+    inflight: Path
+    """The in-flight record (`.steward/inflight.jsonl`). Required rather than optional, because a worker spawned without one is a worker nothing can account for — and an argument that can be forgotten eventually is."""
 
     cwd: Path | None = None
     """Working directory for workers (defaults to the current directory, matching how the definition would run by hand)."""
@@ -108,7 +117,7 @@ class Fleet:
 
         Raises:
             RuntimeError: On Windows, which cannot detach (see the module docstring).
-            OSError: If the process cannot be started. A tend with other spawns to make decides what that means; there is nothing to clean up, since the selection document is inert.
+            OSError: If the process cannot be started. A tend with other spawns to make decides what that means; there is nothing to clean up, because the selection document is inert and the `intent` already written is precisely how the next resolve learns this attempt is over.
         """
         # before anything is written, so a refusal leaves nothing behind. The
         # package declares itself POSIX-only, but a classifier is metadata and
@@ -134,7 +143,10 @@ class Fleet:
             self.definition, self.type, self.args, self.cwd, log_dir=str(scratch)
         )
 
-        selection = self.workers_dir / f"{stem}.json"
+        # canonical, because this one leaves the process: it goes into the
+        # worker's environment, where the only reader is a scan resolving it
+        # from some other directory entirely
+        selection = (self.workers_dir / f"{stem}.json").resolve()
         # utf-8 explicitly: inspect reads this file as bytes and parses it as
         # utf-8, so a locale-encoded write would make a non-ASCII identifier or
         # path unreadable on the other side of a boundary it cannot negotiate
@@ -149,6 +161,18 @@ class Fleet:
         # only happens when the in-flight record was lost) then interleaves with
         # a worker that may still be running rather than erasing its output
         output = self.workers_dir / f"{stem}.log"
+
+        record_intent(
+            self.inflight,
+            worker=stem,
+            identifier=action.identifier,
+            key=action.key,
+            attempt=action.attempt,
+            selection=selection,
+            argv=command.argv,
+            cwd=command.cwd,
+            log_dir=self.log_dir,
+        )
         with output.open("ab") as stream:
             process = subprocess.Popen(
                 command.argv,
@@ -159,8 +183,10 @@ class Fleet:
                 stderr=subprocess.STDOUT,
                 start_new_session=True,
             )
+        record_launched(self.inflight, worker=stem, pid=process.pid)
 
         return SpawnedWorker(
+            worker=stem,
             identifier=action.identifier,
             key=action.key,
             pid=process.pid,

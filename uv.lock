@@ -1421,6 +1421,7 @@ dependencies = [
     { name = "click" },
     { name = "inspect-ai" },
     { name = "inspect-scout" },
+    { name = "psutil" },
     { name = "pyyaml" },
 ]
 
@@ -1449,6 +1450,7 @@ dev = [
     { name = "pyyaml" },
     { name = "quarto-cli" },
     { name = "ruff" },
+    { name = "types-psutil" },
     { name = "types-pyyaml" },
     { name = "uv", marker = "python_full_version >= '3.13'" },
 ]
@@ -1473,6 +1475,7 @@ requires-dist = [
     { name = "inspect-ai", git = "https://github.com/UKGovernmentBEIS/inspect_ai?branch=main" },
     { name = "inspect-flow", marker = "extra == 'flow'", specifier = ">=0.12.0" },
     { name = "inspect-scout", specifier = ">=0.4.46" },
+    { name = "psutil", specifier = ">=5.9" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "uv", marker = "python_full_version >= '3.13' and extra == 'hawk'", specifier = ">=0.5" },
 ]
@@ -1494,6 +1497,7 @@ dev = [
     { name = "pyyaml" },
     { name = "quarto-cli", specifier = ">=1.9.36" },
     { name = "ruff" },
+    { name = "types-psutil" },
     { name = "types-pyyaml" },
     { name = "uv", marker = "python_full_version >= '3.13'", specifier = ">=0.5" },
 ]
@@ -4244,6 +4248,15 @@ dependencies = [
 sdist = { url = "https://files.pythonhosted.org/packages/92/3c/58f808a359700f39a967dffede33efeac809262c03303fa3eec6afff8f49/twine-7.0.0.tar.gz", hash = "sha256:85cdb29c518efef867360ae4acd4b0dfd61c8654a22fca08e6f8539f05022177", size = 215032, upload-time = "2026-07-27T15:59:00.825Z" }
 wheels = [
     { url = "https://files.pythonhosted.org/packages/96/08/ddcdc06225eaad6de0e48e1002b06d919dbde20582d0662c7af51308e5d6/twine-7.0.0-py3-none-any.whl", hash = "sha256:b854164df26db268af05f49aa5c0344b10e27a494343ff05b1e0bad3b135f5a7", size = 43204, upload-time = "2026-07-27T15:58:59.26Z" },
+]
+
+[[package]]
+name = "types-psutil"
+version = "7.2.2.20260518"
+source = { registry = "https://pypi.org/simple" }
+sdist = { url = "https://files.pythonhosted.org/packages/cb/f1/6901857281d4e8d792492e1495eef6f4f01318a3b6a066486d81000a4511/types_psutil-7.2.2.20260518.tar.gz", hash = "sha256:9f825f631463a5b4d26f19f63aebc9ec25f01140d655026f3ad8a67841f9b331", size = 26660, upload-time = "2026-05-18T06:05:09.389Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/cd/eb/f726339668879819599c74c2e1f0cab760912a4159046942bdae2ad37bd6/types_psutil-7.2.2.20260518-py3-none-any.whl", hash = "sha256:6a3d697665754a60d7b5a41d5a2cff12b53f5e0676d77810cd28ba5e14cb4049", size = 32820, upload-time = "2026-05-18T06:05:08.321Z" },
 ]
 
 [[package]]

@@ -22,6 +22,7 @@ from inspect_steward._evalset.observe import (
 from inspect_steward._schedule import (
     DEFAULT_MAX_SAMPLES,
     DEFAULT_MAX_WORKERS,
+    DepartedWorker,
     InFlight,
     ManifestVersionError,
     Pool,
@@ -42,6 +43,21 @@ POOL = Pool(max_workers=8)
 def nothing_run(manifest: Manifest) -> ObservedTasks:
     """The observation of an empty log directory — no filesystem involved."""
     return observe_tasks(manifest, ObservedLogs(log_dir="logs"))
+
+
+def live(identifier: str, *, pid: int = 4242) -> RunningWorker:
+    """A worker confirmed alive.
+
+    The stem and the socket are synthesized rather than passed: `reconcile`
+    reads neither, and a test that supplied them would be asserting they are
+    carried rather than that they matter.
+    """
+    return RunningWorker(worker=f"w{pid}", identifier=identifier, pid=pid, host="here")
+
+
+def dead(identifier: str, *, pid: int | None = 99) -> DepartedWorker:
+    """A worker the record accounts for that is no longer running."""
+    return DepartedWorker(worker=f"w{pid}", identifier=identifier, pid=pid, host="here")
 
 
 def spawns(result: Reconciliation) -> list[SpawnWorker]:
@@ -112,10 +128,10 @@ def test_a_crashed_worker_is_indistinguishable_in_the_log_directory(
     manifest = synth_manifest([TASK])
     write_log(tmp_path, TASK, status="started")
     observed = observe_tasks(manifest, observe_logs(tmp_path))
-    live = RunningWorker(identifier=TASK.identifier, pid=4242, host="here")
-
     crashed = reconcile(manifest, InFlight(), observed, pool=POOL)
-    alive = reconcile(manifest, InFlight(running=[live]), observed, pool=POOL)
+    alive = reconcile(
+        manifest, InFlight(running=[live(TASK.identifier)]), observed, pool=POOL
+    )
 
     assert len(spawns(crashed)) == 1
     assert spawns(crashed)[0].reason == IncompleteReason.STARTED
@@ -213,8 +229,7 @@ def test_running_workers_take_slots_from_the_ceiling() -> None:
     # and five pending under a ceiling of ten spawns two, not five
     manifest = synth_manifest([SynthTask("t", args={"n": n}) for n in range(13)])
     eight = [
-        RunningWorker(identifier=task.identifier, pid=1000 + n, host="here")
-        for n, task in enumerate(manifest.tasks[:8])
+        live(task.identifier, pid=1000 + n) for n, task in enumerate(manifest.tasks[:8])
     ]
 
     result = reconcile(
@@ -250,8 +265,7 @@ def test_convergence_and_idempotence() -> None:
     # once the spawns have happened, the next call has nothing to do
     launched = InFlight(
         running=[
-            RunningWorker(identifier=worker.identifier, pid=n, host="here")
-            for n, worker in enumerate(spawns(first))
+            live(worker.identifier, pid=n) for n, worker in enumerate(spawns(first))
         ]
     )
     settled = reconcile(manifest, launched, observed, pool=POOL)
@@ -263,7 +277,7 @@ def test_convergence_and_idempotence() -> None:
 
 def test_a_departed_worker_is_reaped_and_holds_no_slot() -> None:
     manifest = synth_manifest([SynthTask("t", args={"n": n}) for n in range(2)])
-    gone = RunningWorker(identifier=manifest.tasks[0].identifier, pid=99, host="here")
+    gone = dead(manifest.tasks[0].identifier)
 
     result = reconcile(
         manifest, InFlight(departed=[gone]), nothing_run(manifest), pool=Pool(2)
@@ -292,7 +306,7 @@ def test_paused_schedules_nothing_and_says_so() -> None:
 
 def test_paused_still_reaps() -> None:
     manifest = synth_manifest([TASK])
-    gone = RunningWorker(identifier=TASK.identifier, pid=7, host="here")
+    gone = dead(TASK.identifier, pid=7)
 
     result = reconcile(
         manifest,
@@ -381,7 +395,7 @@ def test_the_summary_counts_what_a_status_line_needs(tmp_path: Path) -> None:
 
     result = reconcile(
         manifest,
-        InFlight(running=[RunningWorker(running.identifier, pid=1, host="here")]),
+        InFlight(running=[live(running.identifier, pid=1)]),
         observe_tasks(manifest, logs),
         pool=POOL,
     )
