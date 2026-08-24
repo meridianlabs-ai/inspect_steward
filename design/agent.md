@@ -67,7 +67,7 @@ They are orthogonal, and both matter. Zero open anomalies with six uncollected t
 
 It also answers the tend summary's audience problem concretely: the delta an arriving agent needs is *since the last collection*, not since the last tend, and now that is a fact rather than an inference.
 
-**Whether a growing backlog should notify is a policy question, not a mechanical one.** In the transient posture a long uncollected stretch is normal — that is what an unattended night looks like. It becomes a problem only against an expectation the human holds, so it belongs in `policy.md` ("I expect collection at least every four hours") rather than in a threshold Steward invents. What Steward does unconditionally is *report* it: `status.md` carries both ages, and a workspace whose last tend is four minutes old and whose last collection is six hours old is describing its own situation accurately.
+**Whether a growing backlog should notify is a policy question, not a mechanical one.** In the transient posture a long uncollected stretch is normal — that is what an unattended night looks like. It becomes a problem only against an expectation the human holds, so it belongs in `_steward.md`'s front matter ("I expect collection at least every four hours") rather than in a threshold Steward invents. What Steward does unconditionally is *report* it: `status.md` carries both ages, and a workspace whose last tend is four minutes old and whose last collection is six hours old is describing its own situation accurately.
 
 ### 2.3 What the agent still owes
 
@@ -83,7 +83,7 @@ The design repeatedly claims a third party can pick a workspace up cold. That cl
 ```
 AGENTS.md          →  you are tending a run; read the runbook
 steward runbook    →  the mechanics, shipped with the package
-policy.md          →  this human's standing rules
+_steward.md        →  this human's standing rules
 steward status     →  what is true right now
 open anomalies     →  what is undecided, with precedent attached
 analysis.md        →  what has been found so far and what it meant
@@ -138,11 +138,11 @@ The bounds are already set by decisions in other documents; collected here becau
 
 - **`steward signoff`.** It is a human attestation; an agent running it is the one thing that would make the record meaningless.
 - **Edit the definition.** It is the human's statement of what is being measured, and an agent's edit to it is afterwards indistinguishable from theirs. Read it, run it, and raise anything that looks wrong as a *question* rather than as a change. This includes adding a comment explaining what the eval set is for — an agent handed a definition was never told why it exists, and a plausible rationale in the file is worse than none, because a later reader cannot tell it from the author's.
-- **Write `policy.md`.** Steward proposes; the human writes.
+- **Write `_steward.md`.** Steward proposes; the human writes.
 - **Move or delete a log.** Not even an empty cancelled one, and not into a folder named for discards. Resume matches logs where they are.
 - **Answer a parked approval or `ask_user`.** A worker that has stopped for a human decision ([execution.md](execution.md), *The parked worker*) is asking whether the eval may do something, and answering is authority over what is being measured — the same authority that puts editing the definition on this list. The distinction from the ruling below is real and worth holding: a ruling decides whether to *re-run* work that already happened, while an approval decides what happens *next*, inside a sample, and leaves no record anyone reviews afterwards. Surface it, name the worker, print the command that attaches to it, notify — and wait.
 
-**Only with a ruling** — every re-run past the automatic tier, at sample or task level ([execution.md](execution.md), *Two tiers, not three*). `policy.md` may grant that ruling in advance, in which case acting on it is executing a decision already made.
+**Only with a ruling** — every re-run past the automatic tier, at sample or task level ([execution.md](execution.md), *Two tiers, not three*). `_steward.md` may grant that ruling in advance, in which case acting on it is executing a decision already made.
 
 **Stop and ask** on: a smoke gate that still fails after two attempts; identity or resume errors, where the manifest and the logs disagree about what the eval *is*; numbers that fail sanity; anything requiring a destructive or irreversible action; persistent credential failures; or a non-converging loop — the same task failing across three launches, or logs accumulating for one task. A stop is not a teardown: healthy work keeps running, and the journal gets a final entry with state and a hypothesis.
 

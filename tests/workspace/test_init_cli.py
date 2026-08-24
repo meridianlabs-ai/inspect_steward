@@ -63,7 +63,7 @@ def test_runbook_carries_the_bounds() -> None:
     for bound in (
         "steward signoff",
         "Edit the definition",
-        "Write `policy.md`",
+        "Write `_steward.md`",
         "Move or delete a log",
         "Trust the artifact, not the exit code",
     ):

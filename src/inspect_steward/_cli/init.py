@@ -30,7 +30,7 @@ def init_command(directory: str, definition_type: DefinitionType, no_git: bool) 
 
     DIRECTORY defaults to the current directory and is created if it does not exist.
 
-    Safe to re-run: existing files are kept and only what is missing is added. Steward never overwrites your work — least of all `policy.md`, which it proposes changes to but never writes.
+    Safe to re-run: existing files are kept and only what is missing is added. Steward never overwrites your work — least of all `_steward.md`, which it proposes changes to but never writes.
     """
     try:
         report = create_workspace(directory, type=definition_type, git=not no_git)

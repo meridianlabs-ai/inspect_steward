@@ -75,11 +75,11 @@ Each fault below exists to falsify a specific claim, and the claim is what the t
 | kill a tend holding the claim | the lock goes with the process; the next tend takes it with nothing to reap | `workspace/test_claim.py` |
 | wedge a tend holding the claim | it is killed and the claim taken, rather than blocking the run until morning | `workspace/test_claim.py` |
 | hold the claim | a second tend refuses rather than proceeding | `workspace/test_claim.py` |
-| race two tends | idempotence — one spawn, not two | *step 12* |
-| run the same tend twice | a no-op | *step 12* |
-| make `log_dir` unwritable | scheduling stops, notification fires, running workers are left alone | *steps 12, 23* |
-| fill the disk | the same, without depending on `steward.log` | *steps 12, 23* |
-| expire log-store credentials | the errors class as *substrate*, and no re-run is proposed | *step 22* |
+| race two tends | idempotence — one spawn, not two | *step 13* |
+| run the same tend twice | a no-op | *step 13* |
+| make `log_dir` unwritable | scheduling stops, notification fires, running workers are left alone | *steps 13, 24* |
+| fill the disk | the same, without depending on `steward.log` | *steps 13, 24* |
+| expire log-store credentials | the errors class as *substrate*, and no re-run is proposed | *step 23* |
 | jump the wall clock backwards | a holder looks young, so the tend refuses rather than killing it | `workspace/test_claim.py` |
 
 **The third column is the point of the table.** A fault list with no test beside it is an intention, and the whole argument of this document is that intentions about failure are the ones that quietly stop being true. A row naming a step rather than a module is work not yet possible; a row naming neither would be a hole.

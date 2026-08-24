@@ -99,7 +99,7 @@ def test_states(
 
 def test_errored_samples_are_a_count_not_a_state(tmp_path: Path) -> None:
     # worker mode forces fail_on_error=False, so a task finishes success
-    # carrying its errored samples: they are step 18's queue, not a reason to
+    # carrying its errored samples: they are step 23's anomalies, not a reason to
     # run the task again
     write_log(tmp_path, TASK, completed=7)
 

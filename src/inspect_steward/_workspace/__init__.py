@@ -1,5 +1,12 @@
 from .claim import STALE_AFTER, Claim, Held, acquire, read_claim
 from .create import CreateReport, Outcome, Step, create_workspace
+from .directives import (
+    REFUSED,
+    Directives,
+    DirectivesError,
+    read_directives,
+    resolve_pool,
+)
 from .journal import (
     DamagedLine,
     InitializedEvent,
@@ -16,10 +23,13 @@ from .layout import DEFINITION_NAMES, GITIGNORE_ENTRIES, Workspace
 __all__ = [
     "DEFINITION_NAMES",
     "GITIGNORE_ENTRIES",
+    "REFUSED",
     "STALE_AFTER",
     "Claim",
     "CreateReport",
     "DamagedLine",
+    "Directives",
+    "DirectivesError",
     "Held",
     "InitializedEvent",
     "JournalEvent",
@@ -32,7 +42,9 @@ __all__ = [
     "append_event",
     "create_workspace",
     "read_claim",
+    "read_directives",
     "read_journal",
+    "resolve_pool",
     "summarize",
     "utc_now",
 ]

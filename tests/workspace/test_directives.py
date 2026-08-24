@@ -1,0 +1,145 @@
+"""Reading `_steward.md`.
+
+Three claims, and they are the whole point of the file: the front matter is read and the prose is not, a setting that belongs elsewhere is refused by name rather than ignored, and the command line outranks the workspace.
+"""
+
+from pathlib import Path
+
+import pytest
+from inspect_steward._schedule import DEFAULT_MAX_WORKERS
+from inspect_steward._workspace import (
+    REFUSED,
+    Directives,
+    DirectivesError,
+    create_workspace,
+    read_directives,
+    resolve_pool,
+)
+
+
+def written(tmp_path: Path, text: str) -> Path:
+    path = tmp_path / "_steward.md"
+    path.write_text(text, encoding="utf-8")
+    return path
+
+
+PARSED: list[tuple[str, str, int | None]] = [
+    ("no front matter at all", "# _steward.md\n\nnever spend over $200.\n", None),
+    ("an empty front matter", "---\n---\n\nprose.\n", None),
+    ("nothing but comments", "---\n# max_workers: 8\n---\n", None),
+    ("a setting", "---\nmax_workers: 8\n---\n\nprose.\n", 8),
+    ("no body", "---\nmax_workers: 3\n---\n", 3),
+    ("a rule in the body", "---\nmax_workers: 4\n---\n\nfirst\n\n---\n\nsecond\n", 4),
+    ("trailing space on the fences", "--- \nmax_workers: 5\n--- \n", 5),
+]
+
+
+@pytest.mark.parametrize(
+    ("text", "max_workers"),
+    [(text, expected) for _, text, expected in PARSED],
+    ids=[case for case, _, _ in PARSED],
+)
+def test_the_front_matter_is_read_and_the_body_is_not(
+    text: str, max_workers: int | None, tmp_path: Path
+) -> None:
+    assert read_directives(written(tmp_path, text)).max_workers == max_workers
+
+
+def test_a_workspace_with_no_file_expressed_no_preferences(tmp_path: Path) -> None:
+    # absent is a workspace that said nothing, not a workspace that is broken
+    assert read_directives(tmp_path / "_steward.md") == Directives()
+
+
+def test_the_file_init_writes_parses(tmp_path: Path) -> None:
+    # the template ships a commented-out front matter, so it must survive being
+    # read as one -- a broken fence there would break every workspace at once
+    workspace = create_workspace(tmp_path, git=False).workspace
+    assert read_directives(workspace.directives) == Directives()
+
+
+REJECTED: list[tuple[str, str, str]] = [
+    ("a fence that never closes", "---\nmax_workers: 8\n\nprose\n", "never closed"),
+    ("front matter that is not yaml", "---\nmax_workers: [8\n---\n", "not valid YAML"),
+    ("front matter that is not a mapping", "---\n- max_workers\n---\n", "a mapping"),
+    ("a key the definition owns", "---\nlog_dir: out/\n---\n", "eval_set()"),
+    ("sample concurrency", "---\nmax_samples: 40\n---\n", "eval_set()"),
+    (
+        "a notification url",
+        "---\nnotify: slack://tok@chan\n---\n",
+        "INSPECT_EVAL_NOTIFICATION",
+    ),
+    ("a typo", "---\nmax_wokrers: 8\n---\n", "not a setting Steward knows"),
+    ("a meaningless ceiling", "---\nmax_workers: 0\n---\n", "greater than 0"),
+    ("a ceiling that is not a number", "---\nmax_workers: lots\n---\n", "max_workers"),
+    # YAML rewrites all four of these before pydantic ever sees them, and
+    # pydantic's default would rewrite them again into a plausible integer --
+    # `yes` all the way to 1, which would throttle a fleet to one worker and
+    # say nothing. The error has to name the value that arrived, because that
+    # is the only way the author learns what YAML did to what they typed.
+    ("a ceiling YAML read as true", "---\nmax_workers: yes\n---\n", "not True"),
+    ("a ceiling YAML read as false", "---\nmax_workers: off\n---\n", "not False"),
+    ("a ceiling in quotes", '---\nmax_workers: "8"\n---\n', "not '8'"),
+    ("a ceiling with a decimal point", "---\nmax_workers: 8.0\n---\n", "not 8.0"),
+]
+
+
+@pytest.mark.parametrize(
+    ("text", "says"),
+    [(text, says) for _, text, says in REJECTED],
+    ids=[case for case, _, _ in REJECTED],
+)
+def test_a_file_that_cannot_be_trusted_is_refused(
+    text: str, says: str, tmp_path: Path
+) -> None:
+    # loudly, and on the first read: a setting quietly ignored is the failure
+    # this file's whole rule exists to prevent
+    with pytest.raises(DirectivesError, match=says):
+        read_directives(written(tmp_path, text))
+
+
+def test_a_file_in_the_wrong_encoding_is_refused_by_name(tmp_path: Path) -> None:
+    # an editor that saved as latin-1 is the ordinary way to get one, and
+    # `UnicodeDecodeError` is a ValueError rather than an OSError -- so without
+    # its own branch this is a traceback instead of a message naming the file
+    path = tmp_path / "_steward.md"
+    path.write_bytes("---\nmax_workers: 8\n---\n\ncafé\n".encode("latin-1"))
+
+    with pytest.raises(DirectivesError, match="not valid UTF-8"):
+        read_directives(path)
+
+
+@pytest.mark.parametrize("key", sorted(REFUSED))
+def test_every_key_that_belongs_elsewhere_says_where(key: str, tmp_path: Path) -> None:
+    with pytest.raises(DirectivesError) as caught:
+        read_directives(written(tmp_path, f"---\n{key}: something\n---\n"))
+
+    assert key in str(caught.value)
+    assert REFUSED[key] in str(caught.value)
+
+
+CEILING: list[tuple[str, int | None, int | None, int]] = [
+    ("nobody expressed one", None, None, DEFAULT_MAX_WORKERS),
+    ("the workspace did", None, 8, 8),
+    ("the command line did", 3, None, 3),
+    ("the command line outranks the workspace", 3, 8, 3),
+]
+
+
+@pytest.mark.parametrize(
+    ("cli", "file", "expected"),
+    [(cli, file, expected) for _, cli, file, expected in CEILING],
+    ids=[case for case, _, _, _ in CEILING],
+)
+def test_the_worker_ceiling_resolves_most_specific_first(
+    cli: int | None, file: int | None, expected: int
+) -> None:
+    pool = resolve_pool(Directives(max_workers=file), max_workers=cli)
+    assert pool.max_workers == expected
+
+
+def test_the_file_is_never_a_source_of_sample_concurrency() -> None:
+    # max_samples belongs to the definition, so the operator's value passes
+    # straight through and `None` keeps meaning *no preference* -- which is what
+    # lets `resolve_max_samples` fall to the definition rather than to a default
+    assert resolve_pool(Directives()).max_samples is None
+    assert resolve_pool(Directives(), max_samples=20).max_samples == 20

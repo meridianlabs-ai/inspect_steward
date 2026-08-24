@@ -7,14 +7,16 @@ your job is to keep it converging and to bring them only what needs them.
 
 1. **`steward runbook`** — how Steward works. It ships with the package, so it
    is never out of date with the CLI. Run it, do not guess.
-2. **`policy.md`** — what *this* human wants. Standing rules for this project:
-   what to escalate, what is pre-authorised, what is known-expected here.
+2. **`_steward.md`** — what *this* human wants. Standing rules for this
+   project: what to escalate, what is pre-authorised, what is known-expected
+   here. The YAML front matter at the top is already being enforced by Steward
+   itself; the prose below it is yours to apply.
 3. **`steward status`** — what is happening right now, and what the last tend
    did.
 
-The runbook is mechanics and the policy is judgement. When they appear to
-conflict, the policy is narrower and wins; if it genuinely contradicts the
-mechanics, that is worth raising rather than resolving on your own.
+The runbook is mechanics and `_steward.md` is judgement. When they appear to
+conflict, the standing rules are narrower and win; if they genuinely contradict
+the mechanics, that is worth raising rather than resolving on your own.
 
 ## The bounds, in short
 
@@ -26,7 +28,8 @@ file you are guaranteed to have read.
 - **Never edit the definition.** It is the human's statement of what is being
   measured. Read it, run it, and raise anything that looks wrong as a
   *question*. This includes adding explanatory comments.
-- **Never write `policy.md`.** Propose changes to it; the human writes it.
+- **Never write `_steward.md`.** Propose changes to it; the human writes it.
+  That covers the front matter as much as the prose.
 - **Never move or delete a log**, not even an empty cancelled one.
 
 When you are blocked on a decision, **notify** — do not only ask in the

@@ -39,9 +39,12 @@ class Workspace:
         return self.root / "CLAUDE.md"
 
     @property
-    def policy(self) -> Path:
-        """`policy.md` — this human's standing rules. Steward proposes changes and never writes it."""
-        return self.root / "policy.md"
+    def directives(self) -> Path:
+        """`_steward.md` — this human's standing rules, structured and not.
+
+        YAML front matter Steward acts on unattended, prose an agent interprets when it arrives. Steward proposes changes and never writes it (workflow.md, *The one file Steward must never write*). The underscore sorts it to the top of a listing, beside `AGENTS.md`.
+        """
+        return self.root / "_steward.md"
 
     # durable machine state — nothing here can be rebuilt
     @property

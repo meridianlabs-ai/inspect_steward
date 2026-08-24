@@ -1,6 +1,6 @@
 """Creating a workspace, and never overwriting one.
 
-`init` only ever creates. Every authored file in a workspace is someone's work — the definition and `policy.md` most obviously, but `AGENTS.md` too once anyone has adjusted it — so a second run reports what it found rather than restoring a pristine copy over it. The one exception is `.gitignore`, which is appended to, because its entries are Steward's rather than the author's.
+`init` only ever creates. Every authored file in a workspace is someone's work — the definition and `_steward.md` most obviously, but `AGENTS.md` too once anyone has adjusted it — so a second run reports what it found rather than restoring a pristine copy over it. The one exception is `.gitignore`, which is appended to, because its entries are Steward's rather than the author's.
 """
 
 import shutil
@@ -81,7 +81,7 @@ def create_workspace(
 
     _write_template(report, workspace.agents, "agents.md")
     _link_claude(report, workspace)
-    _write_template(report, workspace.policy, "policy.md")
+    _write_template(report, workspace.directives, "_steward.md")
     _create_definition(report, workspace, type)
     _update_gitignore(report, workspace)
     _initialize_git(report, workspace, git)

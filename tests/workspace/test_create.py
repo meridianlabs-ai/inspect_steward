@@ -32,14 +32,14 @@ def test_creates_the_workspace(tmp_path: Path) -> None:
     assert outcomes(report) == {
         "AGENTS.md": Outcome.CREATED,
         "CLAUDE.md": Outcome.CREATED,
-        "policy.md": Outcome.CREATED,
+        "_steward.md": Outcome.CREATED,
         "evalset.py": Outcome.CREATED,
         ".gitignore": Outcome.CREATED,
         "git": Outcome.SKIPPED,
         "journal.jsonl": Outcome.CREATED,
     }
     assert workspace.agents.read_text().startswith("# AGENTS.md")
-    assert workspace.policy.exists()
+    assert workspace.directives.exists()
     # the definition is a placeholder, not a guess at what is being measured
     assert workspace.definition("evalset").read_text() == ""
 
@@ -77,14 +77,14 @@ def test_definition_type_chooses_the_filename(
 def test_rerunning_changes_nothing(tmp_path: Path) -> None:
     create_workspace(tmp_path, git=False)
     workspace = Workspace.at(tmp_path)
-    workspace.policy.write_text("never spend over $200 without asking\n")
+    workspace.directives.write_text("never spend over $200 without asking\n")
 
     report = create_workspace(tmp_path, git=False)
 
     assert set(outcomes(report).values()) == {Outcome.KEPT, Outcome.SKIPPED}
     assert not report.created_anything
     # the human's own work, and the record, both survive untouched
-    assert workspace.policy.read_text() == "never spend over $200 without asking\n"
+    assert workspace.directives.read_text() == "never spend over $200 without asking\n"
     assert len(workspace.journal.read_text().splitlines()) == 1
 
 

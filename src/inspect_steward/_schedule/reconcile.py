@@ -316,7 +316,7 @@ def resolve_max_samples(manifest: Manifest, pool: Pool) -> int:
 
     The distinction between the first two is why `Pool.max_samples` is optional rather than pre-filled with the default. Collapsing them gets it wrong in one direction or the other — Steward's own fallback silently outranking a definition, or an explicit operator instruction silently losing to one — and neither is visible from the resulting number.
 
-    Whichever wins is written into the selection explicitly. That is a starting point rather than a ceiling: step 16's tuning changes where a worker ends up, not where it begins.
+    Whichever wins is written into the selection explicitly. That is a starting point rather than a ceiling: step 21's tuning loop changes where a worker ends up, not where it begins.
 
     Args:
         manifest: Captured desired state.

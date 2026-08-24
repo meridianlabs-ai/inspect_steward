@@ -16,6 +16,8 @@ Every other document works a topic to closure regardless of when it ships. This 
 
 **Steward can now see and steer a fleet, and mutual exclusion is in place.** `resolve_inflight` answers what is running by sweeping the process table for each worker's selection marker, with a record supplying what a process cannot say (step 8); `inspect ctl` reads a live worker's task and retunes its `max_samples` (step 9); and the run claim keeps two Stewards from writing at once, releasing itself when a holder dies and killing one that wedges (step 10). Every recovery claim those rest on is now falsifiable on demand rather than only stated (step 11).
 
+**A workspace can state its own standing rules.** `_steward.md` replaces `policy.md` — YAML front matter Steward acts on unattended above prose an agent interprets — and the rule that keeps it safe is enforced rather than documented: a key the definition could express is refused by name, and anything unrecognised is rejected outright (step 12).
+
 **No run is supervised yet.** There is no `launch`, no `tend`, no anomalies, no signoff — every piece a tend would call exists, and nothing calls them. The runner is the project, and the components most likely to be subtly wrong were built and tested before the machinery that drives them.
 
 ## 2. The one thing to verify first — verified
@@ -50,9 +52,10 @@ The sequence matters more than the list, and one ordering choice is worth statin
 5. **The control channel client.** *Done*, and it is `inspect ctl` rather than an in-process client — one invocation reads the whole fleet, and the CLI already carries the error vocabulary and the provenance that a hand-rolled client would have had to reproduce.
 6. **The run claim**, short-lived. *Done.* A kernel lock that a dead holder releases by itself, and a wedged one is killed to release.
 7. **Fault injection** over the above. *Done*, and smaller than expected: ten of the sixteen faults were already falsified by tests written for the steps that built their subjects. What it cost was one definition that fails wherever it is told to — and what it bought was a bug, since deleting `.steward/` mid-run had been quietly able to respawn a task over a live worker.
-8. **`status` and `tend`** as one function with two dispositions, writing `status.md`.
-9. **The timer**, and then **`launch`** — in that order, because launch is *capture, commit, arm, tend* and therefore a composition of the two items before it rather than a peer of either.
-10. **Worker startup at scale** — the identity facets that let inspect prune unselected tasks before constructing them, and a launch-time guard for the interval before that lands. Waits on upstream item 5; the gate does not wait on it, since ten workers on a modest manifest are fine today.
+8. **`_steward.md`** — the workspace's standing rules, front matter above prose. *Done*, and ahead of the tend loop rather than after `launch`, because three settings the loop needs are standing properties of a workspace and stubbing a home for each would mean building it twice. It ships one key, `max_workers`, and grows one per step: the rule is that a key the definition could express is refused by name, which took `max_samples` and `headline_metric` out on the way.
+9. **`status` and `tend`** as one function with two dispositions, writing `status.md` — then what a turn *says*: the attention list a human reads, the work list an agent drains, and the verdict glyph over both.
+10. **The timer**, and then **`launch`** — in that order, because launch is *capture, commit, arm, tend* and therefore a composition of the two items before it rather than a peer of either.
+11. **Worker startup at scale** — the identity facets that let inspect prune unselected tasks before constructing them, and a launch-time guard for the interval before that lands. Waits on upstream item 5; the gate does not wait on it, since ten workers on a modest manifest are fine today.
 
 What M2 deliberately lacks: it does not notice anything. Tasks run, logs land, a human reads `status`. Errors are visible as counts, not as anomalies with a lifecycle.
 
@@ -95,15 +98,16 @@ Scanning is the largest piece and the most valuable — three steps in [plan.md]
 
 | item | needed by | if it does not land |
 |---|---|---|
-| 7 — notification outside an eval | **M3** | Steward carries Apprise itself, duplicating `build_apprise` / `init_apprise`. Works, and is the one item with a genuine workaround |
+| 7 — notification outside an eval | **M3** | smaller than it looked: `build_apprise` / `init_apprise` are importable from `inspect_ai.util._notify`, the same reach-around Steward already does for `_eval.evalset` and `_cli.main`, so nothing is duplicated. The ask is *make them public*, not *unblock us* |
 | 8 — dataset `limit` override | M4 (smoke) | no smoke gate; a rehearsal would run the whole dataset |
-| 5 — early pruning | M2 **at scale** | small sweeps are fine; per-worker memory scales with the whole manifest, so a large one is not. A precondition for launching wide, not for launching. Steward's half — emitting the identity facets the pruner matches on, plus the interim memory guard — is [plan.md](plan.md) step 17 |
+| 5 — early pruning | M2 **at scale** | small sweeps are fine; per-worker memory scales with the whole manifest, so a large one is not. A precondition for launching wide, not for launching. Steward's half — emitting the identity facets the pruner matches on, plus the interim memory guard — is [plan.md](plan.md) step 18 |
 | 9, 10 — `max_sandboxes` override and sandbox type in the manifest | M2 **on Docker** | k8s and unsandboxed evals are unaffected. On a Docker host the fleet asks for `workers × 2 × cores` containers, which is the one failure mode with no backpressure signal |
 | 6 — public directory operations (incl. `archive_dir`) | **M3** | signoff curates into `logs-archive/`, and the predicate it needs — `latest_completed_task_eval_logs` — is private and exported nowhere. Steward reimplements it, which is small but free to drift against the definition of "superseded" that `eval_set()` uses. Its second half — a batched header read that degrades instead of raising — Steward has already reimplemented, and would keep doing so |
 | 11 — epochs reducer in the manifest | never blocking | a reducer-only change reads as complete where `eval_set()` would re-score. Silent rather than loud, which is why it is worth one field |
-| 12, 13 — ACP on in worker mode, and the parked state on the control channel | **M3** | a detached worker has no path to a human: `approver: human` and `ask_user` land as errored samples in successful logs. Only definitions that ask for human interaction are affected, and they are affected completely. The two must land together — 12 without 13 replaces a loud errored sample with an invisible stall ([plan.md](plan.md) step 19) |
+| 14 — the headline metric in the log header | never blocking | a status table picks a metric by convention rather than by declaration, so two readers of the same log can disagree about what the run scored. Cheap to work around and impossible to get exactly right without it |
+| 12, 13 — ACP on in worker mode, and the parked state on the control channel | **M3** | a detached worker has no path to a human: `approver: human` and `ask_user` land as errored samples in successful logs. Only definitions that ask for human interaction are affected, and they are affected completely. The two must land together — 12 without 13 replaces a loud errored sample with an invisible stall ([plan.md](plan.md) step 20) |
 
-**Two items touch M3, and both have workarounds** — Steward can carry Apprise itself, and it can compute supersession itself. Nothing blocks M2 except at scale or on Docker, which is worth knowing: the runner can be built and proven before any of this lands.
+**Two items touch M3, and both have workarounds** — Steward can reach Apprise through a private import, and it can compute supersession itself. Nothing blocks M2 except at scale or on Docker, which is worth knowing: the runner can be built and proven before any of this lands.
 
 ## 6. How Hawk meshes
 
