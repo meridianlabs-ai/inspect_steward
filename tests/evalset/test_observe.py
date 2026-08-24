@@ -10,6 +10,8 @@ The reader and the generator are tested together because neither is testable
 alone: a generator's only proof is that a reader agrees with it.
 """
 
+import os
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -20,7 +22,6 @@ from inspect_steward._evalset.observe import (
     TaskState,
     observe_logs,
     observe_tasks,
-    summarize_states,
 )
 
 from .._logs import (
@@ -124,6 +125,20 @@ def test_attempts_order_by_created(tmp_path: Path) -> None:
     current = logs.current(TASK.identifier)
     assert current is not None and current.created == LATEST
     assert len(logs.superseded(TASK.identifier)) == 2
+
+
+def test_the_modification_time_is_in_milliseconds(tmp_path: Path) -> None:
+    # `EvalLogInfo` normalizes every backend's answer to milliseconds, and the
+    # only reader of this field turns it back into an instant -- so the unit is
+    # load-bearing and reads as seconds without complaint, landing in the year
+    # 58614 rather than raising
+    written = write_log(tmp_path, TASK)
+    stamped = datetime(2026, 8, 23, 21, 0, tzinfo=timezone.utc).timestamp()
+    os.utime(written, (stamped, stamped))
+
+    (attempt,) = observe_logs(tmp_path).attempts[TASK.identifier]
+
+    assert attempt.mtime == pytest.approx(stamped * 1000)
 
 
 def test_the_latest_successful_attempt_wins(tmp_path: Path) -> None:
@@ -259,21 +274,3 @@ def test_scan_output_underneath_the_log_dir_is_not_a_log(tmp_path: Path) -> None
     write_log(tmp_path / "scans" / "scan_id=abc", SynthTask("scanned"))
 
     assert list(observe_logs(tmp_path).attempts) == [TASK.identifier]
-
-
-def test_summarize_states(tmp_path: Path) -> None:
-    done, running, never = SynthTask("done"), SynthTask("running"), SynthTask("never")
-    write_log(tmp_path, done)
-    write_log(tmp_path, running, status="started")
-    write_log(tmp_path, SynthTask("removed"))
-
-    observed = observe_tasks(
-        synth_manifest([done, running, never]), observe_logs(tmp_path)
-    )
-
-    assert summarize_states(observed.tasks) == {
-        "complete": 1,
-        "incomplete": 1,
-        "missing": 1,
-        "orphaned": 1,
-    }

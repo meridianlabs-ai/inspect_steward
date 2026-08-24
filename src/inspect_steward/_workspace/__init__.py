@@ -19,6 +19,7 @@ from .journal import (
     utc_now,
 )
 from .layout import DEFINITION_NAMES, GITIGNORE_ENTRIES, Workspace
+from .log import steward_log
 
 __all__ = [
     "DEFINITION_NAMES",
@@ -45,6 +46,7 @@ __all__ = [
     "read_directives",
     "read_journal",
     "resolve_pool",
+    "steward_log",
     "summarize",
     "utc_now",
 ]

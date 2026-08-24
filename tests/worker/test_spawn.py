@@ -18,6 +18,7 @@ from inspect_ai._eval.eval_set_selection import (
 )
 from inspect_ai.log import list_eval_logs, read_eval_log
 from inspect_steward import read_eval_set
+from inspect_steward._util.jsonl import read_events
 from inspect_steward._worker import resolve_eval_set_id, worker_selection, worker_stem
 
 from ._fleet import (
@@ -58,6 +59,37 @@ def test_a_worker_stem_separates_what_a_display_key_would_merge() -> None:
     assert worker_stem(action("a", key="k")) != worker_stem(
         action("a", key="k", attempt=2)
     )
+
+
+def test_a_second_worker_never_takes_a_stem_already_in_use(tmp_path: Path) -> None:
+    """The attempt number is a decision-layer estimate; the stem cannot be.
+
+    `SpawnWorker.attempt` counts the logs on disk and the in-flight record, and
+    both are disposable — two landed logs plus a deleted `inflight.jsonl` would
+    number the next attempt 3 when 3 has already been used. That is not a
+    cosmetic clash: the stem names the selection document a live worker is
+    reading and the entry the record folds on, so one of the two attempts would
+    vanish from the record entirely, taking the stall guard's evidence with it.
+    """
+    definition = tmp_path / "evalset.py"
+    definition.write_bytes(b"# resolves nothing, exits immediately\n")
+    workers = fleet(definition, tmp_path)
+    repeated = action("file.py@task#hash/mockllm/model/x", key="k", attempt=1)
+
+    first = workers.spawn(repeated)
+    second = workers.spawn(repeated)
+    for worker in (first, second):
+        worker.process.wait(timeout=60)
+
+    assert first.worker != second.worker
+    assert first.selection.exists() and second.selection.exists()
+    # and the record can tell them apart, which is the point of the exercise
+    recorded = {
+        event.payload["worker"]
+        for event in read_events(workers.inflight).events
+        if event.type == "intent"
+    }
+    assert recorded == {first.worker, second.worker}
 
 
 def test_windows_is_refused_before_anything_is_written(

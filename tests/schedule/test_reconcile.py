@@ -6,6 +6,8 @@ ObservedLogs(log_dir=...))` and touches nothing at all. That is what keeping
 `reconcile` pure was worth insisting on (execution.md, *The reconcile core*).
 """
 
+import os
+from datetime import datetime
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +24,8 @@ from inspect_steward._evalset.observe import (
 from inspect_steward._schedule import (
     DEFAULT_MAX_SAMPLES,
     DEFAULT_MAX_WORKERS,
+    DEFAULT_STALL_AFTER,
+    ArchiveLog,
     DepartedWorker,
     InFlight,
     ManifestVersionError,
@@ -64,8 +68,38 @@ def spawns(result: Reconciliation) -> list[SpawnWorker]:
     return [action for action in result.actions if isinstance(action, SpawnWorker)]
 
 
+def archives(result: Reconciliation) -> list[ArchiveLog]:
+    return [action for action in result.actions if isinstance(action, ArchiveLog)]
+
+
 def keys(workers: list[SpawnWorker]) -> list[str]:
     return [worker.key for worker in workers]
+
+
+def attempts(log_dir: Path, task: SynthTask, finished: list[int]) -> None:
+    """One log per attempt, oldest first, each finishing `finished` samples.
+
+    Short of the manifest's count every time, so every attempt reads incomplete
+    and the only thing that varies between them is whether it got further.
+    """
+    for n, count in enumerate(finished):
+        write_log(
+            log_dir,
+            task,
+            total=count,
+            completed=count,
+            created=f"2026-08-23T{10 + n:02d}:00:00+00:00",
+        )
+
+
+def crashes(count: int, *, since: int = 20) -> list[str]:
+    """Start times for `count` attempts that ended having landed no log.
+
+    On the same day `attempts` writes into and by the hour, so a test can place
+    them before or after the logs it wrote — which is the whole question the
+    guard has to answer about them.
+    """
+    return [f"2026-08-23T{since + n:02d}:00:00+00:00" for n in range(count)]
 
 
 @pytest.mark.parametrize(
@@ -350,20 +384,43 @@ def test_max_samples(options: dict[str, Any], pool: Pool, expected: int) -> None
     assert spawns(result)[0].max_samples == expected
 
 
-def test_attempt_counts_the_logs_already_there(tmp_path: Path) -> None:
+NUMBERING: list[tuple[str, list[int], int, int]] = [
+    ("nothing has been tried", [], 0, 1),
+    ("two attempts left logs", [1, 2], 2, 3),
+    # the case log history alone cannot see. Without it every attempt is
+    # numbered 1, and since the number names the worker, each respawn writes
+    # over the last one's in-flight entry -- so the record cannot count them
+    # either, and the stall guard below never fires
+    ("two died before landing one", [], 2, 3),
+    ("one left a log and one did not", [1], 2, 3),
+    # a spent attempt that landed a log is in both counts, so the larger is the
+    # answer and adding them would skip a number every time
+    ("the record was lost", [1, 2], 0, 3),
+]
+
+
+@pytest.mark.parametrize(
+    ("finished", "spent", "expected"),
+    [(finished, spent, expected) for _, finished, spent, expected in NUMBERING],
+    ids=[case for case, _, _, _ in NUMBERING],
+)
+def test_the_attempt_number_counts_every_try_steward_knows_about(
+    finished: list[int], spent: int, expected: int, tmp_path: Path
+) -> None:
     manifest = synth_manifest([TASK])
-    write_log(
-        tmp_path, TASK, status="error", error="one", created="2026-08-23T18:00:00+00:00"
-    )
-    write_log(
-        tmp_path, TASK, status="error", error="two", created="2026-08-23T20:00:00+00:00"
-    )
+    attempts(tmp_path, TASK, finished)
+    inflight = InFlight(spent={TASK.identifier: crashes(spent)})
 
     result = reconcile(
-        manifest, InFlight(), observe_tasks(manifest, observe_logs(tmp_path)), pool=POOL
+        manifest,
+        inflight,
+        observe_tasks(manifest, observe_logs(tmp_path)),
+        # patience out of the way: the subject here is the number, and a task
+        # with two fruitless attempts would otherwise be left alone
+        pool=Pool(max_workers=8, stall_after=99),
     )
 
-    assert spawns(result)[0].attempt == 3
+    assert spawns(result)[0].attempt == expected
 
 
 def test_a_manifest_from_a_different_inspect_is_refused() -> None:
@@ -377,6 +434,350 @@ def test_a_manifest_from_a_different_inspect_is_refused() -> None:
 
     with pytest.raises(ManifestVersionError, match="steward launch"):
         reconcile(stale, InFlight(), nothing_run(manifest), pool=POOL)
+
+
+@pytest.mark.parametrize(
+    ("finished", "stalled"),
+    [
+        # the signal is progress, not attempt count: a task getting further
+        # each time is converging however many attempts that takes
+        pytest.param([1], False, id="one_attempt_that_got_somewhere"),
+        pytest.param([0], False, id="one_attempt_that_got_nowhere"),
+        pytest.param([1, 2, 3, 4, 5], False, id="climbing_is_never_stalled"),
+        pytest.param([4, 4], False, id="one_repeat_is_ordinary"),
+        pytest.param([4, 4, 4], True, id="two_repeats_is_a_pattern"),
+        pytest.param([0, 0], True, id="two_attempts_that_finished_nothing"),
+        # a run of failures the task then recovers from starts the count over
+        pytest.param([4, 4, 5], False, id="progress_resets_the_run"),
+        pytest.param([4, 4, 5, 5, 5], True, id="and_it_can_stall_again_after"),
+        # going backwards is not progress, however large the earlier number:
+        # a resume that reused nothing has accomplished nothing
+        pytest.param([9, 1, 1], True, id="regression_counts_as_fruitless"),
+    ],
+)
+def test_a_task_stops_being_respawned_once_it_stops_getting_anywhere(
+    finished: list[int], stalled: bool, tmp_path: Path
+) -> None:
+    """`SpawnWorker` is the one action here that is not convergent.
+
+    Nothing else in this vocabulary can repeat forever. Without this a task
+    that fails identically every time is respawned every ten minutes until
+    somebody notices, which is precisely what a task with permanently-failing
+    samples does: `SHORT` forever, resumed forever, finishing nothing new.
+    """
+    manifest = synth_manifest([TASK])
+    attempts(tmp_path, TASK, finished)
+
+    result = reconcile(
+        manifest, InFlight(), observe_tasks(manifest, observe_logs(tmp_path)), pool=POOL
+    )
+
+    assert (spawns(result) == []) == stalled
+    assert result.summary.stalled == ([TASK.identifier] if stalled else [])
+    # a stalled task is not queued either -- it is not waiting for a slot,
+    # it is waiting for a person
+    assert result.queued == []
+
+
+def test_the_stall_threshold_is_a_knob() -> None:
+    assert DEFAULT_STALL_AFTER == 2
+
+
+@pytest.mark.parametrize(
+    ("stall_after", "stalled"),
+    [
+        pytest.param(1, True, id="impatient"),
+        pytest.param(2, False, id="default"),
+        pytest.param(5, False, id="patient"),
+    ],
+)
+def test_how_much_patience_a_workspace_wants_is_settable(
+    stall_after: int, stalled: bool, tmp_path: Path
+) -> None:
+    manifest = synth_manifest([TASK])
+    attempts(tmp_path, TASK, [4, 4])
+
+    result = reconcile(
+        manifest,
+        InFlight(),
+        observe_tasks(manifest, observe_logs(tmp_path)),
+        pool=Pool(max_workers=8, stall_after=stall_after),
+    )
+
+    assert (spawns(result) == []) == stalled
+
+
+@pytest.mark.parametrize(
+    ("spent", "stalled"),
+    [
+        pytest.param(0, False, id="never_tried"),
+        pytest.param(1, False, id="tried_once"),
+        pytest.param(2, True, id="tried_twice_and_left_nothing"),
+    ],
+)
+def test_a_worker_that_dies_before_landing_a_log_is_counted_by_the_record(
+    spent: int, stalled: bool
+) -> None:
+    """The other half of the guard, and the one the log directory cannot see.
+
+    A definition that will not import, or an OOM during startup, leaves nothing
+    behind — so the task reads `missing` on every turn exactly as it did on the
+    first, and only the in-flight record knows it has been tried at all.
+    """
+    manifest = synth_manifest([TASK])
+
+    result = reconcile(
+        manifest,
+        InFlight(spent={TASK.identifier: crashes(spent)} if spent else {}),
+        nothing_run(manifest),
+        pool=POOL,
+    )
+
+    assert (spawns(result) == []) == stalled
+
+
+MERGED: list[tuple[str, int, bool]] = [
+    ("one crash after it", 1, False),
+    ("two crashes after it", 2, True),
+    ("four crashes after it", 4, True),
+]
+
+
+@pytest.mark.parametrize(
+    ("after", "stalled"),
+    [(after, stalled) for _, after, stalled in MERGED],
+    ids=[case for case, _, _ in MERGED],
+)
+def test_crashes_after_a_partial_log_count_toward_the_same_stall(
+    after: int, stalled: bool, tmp_path: Path
+) -> None:
+    """Evidence in both places is one history, not two.
+
+    The guard read the record only for a task with *no* logs at all, so a task
+    whose first attempt landed a partial log and whose every attempt since died
+    at import looked like one attempt that made progress — and was respawned
+    forever, which is the failure the guard exists to stop.
+    """
+    manifest = synth_manifest([TASK])
+    attempts(tmp_path, TASK, [4])
+    # the attempt that landed that log is spent too, and it started before it
+    spent = crashes(1, since=9) + crashes(after)
+
+    result = reconcile(
+        manifest,
+        InFlight(spent={TASK.identifier: spent}),
+        observe_tasks(manifest, observe_logs(tmp_path)),
+        pool=POOL,
+    )
+
+    assert (spawns(result) == []) == stalled
+
+
+def test_crashes_before_a_working_attempt_do_not_count(tmp_path: Path) -> None:
+    # the reason the record carries times rather than a count: two crashes and
+    # then an attempt that got somewhere is a task recovering, and a count alone
+    # cannot tell that from a task that got somewhere and then started crashing
+    manifest = synth_manifest([TASK])
+    attempts(tmp_path, TASK, [4])
+
+    result = reconcile(
+        manifest,
+        InFlight(spent={TASK.identifier: crashes(2, since=8)}),
+        observe_tasks(manifest, observe_logs(tmp_path)),
+        pool=POOL,
+    )
+
+    assert len(spawns(result)) == 1
+
+
+def test_a_stall_survives_the_two_timestamp_formats(tmp_path: Path) -> None:
+    # a log's `created` and the record's `ts` are written by different code with
+    # different offset conventions, and comparing them as strings would compare
+    # `Z` against `+00:00` -- so the guard would silently stop firing
+    manifest = synth_manifest([TASK])
+    write_log(tmp_path, TASK, total=4, completed=4, created="2026-08-23T10:00:00Z")
+
+    result = reconcile(
+        manifest,
+        InFlight(spent={TASK.identifier: crashes(2, since=11)}),
+        observe_tasks(manifest, observe_logs(tmp_path)),
+        pool=POOL,
+    )
+
+    assert spawns(result) == []
+
+
+def invalidate(log_dir: Path, task: SynthTask, *, at: str) -> None:
+    """The newest log, marked invalidated, its file stamped when that happened.
+
+    The stamp is what a real invalidation leaves behind — it rewrites the log —
+    and it is the only record of *when* somebody asked for the re-run. Set
+    explicitly rather than taken from the clock, so the tests stay a table.
+    """
+    written = write_log(
+        log_dir,
+        task,
+        total=4,
+        completed=4,
+        invalidated=True,
+        created="2026-08-23T20:00:00+00:00",
+    )
+    when = datetime.fromisoformat(at).timestamp()
+    os.utime(written, (when, when))
+
+
+def test_an_invalidation_clears_the_stall_behind_it(tmp_path: Path) -> None:
+    """The guard yields to a human.
+
+    An invalidation is a decision to try again, made by the only party entitled
+    to make one, so the run of fruitless attempts before it stops counting.
+    """
+    manifest = synth_manifest([TASK])
+    attempts(tmp_path, TASK, [4, 4, 4])
+    invalidate(tmp_path, TASK, at="2026-08-23T21:00:00+00:00")
+
+    result = reconcile(
+        manifest,
+        # crashes from before they acted, which is the history being forgiven
+        InFlight(spent={TASK.identifier: crashes(3, since=18)}),
+        observe_tasks(manifest, observe_logs(tmp_path)),
+        pool=POOL,
+    )
+
+    assert len(spawns(result)) == 1
+    assert result.summary.stalled == []
+
+
+CLEARED: list[tuple[str, int, bool]] = [
+    ("nothing has been tried since", 0, False),
+    ("one retry died", 1, False),
+    ("two retries died", 2, True),
+]
+
+
+@pytest.mark.parametrize(
+    ("since", "stalled"),
+    [(since, stalled) for _, since, stalled in CLEARED],
+    ids=[case for case, _, _ in CLEARED],
+)
+def test_an_invalidation_forgives_the_past_and_not_the_future(
+    since: int, stalled: bool, tmp_path: Path
+) -> None:
+    """Forgiveness is consumed by the retries it authorized.
+
+    A retry that dies before landing a replacement leaves the invalidated log
+    current, so an exemption that merely *returned* would never expire — and an
+    import error under an invalidated log is then respawned every ten minutes
+    for as long as the run lasts, which is the one branch of this guard with no
+    ceiling on it at all.
+    """
+    manifest = synth_manifest([TASK])
+    attempts(tmp_path, TASK, [4, 4, 4])
+    invalidate(tmp_path, TASK, at="2026-08-23T21:00:00+00:00")
+
+    result = reconcile(
+        manifest,
+        InFlight(spent={TASK.identifier: crashes(since, since=22)}),
+        observe_tasks(manifest, observe_logs(tmp_path)),
+        pool=POOL,
+    )
+
+    assert (spawns(result) == []) == stalled
+
+
+def test_a_stalled_task_frees_the_slot_it_was_holding(tmp_path: Path) -> None:
+    healthy, stuck = SynthTask("healthy"), SynthTask("stuck")
+    manifest = synth_manifest([stuck, healthy])
+    attempts(tmp_path, stuck, [4, 4, 4])
+
+    result = reconcile(
+        manifest,
+        InFlight(),
+        observe_tasks(manifest, observe_logs(tmp_path)),
+        pool=Pool(max_workers=1),
+    )
+
+    # the stuck task is first in the manifest, so without the guard it would
+    # take the only slot every turn and the healthy one would never run
+    assert keys(spawns(result)) == [manifest.tasks[1].key]
+
+
+def test_every_attempt_of_an_orphan_is_archived(tmp_path: Path) -> None:
+    """All of them, not only the current one.
+
+    The identifier has left the definition entirely, so there is no attempt
+    history left to reason about — and leaving the superseded ones behind
+    would defeat the point, which is that `logs/` holds exactly what the
+    current definition produced.
+    """
+    removed = SynthTask("removed")
+    manifest = synth_manifest([TASK])
+    write_log(tmp_path, removed, error="one", created="2026-08-23T18:00:00+00:00")
+    write_log(tmp_path, removed, created="2026-08-23T20:00:00+00:00")
+
+    result = reconcile(
+        manifest, InFlight(), observe_tasks(manifest, observe_logs(tmp_path)), pool=POOL
+    )
+
+    assert {action.identifier for action in archives(result)} == {removed.identifier}
+    assert len(archives(result)) == 2
+    assert result.summary.archiving == 2
+
+
+def test_an_orphan_with_a_live_worker_is_left_entirely_alone(tmp_path: Path) -> None:
+    # stopping a worker is not a mechanical act, and archiving a log that is
+    # still being written would take it out from under one
+    removed = SynthTask("removed")
+    manifest = synth_manifest([TASK])
+    write_log(tmp_path, removed, status="started")
+
+    result = reconcile(
+        manifest,
+        InFlight(running=[live(removed.identifier)]),
+        observe_tasks(manifest, observe_logs(tmp_path)),
+        pool=POOL,
+    )
+
+    assert archives(result) == []
+    assert result.summary.orphans_running == [removed.identifier]
+    assert result.summary.archiving == 0
+
+
+def test_actions_are_ordered_reap_then_archive_then_spawn(tmp_path: Path) -> None:
+    # reaping frees a slot the spawn may want, and archiving clears the
+    # directory before anything new lands in it
+    manifest = synth_manifest([TASK])
+    write_log(tmp_path, SynthTask("removed"))
+
+    result = reconcile(
+        manifest,
+        InFlight(departed=[dead(TASK.identifier)]),
+        observe_tasks(manifest, observe_logs(tmp_path)),
+        pool=POOL,
+    )
+
+    assert [type(action).__name__ for action in result.actions] == [
+        "ReapWorker",
+        "ArchiveLog",
+        "SpawnWorker",
+    ]
+
+
+def test_paused_archives_nothing(tmp_path: Path) -> None:
+    # pausing means make no changes to the run, and a move is a change
+    manifest = synth_manifest([TASK])
+    write_log(tmp_path, SynthTask("removed"))
+
+    result = reconcile(
+        manifest,
+        InFlight(),
+        observe_tasks(manifest, observe_logs(tmp_path)),
+        pool=POOL,
+        paused=True,
+    )
+
+    assert archives(result) == []
+    assert result.summary.orphans != []
 
 
 def test_the_summary_counts_what_a_status_line_needs(tmp_path: Path) -> None:

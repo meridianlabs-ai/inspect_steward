@@ -11,7 +11,7 @@ One file with two regions. **The YAML front matter is what Steward executes at 3
 
 **Every value is typed, and validated strictly.** That is what answers YAML's coercion hazards, which workflow.md §5.3 could dismiss for the journal on the grounds that Steward wrote it and here cannot, because a human does. Typing alone is not enough and it is worth saying why: pydantic's default is coercive and YAML's is too, so the two compose into the hazard rather than cancelling it — `max_workers: yes` arrives as `True` and validates as `1`, throttling a fleet to a single worker with nothing reported. `strict=True` is what turns that into a refusal, and the error names the value that arrived so the author can see what YAML did to it.
 
-**Parsing is strict, and that is temporary.** A malformed file refuses the command outright. Degrading to the last known good is the better behaviour for a file a human may edit at 10pm while a fleet is up, and it needs the per-tend `observation` record to have somewhere to read the last good values from — so it arrives with the tend loop rather than here.
+**Parsing is strict, and degrading is the caller's.** A malformed file raises here, always — this module has no way to know whether the caller has anything better to fall back on. A tend does: the settings in force are recorded in every `observation`, so it can carry on with the last known good ones and say so, which is the right behaviour for a file a human may edit at 10pm while a fleet is up. A command with no such history still refuses (`_tend.turn`).
 
 That §5.3 rejected markdown-with-front-matter for `journal.jsonl` is not in tension with this. Its argument was that block-delimited formats fail *globally* — one mistyped `---` swallows the remainder of a file — which is disqualifying for an append-only log of thousands of machine-written entries. This is a single human-authored block read at startup, with exactly one fence to get wrong and a loud error when it is.
 """
@@ -22,7 +22,7 @@ from typing import Any, cast
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError
 
-from .._schedule import DEFAULT_MAX_WORKERS, Pool
+from .._schedule import DEFAULT_MAX_WORKERS, DEFAULT_STALL_AFTER, Pool
 
 FENCE = "---"
 """Opens and closes the front matter. Recognised only at the very start of the file and then at column zero, so a horizontal rule in the prose is prose."""
@@ -80,6 +80,12 @@ class Directives(BaseModel):
     """Ceiling on concurrent workers, or `None` where the workspace expressed no preference.
 
     A standing property of the host and the workspace rather than a setpoint — "do not exceed 8 workers here" — which is what makes it the operator's envelope rather than something a tuning loop moves (workflow.md, *The envelope is policy; the tuning is the agent's job*).
+    """
+
+    stall_after: int | None = Field(default=None, gt=0)
+    """Consecutive fruitless attempts before a task stops being respawned, or `None` for the default.
+
+    Passes the same test `max_workers` does: respawning a task is Steward's invention, and no `eval_set()` argument reaches it, so there is nothing here for a definition to contradict. How much patience a project's failures deserve is genuinely a standing property of the project — a flaky sandbox fleet earns more of it than a deterministic scorer bug does (`_schedule.reconcile._stalled`).
     """
 
 
@@ -148,9 +154,10 @@ def resolve_pool(
     | | |
     |---|---|
     | `max_workers` | the CLI, then `_steward.md`, then the default |
+    | `stall_after` | `_steward.md`, then the default — there is no flag, because patience is a standing property rather than something to retype each turn |
     | `max_samples` | the CLI, then **the definition**, then the default — the file is not a source |
 
-    The second chain continues inside `resolve_max_samples`, which is why `None` is passed straight through rather than filled in here: *no preference* yields to whatever the definition asked for, and a number is an instruction that does not.
+    The last chain continues inside `resolve_max_samples`, which is why `None` is passed straight through rather than filled in here: *no preference* yields to whatever the definition asked for, and a number is an instruction that does not.
 
     Args:
         directives: What the workspace's front matter said.
@@ -167,7 +174,15 @@ def resolve_pool(
     if max_workers is not None:
         ceiling = max_workers
 
-    return Pool(max_workers=ceiling, max_samples=max_samples)
+    return Pool(
+        max_workers=ceiling,
+        max_samples=max_samples,
+        stall_after=(
+            directives.stall_after
+            if directives.stall_after is not None
+            else DEFAULT_STALL_AFTER
+        ),
+    )
 
 
 def _front_matter(text: str, *, name: str) -> str | None:

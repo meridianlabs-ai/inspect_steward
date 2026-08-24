@@ -2,7 +2,7 @@
 
 Everything before this reads; this is the step that decides. `reconcile` takes desired state (the manifest), what is running (the in-flight record, already resolved to live and departed), and what has happened (a log directory observation), and returns the actions that close the gap.
 
-It is **pure** — no clock, no filesystem, no processes — and the design leans on that in three places (execution.md, *The reconcile core, and its drivers*):
+It is **pure** — no clock, no filesystem, no processes; it reads recorded instants but never asks what time it is — and the design leans on that in three places (execution.md, *The reconcile core, and its drivers*):
 
 - **Testability.** Scheduling correctness becomes "given this state, what actions?", which is a table.
 - **Crash recovery is the ordinary path.** There is no resume routine to get wrong: recovery is just the next call, exercised on every tend.
@@ -12,6 +12,7 @@ What this function decides is mechanical continuity: which workers to spawn and 
 """
 
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -20,6 +21,7 @@ from inspect_ai._eval.evalset import TASK_IDENTIFIER_VERSION
 from .._evalset.manifest import Manifest
 from .._evalset.observe import (
     IncompleteReason,
+    LogAttempt,
     ObservedTasks,
     TaskObservation,
     TaskState,
@@ -37,6 +39,12 @@ DEFAULT_MAX_SAMPLES = 40
 """Starting sample concurrency per worker.
 
 Deliberately modest, because the ratchet is asymmetric: raising a limit takes effect immediately, lowering one only stops new acquires and waits for in-flight samples to drain. Climbing from a low setpoint is cheap; descending from a high one is not (scheduling.md, *`max_samples` — set explicitly, so it can be steered*).
+"""
+
+DEFAULT_STALL_AFTER = 2
+"""Consecutive attempts that may finish nothing new before a task is left alone.
+
+Two rather than one, because a single fruitless attempt is ordinary — a worker killed by a host blip finishes nothing and deserves the retry that a resume makes nearly free. Two in a row is a pattern, and the third would be the first attempt with evidence against it.
 """
 
 
@@ -61,6 +69,12 @@ class Pool:
     """Sample concurrency per worker, or `None` for no operator preference.
 
     `None` rather than the default itself, because the two are not the same claim: *no preference* yields to whatever the definition asked for, and a number is an instruction that does not. See `resolve_max_samples`.
+    """
+
+    stall_after: int = DEFAULT_STALL_AFTER
+    """Consecutive attempts that may finish nothing new before a task stops being respawned.
+
+    Steward's alone for the same reason `max_workers` is: respawning a task is Steward's invention, so there is no `eval_set()` argument this could contradict. See `_stalled`.
     """
 
 
@@ -109,6 +123,14 @@ class InFlight:
     departed: list[DepartedWorker] = field(default_factory=list[DepartedWorker])
     """Recorded but no longer alive. These need an `exited` entry and occupy nothing."""
 
+    spent: dict[str, list[str]] = field(default_factory=dict[str, list[str]])
+    """When each of a task's finished spawn attempts began, however it ended.
+
+    The record's own account, and the only evidence there is about a worker that died **before landing a log** — a definition that will not import, an OOM during startup. Such a task reads `missing` on every tend and would otherwise be respawned forever, invisibly, because nothing in the log directory ever changes to say it was tried.
+
+    Times rather than a count, because the two halves of `_stalled` have to be *merged* rather than chosen between: a task whose history is one partial log and then three crashes has evidence in both places, and only the ordering says whether the crashes came after the progress or before it.
+    """
+
     @property
     def running_identifiers(self) -> set[str]:
         return {worker.identifier for worker in self.running}
@@ -132,7 +154,7 @@ class SpawnWorker:
     max_samples: int
 
     attempt: int
-    """1-based, counting the logs already in the directory."""
+    """1-based, counting every attempt Steward knows about — the logs already in the directory and, for a worker that died before landing one, the in-flight record's spent attempts. It names the worker, so it has to advance on every spawn even when nothing was left behind."""
 
     reason: IncompleteReason | None
     """Why more work is needed (`None` when the task has never run)."""
@@ -145,7 +167,23 @@ class ReapWorker:
     worker: DepartedWorker
 
 
-Action = SpawnWorker | ReapWorker
+@dataclass(frozen=True)
+class ArchiveLog:
+    """Move a log out of the run's directory, because nothing in the manifest claims it.
+
+    Never a delete. A log leaving `logs/` is always a move to the sibling archive — reversible, journaled with its reason, and restorable for free if the edit that orphaned it is reverted (workflow.md, *Steward never destroys a result, but it does curate the directory*).
+
+    **Mechanical here because the gate is somewhere else.** Archiving is the one action that removes a result from view, and a one-character change to a task arg reads identically to a deliberate removal — so it is gated on explicit acceptance at the moment the manifest is *committed*, where a human is present and the delta can be shown. Once desired state says a task is not in the eval set, converging toward it is bookkeeping.
+    """
+
+    location: str
+    """The log to move, as `observe_logs` reported it."""
+
+    identifier: str
+    """Task identifier the log belongs to, for the journal."""
+
+
+Action = SpawnWorker | ReapWorker | ArchiveLog
 
 
 @dataclass(frozen=True)
@@ -168,11 +206,17 @@ class Summary:
     spawning: int
     queued: int
 
+    stalled: list[str]
+    """Identifiers left alone because respawning them has stopped accomplishing anything (`_stalled`). Work that needs a person, and the one thing in this summary nothing mechanical will resolve."""
+
     orphans: list[str]
-    """Identifiers in the log directory that the manifest does not name. Reported rather than acted on: archiving them is gated on explicit acceptance, because a one-character change to a task arg reads identically to a deliberate removal (workflow.md, *One trigger, and one gate on it*)."""
+    """Identifiers in the log directory that the manifest does not name. Archived as the manifest converges, except for any still running."""
 
     orphans_running: list[str]
-    """Orphaned identifiers that still have a live worker. Stopping them belongs with the same gate."""
+    """Orphaned identifiers that still have a live worker. Left alone entirely — neither archived nor stopped, since stopping a worker is not a mechanical act."""
+
+    archiving: int
+    """Logs being moved to the archive this turn."""
 
     unreadable: int
     """Files in the log directory that could not be read as logs."""
@@ -229,11 +273,15 @@ def reconcile(
     running = inflight.running_identifiers
     max_samples = resolve_max_samples(manifest, pool)
 
-    pending = [
-        _spawn(observation, max_samples)
-        for observation in _spawn_order(observed.tasks)
-        if observation.identifier not in running
-    ]
+    pending: list[SpawnWorker] = []
+    stalled: list[str] = []
+    for observation in _spawn_order(observed.tasks):
+        if observation.identifier in running:
+            continue
+        if _stalled(observation, inflight, pool.stall_after):
+            stalled.append(observation.identifier)
+        else:
+            pending.append(_spawn(observation, inflight, max_samples))
 
     slots = (
         0
@@ -242,7 +290,12 @@ def reconcile(
     )
     spawning, queued = pending[:slots], pending[slots:]
 
+    # a paused run makes no changes to itself, and a move is a change. Reaping
+    # is not: it records what already happened, which stays true either way
+    archiving = [] if paused else _archiving(observed, running)
+
     actions: list[Action] = [ReapWorker(worker) for worker in inflight.departed]
+    actions.extend(archiving)
     actions.extend(spawning)
 
     return Reconciliation(
@@ -253,10 +306,112 @@ def reconcile(
             running=running,
             spawning=len(spawning),
             queued=len(queued),
+            stalled=stalled,
+            archiving=len(archiving),
             pool=pool,
             paused=paused,
         ),
     )
+
+
+def _archiving(observed: ObservedTasks, running: set[str]) -> list[ArchiveLog]:
+    """Every log of every orphan, except the orphans something is still running.
+
+    All of an orphan's attempts rather than only its current one: the identifier has left the definition entirely, so there is no attempt history left to reason about and leaving the superseded ones behind would defeat the point, which is that `logs/` holds the current definition's results and nothing else.
+    """
+    return [
+        ArchiveLog(location=attempt.location, identifier=task.identifier)
+        for task in observed.tasks
+        if task.state == TaskState.ORPHANED and task.identifier not in running
+        for attempt in _attempts(task)
+    ]
+
+
+def _attempts(observation: TaskObservation) -> list[LogAttempt]:
+    """Every log for a task, oldest first."""
+    attempts = list(observation.superseded)
+    if observation.current is not None:
+        attempts.append(observation.current)
+    return sorted(attempts, key=lambda attempt: attempt.created)
+
+
+def _stalled(
+    observation: TaskObservation, inflight: InFlight, stall_after: int
+) -> bool:
+    """Whether respawning this task has stopped accomplishing anything.
+
+    `SpawnWorker` is the one action in this vocabulary that is not **convergent**: nothing else here can repeat forever, and without a guard a task that fails the same way every time is respawned every ten minutes until someone notices. It lands precisely on the likeliest case — a task with permanently-failing samples is `SHORT` forever, resumes forever, and completes nothing new each time.
+
+    **The signal is progress, not attempt count**, and the difference is the whole point: a task on its fourth attempt with 490 of 500 samples done is converging and should continue, while one repeating the same twelve failures is not. So an attempt counts as progress when it finishes more samples than every attempt before it, and the guard fires on a run of attempts that did not.
+
+    **A worker that leaves no log is the other half**, and it needs the record rather than the directory. One that dies before its `eval_set()` boundary — a definition that will not import, an OOM during startup — leaves nothing behind, so the task reads exactly as it did before it was tried. Roadmap calls that the probable failure of a large sweep.
+
+    **The two halves merge rather than alternate**, and consulting the record only for a task with no logs at all was a bug: a task whose first attempt lands a partial log and whose next twenty die at import has evidence in both places, and reading only the log would see one attempt that made progress and respawn forever. So the spent attempts that began *after the newest log did* are folded into the same run. That test identifies exactly the attempts that landed nothing, since an attempt that landed a log would be the newest one itself.
+
+    **An invalidation clears the history before it, and only that.** Somebody reached in and marked samples for a re-run, which is a decision to try again made by the only party entitled to make one — so nothing that happened before they acted counts against the task any more. What they cannot do is exempt it forever: a retry that dies before landing a replacement leaves the invalidated log current, so *returning* here rather than resetting made the one branch with no ceiling on it, and an import error under an invalidated log respawned every ten minutes for as long as the run lasted. Attempts since the invalidation count normally.
+    """
+    attempts = _attempts(observation)
+    spent = inflight.spent.get(observation.identifier, [])
+
+    if observation.reason == IncompleteReason.INVALIDATED:
+        # when they acted, as closely as anything records it: invalidating
+        # rewrites the log, and nothing else touches a finished one. Without a
+        # time there is nothing to count from, so the task gets the benefit
+        since = _mtime(observation.current)
+        return since is not None and _after(spent, since) >= stall_after
+
+    if not attempts:
+        return len(spent) >= stall_after
+
+    best = 0
+    fruitless = 0
+    for attempt in attempts:
+        if attempt.completed_samples > best:
+            best = attempt.completed_samples
+            fruitless = 0
+        else:
+            fruitless += 1
+
+    if (newest := _when(attempts[-1].created)) is not None:
+        fruitless += _after(spent, newest)
+    return fruitless >= stall_after
+
+
+def _after(spent: list[str], instant: datetime) -> int:
+    """How many of a task's finished attempts began after some instant.
+
+    Which is how many of them landed no log, whenever `instant` comes from the newest log there is: an attempt that landed one would be newer than the log it is being compared against.
+    """
+    return sum(
+        1
+        for started in spent
+        if (when := _when(started)) is not None and when > instant
+    )
+
+
+def _mtime(attempt: LogAttempt | None) -> datetime | None:
+    """When a log was last written, as an instant.
+
+    `LogAttempt.mtime` is in milliseconds — `EvalLogInfo` normalizes every backend's answer that way — and a value that will not convert yields `None` rather than an exception, on the same principle as `_when`: this is a guard, and it may not be the thing that fails a turn.
+    """
+    if attempt is None or attempt.mtime is None:
+        return None
+    try:
+        return datetime.fromtimestamp(attempt.mtime / 1000, tz=timezone.utc)
+    except (ValueError, OverflowError, OSError):
+        return None
+
+
+def _when(value: str) -> datetime | None:
+    """One recorded instant, comparable with any other.
+
+    Two formats meet here — a log's `created` and the record's `ts` — and they are written by different code with different offset conventions, so comparing the strings would be comparing `Z` against `+00:00`. A value that will not parse yields `None` and is simply not counted, which loses a stall rather than inventing one.
+    """
+    try:
+        parsed = datetime.fromisoformat(value)
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
 def _spawn_order(tasks: list[TaskObservation]) -> list[TaskObservation]:
@@ -289,7 +444,9 @@ def _spawn_order(tasks: list[TaskObservation]) -> list[TaskObservation]:
     return sorted(pending, key=group)
 
 
-def _spawn(observation: TaskObservation, max_samples: int) -> SpawnWorker:
+def _spawn(
+    observation: TaskObservation, inflight: InFlight, max_samples: int
+) -> SpawnWorker:
     """One task's spawn decision.
 
     A task with a prior log resumes it whatever went wrong — short, errored, cancelled, invalidated, or a worker that died mid-run. There is deliberately no branch on the reason: resume reuses exactly the samples that are worth keeping, so the reason is reporting material rather than an input to the decision.
@@ -300,9 +457,20 @@ def _spawn(observation: TaskObservation, max_samples: int) -> SpawnWorker:
         key=observation.key,
         resume=current.location if current is not None else None,
         max_samples=max_samples,
-        attempt=len(observation.superseded) + (1 if current is not None else 0) + 1,
+        attempt=_attempt(observation, inflight),
         reason=observation.reason,
     )
+
+
+def _attempt(observation: TaskObservation, inflight: InFlight) -> int:
+    """Which try this is, 1-based, counting every one Steward knows about.
+
+    The larger of the two counts rather than their sum, because an attempt that landed a log is in both. That makes this the log count when every attempt landed one, the spent count when none did, and never less than either.
+
+    **It is an estimate, not a guarantee of uniqueness.** Both counts can be lost — `.steward/` is a directory the design tells people they may delete — and two landed logs plus a discarded record would number the next attempt 3 twice. The worker stem cannot tolerate that, so `Fleet.spawn` resolves it against the directory it is about to write into; here the number means *which try this is*, and there it also has to be a name.
+    """
+    landed = len(observation.superseded) + (1 if observation.current is not None else 0)
+    return max(landed, len(inflight.spent.get(observation.identifier, []))) + 1
 
 
 def resolve_max_samples(manifest: Manifest, pool: Pool) -> int:
@@ -344,6 +512,8 @@ def _summarize(
     running: set[str],
     spawning: int,
     queued: int,
+    stalled: list[str],
+    archiving: int,
     pool: Pool,
     paused: bool,
 ) -> Summary:
@@ -364,8 +534,10 @@ def _summarize(
         running=len(running),
         spawning=spawning,
         queued=queued,
+        stalled=stalled,
         orphans=orphans,
         orphans_running=[identifier for identifier in orphans if identifier in running],
+        archiving=archiving,
         unreadable=len(observed.unreadable),
         max_workers=pool.max_workers,
         paused=paused,

@@ -1,4 +1,3 @@
-import hashlib
 import os
 import subprocess
 import tempfile
@@ -15,6 +14,7 @@ from .manifest import (
     Manifest,
     ManifestSource,
     ManifestTask,
+    definition_hash,
 )
 
 INSPECT_EVAL_SET_CAPTURE = "INSPECT_EVAL_SET_CAPTURE"
@@ -107,7 +107,7 @@ def read_eval_set(
         source=ManifestSource(
             type=resolved_type,
             path=str(definition),
-            content_hash=f"sha256:{hashlib.sha256(definition_path.read_bytes()).hexdigest()}",
+            content_hash=definition_hash(definition_path),
             args=args or {},
         ),
         options=capture.options,

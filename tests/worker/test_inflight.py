@@ -409,7 +409,11 @@ def test_a_worker_killed_before_its_log_lands_is_run_again(
     # nothing landed, so the second attempt starts fresh rather than resuming
     assert [item.identifier for item in spawns] == [task.identifier]
     assert spawns[0].resume is None
-    assert spawns[0].attempt == 1
+    # and it is numbered 2, on the record's word alone. This asserted 1 until
+    # step 13, which is the bug rather than the intent: the number names the
+    # worker, so a second attempt calling itself the first writes over the
+    # first's in-flight entry -- and then the record cannot say this happened
+    assert spawns[0].attempt == 2
 
 
 def test_the_scan_answers_for_this_workspace_only(tmp_path: Path) -> None:

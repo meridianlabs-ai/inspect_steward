@@ -149,7 +149,7 @@ def resolve_inflight(
         scan: How to find live workers (defaults to the process table).
 
     Returns:
-        Workers confirmed alive, and workers the record accounts for that are not.
+        Workers confirmed alive, workers the record accounts for that are not, and when each task's already-spent attempts began.
     """
     host = host or gethostname()
     scan = scan or scan_processes
@@ -161,14 +161,21 @@ def resolve_inflight(
 
     running: list[RunningWorker] = []
     departed: list[DepartedWorker] = []
+    spent: dict[str, list[str]] = {}
     for entry in _fold(read_events(record).events).values():
         # popped before the skips, deliberately: a selection the record knows
         # about belongs to that record, so a reaped worker's leftover children
         # cannot come back through the unrecorded branch below
         matched = live.pop(entry.selection, []) if entry.selection else []
-        if entry.exited or entry.host != host:
+        if entry.host != host:
             # a pid on another host means nothing here, and reaping a worker
             # this machine cannot see would be a claim rather than an observation
+            continue
+        if entry.exited:
+            # already reaped, so there is nothing to report -- but it was an
+            # attempt, and recording it is the only trace a worker that died
+            # before landing a log leaves anywhere
+            spent.setdefault(entry.identifier, []).append(entry.started)
             continue
         found = _worker_process(matched, entry.pid)
         if found is not None:
@@ -190,6 +197,7 @@ def resolve_inflight(
                     pid=entry.pid,
                 )
             )
+            spent.setdefault(entry.identifier, []).append(entry.started)
 
     # whatever the scan found that the record does not account for. This is the
     # lost-record path and it needs no branch of its own: a worker carries its
@@ -207,7 +215,7 @@ def resolve_inflight(
                 )
             )
 
-    return InFlight(running=running, departed=departed)
+    return InFlight(running=running, departed=departed, spent=spent)
 
 
 def _worker_process(
@@ -268,6 +276,9 @@ class _Recorded:
     worker: str
     identifier: str
     host: str
+    started: str
+    """When its `intent` was written, which is the closest thing the record has to when the attempt began. Kept because an attempt that landed no log can only be placed in a task's history by its time."""
+
     selection: Path | None = None
     pid: int | None = None
     exited: bool = False
@@ -292,6 +303,7 @@ def _fold(events: list[Event]) -> dict[str, _Recorded]:
                 worker=worker,
                 identifier=identifier,
                 host=_str(payload.get("host")),
+                started=event.ts,
                 selection=_path(payload.get("selection")),
             )
         elif (current := workers.get(worker)) is None:

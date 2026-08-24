@@ -17,7 +17,6 @@ import asyncio
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import Sequence
 
 # task_identifier is the pairing mechanism eval_set() itself uses; it is
 # versioned rather than public, which is why the manifest records its version
@@ -76,7 +75,12 @@ class LogAttempt:
     """The log's own task id. Unpredictable to Steward — each worker resolves its own — which is why it is carried rather than computed (execution.md, *`eval-set.json` must be written incrementally*)."""
 
     eval_id: str
+
     mtime: float | None
+    """When the file was last written, in **milliseconds** since the epoch, as `EvalLogInfo` reports it.
+
+    For a finished log this is when something last *changed* it, and a human invalidating samples in it is the only thing that does — which makes it the one record of when they acted. `None` when the filesystem does not report one.
+    """
 
     @property
     def errored_samples(self) -> int:
@@ -392,18 +396,3 @@ def _attempt(info: EvalLogInfo, header: EvalLog) -> LogAttempt:
         eval_id=header.eval.eval_id,
         mtime=info.mtime,
     )
-
-
-def summarize_states(tasks: Sequence[TaskObservation]) -> dict[str, int]:
-    """Count observations by state, for a status line.
-
-    Args:
-        tasks: Observations, as `observe_tasks` returns them.
-
-    Returns:
-        Counts keyed by state name, including states with no members so the shape is stable.
-    """
-    counts = {state.value: 0 for state in TaskState}
-    for task in tasks:
-        counts[task.state.value] += 1
-    return counts

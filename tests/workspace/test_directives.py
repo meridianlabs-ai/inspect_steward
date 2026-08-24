@@ -6,7 +6,7 @@ Three claims, and they are the whole point of the file: the front matter is read
 from pathlib import Path
 
 import pytest
-from inspect_steward._schedule import DEFAULT_MAX_WORKERS
+from inspect_steward._schedule import DEFAULT_MAX_WORKERS, DEFAULT_STALL_AFTER
 from inspect_steward._workspace import (
     REFUSED,
     Directives,
@@ -135,6 +135,43 @@ def test_the_worker_ceiling_resolves_most_specific_first(
 ) -> None:
     pool = resolve_pool(Directives(max_workers=file), max_workers=cli)
     assert pool.max_workers == expected
+
+
+PATIENCE: list[tuple[str, str, int]] = [
+    ("nobody expressed one", "---\nmax_workers: 8\n---\n", DEFAULT_STALL_AFTER),
+    ("the workspace did", "---\nstall_after: 5\n---\n", 5),
+    ("a project with no patience at all", "---\nstall_after: 1\n---\n", 1),
+]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [(text, expected) for _, text, expected in PATIENCE],
+    ids=[case for case, _, _ in PATIENCE],
+)
+def test_how_much_patience_a_project_wants_is_its_own(
+    text: str, expected: int, tmp_path: Path
+) -> None:
+    # passes the same test max_workers does: respawning a task is Steward's
+    # invention, so there is no eval_set() argument for this to contradict
+    assert (
+        resolve_pool(read_directives(written(tmp_path, text))).stall_after == expected
+    )
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        pytest.param("---\nstall_after: 0\n---\n", "greater than 0", id="never_try"),
+        pytest.param("---\nstall_after: yes\n---\n", "not True", id="coerced"),
+        pytest.param("---\nstall_after: '2'\n---\n", "not '2'", id="quoted"),
+    ],
+)
+def test_a_meaningless_threshold_is_refused(
+    text: str, message: str, tmp_path: Path
+) -> None:
+    with pytest.raises(DirectivesError, match=message):
+        read_directives(written(tmp_path, text))
 
 
 def test_the_file_is_never_a_source_of_sample_concurrency() -> None:

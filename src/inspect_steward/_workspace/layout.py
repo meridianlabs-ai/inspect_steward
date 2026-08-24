@@ -77,6 +77,14 @@ class Workspace:
         return self.state / "claim"
 
     @property
+    def manifest(self) -> Path:
+        """`.steward/manifest.json` — desired state, as the last launch committed it.
+
+        Disposable because it is derived: the definition is the source of truth and re-capturing rebuilds this exactly (configuration.md, *The manifest*). What is lost with it is not information but time — minutes for a Hawk config — and the knowledge of *which* capture the running fleet was converging toward, which is why `launch` commits it rather than every tend re-reading the definition (workflow.md, *One trigger, and one gate on it*).
+        """
+        return self.state / "manifest.json"
+
+    @property
     def workers(self) -> Path:
         """`.steward/workers/` — one selection document and one output file per spawned worker."""
         return self.state / "workers"

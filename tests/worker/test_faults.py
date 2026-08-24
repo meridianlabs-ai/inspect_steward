@@ -17,7 +17,13 @@ import pytest
 from inspect_ai.log import list_eval_logs
 from inspect_steward import Manifest, read_eval_set
 from inspect_steward._evalset.observe import observe_logs, observe_tasks
-from inspect_steward._schedule import Pool, ReapWorker, SpawnWorker, reconcile
+from inspect_steward._schedule import (
+    Action,
+    Pool,
+    ReapWorker,
+    SpawnWorker,
+    reconcile,
+)
 from inspect_steward._worker import Fleet, SpawnedWorker, resolve_inflight
 
 from .._fault import FAULT_FIXTURE, Fault, arm, kill
@@ -37,7 +43,7 @@ def start(
     return workers, manifest, worker, injected
 
 
-def next_actions(workers: Fleet, manifest: Manifest) -> list[SpawnWorker | ReapWorker]:
+def next_actions(workers: Fleet, manifest: Manifest) -> list[Action]:
     """What a tend would do now.
 
     The manifest is re-captured by the caller rather than read from `.steward/`, which is what a tend after this fault would have to do — the manifest lives there too.
@@ -47,7 +53,7 @@ def next_actions(workers: Fleet, manifest: Manifest) -> list[SpawnWorker | ReapW
     return list(reconcile(manifest, inflight, observed, pool=Pool()).actions)
 
 
-def spawns(actions: list[SpawnWorker | ReapWorker]) -> list[SpawnWorker]:
+def spawns(actions: list[Action]) -> list[SpawnWorker]:
     return [item for item in actions if isinstance(item, SpawnWorker)]
 
 

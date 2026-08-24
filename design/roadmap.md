@@ -18,7 +18,9 @@ Every other document works a topic to closure regardless of when it ships. This 
 
 **A workspace can state its own standing rules.** `_steward.md` replaces `policy.md` — YAML front matter Steward acts on unattended above prose an agent interprets — and the rule that keeps it safe is enforced rather than documented: a key the definition could express is refused by name, and anything unrecognised is rejected outright (step 12).
 
-**No run is supervised yet.** There is no `launch`, no `tend`, no anomalies, no signoff — every piece a tend would call exists, and nothing calls them. The runner is the project, and the components most likely to be subtly wrong were built and tested before the machinery that drives them.
+**A run is now supervised.** `steward tend` is the turn — observe, decide, act, record — and `steward status` is the same function with its actions discarded, so the preview cannot describe something other than what happens next. A repeated tend does nothing and an interrupted one is reconciled by the following one, which is what makes the loop safe to put on a timer. It converges: given a committed manifest it spawns the fleet, reaps what died, archives what the definition no longer asks for, stops respawning a task that has stopped getting anywhere, and then leaves the run alone (step 13).
+
+**What is still missing is the way in and the way it keeps happening.** There is no `launch` to commit desired state — a manifest is written by hand today — and no timer, so a tend happens only when someone or something types it. Pause has no persistence yet, and nothing is *reported* beyond a thin `status.md`: no attention list, no anomalies, no channel, no signoff.
 
 ## 2. The one thing to verify first — verified
 

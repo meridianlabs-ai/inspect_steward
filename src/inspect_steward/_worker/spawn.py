@@ -132,7 +132,7 @@ class Fleet:
             )
 
         self.workers_dir.mkdir(parents=True, exist_ok=True)
-        stem = worker_stem(action)
+        attempt, stem = self._name(action)
 
         # the frontend channel gets this worker's own scratch directory, never
         # the run's: what a definition writes on its way to `eval_set()` is
@@ -157,9 +157,9 @@ class Fleet:
             encoding="utf-8",
         )
 
-        # appended rather than truncated: a respawn of the same attempt (which
-        # only happens when the in-flight record was lost) then interleaves with
-        # a worker that may still be running rather than erasing its output
+        # appended rather than truncated, belt to `_name`'s braces: nothing
+        # should reach an existing stem now, and if something does, interleaving
+        # with a worker that may still be running beats erasing its output
         output = self.workers_dir / f"{stem}.log"
 
         record_intent(
@@ -167,7 +167,7 @@ class Fleet:
             worker=stem,
             identifier=action.identifier,
             key=action.key,
-            attempt=action.attempt,
+            attempt=attempt,
             selection=selection,
             argv=command.argv,
             cwd=command.cwd,
@@ -202,6 +202,18 @@ class Fleet:
             process=process,
         )
 
+    def _name(self, action: SpawnWorker) -> tuple[int, str]:
+        """This attempt's number and stem, with the number free to advance.
+
+        `SpawnWorker.attempt` counts what the *decision layer* could see — the logs in the directory and the in-flight record — and both of those can be lost, since `.steward/` is a directory the design tells people they may delete. Two landed logs and a discarded record would number the next attempt 3 when 3 has already been used, and the stem is not merely a label: it names the selection document a live worker is reading and the entry the record folds on, so a collision loses one of the two attempts entirely.
+
+        The directory it is about to write into is the one witness that outlives the record, so the number is advanced past whatever is already there. Ordinarily nothing is, and this costs one `exists()`.
+        """
+        attempt = action.attempt
+        while (self.workers_dir / f"{worker_stem(action, attempt)}.json").exists():
+            attempt += 1
+        return attempt, worker_stem(action, attempt)
+
 
 def worker_selection(
     action: SpawnWorker, *, eval_set_id: str, log_dir: str
@@ -229,20 +241,21 @@ def worker_selection(
     )
 
 
-def worker_stem(action: SpawnWorker) -> str:
+def worker_stem(action: SpawnWorker, attempt: int | None = None) -> str:
     """File stem for a worker's selection document and output.
 
     Readable first (the display key), unique second: the identifier hash is what keeps two tasks whose keys sanitize to the same string — or truncate to it — from writing over each other, and the attempt keeps a retry's evidence beside the attempt it replaced.
 
     Args:
         action: The task to run.
+        attempt: Attempt number to use in place of the action's, for a caller that has had to advance past a stem already taken (`Fleet._name`).
 
     Returns:
         The stem, with no extension.
     """
     digest = hashlib.sha256(action.identifier.encode()).hexdigest()[:8]
     key = safe_filename(action.key, max_length=MAX_KEY_LENGTH)
-    return f"{key}_{digest}_{action.attempt}"
+    return f"{key}_{digest}_{attempt if attempt is not None else action.attempt}"
 
 
 def resolve_eval_set_id(log_dir: str, eval_set_id: str | None = None) -> str:
