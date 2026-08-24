@@ -1,12 +1,36 @@
+import contextlib
 import os
 import shutil
+import signal
 import subprocess
 import sys
 import tempfile
 from collections.abc import Iterator
 from pathlib import Path
 
+import psutil
 import pytest
+from inspect_steward._worker import scan_processes
+
+
+@pytest.fixture(autouse=True)
+def no_worker_outlives_its_test(tmp_path: Path) -> Iterator[None]:
+    """Kill any worker the test left running.
+
+    Workers are detached — `start_new_session`, so that a run survives the tend that started it — and that guarantee does not know it is in a test. Nothing kills them when pytest exits, and a worker held at a fault marker waits for a file that a finished test run will never write, so one escaped worker spins until somebody notices it in `ps`.
+
+    The sweep is the production one, scoped to this test's workspace exactly as a tend scopes it to its own: a leak is by definition something no `finally` caught, so catching it needs a mechanism no test has to remember. Guarded on the workers directory existing, so the ~60ms costs only the tests that spawned something.
+
+    Silent, because several tests legitimately leave a worker for teardown. What it guarantees is that none of them leaves one behind.
+    """
+    yield
+
+    workers_dir = tmp_path / ".steward" / "workers"
+    if not workers_dir.exists():
+        return
+    for found in scan_processes(workers_dir):
+        with contextlib.suppress(OSError, psutil.Error):
+            os.kill(found.pid, signal.SIGKILL)
 
 
 @pytest.fixture(scope="session")

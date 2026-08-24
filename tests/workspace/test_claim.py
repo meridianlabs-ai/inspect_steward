@@ -27,6 +27,8 @@ import pytest
 from inspect_steward._workspace import Claim, Held, acquire, read_claim, utc_now
 from inspect_steward._workspace import claim as claim_module
 
+from .._fault import until
+
 WEDGED = timedelta(milliseconds=10)
 """A threshold any live holder crosses at once."""
 
@@ -120,12 +122,13 @@ def hold(
         text=True,
     )
     children.append(child)
-    deadline = time.monotonic() + 60
-    while not ready.exists():
+
+    def held() -> bool:
         if child.poll() is not None:
             raise AssertionError(f"the holder exited: {child.communicate()[0]}")
-        assert time.monotonic() < deadline, "the holder never took the claim"
-        time.sleep(0.02)
+        return ready.exists()
+
+    until("the child to take the claim", held)
     # a holder is wedged by having held for a while, and `utc_now` has
     # millisecond resolution -- so put unambiguous time between the two
     time.sleep(0.05)
@@ -351,9 +354,12 @@ def test_a_claim_that_changed_hands_is_not_escalated_against(
         text=True,
     )
     children.append(wedged)
-    while not ready.exists():
+
+    def holding() -> bool:
         assert wedged.poll() is None, "the wedged holder exited before it held"
-        time.sleep(0.02)
+        return ready.exists()
+
+    until("the wedged holder to take the claim", holding)
     time.sleep(0.05)
 
     payload = json.dumps(

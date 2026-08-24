@@ -13,7 +13,6 @@ import os
 import signal
 import subprocess
 import sys
-import time
 from collections.abc import Callable
 from contextlib import suppress
 from dataclasses import dataclass, field
@@ -30,19 +29,20 @@ from inspect_steward._schedule import Pool, ReapWorker, SpawnWorker, reconcile
 from inspect_steward._util.jsonl import read_events, utc_now
 from inspect_steward._worker import (
     INTENT,
+    STEWARD_TASK,
+    STEWARD_WORKER,
     Fleet,
     ScannedWorker,
-    SpawnedWorker,
     WorkerScan,
     record_exited,
     record_intent,
     record_launched,
     resolve_inflight,
     scan_processes,
-    worker_selection,
 )
 
-from ._fleet import EVAL_SET_ID, FIXTURES, action, fleet, output
+from .._fault import FAULT_FIXTURE, Fault, arm, kill, until
+from ._fleet import FIXTURES, action, fleet, output
 
 HERE = gethostname()
 """This host. The real name rather than a placeholder, because the writers stamp it themselves — a table that made one up would be testing its own constant."""
@@ -135,29 +135,20 @@ def selection_path(workers_dir: Path, stem: str) -> Path:
     return workers_dir / f"{stem}.json"
 
 
-def write_selection(workers_dir: Path, stem: str) -> Path:
-    """A real selection document for a worker.
-
-    Real because a scanned worker with no record is identified by reading one —
-    the lost-record path is not a stub away from the live one.
-    """
-    path = selection_path(workers_dir, stem)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(
-        worker_selection(
-            action(f"id-{stem}", key=stem), eval_set_id=EVAL_SET_ID, log_dir="logs"
-        ).model_dump_json(exclude_none=True),
-        encoding="utf-8",
-    )
-    return path
-
-
 def alive_scan(workers_dir: Path, stems: list[str]) -> WorkerScan:
-    """A scan reporting exactly these workers."""
-    for stem in stems:
-        write_selection(workers_dir, stem)
+    """A scan reporting exactly these workers.
+
+    No selection documents are written, and that is the point: a scanned worker
+    carries its own identity in its environment, so nothing here has to exist
+    on disk for it to be identified.
+    """
     found = [
-        ScannedWorker(pid=pid_of(stem), selection=selection_path(workers_dir, stem))
+        ScannedWorker(
+            pid=pid_of(stem),
+            selection=selection_path(workers_dir, stem),
+            worker=stem,
+            identifier=f"id-{stem}",
+        )
         for stem in stems
     ]
     return lambda _: found
@@ -310,30 +301,13 @@ def test_a_spawn_that_never_starts_leaves_an_intent_and_nothing_else(
 # --- live workers -------------------------------------------------------
 
 
-def until(what: str, predicate: Callable[[], bool], timeout: float = 120) -> None:
-    """Poll until something is true, or say what never became true."""
-    deadline = time.monotonic() + timeout
-    while not predicate():
-        assert time.monotonic() < deadline, f"timed out waiting for {what}"
-        time.sleep(0.05)
-
-
-def gated_fleet(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> tuple[Fleet, Path]:
-    """A fleet over the gated definition, and the file that releases it.
-
-    Capture runs the definition too, so the gate is deliberately conditioned on
-    worker mode: reading the manifest here costs nothing.
-    """
-    gate = tmp_path / "gate"
-    monkeypatch.setenv("STEWARD_TEST_GATE", str(gate))
-    return fleet(FIXTURES / "gated_evalset.py", tmp_path), gate
-
-
-def kill(worker: SpawnedWorker) -> None:
-    """Kill a worker and reap it, so its pid is not still claimed."""
-    if worker.process.poll() is None:
-        os.kill(worker.pid, signal.SIGKILL)
-    worker.process.wait(timeout=60)
+def held_fleet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, at: str
+) -> tuple[Fleet, Fault]:
+    """A fleet whose workers stop at a chosen point and wait to be released."""
+    return fleet(FIXTURES / FAULT_FIXTURE, tmp_path), arm(
+        monkeypatch, tmp_path, f"{at}:hang"
+    )
 
 
 def test_a_worker_before_its_eval_is_visible_only_to_the_scan(
@@ -345,16 +319,13 @@ def test_a_worker_before_its_eval_is_visible_only_to_the_scan(
     log and bound no control socket. Both ground-truth sources say it is not
     there; spawning on that answer runs the task twice.
     """
-    workers, gate = gated_fleet(tmp_path, monkeypatch)
+    workers, held = held_fleet(tmp_path, monkeypatch, "pre")
     manifest = read_eval_set(workers.definition, cwd=tmp_path)
     task = manifest.tasks[0]
     worker = workers.spawn(action(task.identifier, key=task.key))
 
     try:
-        until(
-            "the scan to see a worker it has no other evidence of",
-            lambda: bool(scan_processes(workers.workers_dir)),
-        )
+        held.reached()
         resolved = resolve_inflight(workers.inflight, workers.workers_dir)
 
         assert [item.identifier for item in resolved.running] == [task.identifier]
@@ -370,14 +341,14 @@ def test_a_worker_before_its_eval_is_visible_only_to_the_scan(
         assert plan.actions == []
         assert plan.summary.running == 1
 
-        # and losing the record does not change the answer, because a worker's
-        # selection document names the task it is running
+        # and losing the record does not change the answer, because a worker
+        # carries the task it is running in its own environment
         lost = resolve_inflight(tmp_path / "gone.jsonl", workers.workers_dir)
         assert [item.identifier for item in lost.running] == [task.identifier]
 
         # the window closes observably: once the eval starts, the worker binds
         # a control socket, which is what everything after this step talks to
-        gate.touch()
+        held.release()
 
         def bound() -> bool:
             live = resolve_inflight(workers.inflight, workers.workers_dir).running
@@ -392,8 +363,8 @@ def test_a_worker_before_its_eval_is_visible_only_to_the_scan(
 def test_a_worker_that_finished_is_reaped_and_not_run_again(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    workers, gate = gated_fleet(tmp_path, monkeypatch)
-    gate.touch()
+    workers, held = held_fleet(tmp_path, monkeypatch, "pre")
+    held.release()
     manifest = read_eval_set(workers.definition, cwd=tmp_path)
     task = manifest.tasks[0]
     worker = workers.spawn(action(task.identifier, key=task.key))
@@ -416,16 +387,13 @@ def test_a_worker_that_finished_is_reaped_and_not_run_again(
 def test_a_worker_killed_before_its_log_lands_is_run_again(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    workers, _gate = gated_fleet(tmp_path, monkeypatch)
+    workers, held = held_fleet(tmp_path, monkeypatch, "pre")
     manifest = read_eval_set(workers.definition, cwd=tmp_path)
     task = manifest.tasks[0]
-    # the gate is never opened: the worker dies in the window before its eval,
-    # which is where a task can be lost without leaving a log behind
+    # never released: the worker dies in the window before its eval, which is
+    # where a task can be lost without leaving a log behind
     worker = workers.spawn(action(task.identifier, key=task.key))
-    until(
-        "the worker to appear in the process table",
-        lambda: bool(scan_processes(workers.workers_dir)),
-    )
+    held.reached()
     kill(worker)
 
     resolved = resolve_inflight(workers.inflight, workers.workers_dir)
@@ -471,16 +439,22 @@ def test_the_scan_answers_for_this_workspace_only(tmp_path: Path) -> None:
 
 
 def idle(selection: Path, script: str = "import time; time.sleep(120)") -> Idle:
-    """A process that does nothing but claim a selection document.
+    """A process wearing a worker's environment and doing nothing else.
 
     Real rather than simulated, because what is being tested is that the
     environment of a live process can be read at all — the measurement the
-    scan's affordability rests on.
+    scan's affordability rests on. It carries the whole marker a worker does,
+    identity included, since that is what a scan reads.
     """
     selection.parent.mkdir(parents=True, exist_ok=True)
     return subprocess.Popen(
         [sys.executable, "-c", script],
-        env={**os.environ, INSPECT_EVAL_SET_SELECTION: str(selection)},
+        env={
+            **os.environ,
+            INSPECT_EVAL_SET_SELECTION: str(selection),
+            STEWARD_WORKER: selection.stem,
+            STEWARD_TASK: f"id-{selection.stem}",
+        },
         stdout=subprocess.PIPE,
         stderr=subprocess.DEVNULL,
     )
@@ -509,8 +483,7 @@ def test_a_workers_children_are_not_mistaken_for_the_worker(tmp_path: Path) -> N
     # would be sent to -- and can hold a task open on a leftover child forever
     workers_dir = tmp_path / ".steward" / "workers"
     record = tmp_path / ".steward" / "inflight.jsonl"
-    selection = write_selection(workers_dir, "a")
-    worker, child = idle_tree(selection)
+    worker, child = idle_tree(selection_path(workers_dir, "a"))
 
     try:
         intent("a")(record, workers_dir)

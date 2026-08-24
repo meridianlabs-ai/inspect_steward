@@ -34,7 +34,7 @@ from inspect_ai._util.file import safe_filename
 from .._evalset.command import DefinitionCommand, definition_command
 from .._evalset.detect import DefinitionType
 from .._schedule import SpawnWorker
-from .inflight import record_intent, record_launched
+from .inflight import STEWARD_TASK, STEWARD_WORKER, record_intent, record_launched
 
 MAX_KEY_LENGTH = 80
 """Longest display key a worker's file stem keeps. A key carries a task name, a solver, a model, and every distinguishing argument, so an argument sweep can produce a long one; the identifier hash beside it is what keeps two truncations apart."""
@@ -177,7 +177,12 @@ class Fleet:
             process = subprocess.Popen(
                 command.argv,
                 cwd=command.cwd,
-                env=_worker_env(command, selection),
+                env=_worker_env(
+                    command,
+                    selection,
+                    worker=stem,
+                    identifier=action.identifier,
+                ),
                 stdin=subprocess.DEVNULL,
                 stdout=stream,
                 stderr=subprocess.STDOUT,
@@ -258,8 +263,12 @@ def resolve_eval_set_id(log_dir: str, eval_set_id: str | None = None) -> str:
     return eval_set_id_for_log_dir(log_dir, eval_set_id)
 
 
-def _worker_env(command: DefinitionCommand, selection: Path) -> dict[str, str]:
-    """Environment for a worker: the ambient one, plus worker mode.
+def _worker_env(
+    command: DefinitionCommand, selection: Path, *, worker: str, identifier: str
+) -> dict[str, str]:
+    """Environment for a worker: the ambient one, plus worker mode, plus who it is.
+
+    The selection path is inspect's marker and is what scopes a process to this workspace. `STEWARD_WORKER` and `STEWARD_TASK` are Steward's own, and they are what a scan reads instead of opening the selection document — so a worker stays identifiable after `.steward/` is deleted out from under it (`inflight.py`).
 
     `INSPECT_EVAL_SET_CAPTURE` is removed rather than left alone. Capture and selection are mutually exclusive, so an exported capture path — from a shell where someone was reading a definition by hand — would turn every worker into a startup error.
     """
@@ -267,6 +276,8 @@ def _worker_env(command: DefinitionCommand, selection: Path) -> dict[str, str]:
         **os.environ,
         **command.env,
         INSPECT_EVAL_SET_SELECTION: str(selection),
+        STEWARD_WORKER: worker,
+        STEWARD_TASK: identifier,
         # no terminal to draw on, and the output file is read by people and by
         # grep rather than by a renderer
         "INSPECT_DISPLAY": "plain",

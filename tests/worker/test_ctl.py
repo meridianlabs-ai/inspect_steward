@@ -27,6 +27,7 @@ from inspect_steward._worker import (
 from inspect_steward._worker.ctl import ABSENT, _ctl, _decode
 from inspect_steward._worker.spawn import SpawnedWorker
 
+from .._fault import FAULT_FIXTURE, arm, kill
 from ._fleet import FIXTURES, action, fleet, output
 
 # --- classification -----------------------------------------------------
@@ -153,17 +154,16 @@ def test_the_live_surface(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
     One launch, because a worker costs seconds and these claims are stages of
     one lifecycle rather than independent facts.
     """
-    gate = tmp_path / "gate"
-    monkeypatch.setenv("STEWARD_TEST_GATE", str(gate))
-    # long enough to outlast every invocation below, and killed when done
-    monkeypatch.setenv("STEWARD_TEST_SLEEP", "120")
-    workers = fleet(FIXTURES / "gated_evalset.py", tmp_path)
+    # the eval is held open inside a sample rather than for a fixed number of
+    # seconds, so no invocation below has to finish before a timer does
+    held = arm(monkeypatch, tmp_path, "run:hang")
+    workers = fleet(FIXTURES / FAULT_FIXTURE, tmp_path)
     manifest = read_eval_set(workers.definition, cwd=tmp_path)
     task = manifest.tasks[0]
     worker = workers.spawn(action(task.identifier, key=task.key))
 
     try:
-        gate.touch()
+        held.reached()
         row = first_row(worker)
 
         # the join that makes the channel usable at all: a row Steward can
@@ -216,15 +216,14 @@ def test_a_patched_token_limit_does_not_break_correlation(
     orphan. The help text says these are live overrides read where limits are
     checked; this is the check.
     """
-    gate = tmp_path / "gate"
-    monkeypatch.setenv("STEWARD_TEST_GATE", str(gate))
-    workers = fleet(FIXTURES / "gated_evalset.py", tmp_path)
+    held = arm(monkeypatch, tmp_path, "run:hang")
+    workers = fleet(FIXTURES / FAULT_FIXTURE, tmp_path)
     manifest = read_eval_set(workers.definition, cwd=tmp_path)
     task = manifest.tasks[0]
     worker = workers.spawn(action(task.identifier, key=task.key))
 
     try:
-        gate.touch()
+        held.reached()
         # through `_ctl` rather than `task_config`, which deliberately exposes
         # `max_samples` only -- this knob is what is being investigated, not
         # something Steward offers
@@ -238,6 +237,8 @@ def test_a_patched_token_limit_does_not_break_correlation(
             "--json",
         )
         assert not isinstance(patch, Unavailable), patch
+        # the log has to land for the identifier to be recomputed from it
+        held.release()
         assert worker.process.wait(timeout=300) == 0, output(worker)
     finally:
         kill(worker)
@@ -252,9 +253,3 @@ def reread(task_id: str) -> ConfigView:
     view = task_config(task_id)
     assert not isinstance(view, Unavailable)
     return view
-
-
-def kill(worker: SpawnedWorker) -> None:
-    if worker.process.poll() is None:
-        worker.process.kill()
-    worker.process.wait(timeout=60)

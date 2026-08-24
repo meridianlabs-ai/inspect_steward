@@ -4,11 +4,13 @@ Workers are detached, so there is no parent-child relationship to ask. Ground tr
 
 **The process table closes it, and is therefore the liveness source rather than a fallback.** Every worker's environment names its own selection document (`INSPECT_EVAL_SET_SELECTION` — the only marker every definition type can carry, since a frontend's CLI would reject an extra argument), so sweeping same-user processes for a selection path inside this workspace answers *what is running* from the instant a process exists. Measured at ~60ms for a table of 750 processes, which is affordable on every tend — and a scan that runs every time is exercised, where a recovery path that runs only after a crash is not.
 
+**A worker carries its identity there too**, in `STEWARD_WORKER` and `STEWARD_TASK`, so the sweep answers *what is this* from the same read that answered *is it alive*. Taking the identifier from the selection document instead would work — it names one — but it makes identity depend on a file, and `.steward/` is a directory the design tells people they may delete. It cost one line of environment to stop a deletion mid-run from hiding a live worker and getting it respawned over itself.
+
 **A worker's descendants carry the same marker, and are not the worker.** The environment is inherited, so a sandbox's `docker`, a frontend's `uv`, and every other subprocess an eval starts match the same selection path. Two rules separate them. The scan returns only the **ancestor-most** match of each subtree — a live worker's parent is the tend that spawned it, which carries no marker, so the worker is the unique root. And where the record knows a pid, that pid decides: a selection whose only surviving process is a leftover child reads as *departed*, because otherwise an orphan could hold a task open forever.
 
 Matching on the path is what makes the pid safe to use rather than what replaces it. The question asked is *is the process we launched still running this selection*, and neither half answers it alone: a recycled pid fails the path test, and a descendant fails the pid test.
 
-**The record is what the scan cannot know.** A worker whose `intent` was written and whose spawn never returned left no process to find, and must not block its task forever; a running worker's task identifier, attempt, and argv are provenance no process carries. So `.steward/inflight.jsonl` is appended before and after each spawn, and `resolve_inflight` reads the two together. Losing it costs provenance, and one degradation rather than correctness: an unrecorded worker still turns up in the scan with its identifier read from the selection document, but with no pid to check it against, an orphaned child of a dead worker reads as the worker.
+**The record is what the scan cannot know.** A worker whose `intent` was written and whose spawn never returned left no process to find, and must not block its task forever; a running worker's attempt, key, and argv are provenance no process carries. So `.steward/inflight.jsonl` is appended before and after each spawn, and `resolve_inflight` reads the two together. Losing it costs that provenance, and one degradation rather than correctness: an unrecorded worker still turns up in the scan naming its own task, but with no recorded pid to check it against, an orphaned child of a dead worker reads as the worker.
 
 See execution.md, *Detachment and the in-flight record*.
 """
@@ -21,11 +23,7 @@ from typing import Any
 
 import psutil
 from inspect_ai._control.discovery import list_discovered_servers
-from inspect_ai._eval.eval_set_selection import (
-    INSPECT_EVAL_SET_SELECTION,
-    read_eval_set_selection,
-)
-from inspect_ai._util.error import PrerequisiteError
+from inspect_ai._eval.eval_set_selection import INSPECT_EVAL_SET_SELECTION
 
 from .._schedule import DepartedWorker, InFlight, RunningWorker
 from .._util.jsonl import Event, append_event, read_events
@@ -39,6 +37,14 @@ LAUNCHED = "launched"
 EXITED = "exited"
 """Written when a worker is reaped, which is the only one of the three that is not this module's to write."""
 
+STEWARD_WORKER = "STEWARD_WORKER"
+"""Environment variable naming a worker's stem. Steward's own, alongside inspect's selection marker."""
+
+STEWARD_TASK = "STEWARD_TASK"
+"""Environment variable naming the task identifier a worker is running.
+
+Here rather than read from the selection document, so that the scan answers *what is this* from the same place it answers *is it alive*. The document would do — it names the identifier and the worker was launched with its path — but reading it makes identity depend on a file, and `.steward/` is a directory the design tells people they may delete."""
+
 
 @dataclass(frozen=True)
 class ScannedWorker:
@@ -49,7 +55,13 @@ class ScannedWorker:
 
     pid: int
     selection: Path
-    """Resolved path to its selection document, which is both how it was found and how it is identified."""
+    """Resolved path to its selection document, which is how it was found and how it is scoped to this workspace."""
+
+    worker: str | None = None
+    """File stem, from the environment. `None` for a marked process Steward did not spawn."""
+
+    identifier: str | None = None
+    """Task identifier, from the environment. `None` for a marked process Steward did not spawn."""
 
 
 WorkerScan = Callable[[Path], list[ScannedWorker]]
@@ -180,16 +192,15 @@ def resolve_inflight(
             )
 
     # whatever the scan found that the record does not account for. This is the
-    # lost-record path and it needs no branch of its own: a worker's selection
-    # document names the task it is running, so the scan alone is sufficient
+    # lost-record path and it needs no branch of its own: a worker carries its
+    # own identity in its environment, so the scan alone is sufficient
     for selection, matched in live.items():
-        identifier = _selected_identifier(selection)
         found = _worker_process(matched, None)
-        if identifier is not None and found is not None:
+        if found is not None and found.identifier is not None:
             running.append(
                 RunningWorker(
-                    worker=selection.stem,
-                    identifier=identifier,
+                    worker=found.worker or selection.stem,
+                    identifier=found.identifier,
                     pid=found.pid,
                     host=host,
                     socket=sockets.get(found.pid),
@@ -225,24 +236,29 @@ def scan_processes(workers_dir: Path) -> list[ScannedWorker]:
         One entry per live worker, in no particular order.
     """
     root = workers_dir.resolve()
-    matched: dict[int, tuple[int, Path]] = {}
+    matched: dict[int, tuple[int, ScannedWorker]] = {}
     for process in psutil.process_iter():
         try:
-            selection = process.environ().get(INSPECT_EVAL_SET_SELECTION)
+            environ = process.environ()
+            selection = environ.get(INSPECT_EVAL_SET_SELECTION)
             if not selection:
                 continue
             path = Path(selection).resolve()
             if path.is_relative_to(root):
-                matched[process.pid] = (process.ppid(), path)
+                matched[process.pid] = (
+                    process.ppid(),
+                    ScannedWorker(
+                        pid=process.pid,
+                        selection=path,
+                        worker=environ.get(STEWARD_WORKER),
+                        identifier=environ.get(STEWARD_TASK),
+                    ),
+                )
         except psutil.Error:
             # gone between the listing and the read, a zombie, or another
             # user's. None of the three is a worker of ours.
             continue
-    return [
-        ScannedWorker(pid=pid, selection=path)
-        for pid, (ppid, path) in matched.items()
-        if ppid not in matched
-    ]
+    return [found for ppid, found in matched.values() if ppid not in matched]
 
 
 @dataclass(frozen=True)
@@ -287,16 +303,6 @@ def _fold(events: list[Event]) -> dict[str, _Recorded]:
         elif event.type == EXITED:
             workers[worker] = replace(current, exited=True)
     return workers
-
-
-def _selected_identifier(selection: Path) -> str | None:
-    """The task identifier a selection document names, or `None` if it cannot be read."""
-    try:
-        return read_eval_set_selection(str(selection)).tasks[0].identifier
-    except PrerequisiteError:
-        # every read failure arrives as this one, including a document a later
-        # Steward wrote at a schema version this inspect refuses
-        return None
 
 
 def _append(record: Path, type: str, **fields: Any) -> None:

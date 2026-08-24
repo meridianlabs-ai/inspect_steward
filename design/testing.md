@@ -63,33 +63,43 @@ Also here: that a flat shared directory survives concurrent workers, that worker
 
 Each fault below exists to falsify a specific claim, and the claim is what the test asserts.
 
-| fault | claim under test |
-|---|---|
-| kill a worker after its log lands | reaping is correct; no respawn of finished work |
-| kill a worker *before* its log lands | the process table, not the log directory, is what prevents a respawn |
-| kill a worker during pre-boundary startup | the invisible-worker window behaves as designed, not as a double-spawn |
-| delete `.steward/` mid-run | state rebuilds from the log directory; nothing durable is lost |
-| delete `.steward/` *while a worker is starting* | the one case that is **not** safe — a duplicate log lands and reads as an ordinary retry |
-| corrupt a journal line | the fold degrades legibly rather than crashing |
-| truncate the journal mid-write | the last event is lost, earlier state is intact |
-| kill a tend holding the claim | the lock goes with the process; the next tend takes it with nothing to reap |
-| wedge a tend holding the claim | it is killed and the claim taken, rather than blocking the run until morning |
-| hold the claim | a second tend refuses rather than proceeding |
-| race two tends | idempotence — one spawn, not two |
-| run the same tend twice | a no-op |
-| make `log_dir` unwritable | scheduling stops, notification fires, running workers are left alone |
-| fill the disk | the same, without depending on `steward.log` |
-| expire log-store credentials | the errors class as *substrate*, and no re-run is proposed |
-| jump the wall clock backwards | a holder looks young, so the tend refuses rather than killing it |
+| fault | claim under test | falsified by |
+|---|---|---|
+| kill a worker after its log lands | reaping is correct; no respawn of finished work | `worker/test_faults.py` |
+| kill a worker *before* its log lands | the process table, not the log directory, is what prevents a respawn | `worker/test_inflight.py` |
+| kill a worker during pre-boundary startup | the invisible-worker window behaves as designed, not as a double-spawn | `worker/test_inflight.py`, `worker/test_spawn.py` |
+| delete `.steward/` mid-run | a worker carries its identity in its own environment, so it is still seen running and nothing is scheduled over it | `worker/test_faults.py` |
+| delete `.steward/` *while a worker is starting* | it dies at the boundary, having not yet read the document — and a dead worker is respawned exactly once | `worker/test_faults.py` |
+| corrupt a journal line | the fold degrades legibly rather than crashing | `workspace/test_journal.py` |
+| truncate the journal mid-write | the last event is lost, earlier state is intact | `workspace/test_journal.py` |
+| kill a tend holding the claim | the lock goes with the process; the next tend takes it with nothing to reap | `workspace/test_claim.py` |
+| wedge a tend holding the claim | it is killed and the claim taken, rather than blocking the run until morning | `workspace/test_claim.py` |
+| hold the claim | a second tend refuses rather than proceeding | `workspace/test_claim.py` |
+| race two tends | idempotence — one spawn, not two | *step 12* |
+| run the same tend twice | a no-op | *step 12* |
+| make `log_dir` unwritable | scheduling stops, notification fires, running workers are left alone | *steps 12, 23* |
+| fill the disk | the same, without depending on `steward.log` | *steps 12, 23* |
+| expire log-store credentials | the errors class as *substrate*, and no re-run is proposed | *step 22* |
+| jump the wall clock backwards | a holder looks young, so the tend refuses rather than killing it | `workspace/test_claim.py` |
+
+**The third column is the point of the table.** A fault list with no test beside it is an intention, and the whole argument of this document is that intentions about failure are the ones that quietly stop being true. A row naming a step rather than a module is work not yet possible; a row naming neither would be a hole.
+
+Worth noting what the column shows: **ten of these were falsified before any of them was written as fault injection**, because each arrived as the natural test of the step that built its subject. Building the harness as a step of its own was still right — it found the `.steward/` rows above, which had been wrong in this table since it was written — but the shape it took was three pieces of shared machinery, not a suite.
 
 **Two rules keep this suite from becoming flaky**, and they matter more than the list:
 
 - **Inject at decision points, never at wall-clock times.** "Kill the worker once its log has landed" is deterministic; "kill the worker after 2 seconds" is a race that will pass locally and fail in CI. Every row above is expressible as a state the harness waits for.
 - **No `sleep`.** Waiting is on a condition — a file appearing, a pid exiting, a barrier releasing. A suite that sleeps is a suite that gets slower every time someone fixes a flake by raising a number.
 
-The design already has a fixture in this shape: `tests/evalset/fixtures/slow_evalset.py` blocks before reaching `eval_set()`, which is precisely the invisible-worker window. The fault harness is that idea generalized — definitions that hang, crash, or exit at chosen points, plus a way to break the filesystem underneath a run.
+**Both rules are a mechanism rather than a discipline**, which is what keeps them from decaying. `tests/evalset/fixtures/faulty_evalset.py` fails wherever it is told to — `pre` (the module body, before `eval_set()`), `run` (inside a sample), or `post` (after `eval_set()` returns and before the process exits) — and each point is a two-file handshake: the definition writes `<point>.reached` on arrival, and `hang` waits for the test to write `<point>.go`. So *inject at a decision point* is the only thing the fixture can do, and a test that wants a worker held somewhere waits for a marker instead of estimating how long it takes to get there.
 
-**One fault is worth building even though nothing in the design depends on it**: a definition that is slow, hangs, and crashes at each of the three interesting points (before import completes, before the boundary, after the log lands). Those three are the whole taxonomy of worker startup failure, and having them as fixtures makes every scheduling test able to include a broken worker cheaply.
+Those three points are the whole taxonomy of a worker's lifetime, and `post` is the only way to observe a landed log whose process is still alive at all.
+
+**There is deliberately no `slow`**, despite it appearing in the taxonomy above for a while. A delay is a race and a gate is a state: a test that wants *still running* holds the gate, and one that wants *eventually finishes* releases it. Removing it also took the last wall-clock waits out of the worker suite, which had been paying a fixed sleep per test to keep an eval alive long enough to ask it something.
+
+**A held worker is a leak waiting to happen, and it needs answering twice.** Workers are detached so that a run survives the tend that started it, and that guarantee does not know it is in a test: nothing kills them when pytest exits, and one waiting on a marker a finished run will never write spins until somebody finds it in `ps`. So an autouse fixture sweeps the test's own workspace at teardown — the production scan, scoped exactly as a tend scopes it, because a leak is by definition what no `finally` caught and catching it must not depend on remembering. And a hold watches for its spawner disappearing and exits, which covers the case teardown cannot: pytest killed, or Ctrl-C. That second check is a *state* rather than a timeout — the ppid captured at startup, compared against the current one, so a subreaper adopting the orphan reads the same as init doing it.
+
+**The fixture is a fixture, not a shipped tool** (§7 q1, closed). The safety argument — keeping a process-killing, filesystem-breaking capability out of the package — is real but secondary. The decisive one is that nothing in `src/` would import any of it: the two pieces that looked most like a tool turned out to be an eval definition and a `chmod`.
 
 ## 5. Layer 4: the agent is a prompt artifact, and its quality is the product
 
@@ -122,7 +132,7 @@ Stated so nobody mistakes a green suite for coverage of these:
 
 ## 7. Open questions
 
-1. **Where fault injection lives.** A harness that can kill processes and break filesystems is either a test fixture or a shipped debugging tool. Making it a tool means an operator can reproduce a failure on a real workspace; making it a fixture keeps a dangerous capability out of the package. The second is the safer default and the first is what would actually get used.
+1. ~~**Where fault injection lives.**~~ *Closed: a fixture.* See §4 — the safety argument was the weaker one, and what settled it is that nothing in the package would import any of it.
 
 2. **Whether agent scenarios run in CI at all.** They cost money and are nondeterministic, so a red result is a conversation rather than a build failure. Running them on runbook changes only is the obvious answer; whether that is often enough to catch a regression introduced elsewhere — a changed tend summary that makes a rule unfollowable — is not clear.
 
