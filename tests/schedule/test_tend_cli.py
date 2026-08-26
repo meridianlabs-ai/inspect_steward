@@ -164,3 +164,183 @@ def test_tend_is_still_the_thing_status_previewed(
     assert "next tend: 1 to archive" in preview
     assert len(result.archived) == 1
     assert "next tend: nothing to do" in after
+
+
+# --- ack ----------------------------------------------------------------
+
+
+def broken(workspace: Workspace, name: str = "broken.eval") -> str:
+    """A file that is not a log, which projects to one acknowledgeable item."""
+    (workspace.logs / name).write_bytes(b"not a log")
+    return f"unreadable:{name}"
+
+
+def test_ack_takes_an_id(workspace: Workspace) -> None:
+    identifier = broken(workspace)
+
+    code, output = run("ack", identifier, "--reason", "known bad file")
+
+    assert code == 0, output
+    assert identifier in output
+    # gone from the surface, and only the surface -- the record is the journal
+    assert identifier not in run("status")[1]
+    assert "known bad file" in workspace.journal.read_text(encoding="utf-8")
+
+
+def test_ack_takes_an_unambiguous_prefix(workspace: Workspace) -> None:
+    identifier = broken(workspace)
+
+    code, output = run("ack", "unreadable:bro", "--reason", "fine")
+
+    assert code == 0, output
+    assert identifier in output
+
+
+def test_an_ambiguous_prefix_names_the_candidates_and_writes_nothing(
+    workspace: Workspace,
+) -> None:
+    broken(workspace, "one.eval")
+    broken(workspace, "two.eval")
+    before = workspace.journal.read_text(encoding="utf-8")
+
+    code, output = run("ack", "unreadable", "--reason", "fine")
+
+    assert code != 0
+    assert "unreadable:one.eval" in output and "unreadable:two.eval" in output
+    assert workspace.journal.read_text(encoding="utf-8") == before
+
+
+def test_acking_the_same_thing_twice_says_who_did_it_first(
+    workspace: Workspace,
+) -> None:
+    # the likeliest confusion by far, and an empty list cannot distinguish it
+    # from a typo -- so the journal is consulted to say which one happened
+    identifier = broken(workspace)
+    run("ack", identifier, "--reason", "deliberate")
+
+    code, output = run("ack", identifier, "--reason", "again")
+
+    assert code != 0
+    assert "already been acknowledged" in output
+    assert "deliberate" in output
+
+
+def test_an_id_that_matches_nothing_says_where_to_look(
+    workspace: Workspace,
+) -> None:
+    code, output = run("ack", "nonsense", "--reason", "fine")
+
+    assert code != 0
+    assert "steward status" in output
+
+
+def test_ack_refuses_without_a_reason(workspace: Workspace) -> None:
+    # the record is the whole point of the act; one without a reason is a hole
+    # in the audit trail rather than a terse entry in it
+    identifier = broken(workspace)
+
+    code, output = run("ack", identifier)
+
+    assert code != 0
+    assert "--reason" in output
+
+
+def test_ack_records_who_decided(workspace: Workspace) -> None:
+    # an agent disposing of something it investigated is its own decision, not
+    # a person's relayed through it
+    identifier = broken(workspace)
+
+    run("ack", identifier, "--by", "agent", "--reason", "transient")
+
+    (event,) = [
+        json.loads(line)
+        for line in workspace.journal.read_text(encoding="utf-8").splitlines()
+        if '"acknowledged"' in line
+    ]
+    assert event["by"] == "agent"
+    assert event["kind"] == "unreadable"
+
+
+def test_ack_does_not_take_the_claim(workspace: Workspace) -> None:
+    # the case that matters most: somebody reading a status while the fleet
+    # converges is exactly when they decide something is fine
+    identifier = broken(workspace)
+
+    outcome = acquire(workspace.claim, command="tend")
+    assert isinstance(outcome, Claim)
+    with outcome:
+        code, output = run("ack", identifier, "--reason", "mid-tend")
+
+    assert code == 0, output
+
+
+# --- rendering ----------------------------------------------------------
+
+
+def test_status_prints_markdown_on_request_and_not_otherwise(
+    workspace: Workspace,
+) -> None:
+    # the agent is told to relay this verbatim (agent.md, *Render the summary;
+    # do not replace it*), and aligned terminal columns do not survive that
+    _, markdown = run("status", "--format", "md")
+    _, text = run("status")
+
+    assert "| state | tasks |" in markdown
+    assert "## progress" in markdown
+    # ...and no warning about editing a file, since this one is not a file
+    assert "Regenerated every turn" not in markdown
+    assert "| state | tasks |" not in text
+
+
+def test_every_rendering_leads_with_the_same_verdict(workspace: Workspace) -> None:
+    turn(workspace)
+
+    _, text = run("status")
+    _, markdown = run("status", "--format", "md")
+    code, raw = run("status", "--json")
+    document = json.loads(raw)
+
+    assert text.startswith("✅")
+    assert "✅" in markdown
+    assert document["verdict"] == "✅"
+    assert code == 0
+
+
+def test_markdown_says_when_a_tend_holds_the_claim(workspace: Workspace) -> None:
+    # a claim is not an item -- nobody resolves it, and it is gone in seconds --
+    # but it is exactly what makes an "as of" misleading, since the tend holding
+    # it is about to change every number below. Both renderings have to say so
+    outcome = acquire(workspace.claim, command="tend")
+    assert isinstance(outcome, Claim)
+    with outcome:
+        _, text = run("status")
+        _, markdown = run("status", "--format", "md")
+
+    assert "holds the claim" in text
+    assert "holds the claim" in markdown
+
+
+def test_ack_leaves_status_md_to_the_next_tend(workspace: Workspace) -> None:
+    """The one surface an ack deliberately does not touch.
+
+    `status.md` is a tend artifact whose **age** is load-bearing: a remote
+    reader detects a stopped timer, a crashed tend, or a broken sync by
+    noticing it stopped changing. A writer that is not a tend would stamp it
+    `as of now` and destroy exactly that signal — so the file catches up on the
+    next turn, which is the same interval every other number in it is already
+    stale by.
+    """
+    identifier = broken(workspace)
+    turn(workspace)
+    stamped = workspace.status.read_text(encoding="utf-8")
+    assert identifier in stamped
+
+    run("ack", identifier, "--reason", "known bad file")
+
+    # unchanged, byte for byte -- including the `As of` it was written with
+    assert workspace.status.read_text(encoding="utf-8") == stamped
+    # but nothing that *computes* still reports it
+    assert identifier not in run("status")[1]
+
+    turn(workspace)
+    assert identifier not in workspace.status.read_text(encoding="utf-8")

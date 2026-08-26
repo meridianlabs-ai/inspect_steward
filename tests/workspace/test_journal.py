@@ -12,9 +12,11 @@ from pathlib import Path
 
 import pytest
 from inspect_steward._workspace import (
+    ACKNOWLEDGED,
     JournalEvent,
     append_event,
     create_workspace,
+    read_acks,
     read_journal,
     summarize,
 )
@@ -184,6 +186,52 @@ def test_summarize(tmp_path: Path) -> None:
     assert summary.last_ts == "2026-08-23T21:00:00.000Z"
     assert summary.last is not None and summary.last.type == "observation"
     assert len(read.damage) == 1
+
+
+# --- acknowledgments ----------------------------------------------------
+
+
+def test_acks_fold_to_the_last_word_per_item(tmp_path: Path) -> None:
+    # a re-acknowledgment carries the newer reason, which is the one that
+    # describes why the item is currently silent
+    journal = tmp_path / "journal.jsonl"
+    append_event(journal, ACKNOWLEDGED, id="drift:abc", by="human", reason="first")
+    append_event(journal, ACKNOWLEDGED, id="unreadable:x", by="agent", reason="other")
+    append_event(journal, ACKNOWLEDGED, id="drift:abc", by="agent", reason="second")
+
+    acks = read_acks(read_journal(journal).events)
+
+    assert set(acks) == {"drift:abc", "unreadable:x"}
+    assert acks["drift:abc"].reason == "second"
+    assert acks["drift:abc"].by == "agent"
+    assert acks["unreadable:x"].ts.startswith("20")
+
+
+ACK_PAYLOADS = [
+    ("no id at all", {"by": "human", "reason": "?"}),
+    ("an id that is not a string", {"id": 7, "reason": "?"}),
+    ("an empty id", {"id": "", "reason": "?"}),
+]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [payload for _, payload in ACK_PAYLOADS],
+    ids=[case for case, _ in ACK_PAYLOADS],
+)
+def test_an_ack_this_version_cannot_use_is_data_rather_than_damage(
+    payload: dict[str, object], tmp_path: Path
+) -> None:
+    # the same rule the vocabulary itself follows: a workspace outlives the
+    # version that wrote it, so an unusable record is skipped, not raised on
+    journal = tmp_path / "journal.jsonl"
+    write_lines(journal, event_line(ACKNOWLEDGED, **payload))
+
+    assert read_acks(read_journal(journal).events) == {}
+
+
+def test_acks_of_nothing() -> None:
+    assert read_acks([]) == {}
 
 
 def test_summarize_of_nothing() -> None:

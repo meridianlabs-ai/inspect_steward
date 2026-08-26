@@ -8,12 +8,15 @@ from .directives import (
     resolve_pool,
 )
 from .journal import (
+    ACKNOWLEDGED,
+    Ack,
     DamagedLine,
     InitializedEvent,
     JournalEvent,
     JournalRead,
     JournalSummary,
     append_event,
+    read_acks,
     read_journal,
     summarize,
     utc_now,
@@ -22,10 +25,12 @@ from .layout import DEFINITION_NAMES, GITIGNORE_ENTRIES, Workspace
 from .log import steward_log
 
 __all__ = [
+    "ACKNOWLEDGED",
     "DEFINITION_NAMES",
     "GITIGNORE_ENTRIES",
     "REFUSED",
     "STALE_AFTER",
+    "Ack",
     "Claim",
     "CreateReport",
     "DamagedLine",
@@ -42,6 +47,7 @@ __all__ = [
     "acquire",
     "append_event",
     "create_workspace",
+    "read_acks",
     "read_claim",
     "read_directives",
     "read_journal",

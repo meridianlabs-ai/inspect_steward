@@ -13,6 +13,7 @@ from .reconcile import (
     RunningWorker,
     SpawnWorker,
     Summary,
+    attempts_made,
     reconcile,
     resolve_max_samples,
 )
@@ -32,6 +33,7 @@ __all__ = [
     "RunningWorker",
     "SpawnWorker",
     "Summary",
+    "attempts_made",
     "reconcile",
     "resolve_max_samples",
 ]

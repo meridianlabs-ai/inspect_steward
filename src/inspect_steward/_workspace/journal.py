@@ -21,16 +21,27 @@ from .._util.jsonl import (
 )
 
 __all__ = [
+    "ACKNOWLEDGED",
+    "Ack",
     "DamagedLine",
     "InitializedEvent",
     "JournalEvent",
     "JournalRead",
     "JournalSummary",
     "append_event",
+    "read_acks",
     "read_journal",
     "summarize",
     "utc_now",
 ]
+
+ACKNOWLEDGED = "acknowledged"
+"""Journal event: somebody looked at an item and accepted it.
+
+The one event kind an item list was not supposed to need. Items are a projection, so a condition that ends stops being reported and a decision keeps its subject open — but neither covers a real condition nothing will clear mechanically that somebody has already accepted. Without this, a definition edited on purpose reports drift every ten minutes for the rest of the run, which is how an attention list stops being read.
+
+Written by `steward ack`, never by a tend. It carries `id`, `by` (`agent` or `human`), and a required `reason` — the discipline `inspect ctl` already imposes on every applied change, and what makes *who decided, and why* (workflow.md, *The audit trail*) true of this act too.
+"""
 
 JournalEvent = Event
 """One event in the journal."""
@@ -47,6 +58,18 @@ class InitializedEvent(JournalEvent):
 
     definition: str | None = None
     """Definition filename the workspace expects, if it had one at `init`."""
+
+
+@dataclass(frozen=True)
+class Ack:
+    """One disposal, as the fold reports it."""
+
+    id: str
+    by: str
+    """`agent` or `human`. An agent disposing of a transient it investigated is its own ack, not a human's relayed through it."""
+
+    reason: str
+    ts: str
 
 
 @dataclass(frozen=True)
@@ -73,6 +96,38 @@ def read_journal(journal: Path) -> JournalRead:
         OSError: If the file exists but cannot be read. A missing journal is expected; an unreadable one is not.
     """
     return read_events(journal)
+
+
+def read_acks(events: list[JournalEvent]) -> dict[str, Ack]:
+    """Fold a journal down to what has been disposed of.
+
+    An acknowledgment says a person or an agent looked at something nothing will clear mechanically and accepted it. The item then leaves every surface — `status.md`, the summary, the channel, the verdict — and this record is what it leaves behind (plan.md step 14).
+
+    Keyed on the **item id**, which is chosen per kind so that a material change produces a different one. That is what makes a permanent-looking suppression safe: acknowledging a definition edit does not acknowledge the next edit, because the next edit hashes differently and is therefore a different item.
+
+    Args:
+        events: Events in file order, as `read_journal` returns them.
+
+    Returns:
+        The most recent acknowledgment per item id. Later wins, so a re-acknowledgment carries the newer reason.
+    """
+    acks: dict[str, Ack] = {}
+    for event in events:
+        if event.type != ACKNOWLEDGED:
+            continue
+        identifier = event.payload.get("id")
+        if not isinstance(identifier, str) or not identifier:
+            # a payload this version does not understand is data, not damage
+            continue
+        by = event.payload.get("by")
+        reason = event.payload.get("reason")
+        acks[identifier] = Ack(
+            id=identifier,
+            by=by if isinstance(by, str) else "",
+            reason=reason if isinstance(reason, str) else "",
+            ts=event.ts,
+        )
+    return acks
 
 
 def summarize(events: list[JournalEvent]) -> JournalSummary:

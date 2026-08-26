@@ -12,7 +12,7 @@ Read left to right it is: what state the task is in, which task, how much of it 
 """
 
 from .._evalset.observe import TaskState
-from .progress import Progress, TaskProgress
+from .progress import Progress, TaskProgress, short_keys
 
 GLYPH = {
     TaskState.COMPLETE: "✓",
@@ -36,7 +36,11 @@ def progress_table(progress: Progress, *, width: int = 0) -> list[str]:
     if not progress.rows:
         return []
 
-    cells = [_cells(row, width) for row in progress.rows]
+    short = short_keys(progress.rows)
+    cells = [
+        _cells(row, key, width)
+        for row, key in zip(progress.rows, short.keys, strict=True)
+    ]
     # a column empty in every row is dropped rather than padded: a settled
     # campaign has no running samples, no queue, and no budget in flight, and
     # holding their width open leaves the score stranded across a gap
@@ -45,15 +49,15 @@ def progress_table(progress: Progress, *, width: int = 0) -> list[str]:
     widths = [max(len(cell[n]) for cell in cells) for n in range(len(cells[0]))]
 
     lines = [_line(cell, widths) for cell in cells]
-    if len(progress.rows) > 1:
-        lines.append(_total(progress))
+    if (footer := _footer(progress, short.model)) is not None:
+        lines.append(footer)
     return lines
 
 
-def _cells(row: TaskProgress, width: int) -> tuple[str, ...]:
+def _cells(row: TaskProgress, key: str, width: int) -> tuple[str, ...]:
     """One row's columns, already formatted, before they are padded to a width."""
     budget = row.budget
-    name = row.key[:width] if width else row.key
+    name = key[:width] if width and len(key) > width else key
     return (
         f"{glyph(row)} {name}",
         f"{row.completed}/{row.total}",
@@ -81,8 +85,20 @@ def _line(cells: tuple[str, ...], widths: list[int]) -> str:
     return f"{name.ljust(widths[0])}  {padded}".rstrip()
 
 
-def _total(progress: Progress) -> str:
-    parts = [f"{progress.completed}/{progress.total} samples"]
+def _footer(progress: Progress, model: str | None) -> str | None:
+    """The line under the table: what every row shares, then the run's totals.
+
+    **The two halves are gated separately**, because only one of them is a total. Summing one row's samples restates the row, so the totals wait for a second row — but a model elided out of the keys has to be said *somewhere*, and a single-task run that shows neither the model in its key nor a footer to name it has simply lost it.
+    """
+    parts: list[str] = []
+    if model is not None:
+        # every row ran against it and no row shows it, so it is a fact about
+        # the run rather than a column
+        parts.append(model)
+    if len(progress.rows) < 2:
+        return f"  {parts[0]}" if parts else None
+
+    parts.append(f"{progress.completed}/{progress.total} samples")
     if progress.total:
         parts.append(f"{round(progress.fraction * 100)}%")
     if progress.running:

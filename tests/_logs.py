@@ -71,6 +71,13 @@ class SynthTask:
     samples: int = 10
     epochs: int = 1
 
+    display_name: str | None = None
+    """What the manifest calls this task, when that differs from `name`.
+
+    Only ever on the manifest row: a log records the registered `name`, and the
+    two are correlated by identifier rather than by either of them.
+    """
+
     limits: dict[str, int] = field(default_factory=dict[str, int])
     """Per-sample budgets by `EvalConfig` field name, e.g. `{"turn_limit": 300}`.
 
@@ -140,6 +147,7 @@ def synth_manifest(tasks: Sequence[SynthTask], **options: Any) -> Manifest:
     rows = [
         ManifestTask(
             name=task.name,
+            display_name=task.display_name,
             file=task.file,
             args=task.args,
             args_hash=task_args_hash(task.args),

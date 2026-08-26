@@ -275,13 +275,14 @@ It landed here rather than at the end because this is the first point where ever
 
 This takes the **body table** and the **interim headline convention** out of step 14, which keeps the item list, the diff, and the verdict.
 
-### Step 14 — The tend surface
+### Step 14 — The tend surface ✅ **done**
 
-**Delivers** what a turn *says* — to a human, to an agent, and to a channel that does not exist yet.
+**Delivered** `_tend/items.py` — `Item`, `Owner`, `Level`, `Verdict`, `tend_items`, `verdict`, `verdict_line`, `by_owner` — with `TendResult` gaining `items`, `verdict`, `appeared`, and `resolved`; the `acknowledged` journal event and `read_acks`; `steward ack`; `steward status --format md`; and `shorten_keys` beside `compute_display_keys`. Both hand-written attention lists are gone. Tests: `test_items.py` (20), `test_display_short.py` (10), additions to `test_journal.py`, `test_tend_cli.py`, and `test_progress.py` — 47 tests, **no launches**.
+
+**Done when** — all three held: a synthesized parked worker, stalled task, and spawn failure each carry the right owner and level (the first through `Level.BLOCKING` directly, since step 20 owns the producer); the verdict reflects the run rather than the worst item; and an acknowledged item leaves every surface without leaving the record.
 
 - **Scope.** The **item envelope** and the single list it forms, with a computed owner and a stable id. The verdict as a level over it. The set diff against the previous tend. Acknowledgment as a journal event, with `steward ack` to write one. Three renderings over one model, and the display key that makes the narrowest of them fit. ~~The body table; the interim headline-metric convention~~ — landed in 13a.
 - **Refs.** exec §8.3, §8.4; workflow §11.1, §12.1, §14, §17; agent §2.2, §4, §5, §6.
-- **Done when** a synthesized parked worker, stalled task, and spawn failure each carry the right owner and level, the verdict reflects the run rather than the worst item, and an acknowledged item leaves every surface without leaving the record.
 
 **Split from step 13 because the turn and its rendering are separately testable**, and because 13 is what steps 15–16 depend on.
 
@@ -305,7 +306,7 @@ This takes the **body table** and the **interim headline convention** out of ste
 
 `action_failed` is deliberately absent. It is a single-turn fact that either recurs or does not, and making it acknowledgeable would give it a lifecycle it has not earned.
 
-**A disposed item leaves every surface, and its record leaves in the other direction.** Once acknowledged it is gone from `status.md`, from the summary, and from the channel, and it stops counting toward the verdict — a run whose last open item was accepted reads ✅, which is what disposal means. The trail is the journal event, plus the rule that keeps *the journal has it* from meaning *nobody ever reads it*: **an acknowledgment accepting something the data carries flows to `anomalies.md`** ([workflow.md](workflow.md), *The caveats that reached the final data*), and from there into signoff. One with no effect on the data simply ends.
+**A disposed item stops being reported, and its record leaves in the other direction.** Once acknowledged it is gone from the summary, from `status.md` as the next turn rewrites it, and from the channel, and it stops counting toward the verdict — a run whose last open item was accepted reads ✅, which is what disposal means. The trail is the journal event, plus the rule that keeps *the journal has it* from meaning *nobody ever reads it*: **an acknowledgment accepting something the data carries flows to `anomalies.md`** ([workflow.md](workflow.md), *The caveats that reached the final data*), and from there into signoff. One with no effect on the data simply ends.
 
 **`acknowledged` disposes only of items whose subject has no lifecycle of its own**, and the boundary needs stating before step 23 arrives to find two ways of closing the same thing. Drift, a degraded read, a running orphan, an unreadable file: no class, no evidence, no proposal, nothing to rule *on* — someone looked and accepted it, and that is the whole of the act. An anomaly already has a richer path and keeps it, closing through `ruling` and `resolution`, where `resolution` has carried *accepted* since workflow §5.6 was written. Both routes end the same way — the item stops being projected — which is what lets the list have one disposal rule while the subjects have two. It is also not `steward resolve` (exec §8.2), which acts on *samples*; `ack` disposes of a **line in a list** and touches nothing in the run.
 
@@ -644,6 +645,8 @@ Three rules follow, and they are the opposite of the instinct:
 3. **Reach for a subprocess only when the process boundary is the subject.** [testing.md](testing.md) §1's layer 1 — `reconcile` over a synthesized log directory — is microseconds, and it is where most of this plan's correctness lives.
 
 **Which steps genuinely need real workers**: 1 (done), 6–9, 11, 17, 20, and parts of 13, 16, 25, and 28–30 — call it twelve. Steps 2–5, 10, 12, 14–15, 18–19, 21–24, 26–27, and 31–33 are layer 1 or near it: synthesized state, pure functions, no eval runs at all. **Budget ~12 launches for a layer-2 step**, which is roughly 35s serial and under 10s with `-n auto`. Ten such steps lands the whole suite near five minutes serial and one to two minutes on CI. That is the line; a step that wants more should say why in its design pass.
+
+**Running total after step 14**: 462 offline tests, 63s with `-n auto`. Forty-seven tests and **no launches**, for the step that owns what a turn says — which is rule 3 at its most literal, since a rendering takes a value and returns a string. The one place it needed care is that an item is a *projection*, so building `Item`s by hand would have tested the constructor: every case here synthesizes the condition in a workspace — a definition edited after capture, a file that is not a log, three logs that got exactly as far as each other — and asserts on what came out of a real `tend`. The stall cases take the log-visible route rather than the crash loop, because the crash loop needs processes and this file is not about the guard.
 
 **Running total after step 13a**: 415 offline tests, 54s with `-n auto`. Forty-nine tests and **no launches**, for a step whose whole subject is talking to running processes. Two of the three files are rule 3 again — the cache is a listing against a dict, the rows are a dataclass against a synthesized log directory — and the third is the fourth category in a form the rules did not have: **a real server that is not a worker**. `read_fleet` exists because of a timing claim, so a stubbed client would test the parsing and discard the part under test; an `asyncio` AF_UNIX listener in a thread costs nothing, speaks real HTTP over a real socket, and can do the one thing no eval will do on demand — accept a connection and never answer. The two tests that turn on that pay 0.25s each, which is the timeout they are asserting.
 

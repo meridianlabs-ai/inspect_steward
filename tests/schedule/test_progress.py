@@ -235,14 +235,108 @@ def test_a_live_row_carries_every_column(tmp_path: Path) -> None:
         assert cell in line, f"{cell!r} missing from {line!r}"
 
 
-def test_the_totals_line_appears_only_when_there_is_more_than_one_row(
+def test_the_totals_appear_only_when_there_is_more_than_one_row(
     tmp_path: Path,
 ) -> None:
+    # summing one row's samples restates the row
     write_log(tmp_path, TASK)
-    assert len(progress_table(rows(tmp_path, [TASK], LiveFleet()))) == 1
+    (_, footer) = progress_table(rows(tmp_path, [TASK], LiveFleet()))
+    assert "samples" not in footer
 
     other = SynthTask("other", samples=6)
     write_log(tmp_path, other)
     lines = progress_table(rows(tmp_path, [TASK, other], LiveFleet()))
     assert len(lines) == 3
     assert "16/16 samples" in lines[-1]
+
+
+def test_one_task_still_says_which_model_it_ran(tmp_path: Path) -> None:
+    # the model is elided from a key that has nobody to be compared against,
+    # so the footer is the only place left for it -- and a row that names
+    # neither has lost it outright
+    write_log(tmp_path, TASK)
+
+    lines = progress_table(rows(tmp_path, [TASK], LiveFleet()))
+
+    assert "mockllm/model" not in lines[0]
+    assert lines[-1].strip() == "mockllm/model"
+
+
+def test_no_footer_when_there_is_nothing_to_put_in_one(tmp_path: Path) -> None:
+    # one row whose model is on the row already: no shared fact, no totals
+    orphan = SynthTask("gone")
+    write_log(tmp_path, orphan)
+
+    lines = progress_table(rows(tmp_path, [], LiveFleet()))
+
+    assert len(lines) == 1
+    assert lines[0].startswith("⌫ ")
+
+
+SLACK = 76
+"""Columns a Slack code block holds before it wraps.
+
+The narrowest surface the table has to survive, and the reason display keys are
+shortened against the rows on screen rather than printed as the manifest
+computed them. Step 24 sends the post; this is where the table is held to
+fitting in one.
+"""
+
+
+def test_a_busy_sweep_fits_the_narrowest_surface(tmp_path: Path) -> None:
+    # every column present at once, on keys the length real benchmarks have --
+    # which is the worst case, since a settled campaign drops most of them
+    tasks = [
+        SynthTask(name, samples=300, limits={"turn_limit": 300})
+        for name in ("sec_bench_pro", "exploit_gym_userspace", "oss_fuzz_t300")
+    ]
+    for task in tasks:
+        write_log(tmp_path, task, status="started", total=300, completed=1)
+
+    fleet = LiveFleet(
+        tasks={
+            task.identifier: live(
+                task,
+                completed=37,
+                total=183,
+                in_flight=83,
+                queued=63,
+                turns=115,
+                connections=(52, 80),
+            ).tasks[task.identifier]
+            for task in tasks
+        }
+    )
+    lines = progress_table(rows(tmp_path, tasks, fleet))
+
+    for line in lines:
+        assert len(line) <= SLACK, f"{len(line)} columns: {line!r}"
+    # and it is not fitting by having thrown the numbers away
+    assert "52/80c" in lines[0] and "115/300t" in lines[0]
+
+
+def test_the_shared_model_is_named_once_rather_than_on_every_row(
+    tmp_path: Path,
+) -> None:
+    other = SynthTask("other", samples=6)
+    write_log(tmp_path, TASK, total=10, completed=10)
+    write_log(tmp_path, other, total=6, completed=6)
+
+    lines = progress_table(rows(tmp_path, [TASK, other], LiveFleet()))
+
+    assert lines[0].startswith("✓ probe ")
+    assert "mockllm/model" not in lines[0]
+    assert "mockllm/model" in lines[-1]
+
+
+def test_a_shortened_key_uses_the_name_the_manifest_shows(tmp_path: Path) -> None:
+    # `compute_display_keys` builds the full key from `display_name or name`,
+    # and shortening has to agree with it -- a task the whole run calls
+    # `Friendly Name` must not become the internal name in one column
+    named = SynthTask("internal_name", display_name="Friendly Name")
+    write_log(tmp_path, named)
+
+    (line, *_) = progress_table(rows(tmp_path, [named], LiveFleet()))
+
+    assert "Friendly Name" in line
+    assert "internal_name" not in line

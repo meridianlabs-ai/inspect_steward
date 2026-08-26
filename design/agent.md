@@ -114,7 +114,9 @@ The schema itself is unsettled (open question 1). What is settled is that it is 
 
 *"How is it going", "what's the latest", "any update"* are requests for **the snapshot**, not for the agent's reading of it. The rule is worth stating as flatly as possible because the temptation is constant and the failure is invisible:
 
-> Run `steward status` and render what it printed — every section, in its order, in full, with nothing above it. As markdown, not inside a code fence, because it is a document with tables meant to be read rendered.
+> Run `steward status --format md` and render what it printed — every section, in its order, in full, with nothing above it. As markdown, not inside a code fence, because it is a document with tables meant to be read rendered.
+
+**`--format md` rather than plain `status`**, because there are three renderings of one model and only one of them survives relaying. The default is aligned monospace columns for a terminal, which collapse into a line of words when rendered as markdown; `--format md` is the same content as real tables. Reading `status.md` instead is the wrong move for the same question: `status` is read-only and never writes that file, so it carries the last *tend*'s snapshot and can be a full interval stale while claiming to be current.
 
 **Brevity is not the failure; substitution is.** The detail *is* the answer, and a summary replaces the reader's judgement with the agent's at the exact moment they were trying to form their own. They asked to see the run.
 
@@ -141,6 +143,8 @@ The bounds are already set by decisions in other documents; collected here becau
 - **Write `_steward.md`.** Steward proposes; the human writes.
 - **Move or delete a log.** Not even an empty cancelled one, and not into a folder named for discards. Resume matches logs where they are.
 - **Answer a parked approval or `ask_user`.** A worker that has stopped for a human decision ([execution.md](execution.md), *The parked worker*) is asking whether the eval may do something, and answering is authority over what is being measured — the same authority that puts editing the definition on this list. The distinction from the ruling below is real and worth holding: a ruling decides whether to *re-run* work that already happened, while an approval decides what happens *next*, inside a sample, and leaves no record anyone reviews afterwards. Surface it, name the worker, print the command that attaches to it, notify — and wait.
+
+**Ask first, then do:** `steward ack`. Acknowledging an item takes it out of the tend summary, the verdict, `status.md`, and the channel — so an agent that may do it unasked can silence its own attention list, which is the gate on its own autonomy rather than a chore to tidy. Ask, then run it with `--by human` and the person's reason. The exception is narrow and worth naming: an item the agent **investigated and resolved itself** — a file that turned out to be a partial upload, say — is the agent's own disposal, recorded `--by agent`, and needs nobody's permission. The test is whether anyone but the agent would have to know.
 
 **Only with a ruling** — every re-run past the automatic tier, at sample or task level ([execution.md](execution.md), *Two tiers, not three*). `_steward.md` may grant that ruling in advance, in which case acting on it is executing a decision already made.
 

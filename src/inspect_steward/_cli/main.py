@@ -1,6 +1,7 @@
 import click
 
 from .. import __version__
+from .ack import ack_command
 from .init import init_command
 from .runbook import runbook_command
 from .status import status_command
@@ -14,6 +15,7 @@ def steward() -> None:
     """Steward CLI - supervise evaluations."""
 
 
+steward.add_command(ack_command)
 steward.add_command(init_command)
 steward.add_command(runbook_command)
 steward.add_command(status_command)

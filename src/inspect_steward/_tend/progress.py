@@ -9,6 +9,7 @@ The counts a turn already computes answer *what is Steward doing* — two to spa
 
 from dataclasses import dataclass, field
 
+from .._evalset.display import KeyParts, ShortKeys, shorten_keys
 from .._evalset.observe import (
     LIMITS,
     LogAttempt,
@@ -51,10 +52,15 @@ class TaskProgress:
     """One task's row."""
 
     key: str
-    """Display key — name, args, and model, as the manifest computed it."""
+    """Display key — name, args, and model, as the manifest computed it. Unique across the run, and usually longer than a reader needs; `short_keys` shortens it against the rows actually on screen."""
 
-    state: TaskState
-    identifier: str
+    name: str | None = None
+    solver: str | None = None
+    model: str | None = None
+    """The key still in pieces, so shortening does not have to parse back out of a string it built. `None` for an orphan, which has no manifest row to take them from."""
+
+    state: TaskState = TaskState.MISSING
+    identifier: str = ""
 
     completed: int = 0
     """Samples finished without error."""
@@ -107,6 +113,12 @@ def _row(task: TaskObservation, live: LiveTask | None) -> TaskProgress:
     completed, total, errored = _counts(task, attempt, live if answered else None)
     return TaskProgress(
         key=task.key,
+        # `display_name or name`, exactly as `compute_display_keys` builds the
+        # full key from: a task the manifest calls `Friendly Name` must not
+        # shorten to the internal name nothing else in the run ever shows
+        name=(task.task.display_name or task.task.name) if task.task else None,
+        solver=task.task.solver if task.task is not None else None,
+        model=task.task.model if task.task is not None else None,
         state=task.state,
         identifier=task.identifier,
         completed=completed,
@@ -203,3 +215,27 @@ class Progress:
     @property
     def fraction(self) -> float:
         return self.completed / self.total if self.total else 0.0
+
+
+def short_keys(rows: list[TaskProgress]) -> ShortKeys:
+    """The display keys for these rows, no longer than they have to be.
+
+    One helper rather than two, because the terminal and the markdown table must not disagree about what a row is called.
+
+    Args:
+        rows: The rows about to be rendered, in render order.
+
+    Returns:
+        Keys index-aligned with `rows`, and the model they all share if none of them shows it.
+    """
+    return shorten_keys(
+        [
+            KeyParts(
+                name=row.name if row.name is not None else row.key,
+                solver=row.solver,
+                model=row.model,
+                full=row.key,
+            )
+            for row in rows
+        ]
+    )

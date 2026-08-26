@@ -462,15 +462,30 @@ def _spawn(
     )
 
 
-def _attempt(observation: TaskObservation, inflight: InFlight) -> int:
-    """Which try this is, 1-based, counting every one Steward knows about.
+def attempts_made(observation: TaskObservation, inflight: InFlight) -> int:
+    """How many tries this task has already had, from both records that know.
 
     The larger of the two counts rather than their sum, because an attempt that landed a log is in both. That makes this the log count when every attempt landed one, the spent count when none did, and never less than either.
 
-    **It is an estimate, not a guarantee of uniqueness.** Both counts can be lost — `.steward/` is a directory the design tells people they may delete — and two landed logs plus a discarded record would number the next attempt 3 twice. The worker stem cannot tolerate that, so `Fleet.spawn` resolves it against the directory it is about to write into; here the number means *which try this is*, and there it also has to be a name.
+    Two callers, which is why it is one function: `_attempt` numbers the next try from it, and a stalled task's item id is keyed on it so that a further failed attempt is a *new* item rather than one already acknowledged.
+
+    Args:
+        observation: The task's logs.
+        inflight: The record of attempts that landed none.
+
+    Returns:
+        Attempts made so far, zero for a task that has never run.
     """
     landed = len(observation.superseded) + (1 if observation.current is not None else 0)
-    return max(landed, len(inflight.spent.get(observation.identifier, []))) + 1
+    return max(landed, len(inflight.spent.get(observation.identifier, [])))
+
+
+def _attempt(observation: TaskObservation, inflight: InFlight) -> int:
+    """Which try this is, 1-based, counting every one Steward knows about.
+
+    **It is an estimate, not a guarantee of uniqueness.** Both counts can be lost — `.steward/` is a directory the design tells people they may delete — and two landed logs plus a discarded record would number the next attempt 3 twice. The worker stem cannot tolerate that, so `Fleet.spawn` resolves it against the directory it is about to write into; here the number means *which try this is*, and there it also has to be a name.
+    """
+    return attempts_made(observation, inflight) + 1
 
 
 def resolve_max_samples(manifest: Manifest, pool: Pool) -> int:

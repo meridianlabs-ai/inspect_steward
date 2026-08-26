@@ -18,7 +18,7 @@ They cannot drift, because they are the same code path with one flag. That is wo
 **An interrupted turn is reconciled by the next one**, and that is a requirement rather than a hope. There is no resume path here and no partial-turn state to recover: the next turn re-reads the log directory and the process table and decides again from what it finds. Every write is ordered so that being interrupted before it costs a repeat rather than a corruption.
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass, field, replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -29,7 +29,12 @@ from .._evalset.manifest import (
     definition_hash,
     read_manifest,
 )
-from .._evalset.observe import observe_logs, observe_tasks
+from .._evalset.observe import (
+    ObservedTasks,
+    TaskState,
+    observe_logs,
+    observe_tasks,
+)
 from .._schedule import (
     Action,
     ArchiveLog,
@@ -50,17 +55,20 @@ from .._worker import (
     resolve_inflight,
 )
 from .._workspace import (
+    Ack,
     DirectivesError,
     Held,
     Workspace,
     acquire,
     append_event,
+    read_acks,
     read_claim,
     read_directives,
     read_journal,
     resolve_pool,
     steward_log,
 )
+from .items import Item, Verdict, tend_items, verdict
 from .progress import Progress, task_progress
 from .render import status_markdown
 
@@ -118,6 +126,24 @@ class TendResult:
     broke: Held | None
     """The wedged holder this turn killed to get the claim, if there was one."""
 
+    definition_hash: str | None = None
+    """What the definition hashes to now. Carried because it is what keys the drift item: a further edit makes a new id, so an accepted drift stays accepted and the next one is heard."""
+
+    degraded_at: str | None = None
+    """`_steward.md`'s modification time when it would not parse, for the same reason — an edited file that still fails is a new item rather than one already acknowledged."""
+
+    items: list[Item] = field(default_factory=list[Item])
+    """Everything this turn has to say that is not a number, acknowledged ones already removed."""
+
+    verdict: Verdict = Verdict.CLEAR
+    """Where the run stands. Computed over the items and the run, not over the worst thing in it."""
+
+    appeared: list[str] = field(default_factory=list[str])
+    """Item ids not in the previous turn's. What an edge notification fires on (step 24)."""
+
+    resolved: list[str] = field(default_factory=list[str])
+    """Item ids the previous turn had and this one does not — closed, acknowledged, or simply over."""
+
     spawned: list[str] = field(default_factory=list[str])
     reaped: list[str] = field(default_factory=list[str])
     archived: list[str] = field(default_factory=list[str])
@@ -169,8 +195,13 @@ def tend(
         # `_steward.md` says so in `steward.log` — and a refused turn has to be
         # a genuine no-op. A timer firing every ten minutes against an agent's
         # long-held claim would otherwise leave a line each time it fired
+        history = _history(workspace)
         settings = _settings(
-            workspace, max_workers=max_workers, max_samples=max_samples, execute=True
+            workspace,
+            history,
+            max_workers=max_workers,
+            max_samples=max_samples,
+            execute=True,
         )
         if claim.broke is not None:
             # machinery rather than a fact about the eval set, so it goes to
@@ -187,6 +218,7 @@ def tend(
             workspace,
             manifest,
             settings,
+            history,
             execute=True,
             claim=None,
             broke=claim.broke,
@@ -218,18 +250,88 @@ def status(
         ManifestError: The committed manifest is not a manifest.
         ManifestVersionError: The manifest cannot be matched against this inspect_ai.
     """
+    history = _history(workspace)
     settings = _settings(
-        workspace, max_workers=max_workers, max_samples=max_samples, execute=False
+        workspace,
+        history,
+        max_workers=max_workers,
+        max_samples=max_samples,
+        execute=False,
     )
     manifest = _manifest(workspace)
     return _turn(
         workspace,
         manifest,
         settings,
+        history,
         execute=False,
         claim=read_claim(workspace.claim),
         broke=None,
     )
+
+
+@dataclass(frozen=True)
+class _History:
+    """What the journal says, read once and used three times.
+
+    A turn used to read the journal only when `_steward.md` would not parse. It now has three questions for it — the last good settings, the previous turn's items, and what has been acknowledged — and they are one pass over the same events. The file is small by design (roughly sixty records a night, workflow.md §5.6) and the alternative is three reads of it per turn.
+    """
+
+    pool: Pool | None
+    """Settings the most recent turn ran under, for degrading to a last known good."""
+
+    previous: frozenset[str]
+    """Item ids the most recent turn recorded, which is what this turn diffs against."""
+
+    acknowledged: dict[str, Ack]
+    """Items somebody has disposed of, by id."""
+
+
+def _history(workspace: Workspace) -> _History:
+    """Read the journal once, answering everything a turn asks of it."""
+    try:
+        events = read_journal(workspace.journal).events
+    except OSError:
+        return _History(pool=None, previous=frozenset(), acknowledged={})
+
+    pool: Pool | None = None
+    previous: frozenset[str] | None = None
+    for event in reversed(events):
+        if event.type != OBSERVATION:
+            continue
+        if previous is None:
+            previous = frozenset(_strings(event.payload.get("items")))
+        if pool is None:
+            pool = _pool(event.payload.get("settings"))
+        if pool is not None:
+            break
+
+    return _History(
+        pool=pool,
+        previous=previous if previous is not None else frozenset(),
+        acknowledged=read_acks(events),
+    )
+
+
+def _pool(recorded: object) -> Pool | None:
+    """The settings an `observation` payload recorded, if it recorded usable ones."""
+    if not isinstance(recorded, dict):
+        return None
+    settings = cast(dict[str, Any], recorded)
+    if (workers := _positive(settings.get("max_workers"))) is None:
+        return None
+    return Pool(
+        max_workers=workers,
+        max_samples=_positive(settings.get("max_samples")),
+        stall_after=_positive(settings.get("stall_after")) or 1,
+    )
+
+
+def _strings(value: object) -> list[str]:
+    """A list of strings from a journal payload, which may hold anything."""
+    if not isinstance(value, list):
+        return []
+    return [entry for entry in cast(list[object], value) if isinstance(entry, str)]
 
 
 @dataclass(frozen=True)
@@ -238,12 +340,15 @@ class _Settings:
 
     pool: Pool
     degraded: str | None
+    degraded_at: str | None = None
+    """`_steward.md`'s modification time when it would not parse — what keys the item, so an edit that still fails is heard again."""
 
 
 def _turn(
     workspace: Workspace,
     manifest: Manifest,
     settings: _Settings,
+    history: _History,
     *,
     execute: bool,
     claim: Held | None,
@@ -280,30 +385,30 @@ def _turn(
     result = TendResult(
         summary=decision.summary,
         queued=decision.queued,
-        drift=drift,
+        drift=drift.changed,
         degraded=settings.degraded,
         claim=claim,
         broke=broke,
+        definition_hash=drift.digest,
+        degraded_at=settings.degraded_at,
         executed=execute,
         progress=progress,
     )
     if not execute:
-        return result
+        return _projected(result, observed, inflight, history)
 
     acted = _act(workspace, manifest, log_dir, decision.actions)
-    result = TendResult(
-        summary=decision.summary,
-        queued=decision.queued,
-        drift=drift,
-        degraded=settings.degraded,
-        claim=claim,
-        broke=broke,
-        spawned=acted.spawned,
-        reaped=acted.reaped,
-        archived=acted.archived,
-        failures=acted.failures,
-        executed=True,
-        progress=progress,
+    result = _projected(
+        replace(
+            result,
+            spawned=acted.spawned,
+            reaped=acted.reaped,
+            archived=acted.archived,
+            failures=acted.failures,
+        ),
+        observed,
+        inflight,
+        history,
     )
 
     # narrowed to what this listing named *minus what this turn just moved out
@@ -325,6 +430,36 @@ def _turn(
     _record(workspace, result, pool=settings.pool)
     _write_status(workspace, result)
     return result
+
+
+def _projected(
+    result: TendResult,
+    observed: ObservedTasks,
+    inflight: InFlight,
+    history: _History,
+) -> TendResult:
+    """Fill in the items, the verdict, and what changed since the last turn.
+
+    Last, because an item can be about something the acting produced — an action that failed is a fact about this turn, not about the directory it read. Which also makes the two dispositions honest against each other: a `status` projects a turn that did nothing, so it reports what is open *now* rather than what would be open afterwards.
+    """
+    items = tend_items(result, observed, inflight, frozenset(history.acknowledged))
+    current = {item.id for item in items}
+    return replace(
+        result,
+        items=items,
+        verdict=verdict(
+            items,
+            paused=result.summary.paused,
+            running=result.summary.running,
+            spawning=result.summary.spawning,
+            unfinished=sum(
+                result.summary.states.get(state.value, 0)
+                for state in (TaskState.MISSING, TaskState.INCOMPLETE)
+            ),
+        ),
+        appeared=sorted(current - history.previous),
+        resolved=sorted(history.previous - current),
+    )
 
 
 @dataclass
@@ -479,6 +614,7 @@ def _manifest(workspace: Workspace) -> Manifest:
 
 def _settings(
     workspace: Workspace,
+    history: _History,
     *,
     max_workers: int | None,
     max_samples: int | None,
@@ -493,7 +629,7 @@ def _settings(
     try:
         directives = read_directives(workspace.directives)
     except DirectivesError as ex:
-        if (last := _last_pool(workspace)) is None:
+        if (last := history.pool) is None:
             raise
         pool = Pool(
             max_workers=max_workers if max_workers is not None else last.max_workers,
@@ -506,7 +642,9 @@ def _settings(
                 f"{workspace.directives.name} could not be read ({ex}); "
                 f"running on the settings the last turn recorded",
             )
-        return _Settings(pool=pool, degraded=str(ex))
+        return _Settings(
+            pool=pool, degraded=str(ex), degraded_at=_stamp(workspace.directives)
+        )
 
     return _Settings(
         pool=resolve_pool(directives, max_workers=max_workers, max_samples=max_samples),
@@ -514,28 +652,15 @@ def _settings(
     )
 
 
-def _last_pool(workspace: Workspace) -> Pool | None:
-    """The settings the most recent turn ran under, from the journal."""
+def _stamp(path: Path) -> str | None:
+    """A file's modification time, as an item id can carry it.
+
+    Nanoseconds rather than seconds: someone fixing a typo and saving twice inside one second is exactly the person this must not go quiet on.
+    """
     try:
-        events = read_journal(workspace.journal).events
+        return str(path.stat().st_mtime_ns)
     except OSError:
         return None
-
-    for event in reversed(events):
-        if event.type != OBSERVATION:
-            continue
-        recorded = event.payload.get("settings")
-        if not isinstance(recorded, dict):
-            continue
-        settings = cast(dict[str, Any], recorded)
-        if (workers := _positive(settings.get("max_workers"))) is None:
-            continue
-        return Pool(
-            max_workers=workers,
-            max_samples=_positive(settings.get("max_samples")),
-            stall_after=_positive(settings.get("stall_after")) or 1,
-        )
-    return None
 
 
 def _positive(value: Any) -> int | None:
@@ -570,6 +695,10 @@ def _record(workspace: Workspace, result: TendResult, *, pool: Pool) -> None:
         drift=result.drift,
         degraded=result.degraded,
         failures=result.failures,
+        verdict=result.verdict.value,
+        # the ids rather than the items: this is what the *next* turn diffs
+        # against, and a rendered summary is not something to diff
+        items=[item.id for item in result.items],
         # what this turn ran under, which is what a later turn reads back when
         # `_steward.md` will not parse
         settings={
@@ -620,19 +749,28 @@ def _definition(workspace: Workspace, manifest: Manifest) -> Path:
     return path if path.is_absolute() else workspace.root / path
 
 
-def _drifted(workspace: Workspace, manifest: Manifest) -> bool:
+@dataclass(frozen=True)
+class _Drift:
+    """Whether the definition changed, and what it is now."""
+
+    changed: bool
+    digest: str | None
+
+
+def _drifted(workspace: Workspace, manifest: Manifest) -> _Drift:
     """Whether the definition has changed since it was captured.
 
     One hash of one file, cheap enough for every turn, and the guard against the failure that actually costs a night: an edit made at 11pm that nobody applied, converging all night toward the manifest captured before it. Never acted on here — `launch` is the only verb that reads a definition.
+
+    The digest comes back with the answer because it is what keys the item: acknowledging a deliberate edit must not also acknowledge the next one, and the hash is precisely the thing that distinguishes them.
     """
     try:
-        return definition_hash(_definition(workspace, manifest)) != (
-            manifest.source.content_hash
-        )
+        digest = definition_hash(_definition(workspace, manifest))
     except OSError:
         # gone, or unreadable: either way it is not the file that was captured,
         # which is the same thing drift means
-        return True
+        return _Drift(changed=True, digest=None)
+    return _Drift(changed=digest != manifest.source.content_hash, digest=digest)
 
 
 def _log_dir(workspace: Workspace, manifest: Manifest) -> str:
