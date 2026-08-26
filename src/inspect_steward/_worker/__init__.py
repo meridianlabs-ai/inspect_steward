@@ -23,6 +23,15 @@ from .inflight import (
     resolve_inflight,
     scan_processes,
 )
+from .live import (
+    LiveConnections,
+    LiveFleet,
+    LiveSamples,
+    LiveTarget,
+    LiveTask,
+    LiveUsage,
+    read_fleet,
+)
 from .spawn import (
     MAX_KEY_LENGTH,
     Fleet,
@@ -44,6 +53,12 @@ __all__ = [
     "ConfigView",
     "Fleet",
     "Knob",
+    "LiveConnections",
+    "LiveFleet",
+    "LiveSamples",
+    "LiveTarget",
+    "LiveTask",
+    "LiveUsage",
     "Samples",
     "ScannedWorker",
     "SpawnedWorker",
@@ -51,6 +66,7 @@ __all__ = [
     "Unavailable",
     "WorkerScan",
     "list_tasks",
+    "read_fleet",
     "record_exited",
     "record_intent",
     "record_launched",

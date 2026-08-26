@@ -261,21 +261,65 @@ It landed here rather than at the end because this is the first point where ever
 
 `status.md` is here rather than with the sync because writing it is part of what a turn *is* (workflow §3), and because M2 wants a human-readable snapshot even though nothing syncs yet. It is deliberately thin — step 14 owns the real surface.
 
+### Step 13a — The header cache and the progress table ✅ **done**
+
+**Delivered** `_evalset/cache.py` (`AttemptCache`, `read_attempt_cache`, `write_attempt_cache`, `Workspace.observed`); `_worker/live.py` (`read_fleet` over the worker's own socket); `_tend/progress.py` and `_tend/table.py`; `LogAttempt.mtime`/`headline`/`limits` and `ObservedLogs.locations`. Tests: `test_cache.py` (17), `test_live.py` (14), `test_progress.py` (14) — **no launches**, the live ones against a real AF_UNIX server in a thread.
+
+**Not a planned step.** It came out of one question — *is `status` cheap enough to run constantly, and does it say enough to be worth running?* — asked because the operator's previous system slowed down late in a campaign, which is the point at which a status command is most wanted. Both halves turned out to be the same step 14 dependency, so they landed together, ahead of it.
+
+**The cost was the shape it was, not the amount.** A turn already avoided the expensive path — a full read of a 500-sample log is 426ms and Steward reads headers, which are O(1) in samples at ~1.4ms. But it read *every* header *every* turn, so the per-turn cost grew with the campaign while the tend interval did not. A finished log is immutable and the listing already carries `mtime` and `size` for 0.011ms with no file opens, so the mutation signal is free and the re-read is the waste. Measured at 800 settled logs: **0.862s cold, 0.058s warm** — and one new log the next turn is still 0.058s, which is the property that matters, since it says the cost tracks *change* rather than *size*.
+
+**The table needed a second source, and it is not the log.** Sample counts, the headline metric, and the declared limits are in the header; how many samples are running, how much of the limit the leading one has spent, and how hard the model pool is working exist only in the process. Reading those through `inspect ctl` was measured at ~1.6s per invocation and the connection pool resolves one task at a time — nineteen seconds for a fleet of ten, which is not a slow table but a table nobody runs. Over the workers' own sockets it is ~6ms each, concurrently. So **reads moved to `live.py` and every mutation stayed in `ctl.py`**, with the retry policy deliberately inverted: a mutation waits out a busy event loop because it has to land, and a table reports the row as busy and renders it from the log. Nothing live is read at all when nothing is running, which is the common late-campaign shape.
+
+**Both halves are disposable by construction.** The cache is derived data — absent, unreadable, or from another version all mean *empty*, and a write that fails is a turn that was still correct. A worker that does not answer costs its own row's live columns. Neither can fail a tend, which is what let them go in below the turn rather than beside it.
+
+This takes the **body table** and the **interim headline convention** out of step 14, which keeps the item list, the diff, and the verdict.
+
 ### Step 14 — The tend surface
 
 **Delivers** what a turn *says* — to a human, to an agent, and to a channel that does not exist yet.
 
-- **Scope.** The attention list (human) and the work list (agent) as two projections of one item type; the set diff against the previous tend; the verdict glyph; the body table; the interim headline-metric convention.
-- **Refs.** exec §8.3, §8.4; workflow §11.1, §12.1; agent §2.2, §4.
-- **Done when** a synthesized parked worker, stalled task, and spawn failure each appear in the right projection, and the verdict reflects the run rather than the worst item.
+- **Scope.** The **item envelope** and the single list it forms, with a computed owner and a stable id. The verdict as a level over it. The set diff against the previous tend. Acknowledgment as a journal event, with `steward ack` to write one. Three renderings over one model, and the display key that makes the narrowest of them fit. ~~The body table; the interim headline-metric convention~~ — landed in 13a.
+- **Refs.** exec §8.3, §8.4; workflow §11.1, §12.1, §14, §17; agent §2.2, §4, §5, §6.
+- **Done when** a synthesized parked worker, stalled task, and spawn failure each carry the right owner and level, the verdict reflects the run rather than the worst item, and an acknowledged item leaves every surface without leaving the record.
 
 **Split from step 13 because the turn and its rendering are separately testable**, and because 13 is what steps 15–16 depend on.
 
-**Items are a projection of the latest `observation`, not a second lifecycle to maintain.** A stalled task, a parked worker, a no-completion worker are all computed from what a tend already sees, so the open set needs no new journal event kinds — only a *ruling* is unobservable, and that is step 23. The diff between consecutive observations is what an edge notification would fire on.
+**One list, not two, because responsibility is assigned rather than intrinsic.** The earlier draft had an attention list for the human and a work list for the agent, which hard-codes a routing decision that is not Steward's to make: one workspace's `_steward.md` may let the agent rule on a class the next one reserves for a person. So there is one list with an `owner`, and the projections are a filter over it. Owner is a function of **(kind, state, policy)** rather than of kind alone — an anomaly is the agent's while it needs grouping and the human's once there is a proposal to answer — and it is **recomputed every turn**, so editing the rules re-routes items that already exist. One kind is fixed by design and policy may not widen it: a parked worker is always the human's, because nobody else may answer ([agent.md](agent.md), *What the agent may do without asking*).
 
-**The verdict is a level, not an event.** ✅ nothing needs you · ⚠️ something does, work continues · 🛑 nothing progresses until a person answers · ⏸ paused. Computed run-level rather than item-level: one parked worker among twenty running is ⚠️, because a rule that paints red whenever any single thing is blocked makes red meaningless. The consequence — a `stopped`-kind post can carry a ⚠️ verdict — is deliberate, since the kind says *why you are hearing from me* and the glyph says *where the run stands*.
+**The item points at its subject; it does not contain it.** An anomaly carries nine fields of its own ([workflow.md](workflow.md), *Anomalies are structured state*), and an envelope that absorbs them is one every later step rewrites. So an item is `id`, `kind`, `owner`, `level`, `subject`, and `summary`, plus the command that resolves it where there is one — and `subject` is a task identifier, a pid, or a class key.
 
-**Nothing is sent here.** Step 24 owns the channel and the kinds. This step owns the queue model and the diff, both of which `status` needs regardless.
+**Items stay a projection, and *remains until resolved* comes from the subject rather than from the list.** There are two exit paths and only one of them needs memory. A condition that ends — a park answered, drift applied, a stall that starts progressing — stops being observed, and durability here would mean garbage-collecting items whose condition is already over. Something needing a *decision* persists because the subject is still open in the fold, not because the list remembered it. What that leaves uncovered is the third case, and it is the one this step adds an event for: a real condition nothing will clear mechanically, which somebody has already looked at and accepted.
+
+**The id is the re-notification policy.** An acknowledgment is recorded against an item id, so what re-arms an item is exactly what changes its id — which makes the choice per kind a design decision rather than a naming one:
+
+| kind | id | says it again when |
+|---|---|---|
+| `drift` | `drift:<content_hash>` | the definition changes again — and clears at relaunch for free |
+| `stalled` | `stalled:<identifier>:<attempts>` | another attempt is made and also fails |
+| `degraded` | `degraded:<mtime>` | the file is edited and still will not parse |
+| `orphan_running` | `orphan:<identifier>` | never; the condition ends when the worker exits |
+| `unreadable` | `unreadable:<name>` | per file, so one bad file is not a permanent count |
+| `parked` (20) | `parked:<pid>:<request>` | the worker asks something else |
+| `anomaly` (23) | the class key | a ruling closes the window ([workflow.md](workflow.md), *The window closes when someone rules*) |
+
+`action_failed` is deliberately absent. It is a single-turn fact that either recurs or does not, and making it acknowledgeable would give it a lifecycle it has not earned.
+
+**A disposed item leaves every surface, and its record leaves in the other direction.** Once acknowledged it is gone from `status.md`, from the summary, and from the channel, and it stops counting toward the verdict — a run whose last open item was accepted reads ✅, which is what disposal means. The trail is the journal event, plus the rule that keeps *the journal has it* from meaning *nobody ever reads it*: **an acknowledgment accepting something the data carries flows to `anomalies.md`** ([workflow.md](workflow.md), *The caveats that reached the final data*), and from there into signoff. One with no effect on the data simply ends.
+
+**`acknowledged` disposes only of items whose subject has no lifecycle of its own**, and the boundary needs stating before step 23 arrives to find two ways of closing the same thing. Drift, a degraded read, a running orphan, an unreadable file: no class, no evidence, no proposal, nothing to rule *on* — someone looked and accepted it, and that is the whole of the act. An anomaly already has a richer path and keeps it, closing through `ruling` and `resolution`, where `resolution` has carried *accepted* since workflow §5.6 was written. Both routes end the same way — the item stops being projected — which is what lets the list have one disposal rule while the subjects have two. It is also not `steward resolve` (exec §8.2), which acts on *samples*; `ack` disposes of a **line in a list** and touches nothing in the run.
+
+**`steward ack` ships here rather than with adjudication, and the agent is its main caller.** An event nothing can write is inert, and inert means it can only be exercised against hand-written journals rather than through the surface a person actually uses. It cannot be a flag on `status`, which stays read-only (exec §8.4). A **reason is required** and the actor is recorded — the discipline `inspect ctl` already imposes on every applied change, and what makes workflow §17's promise (*who decided, and why*) true of this act too. `by` genuinely varies: an agent disposing of a transient it investigated is the agent's own ack, not a human's relayed through it. The guardrail that creates belongs in [agent.md](agent.md) §6 rather than in code — **acking is ask-first**, because an agent that can silently clear its own attention list has removed the gate on its own autonomy.
+
+**Three renderings over one model, and 76 characters is the binding one.** Terminal, markdown, and Slack. Slack has no tables, so one is preformatted inside a code block at a hard 76 columns — narrower than the terminal, and narrower than a full display key needs. Converting markdown to Slack is the wrong direction for the hard part: the fixed-width renderer 13a already built **is** the Slack table at `width=76`, and what remains to convert is prose, where it is mechanical. A post is the verdict line (which is also its title), then the items, then the table. There is no row budget — a sweep is five to ten tasks, and rationing rows for a shape that does not occur is the wrong instinct.
+
+**The display key expands from the task name rather than shrinking toward it.** `compute_display_keys` already renders only the args that *differ* when two tasks collide; this applies the same rule one level up. A row shows its task name, and gains `@model`, then `[solver]`, then the manifest's full key, only where a name collides — and per colliding group, so one row can read `alpha` while two others read `beta@gpt-5` and `beta@claude`. That is where the width comes from: `sec_bench_pro[default]@openai/gpt-5` is thirty-five characters and `sec_bench_pro` is thirteen, which is the difference between a row that fits at 76 with every column and one that does not. It works from the structured fields already on the observation rather than by re-parsing a key Steward built, because an orphan's key is a bare log task name with no shape to parse. A universal model is stated once beside the totals; a universal `[default]` is not, being the absence of information rather than a fact about the run.
+
+**The verdict is a level, not an event.** ✅ nothing needs you · ⚠️ something does, work continues · 🛑 nothing progresses until a person answers · ⏸ paused. Computed run-level rather than item-level, as `max()` over the items' own levels: one parked worker among twenty running is ⚠️, because a rule that paints red whenever any single thing is blocked makes red meaningless. The consequence — a `stopped`-kind post can carry a ⚠️ verdict — is deliberate, since the kind says *why you are hearing from me* and the glyph says *where the run stands*.
+
+**Nothing is sent here.** Step 24 owns the channel and the kinds; this step owns the item, the diff, and the acknowledgment that stops the diff repeating itself. All three are things `status` needs whether or not anything is ever sent.
+
+**Doc corrections this step owes.** agent.md §6 gains acking as ask-first, and §5's *render what it printed* is reconciled with there being three renderings rather than one. workflow §14 gains the path by which an acknowledgment reaches `anomalies.md`, and §5.6's journal vocabulary gains `acknowledged` — the one event kind an item list was not supposed to need.
 
 ### Step 15 — The timer
 
@@ -358,7 +402,7 @@ It landed here rather than at the end because this is the first point where ever
 
 **Delivers** the one thing a detached worker cannot do for itself: reach a person.
 
-- **Scope.** Reading the pending interaction out of the control channel's sample row; the parked worker as an in-flight condition `reconcile` neither reaps nor replaces; the blocked section of the summary and `status.md`, with the `inspect acp` command built from the per-pid ACP discovery file; the latched `stopped` notification, which is the first one Steward sends itself; how much of the request to render.
+- **Scope.** Reading the pending interaction out of the control channel's sample row; the parked worker as an in-flight condition `reconcile` neither reaps nor replaces; **step 14's item, kind `parked`** — owner fixed to the human and never policy-routed, carrying the `inspect acp` command built from the per-pid ACP discovery file as its resolving action; the latched `stopped` notification, which is the first one Steward sends itself; how much of the request to render.
 - **Refs.** exec §7.4, §12 items 12–13, §13 q13; workflow §8, §11.1, §12; agent §2, §2.2, §6; sched §2.2.
 - **Done when** a worker parked on an approval appears in `status.md` as blocked with a command that attaches to it, reconcile leaves it alone, and answering it through that command lets the run continue.
 
@@ -370,7 +414,7 @@ It landed here rather than at the end because this is the first point where ever
 
 **Delivers** concurrency that adapts over the night rather than being fixed at launch.
 
-- **Scope.** The growth signal — rate limits, not saturation — carried in the summary; the envelope as policy; the asymmetric ratchet; retuning through step 9; recording tuning precedent.
+- **Scope.** The growth signal — rate limits, not saturation — carried in the summary; the envelope as policy; the asymmetric ratchet; retuning through step 9; recording tuning precedent. **Produces step 14's item, kind `tuning_proposal`** — owner the human when the retune exceeds the authorized envelope, the agent when it does not.
 - **Refs.** sched §3.2, §3.4, §3.5; workflow §10.5–10.7, §10.10, §10.11, §10.13.
 - **Done when** an envelope and a synthesized signal produce the right retune, and the ratchet's asymmetry is a test rather than a comment.
 
@@ -390,7 +434,7 @@ Note the honest limit up front: `mockllm` never returns a 429, so the *end-to-en
 
 **Delivers** errors as structured state with a lifecycle, rather than counts.
 
-- **Scope.** The three levels — instance, class computed from exception type plus raising frame, and proposal grouped by the agent across classes. The state machine and the fold. The window closing on a ruling rather than on a clock. Per-class ruling records, so a bad grouping is recoverable. Precedent lookup and how it travels. Ruling versus policy.
+- **Scope.** The three levels — instance, class computed from exception type plus raising frame, and proposal grouped by the agent across classes. The state machine and the fold. The window closing on a ruling rather than on a clock. Per-class ruling records, so a bad grouping is recoverable. Precedent lookup and how it travels. Ruling versus policy. **Produces step 14's item, kind `anomaly`**, and owns the case that makes owner a function of state rather than kind: the agent's while it needs grouping, the human's once there is a proposal to answer.
 - **Refs.** workflow §12, §12.1, §12.2, §12.8, §6.1; sched §5.1, §5.3; exec §6.7.
 - **Done when** synthesized error populations produce stable classes across tends, a ruling on a proposal produces correct per-class records and closes exactly the right window, and precedent surfaces on a recurrence.
 
@@ -400,7 +444,7 @@ Note the honest limit up front: `mockllm` never returns a 429, so the *end-to-en
 
 **Delivers** the channel that reaches an absent human.
 
-- **Scope.** The kinds and which are Steward's alone; Apprise wiring; the notification-policy keys `_steward.md` gains; what a failed notification does. Plus the triggers, which step 14 computed and discarded: an item **appearing** in the attention list, the list **emptying**, and the clock.
+- **Scope.** The kinds and which are Steward's alone; Apprise wiring; the notification-policy keys `_steward.md` gains; what a failed notification does. Plus the triggers, which step 14 computed and discarded: an item **appearing** in the list, the list **emptying**, and the clock — all three set arithmetic over step 14's item ids, which is what makes them set-based rather than count-based. **Consumes the envelope; produces no kind of its own.** Post assembly is verdict line, then items, then the table at 76 columns.
 - **Refs.** workflow §11, §11.1–11.4; agent §7.
 - **Workaround.** Smaller than it looked. `build_apprise` / `init_apprise` are importable from `inspect_ai.util._notify` — the same reach-around Steward already does for `_eval.evalset`, `_control.discovery`, and `_cli.main` — so nothing is duplicated and upstream item 7 is *make them public* rather than *unblock us*.
 - **Done when** each kind fires from a synthesized condition.
@@ -461,7 +505,7 @@ Protocol work, and the reason the scanning trio is split: this step is a boundar
 
 **Delivers** scans as detached children a tend spawns and reaps.
 
-- **Scope.** Spawned immediately rather than queued behind a core, because a scan is not competing for one; one log at a time, and where that has to bend; eager drain; a crashed pass as an anomaly rather than a retry; how a scan appears in the in-flight accounting.
+- **Scope.** Spawned immediately rather than queued behind a core, because a scan is not competing for one; one log at a time, and where that has to bend; eager drain; a crashed pass as an anomaly rather than a retry — so a scan reaches the list **through kind `anomaly`** and gains no kind of its own; how a scan appears in the in-flight accounting.
 - **Refs.** sched §4, §4.1–4.3; exec §4.4.
 - **Done when** a sweep's logs drain through scanning across successive tends, and a killed pass surfaces as an anomaly under step 11's harness.
 
@@ -469,7 +513,7 @@ Protocol work, and the reason the scanning trio is split: this step is a boundar
 
 **Delivers** scan output the agent can act on.
 
-- **Scope.** Reporting distributions rather than verdicts; a scan result as a measurement only the agent can read; findings as anomalies that arrive last; collection versus investigation.
+- **Scope.** Reporting distributions rather than verdicts; a scan result as a measurement only the agent can read; findings as anomalies that arrive last; collection versus investigation. **Produces step 14's item, kind `scan_finding`** — owner the agent, since a distribution carries no verdict a human could answer.
 - **Refs.** workflow §12.6, §12.3, §12.5; agent §1.
 - **Done when** a flat distribution and an outlier distribution over the same scanner produce visibly different leads in the tend summary.
 
@@ -479,7 +523,7 @@ One frontend caveat covering all three: **Hawk rejects `scan:` locally**, so non
 
 **Delivers** what investigation produces, per task, mirrored where the data lives.
 
-- **Scope.** Skeleton rendering; the unprobed count; adjudicating as you go; mirroring into `log_dir` including on S3.
+- **Scope.** Skeleton rendering; the unprobed count; adjudicating as you go; mirroring into `log_dir` including on S3. **Produces step 14's item, kind `unwritten`** — owner the agent, one per task section still unwritten (agent §4).
 - **Refs.** workflow §12.7, §12.4.
 - **Done when** both files exist per task and reach the log directory.
 
@@ -600,6 +644,8 @@ Three rules follow, and they are the opposite of the instinct:
 3. **Reach for a subprocess only when the process boundary is the subject.** [testing.md](testing.md) §1's layer 1 — `reconcile` over a synthesized log directory — is microseconds, and it is where most of this plan's correctness lives.
 
 **Which steps genuinely need real workers**: 1 (done), 6–9, 11, 17, 20, and parts of 13, 16, 25, and 28–30 — call it twelve. Steps 2–5, 10, 12, 14–15, 18–19, 21–24, 26–27, and 31–33 are layer 1 or near it: synthesized state, pure functions, no eval runs at all. **Budget ~12 launches for a layer-2 step**, which is roughly 35s serial and under 10s with `-n auto`. Ten such steps lands the whole suite near five minutes serial and one to two minutes on CI. That is the line; a step that wants more should say why in its design pass.
+
+**Running total after step 13a**: 415 offline tests, 54s with `-n auto`. Forty-nine tests and **no launches**, for a step whose whole subject is talking to running processes. Two of the three files are rule 3 again — the cache is a listing against a dict, the rows are a dataclass against a synthesized log directory — and the third is the fourth category in a form the rules did not have: **a real server that is not a worker**. `read_fleet` exists because of a timing claim, so a stubbed client would test the parsing and discard the part under test; an `asyncio` AF_UNIX listener in a thread costs nothing, speaks real HTTP over a real socket, and can do the one thing no eval will do on demand — accept a connection and never answer. The two tests that turn on that pay 0.25s each, which is the timeout they are asserting.
 
 **Running total after step 13**: 366 offline tests, 50s with `-n auto`. Step 13 is the largest step so far — the turn, two CLI verbs, three new actions — and added ninety-one tests for **three launches**, at no measurable cost in wall time. Rule 3 did nearly all of it: the turn takes a workspace, and a workspace is a directory, so nineteen of those tests drive the real `tend` against a hand-committed manifest and a log directory `tests/_logs.py` wrote.
 

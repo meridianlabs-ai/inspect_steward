@@ -85,6 +85,14 @@ class Workspace:
         return self.state / "manifest.json"
 
     @property
+    def observed(self) -> Path:
+        """`.steward/observed.json` — headers a turn does not have to read again.
+
+        Purely an accelerator, and the most disposable thing in the workspace: every entry is a fact about a log file that is still sitting in the log directory. Losing it costs one slow turn, which is why nothing that touches it raises.
+        """
+        return self.state / "observed.json"
+
+    @property
     def workers(self) -> Path:
         """`.steward/workers/` — one selection document and one output file per spawned worker."""
         return self.state / "workers"

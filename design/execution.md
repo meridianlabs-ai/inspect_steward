@@ -642,6 +642,8 @@ A **composition** is Steward's, and gets a real command with tests behind it: an
 
 Two consequences worth stating. **Steward's own CLI stays small** — its vocabulary is run-scoped (`status`, `pause`, `resolve`, `signoff`) and worker-scoped primitives are simply not its business. And **Steward never undoes a latch it did not set**: a worker someone paused deliberately reads as paused-by-another, not as drift to correct.
 
+**One further split, inside Steward's own use of the channel: its status reads go to the socket, its mutations go through the CLI.** Deferring to `inspect ctl` for everything held while a whole-fleet read was one invocation, and the connection pool broke that — `inspect ctl config` resolves a *single* task, so the column costs one ~1.6s invocation per worker, or nineteen seconds for a fleet of ten. That is not a slow status table, it is a status table nobody runs, and `steward status` exists to be run constantly. The same three reads over each worker's own AF_UNIX socket are ~6ms and run concurrently. The retry policy inverts with the transport, deliberately: the CLI waits out a busy event loop because a mutation has to land, while a table reports a worker that does not answer promptly as *busy* and renders its row from the log. Mutations stay on the CLI, which is where the risk is — a retune that half-lands is a real problem; a status column missing for one turn is not. None of this changes what an **agent** does: it runs `inspect ctl` itself, for reads and mutations both.
+
 ### 8.3 The reconcile core, and its drivers
 
 The supervisor is not the architecture. The architecture is a **pure function**:

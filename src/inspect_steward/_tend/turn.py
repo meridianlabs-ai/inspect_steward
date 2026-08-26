@@ -23,6 +23,7 @@ from pathlib import Path
 from typing import Any, cast
 
 from .._evalset.archive import archive_log
+from .._evalset.cache import read_attempt_cache, write_attempt_cache
 from .._evalset.manifest import (
     Manifest,
     definition_hash,
@@ -32,13 +33,22 @@ from .._evalset.observe import observe_logs, observe_tasks
 from .._schedule import (
     Action,
     ArchiveLog,
+    InFlight,
     Pool,
     ReapWorker,
     SpawnWorker,
     Summary,
     reconcile,
 )
-from .._worker import Fleet, record_exited, resolve_eval_set_id, resolve_inflight
+from .._worker import (
+    Fleet,
+    LiveFleet,
+    LiveTarget,
+    read_fleet,
+    record_exited,
+    resolve_eval_set_id,
+    resolve_inflight,
+)
 from .._workspace import (
     DirectivesError,
     Held,
@@ -51,6 +61,7 @@ from .._workspace import (
     resolve_pool,
     steward_log,
 )
+from .progress import Progress, task_progress
 from .render import status_markdown
 
 OBSERVATION = "observation"
@@ -116,6 +127,12 @@ class TendResult:
 
     executed: bool = False
     """Whether the actions were carried out (`tend`) or discarded (`status`)."""
+
+    progress: Progress = field(default_factory=Progress)
+    """One row per task: samples done, in flight, and queued, the budget the leading sample is closest to spending, and the headline metric.
+
+    Where `summary` counts what Steward is doing, this is what the *run* is doing — the question anybody opening a status view actually has. Sample counts and the live columns come from different places (the log header and the worker's own socket), which is why it is assembled here rather than inside `reconcile`.
+    """
 
 
 def tend(
@@ -237,8 +254,12 @@ def _turn(
     log_dir = _log_dir(workspace, manifest)
 
     inflight = resolve_inflight(workspace.inflight, workspace.workers)
+    # read even for a `status`, which is the disposition that most needs it: a
+    # person types it to satisfy their curiosity, and a settled directory of two
+    # thousand logs is two thousand header reads it can skip entirely
+    cache = read_attempt_cache(workspace.observed)
     try:
-        logs = observe_logs(log_dir)
+        logs = observe_logs(log_dir, cache=cache)
     except OSError as ex:
         # scheduling into a directory that cannot be read would multiply the
         # loss; running workers are left alone, since one that still holds its
@@ -254,6 +275,7 @@ def _turn(
 
     observed = observe_tasks(manifest, logs)
     decision = reconcile(manifest, inflight, observed, pool=settings.pool)
+    progress = Progress(rows=task_progress(observed, _live(inflight)))
 
     result = TendResult(
         summary=decision.summary,
@@ -263,6 +285,7 @@ def _turn(
         claim=claim,
         broke=broke,
         executed=execute,
+        progress=progress,
     )
     if not execute:
         return result
@@ -280,7 +303,24 @@ def _turn(
         archived=acted.archived,
         failures=acted.failures,
         executed=True,
+        progress=progress,
     )
+
+    # narrowed to what this listing named *minus what this turn just moved out
+    # of it*, which is what keeps it bounded. The subtraction is because the
+    # listing was taken before the archiving; without it every archived log
+    # would linger one extra turn. An archive that failed simply costs a header
+    # read next turn, which is why this does not consult `acted`.
+    #
+    # **A tend writes this and a status does not.** The cache is disposable and
+    # a write of it mutates nothing about the run, so the rule is not really
+    # about damage -- it is that *writes nothing* is a promise worth being able
+    # to make without a footnote, and the tend on the timer keeps the cache warm
+    # for whoever types `status` between turns anyway.
+    moved = {
+        action.location for action in decision.actions if isinstance(action, ArchiveLog)
+    }
+    write_attempt_cache(workspace.observed, cache.keep({*logs.locations} - moved))
 
     _record(workspace, result, pool=settings.pool)
     _write_status(workspace, result)
@@ -559,6 +599,19 @@ def _write_status(workspace: Workspace, result: TendResult) -> None:
         except OSError:
             pass
         steward_log(workspace.log, f"could not write {workspace.status.name}: {ex}")
+
+
+def _live(inflight: InFlight) -> LiveFleet:
+    """Ask the running workers how they are getting on.
+
+    **Only the ones that are running, and only when some are.** The in-flight record already answers *is anything alive* for free, so a finished campaign — the common shape late on — pays nothing at all for the live columns. A worker that has not yet bound its control socket has no entry here either; it is in the window before its `eval_set()` boundary, where there is genuinely nothing to ask.
+    """
+    targets = [
+        LiveTarget(identifier=worker.identifier, pid=worker.pid, socket=worker.socket)
+        for worker in inflight.running
+        if worker.socket is not None
+    ]
+    return read_fleet(targets)
 
 
 def _definition(workspace: Workspace, manifest: Manifest) -> Path:

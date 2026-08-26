@@ -33,8 +33,10 @@ from inspect_ai.log import (
     EvalDataset,
     EvalError,
     EvalLog,
+    EvalMetric,
     EvalPlan,
     EvalResults,
+    EvalScore,
     EvalSpec,
     EvalStats,
     write_eval_log,
@@ -68,6 +70,14 @@ class SynthTask:
     file: str | None = DEFINITION
     samples: int = 10
     epochs: int = 1
+
+    limits: dict[str, int] = field(default_factory=dict[str, int])
+    """Per-sample budgets by `EvalConfig` field name, e.g. `{"turn_limit": 300}`.
+
+    On the task rather than on `write_log`, because `task_identifier` hashes the
+    eval config: a log carrying a limit its manifest row does not would compute
+    a different identifier and read as an orphan.
+    """
 
     @property
     def identifier(self) -> str:
@@ -108,7 +118,12 @@ def _eval_spec(
         task_args_passed=task.args,
         dataset=EvalDataset(samples=task.samples),
         model=task.model,
-        config=EvalConfig(epochs=epochs if epochs is not None else task.epochs),
+        # limits go on via `model_copy` rather than as keywords: `EvalConfig`
+        # takes a hundred fields of every type, so a `**dict[str, int]` spread
+        # is checked against all of them
+        config=EvalConfig(
+            epochs=epochs if epochs is not None else task.epochs
+        ).model_copy(update=task.limits),
     )
 
 
@@ -168,6 +183,7 @@ def write_log(
     epochs: int | None = None,
     created: str = CREATED,
     format: LogFormat = "json",
+    scores: dict[str, dict[str, float]] | None = None,
 ) -> Path:
     """Write one log for a task.
 
@@ -182,6 +198,7 @@ def write_log(
         epochs: Epochs the log ran with (defaults to the task's).
         created: `eval.created`, which orders attempts and names the file.
         format: `json` for a document, `eval` for a real zip.
+        scores: Scorer name to metric name to value, e.g. `{"exact": {"accuracy": 0.75}}`.
 
     Returns:
         Path the log was written to.
@@ -195,6 +212,17 @@ def write_log(
         results = EvalResults(
             total_samples=total,
             completed_samples=completed if completed is not None else total,
+            scores=[
+                EvalScore(
+                    name=name,
+                    scorer=name,
+                    metrics={
+                        metric: EvalMetric(name=metric, value=value)
+                        for metric, value in metrics.items()
+                    },
+                )
+                for name, metrics in (scores or {}).items()
+            ],
         )
 
     log = EvalLog(

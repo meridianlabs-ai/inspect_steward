@@ -17,6 +17,7 @@ import asyncio
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
+from typing import TYPE_CHECKING
 
 # task_identifier is the pairing mechanism eval_set() itself uses; it is
 # versioned rather than public, which is why the manifest records its version
@@ -29,6 +30,11 @@ from inspect_ai.log import (
 )
 
 from .manifest import Manifest, ManifestTask
+
+if TYPE_CHECKING:
+    # the cache reads `LogAttempt` from here, so the run-time import goes one way
+    # only and the annotation below is a string
+    from .cache import AttemptCache
 
 DEFAULT_READ_CONCURRENCY = 20
 """Headers read at once. A ceiling against file descriptors and connection pools rather than a tuned number."""
@@ -82,6 +88,21 @@ class LogAttempt:
     For a finished log this is when something last *changed* it, and a human invalidating samples in it is the only thing that does — which makes it the one record of when they acted. `None` when the filesystem does not report one.
     """
 
+    headline: float | None = None
+    """The one number worth putting in a table, **chosen by convention rather than by declaration**.
+
+    Nothing in a log marks a metric as primary, so every reader that renders a task × model table invents a rule and no two agree — which is why *say in the log which metric is the headline* is an upstream ask (roadmap.md §5, item 14). Until it lands the convention here is the first metric of the first score, which is the order Inspect's own view presents them in, and `headline_name` says which one it picked so a reader is never guessing. The cost of being wrong is a column showing the less interesting of two numbers.
+    """
+
+    headline_name: str | None = None
+    """Which metric `headline` is, as `<score>/<metric>`. Present so the convention is legible rather than implied."""
+
+    limits: dict[str, int] = field(default_factory=dict[str, int])
+    """The per-sample budgets this log ran under, from `eval.config` — `turns`, `messages`, `tokens`, `time`, `working`, `cost`, whichever were set.
+
+    Carried because *usage* comes from the control channel and the *limit* does not: `inspect ctl config` reports retune overrides rather than the task's declared values, so the denominator of a `115/300t` column can only come from here.
+    """
+
     @property
     def errored_samples(self) -> int:
         """Samples that ran and failed.
@@ -120,6 +141,18 @@ class ObservedLogs:
     def count(self) -> int:
         """Total logs read."""
         return sum(len(attempts) for attempts in self.attempts.values())
+
+    @property
+    def locations(self) -> list[str]:
+        """Every log this observation covers, readable or not.
+
+        The directory as it stood, which is what a cache of it has to be narrowed to — an entry for a log that has since been archived is an entry nothing will ever ask for again.
+        """
+        return [
+            attempt.location
+            for attempts in self.attempts.values()
+            for attempt in attempts
+        ] + [log.location for log in self.unreadable]
 
     def current(self, identifier: str) -> LogAttempt | None:
         """The attempt that counts for an identifier.
@@ -237,6 +270,7 @@ async def observe_logs_async(
     log_dir: str | Path,
     *,
     concurrency: int = DEFAULT_READ_CONCURRENCY,
+    cache: "AttemptCache | None" = None,
 ) -> ObservedLogs:
     """Read a log directory into attempts grouped by task identifier.
 
@@ -245,6 +279,7 @@ async def observe_logs_async(
     Args:
         log_dir: Directory to read. A directory that does not exist is an empty observation.
         concurrency: Headers to read at once.
+        cache: Attempts already known from a previous turn, consulted per file against the listing's modification time and size. Filled in as this turn reads, and narrowed to what the listing still names, so the caller can write it back. Omitted, every header is read.
 
     Returns:
         Attempts per identifier and one entry per file that could not be read.
@@ -258,6 +293,8 @@ async def observe_logs_async(
     semaphore = asyncio.Semaphore(concurrency)
 
     async def read(info: EvalLogInfo) -> LogAttempt | UnreadableLog:
+        if cache is not None and (known := cache.get(info)) is not None:
+            return known
         async with semaphore:
             try:
                 header = await read_eval_log_async(info, header_only=True)
@@ -265,7 +302,10 @@ async def observe_logs_async(
                 return UnreadableLog(
                     location=info.name, reason=f"{type(ex).__name__}: {ex}"
                 )
-        return _attempt(info, header)
+        attempt = _attempt(info, header)
+        if cache is not None:
+            cache.put(info, attempt)
+        return attempt
 
     results = await asyncio.gather(*(read(info) for info in infos))
 
@@ -291,17 +331,21 @@ def observe_logs(
     log_dir: str | Path,
     *,
     concurrency: int = DEFAULT_READ_CONCURRENCY,
+    cache: "AttemptCache | None" = None,
 ) -> ObservedLogs:
     """Read a log directory into attempts grouped by task identifier.
 
     Args:
         log_dir: Directory to read. A directory that does not exist is an empty observation.
         concurrency: Headers to read at once.
+        cache: Attempts already known from a previous turn. See `observe_logs_async`.
 
     Returns:
         Attempts per identifier and one entry per file that could not be read.
     """
-    return asyncio.run(observe_logs_async(log_dir, concurrency=concurrency))
+    return asyncio.run(
+        observe_logs_async(log_dir, concurrency=concurrency, cache=cache)
+    )
 
 
 def observe_tasks(manifest: Manifest, logs: ObservedLogs) -> ObservedTasks:
@@ -381,6 +425,7 @@ def _incomplete_reason(
 
 def _attempt(info: EvalLogInfo, header: EvalLog) -> LogAttempt:
     results = header.results
+    headline, headline_name = _headline(header)
     return LogAttempt(
         location=info.name,
         identifier=task_identifier(header, None),
@@ -395,4 +440,46 @@ def _attempt(info: EvalLogInfo, header: EvalLog) -> LogAttempt:
         task_id=header.eval.task_id,
         eval_id=header.eval.eval_id,
         mtime=info.mtime,
+        headline=headline,
+        headline_name=headline_name,
+        limits=_limits(header),
     )
+
+
+def _headline(header: EvalLog) -> tuple[float | None, str | None]:
+    """The interim convention: the first metric of the first score.
+
+    Which is the order Inspect's own view presents them in, so two readers following it agree. The name is returned alongside because a convention nobody can see is indistinguishable from a guess.
+    """
+    results = header.results
+    if results is None:
+        return None, None
+    for score in results.scores:
+        for metric in score.metrics.values():
+            return float(metric.value), f"{score.name}/{metric.name}"
+    return None, None
+
+
+LIMITS = {
+    "turns": "turn_limit",
+    "messages": "message_limit",
+    "tokens": "token_limit",
+    "time": "time_limit",
+    "working": "working_limit",
+    "cost": "cost_limit",
+}
+"""Per-sample budgets: the name a column is labelled with, and the `EvalConfig` field it comes from.
+
+Spelled out rather than derived by appending `_limit`, because the two do not agree — a *turn* limit is `turn_limit` and its column is `turns` — and a name built by concatenation reads every one of these as absent without saying so.
+"""
+
+
+def _limits(header: EvalLog) -> dict[str, int]:
+    """Whichever per-sample budgets the task declared."""
+    config = header.eval.config
+    declared = {name: getattr(config, field, None) for name, field in LIMITS.items()}
+    return {
+        name: int(value)
+        for name, value in declared.items()
+        if isinstance(value, float | int) and not isinstance(value, bool) and value > 0
+    }

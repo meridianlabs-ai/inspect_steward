@@ -28,6 +28,11 @@ dependencies = [
     # depends on psutil too, but this is a direct import and a transitive
     # dependency is not a promise.
     "psutil>=5.9",
+    # a worker's control server is HTTP over an AF_UNIX socket, and reading a
+    # running fleet for `status` goes to it directly rather than through
+    # `inspect ctl` (see _worker/live.py). inspect-ai depends on httpx too, but
+    # this is a direct import and a transitive dependency is not a promise.
+    "httpx>=0.27",
 ]
 
 [project.optional-dependencies]

@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from inspect_steward._evalset.cache import read_attempt_cache
 from inspect_steward._evalset.manifest import (
     Manifest,
     definition_hash,
@@ -301,6 +302,66 @@ def test_status_writes_nothing_at_all(tmp_path: Path) -> None:
     assert not workspace.journal.exists()
     assert not workspace.claim.exists()
     assert not workspace.inflight.exists()
+
+
+def test_a_tend_leaves_behind_what_the_next_one_can_skip(tmp_path: Path) -> None:
+    done, other = SynthTask("done"), SynthTask("other")
+    workspace, _ = prepared(tmp_path, [done, other])
+    write_log(workspace.logs, done)
+    write_log(workspace.logs, other)
+
+    turn(workspace)
+    cached = read_attempt_cache(workspace.observed)
+
+    assert len(cached.entries) == 2
+    # and the turn after it reads the same run out of them
+    reused = turn(workspace)
+    assert reused.summary.states["complete"] == 2
+
+
+def test_the_cache_is_narrowed_to_the_directory_it_describes(tmp_path: Path) -> None:
+    # bounded without a policy: an archived log leaves the directory, so the
+    # turn that archives it also stops remembering it
+    kept, removed = SynthTask("kept"), SynthTask("removed")
+    workspace, _ = prepared(tmp_path, [kept])
+    write_log(workspace.logs, kept)
+    write_log(workspace.logs, removed)
+
+    turn(workspace)
+
+    entries = read_attempt_cache(workspace.observed).entries
+    assert len(entries) == 1
+    assert all("kept" in location for location in entries)
+
+
+def test_a_discarded_cache_changes_nothing_but_the_time(tmp_path: Path) -> None:
+    """Deleting the cache is invisible in the answer.
+
+    Which is the property that makes it an accelerator rather than a second source of truth.
+    """
+    done, short = SynthTask("done"), SynthTask("short")
+    workspace, _ = prepared(tmp_path, [done, short])
+    write_log(workspace.logs, done)
+    write_log(workspace.logs, short, total=4, completed=4)
+
+    warm = status(workspace)
+    workspace.observed.unlink(missing_ok=True)
+    cold = status(workspace)
+
+    assert warm.summary == cold.summary
+
+
+def test_status_does_not_write_the_cache_either(tmp_path: Path) -> None:
+    # it reads one gladly -- that is most of why it is cheap -- but *writes
+    # nothing* is a promise worth being able to make without a footnote, and the
+    # tend on the timer keeps the cache warm for it anyway
+    done = SynthTask("done")
+    workspace, _ = prepared(tmp_path, [done])
+    write_log(workspace.logs, done)
+
+    status(workspace)
+
+    assert not workspace.observed.exists()
 
 
 def test_status_previews_exactly_what_the_next_turn_does(tmp_path: Path) -> None:

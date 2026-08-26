@@ -57,12 +57,83 @@ def status_markdown(result: "TendResult") -> str:
         counts.insert(2, f"{len(result.spawned)} spawned this turn")
     else:
         counts.insert(2, f"{summary.spawning} would be spawned")
-    lines.extend(["", " · ".join(counts), "", "## attention", ""])
+    lines.extend(["", " · ".join(counts), ""])
+    lines.extend(_progress(result))
+    lines.extend(["## attention", ""])
 
     attention = _attention(result)
     lines.extend(attention if attention else ["Nothing needs attention."])
     lines.append("")
     return "\n".join(lines)
+
+
+def _progress(result: "TendResult") -> list[str]:
+    """The per-task table, as markdown.
+
+    Samples rather than task states, because *how is the run going* is a
+    question about samples and the table above it is not an answer to it. Every
+    column is present or absent for the whole table rather than per row, so a
+    settled campaign renders four columns instead of eight.
+    """
+    rows = result.progress.rows
+    if not rows:
+        return []
+
+    live = any(row.live for row in rows)
+    scored = any(row.headline is not None for row in rows)
+    budgeted = any(row.budget is not None for row in rows)
+
+    header = ["task", "samples", "done"]
+    align = ["---", "---:", "---:"]
+    if live:
+        header += ["running", "queued", "connections"]
+        align += ["---:", "---:", "---:"]
+    if budgeted:
+        header += ["limit"]
+        align += ["---:"]
+    if scored:
+        header += ["score"]
+        align += ["---:"]
+
+    lines = [
+        "## progress",
+        "",
+        "| " + " | ".join(header) + " |",
+        "| " + " | ".join(align) + " |",
+    ]
+    for row in rows:
+        cells = [
+            f"`{row.key}`",
+            f"{row.completed}/{row.total}",
+            f"{round(row.fraction * 100)}%",
+        ]
+        if live:
+            connections = ""
+            if row.connections is not None:
+                in_use, limit = row.connections
+                connections = f"{in_use}/{limit}" if limit is not None else str(in_use)
+            cells += [
+                str(row.running) if row.running else "",
+                str(row.queued) if row.queued else "",
+                connections,
+            ]
+        if budgeted:
+            budget = row.budget
+            cells += [
+                f"{budget.used}/{budget.limit} {budget.name}" if budget else "",
+            ]
+        if scored:
+            cells += [f"{row.headline:.3g}" if row.headline is not None else ""]
+        lines.append("| " + " | ".join(cells) + " |")
+
+    if scored:
+        named = {row.headline_name for row in rows if row.headline_name is not None}
+        # the convention has to be legible, because nothing in a log marks a
+        # metric as primary and a reader who cannot see which one was picked
+        # cannot tell a convention from a guess (roadmap.md §5, item 14)
+        lines += ["", f"Score is {' / '.join(sorted(named))}."]
+
+    return lines + [""]
 
 
 def _attention(result: "TendResult") -> list[str]:

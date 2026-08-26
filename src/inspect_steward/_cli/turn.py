@@ -5,13 +5,14 @@ One renderer for two verbs, differing only in tense: a tend reports what it did,
 
 import dataclasses
 import json
+import shutil
 
 import click
 
 from .._evalset.manifest import ManifestError
 from .._evalset.observe import TaskState
 from .._schedule import ManifestVersionError
-from .._tend import Refused, TendError, TendResult
+from .._tend import Refused, TendError, TendResult, progress_table
 from .._workspace import DirectivesError, Held, Workspace
 
 TURN_ERRORS = (TendError, ManifestError, ManifestVersionError, DirectivesError)
@@ -47,7 +48,7 @@ def echo_refused(refused: Refused) -> None:
         click.echo("nothing to do — it holds the claim and is doing this turn's work.")
 
 
-def echo_turn(result: TendResult) -> None:
+def echo_turn(result: TendResult, *, table: bool = True) -> None:
     """Print a turn: where the run stands, then what it did or would do."""
     summary = result.summary
     states = ", ".join(
@@ -56,6 +57,10 @@ def echo_turn(result: TendResult) -> None:
         if summary.states.get(state.value, 0)
     )
     click.echo(f"{summary.tasks} tasks: {states or 'none'}")
+
+    if table:
+        for line in progress_table(result.progress, width=_key_width()):
+            click.echo(line)
 
     if result.executed:
         did = _counts(
@@ -77,6 +82,17 @@ def echo_turn(result: TendResult) -> None:
 
     for line in _attention(result):
         click.echo(line)
+
+
+def _key_width() -> int:
+    """How much of a display key the terminal can spare.
+
+    The numeric columns are what a reader scans, so they get the room: a sweep
+    key with three arguments and a model runs past eighty characters and would
+    push the counts off the edge. Half the terminal, floored at something a
+    task name still survives.
+    """
+    return max(28, shutil.get_terminal_size(fallback=(100, 24)).columns // 2)
 
 
 def _counts(*pairs: tuple[int, str]) -> str:

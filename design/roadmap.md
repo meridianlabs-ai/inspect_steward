@@ -20,7 +20,9 @@ Every other document works a topic to closure regardless of when it ships. This 
 
 **A run is now supervised.** `steward tend` is the turn — observe, decide, act, record — and `steward status` is the same function with its actions discarded, so the preview cannot describe something other than what happens next. A repeated tend does nothing and an interrupted one is reconciled by the following one, which is what makes the loop safe to put on a timer. It converges: given a committed manifest it spawns the fleet, reaps what died, archives what the definition no longer asks for, stops respawning a task that has stopped getting anywhere, and then leaves the run alone (step 13).
 
-**What is still missing is the way in and the way it keeps happening.** There is no `launch` to commit desired state — a manifest is written by hand today — and no timer, so a tend happens only when someone or something types it. Pause has no persistence yet, and nothing is *reported* beyond a thin `status.md`: no attention list, no anomalies, no channel, no signoff.
+**And it says how the run is going, cheaply enough to ask constantly.** `steward status` renders one line per task — samples done, what is running and queued, how hard the model pool is working, how close the leading sample is to whichever limit will stop it, and what the task is scoring — filled from the log for the denominators and from each running worker's own socket for everything that moves. The header reads a turn used to repeat every ten minutes are now cached against the listing's own `mtime` and `size`, so the cost of a turn tracks what *changed* rather than how large the campaign has grown: 0.862s down to 0.058s at eight hundred settled logs (step 13a).
+
+**What is still missing is the way in and the way it keeps happening.** There is no `launch` to commit desired state — a manifest is written by hand today — and no timer, so a tend happens only when someone or something types it. Pause has no persistence yet, and what a turn reports is a progress table and little else: no attention list, no anomalies, no channel, no signoff.
 
 ## 2. The one thing to verify first — verified
 
