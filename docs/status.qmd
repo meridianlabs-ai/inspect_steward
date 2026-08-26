@@ -127,7 +127,7 @@ that resolves it, the command is printed with it.
 | `drift` | the definition file has changed since it was captured, so what is running is not what the file says. Resolved by `steward launch` | a person |
 | `degraded` | `_steward.md` could not be parsed, so the turn ran on the settings the last one recorded | a person |
 | `orphan_running` | a worker is still running work the definition no longer asks for. Stopping it is not a mechanical act, so Steward leaves it and tells you | a person |
-| `unsupervised` | no tend has happened for two intervals, so nothing is keeping the run going. A scheduler cannot report its own absence, which is why this is computed rather than raised | a person |
+| `unsupervised` | no tend has happened for two intervals, so nothing is keeping the run going. A scheduler cannot report its own absence, so this is computed from the journal rather than raised — and only `status` says it, because a tend saying *nothing has tended* is a past-tense fact stated by the turn that disproves it | a person |
 | `timer_drift` | the interval `_steward.md` asks for is not the one that is actually armed. Reaching into your crontab unprompted is not a mechanical act, so Steward reports it rather than fixing it — re-arm to resolve | a person |
 | `unreadable` | a file in the log directory would not parse as a log. One item per file, so one bad file is not a permanent count | the agent |
 | `action_failed` | something a turn tried to do did not work. A single-turn fact that either recurs or does not, so it cannot be acknowledged | the agent |
@@ -143,6 +143,8 @@ Each item's id is chosen so that **what re-arms it is what changes it**:
 | `degraded` | when the file was last edited | the file is edited and still will not parse |
 | `orphan_running` | the task | never — the condition ends when the worker exits |
 | `unreadable` | the filename | per file |
+| `unsupervised` | when the timer in force was armed | you re-arm — so an acknowledged silence never covers the next timer's |
+| `timer_drift` | both intervals, armed and asked for | you edit the file again, and it clears by arming to match |
 
 ## Acknowledging an item
 

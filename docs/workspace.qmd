@@ -16,8 +16,8 @@ somebody's session.
 
 ``` text
 my-sweep/
-  AGENTS.md          # authored  — bootstrap: "you are tending a run; read the runbook"
-  CLAUDE.md          # authored  — symlink to AGENTS.md
+  AGENTS.md           # authored  — bootstrap: "you are tending a run; read the runbook"
+  CLAUDE.md           # authored  — symlink to AGENTS.md
   _steward.md         # authored  — your standing rules
   evalset.py          # authored  — your definition (or flow.yaml / hawk.yaml)
   .env                # authored  — credentials, if you keep them here
@@ -25,6 +25,7 @@ my-sweep/
   journal.jsonl       # DURABLE   — append-only record; the source of truth
   status.md           # generated — rewritten by every tend
   steward.log         # generated — whether Steward's own machinery worked
+  timer.log           # generated — what a scheduled tend printed before Steward could log
 
   logs/               # DURABLE   — the flat log directory: the CURRENT definition's results
   logs-archive/       # DURABLE   — superseded, removed, and failed logs; never deleted
@@ -48,7 +49,7 @@ that matter are:
 | **authored** | `_steward.md`, `AGENTS.md`, the definition | your own work is gone |
 | **durable machine state** | `journal.jsonl`, `logs/`, `logs-archive/` | the audit trail, or the results, are gone |
 | **authored by the agent** | `scanning.md`, `analysis.md` *(not yet implemented)* | the investigation is gone, and re-runs from scratch |
-| **disposable** | everything in `.steward/`, `status.md`, `steward.log` | rebuilt on the next turn, or simply gone with no loss |
+| **disposable** | everything in `.steward/`, `status.md`, `steward.log`, `timer.log` | rebuilt on the next turn, or simply gone with no loss |
 
 Note that gitignored is **not** the same category as disposable. `logs/` and
 `logs-archive/` are ignored by git because `.eval` files are large outputs shared
@@ -99,6 +100,15 @@ The split answers something neither could alone: *"no tend for four hours"* is
 computable from the journal's silence, and *why* is in `steward.log`. Had they
 shared a file, a run whose tends were crashing would look like a run with
 nothing to report.
+
+`timer.log` is the third one, and it exists because there is a window in which
+Steward cannot write to the other two: whatever a scheduled tend printed before
+it got far enough to log anything of its own — a Python that would not start, a
+workspace that had moved. It sits at the workspace root rather than in
+`.steward/` deliberately. Every scheduler opens that path *before* running
+anything, and none of them creates a missing parent directory, so a `timer.log`
+under `.steward/` would turn a directory documented as safe to delete into one
+whose deletion silently stops supervision forever.
 
 ## Losing `.steward/`
 

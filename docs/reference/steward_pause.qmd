@@ -1,0 +1,4 @@
+---
+reference: steward pause
+description: Stop scheduling new work, leaving what is running to finish.
+---

@@ -15,8 +15,11 @@ title: Reference
 |---|---|
 | [steward ack](steward_ack.qmd) | Accept an open item, so that nothing reports it again. |
 | [steward init](steward_init.qmd) | Create a Steward workspace. |
+| [steward pause](steward_pause.qmd) | Stop scheduling new work, leaving what is running to finish. |
+| [steward resume](steward_resume.qmd) | Start scheduling again. |
 | [steward runbook](steward_runbook.qmd) | Print the agent runbook that ships with the package. |
 | [steward status](steward_status.qmd) | Report where the run stands, and what the next turn would do. |
 | [steward tasks](steward_tasks.qmd) | Enumerate the tasks an eval set definition resolves to. |
 | [steward tend](steward_tend.qmd) | Run one turn of the supervision loop. |
+| [steward timer](steward_timer.qmd) | Arm, disarm, and inspect the timer that tends this run. |
 : {.borderless tbl-colwidths=[35,65]}

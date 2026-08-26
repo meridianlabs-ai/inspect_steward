@@ -122,32 +122,55 @@ rather than a step in a checklist somebody remembers.
 
 ``` bash
 steward timer arm                    # detect a scheduler and install
-steward timer arm --interval 5m      # override the interval
+steward timer arm --interval 5m      # override _steward.md's interval
+steward timer arm --scheduler cron   # override the detected scheduler
 steward timer status                 # ask the scheduler what is really there
 steward timer disarm                 # remove it
 ```
 
-Steward prefers a scheduler that survives a reboot, trying in order:
+Steward hands the job to something the machine already runs, preferring what
+survives the most:
 
-| scheduler | |
-|----|----|
-| `launchd` | macOS user agent |
-| `systemd` | user timer |
-| `cron` | a marked block in your crontab |
-| `ticker` | Steward's own detached process — the fallback where a machine has none of the three. It does not survive a reboot, which is a reason to prefer the others rather than a reason to avoid it. |
+| scheduler | | survives |
+|----|----|----|
+| `launchd` | macOS user agent | a reboot |
+| `systemd` | user timer | a reboot |
+| `cron` | a marked block in your crontab | a logout |
+
+All three survive the terminal you armed from, which is the property that
+matters. **Detection is allowed to fail.** A machine with none of the three is
+told so rather than quietly given something weaker, and running unsupervised
+stays available as an explicit choice — which has the merit of making an
+unsupervised run *look* unsupervised.
+
+Detection also depends on the interval rather than only on the machine: a
+seven-minute interval is not expressible in a crontab, so a host where cron is
+the only scheduler will take `10m` and refuse `7m`.
 
 Arming is idempotent: an existing timer is removed first, so re-arming at a new
-interval leaves exactly one.
+interval or under a different scheduler leaves exactly one. What a scheduled
+tend prints before Steward can log anything of its own goes to `timer.log` in
+the workspace, and `arm` says so.
 
 ### Arming checks that a scheduled tend can authenticate
 
-A timer does not inherit your shell. So if the credentials your run needs are
-exported in the terminal you armed from and are not available to a scheduled
-process, `arm` **refuses** and says which ones are missing.
+A timer does not inherit your shell, and the failure that produces is the worst
+kind available here: every interval all night, a worker starts, authenticates
+against nothing, and writes a log saying so, while `status.md` reports a fleet
+dutifully trying.
 
-That refusal is worth the friction. The alternative is a fleet that fails to
-authenticate every ten minutes all night while `status.md` reports it dutifully
-trying. Use `--no-env-check` to arm anyway when you know better.
+So arming compares two environments — what your shell holds against what the
+workspace's `.env` holds — and **refuses** when a credential is in the first and
+not the second, because that is exactly a credential that will be gone at 02:00.
+The remedy it suggests is to put the key in that `.env`, which is the file the
+workers already read and which `init` has already gitignored for you.
+
+It is a diff, not a requirement. Steward does not know which provider your
+definition uses and does not guess: a required-key list would refuse correct
+setups and miss unusual ones. No value ever leaves the check either — resolving
+a `.env` line is the only way to know whether a key will really be there, so
+values are read and only names come back. Use `--no-env-check` to arm anyway
+when you know better.
 
 ### A run says when nothing is tending it
 
