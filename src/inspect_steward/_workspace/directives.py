@@ -20,9 +20,16 @@ from pathlib import Path
 from typing import Any, cast
 
 import yaml
-from pydantic import BaseModel, ConfigDict, Field, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from .._schedule import DEFAULT_MAX_WORKERS, DEFAULT_STALL_AFTER, Pool
+from .._util.duration import parse_duration
+
+DEFAULT_TEND_INTERVAL = 600
+"""Seconds between scheduled tends where nobody said otherwise.
+
+Ten minutes, because the cost of a turn is bounded by what it reads and the cost of *missing* one is a fleet sitting idle for the whole interval. Short enough that an empty slot is refilled while somebody is still awake to care; long enough that a settled directory of two thousand logs is not re-read every minute.
+"""
 
 FENCE = "---"
 """Opens and closes the front matter. Recognised only at the very start of the file and then at column zero, so a horizontal rule in the prose is prose."""
@@ -87,6 +94,32 @@ class Directives(BaseModel):
 
     Passes the same test `max_workers` does: respawning a task is Steward's invention, and no `eval_set()` argument reaches it, so there is nothing here for a definition to contradict. How much patience a project's failures deserve is genuinely a standing property of the project — a flaky sandbox fleet earns more of it than a deterministic scorer bug does (`_schedule.reconcile._stalled`).
     """
+
+    tend_interval: int | None = Field(default=None, gt=0)
+    """Seconds between scheduled tends, or `None` for the default.
+
+    Written with a unit — `tend_interval: 10m` — and stored as seconds. Passes the same test the two above do: how often to converge is a property of the host and the workspace, and no `eval_set()` argument reaches it.
+
+    A standing preference rather than what is currently installed. `steward timer arm` reads it, but a timer armed at one interval and a file later edited to another disagree until somebody re-arms, which is a `timer_drift` item rather than something a tend quietly fixes — reaching into a user's crontab unprompted is not a mechanical act.
+    """
+
+    @field_validator("tend_interval", mode="before")
+    @classmethod
+    def _duration(cls, value: object) -> object:
+        """A duration is written with its unit, and a bare number is refused.
+
+        The one place strictness is not enough on its own. `tend_interval: 10` is a perfectly good integer and means ten minutes to whoever typed it and ten seconds to whoever wrote the parser, so it is rejected rather than guessed at — the same posture as every other key here, applied to a hazard typing cannot see.
+        """
+        if value is None:
+            return None
+        if not isinstance(value, str):
+            raise ValueError(
+                f"must be written with a unit, like '10m' — {value!r} could mean "
+                f"seconds, minutes, or hours, and Steward will not guess"
+            )
+        # DurationError is a ValueError, so a bad unit arrives as a field error
+        # naming the value, like every other refusal in this file
+        return parse_duration(value)
 
 
 def read_directives(path: Path) -> Directives:
@@ -183,6 +216,28 @@ def resolve_pool(
             else DEFAULT_STALL_AFTER
         ),
     )
+
+
+def resolve_interval(directives: Directives, *, interval: str | None = None) -> int:
+    """Resolve how often this workspace should tend.
+
+    The `max_workers` chain, one key over: the command line, then `_steward.md`, then the default. An interval is a standing property of the host, so the file is a real source for it — unlike `max_samples`, whose source is the definition.
+
+    Args:
+        directives: What the workspace's front matter said.
+        interval: A duration from the command line, e.g. `10m`, or `None`.
+
+    Returns:
+        Seconds between tends.
+
+    Raises:
+        DurationError: `interval` is not a duration.
+    """
+    if interval is not None:
+        return parse_duration(interval)
+    if directives.tend_interval is not None:
+        return directives.tend_interval
+    return DEFAULT_TEND_INTERVAL
 
 
 def _front_matter(text: str, *, name: str) -> str | None:

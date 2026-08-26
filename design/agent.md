@@ -25,7 +25,7 @@ An earlier draft made the agent the scheduler, and the reason it cannot be is st
 
 > A supervising agent is turn-based. It acts when the human speaks, when a background job finishes, or when a scheduled wake-up fires — and never in between. So an agent-scheduled run is silent by construction whenever no agent is in session, and **silence is indistinguishable from a healthy run**.
 
-Combine that with the four jobs above and the failure compounds: an absent agent would stop the fleet *and* leave nothing to say so. So the mechanical half is guaranteed by a timer — a system scheduler where one exists, Steward's own detached ticker otherwise, Hawk's in-pod loop in a pod — armed by `launch` rather than remembered ([execution.md](execution.md), *Drivers, one core*).
+Combine that with the four jobs above and the failure compounds: an absent agent would stop the fleet *and* leave nothing to say so. So the mechanical half is guaranteed by a timer — a system scheduler on a host, Hawk's in-pod loop in a pod — armed by `launch` rather than remembered ([execution.md](execution.md), *Drivers, one core*).
 
 **What that buys is a clean separation of what breaks.** With a timer running and no agent in session, the fleet converges, logs land, scans drain, `status.md` stays current, and mechanical notifications fire. What accumulates is judgement: anomalies unruled, scan results unprobed, `analysis.md` unwritten. That is a run waiting for a decision, which is a fine thing to be at 4am — as opposed to a stalled run that looks exactly like a healthy one.
 
@@ -75,6 +75,8 @@ Two things the timer cannot do, both of which belong in the runbook:
 
 - **Check on attach, before anything else.** A session that starts by answering the human's question without first reading what accumulated is answering from a stale picture.
 - **Confirm supervision is actually running**, once, early. The timer cannot detect its own absence, so two cheap signals stand in: the journal should show tend events at roughly the expected interval, and `status.md` states its own age. A workspace whose newest tend is four hours old in a ten-minute cadence is unsupervised, and nothing else will say so.
+
+  As of [plan.md](plan.md) step 15 the first of those is computed rather than left to the reader: an `armed` journal event plus a gap of more than two intervals since the last `observation` raises an **`unsupervised`** item, which arrives in the ordinary attention list. The agent still owes the *judgement* — an unsupervised run may be one somebody is deliberately driving by hand, which is why the item is acknowledgeable and why "ask, then `steward ack --by human`" is the right response rather than silently re-arming (§6). What the agent no longer owes is noticing.
 
 ## 3. Cold pickup is a procedure, not a property
 
@@ -182,7 +184,7 @@ One rule belongs there that appears nowhere else, because it is about how an age
 
 1. **The tend summary schema.** The contents are settled above; the encoding is not. It is read sixty times a night, so its size is a real cost, and the balance between a compact structured form and one legible when rendered directly to a human is unresolved.
 
-2. **Which timer, and what `launch` does when it cannot arm one.** [execution.md](execution.md) settles that `launch` arms a timer and names the mechanism. What it does when no system scheduler is usable *and* the ticker cannot be spawned is unresolved: proceed unsupervised with a loud warning, or refuse. Refusing is more attractive than it sounds, since an unsupervised run is the failure the arrangement exists to prevent — but it would also block the case of someone deliberately driving a short run by hand.
+2. **~~Which timer, and what `launch` does when it cannot arm one.~~** *Settled by [plan.md](plan.md) step 15, and then re-settled the other way.* Three backends in preference order — launchd, systemd `--user`, cron — and **arming fails when none of them can run the entry**. The step first shipped a fourth, a detached process of Steward's own that was always usable, on the reasoning that it dissolved the harder half of the question: with it, there is no *none can be armed* state on a machine that can start a process. Review found the cost of that dissolution, and it was too high — an always-usable backend made the failure branch unreachable, so a bare container was handed a timer that died with its terminal instead of being told what it lacked, and it needed a snapshot of the arming environment to have credentials at all, which is a second and permanently shadowing answer to a question every later step has to ask once. **No timer at all is still a choice somebody makes rather than an outcome a bare container arrives at** — it is just made by a person reading a refusal rather than by a fallback nobody chose. Deliberately hand-driving a short run stays available (`--no-timer` at step 16, `steward timer disarm` at any point) and is not silent: it raises an `unsupervised` item that the operator acknowledges once.
 
 3. **What surfaces an agent's mistake.** The agent groups classes into proposals and a human agrees in one word. Per-class ruling records make a bad grouping *recoverable* — that was deliberate — but nothing brings it to anyone's attention, and a wrong grouping re-runs samples that did not earn it. There is no review path.
 

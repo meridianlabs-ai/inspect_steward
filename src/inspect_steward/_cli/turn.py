@@ -85,9 +85,15 @@ def echo_turn(result: TendResult, *, table: bool = True) -> None:
         )
         click.echo(f"{summary.running} running · next tend: {would or 'nothing to do'}")
     if summary.queued:
-        click.echo(
-            f"{summary.queued} waiting on a slot (ceiling {summary.max_workers})"
+        # a paused run queues everything, and saying it waits on a slot would
+        # name the ceiling as the reason when the reason is the pause -- which
+        # is the one thing a reader might go and change
+        waiting = (
+            "waiting on a resume"
+            if summary.paused
+            else f"waiting on a slot (ceiling {summary.max_workers})"
         )
+        click.echo(f"{summary.queued} {waiting}")
 
     for line in _attention(result):
         click.echo(line)

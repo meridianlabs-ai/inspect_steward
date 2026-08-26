@@ -19,6 +19,7 @@ They cannot drift, because they are the same code path with one flag. That is wo
 """
 
 from dataclasses import dataclass, field, replace
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, cast
 
@@ -55,20 +56,25 @@ from .._worker import (
     resolve_inflight,
 )
 from .._workspace import (
+    ARMED,
     Ack,
+    Armed,
     DirectivesError,
     Held,
+    Paused,
     Workspace,
     acquire,
     append_event,
     read_acks,
+    read_armed,
     read_claim,
     read_directives,
     read_journal,
+    read_pause,
     resolve_pool,
     steward_log,
 )
-from .items import Item, Verdict, tend_items, verdict
+from .items import Item, Supervision, Verdict, tend_items, verdict
 from .progress import Progress, task_progress
 from .render import status_markdown
 
@@ -131,6 +137,9 @@ class TendResult:
 
     degraded_at: str | None = None
     """`_steward.md`'s modification time when it would not parse, for the same reason — an edited file that still fails is a new item rather than one already acknowledged."""
+
+    supervision: Supervision | None = None
+    """Whether anything is scheduled to run the next turn. `None` where nothing asked — an item projection over a result assembled by hand has no opinion about timers."""
 
     items: list[Item] = field(default_factory=list[Item])
     """Everything this turn has to say that is not a number, acknowledged ones already removed."""
@@ -272,9 +281,9 @@ def status(
 
 @dataclass(frozen=True)
 class _History:
-    """What the journal says, read once and used three times.
+    """What the journal says, read once and used for everything that asks.
 
-    A turn used to read the journal only when `_steward.md` would not parse. It now has three questions for it — the last good settings, the previous turn's items, and what has been acknowledged — and they are one pass over the same events. The file is small by design (roughly sixty records a night, workflow.md §5.6) and the alternative is three reads of it per turn.
+    A turn used to read the journal only when `_steward.md` would not parse. It now has six questions for it — the last good settings, the previous turn's items and when it happened, what has been acknowledged, whether the run is paused, and what timer is armed — and they are one pass over the same events. The file is small by design (roughly sixty records a night, workflow.md §5.6) and the alternative is six reads of it per turn.
     """
 
     pool: Pool | None
@@ -286,6 +295,21 @@ class _History:
     acknowledged: dict[str, Ack]
     """Items somebody has disposed of, by id."""
 
+    paused: Paused | None = None
+    """The pause in force, or `None` where the run is scheduling normally."""
+
+    armed: Armed | None = None
+    """The timer the last arming installed, or `None`."""
+
+    ever_armed: bool = False
+    """Whether a timer was ever armed here. What distinguishes *never supervised* from *no longer supervised* (`items.Supervision`)."""
+
+    since_tend: float | None = None
+    """Seconds since the most recent recorded turn, or `None` where there has not been one."""
+
+    since_armed: float | None = None
+    """Seconds since the timer in force was armed, or `None` where none is."""
+
 
 def _history(workspace: Workspace) -> _History:
     """Read the journal once, answering everything a turn asks of it."""
@@ -294,13 +318,16 @@ def _history(workspace: Workspace) -> _History:
     except OSError:
         return _History(pool=None, previous=frozenset(), acknowledged={})
 
+    armed = read_armed(events)
     pool: Pool | None = None
     previous: frozenset[str] | None = None
+    since: float | None = None
     for event in reversed(events):
         if event.type != OBSERVATION:
             continue
         if previous is None:
             previous = frozenset(_strings(event.payload.get("items")))
+            since = _elapsed(event.ts)
         if pool is None:
             pool = _pool(event.payload.get("settings"))
         if pool is not None:
@@ -310,7 +337,26 @@ def _history(workspace: Workspace) -> _History:
         pool=pool,
         previous=previous if previous is not None else frozenset(),
         acknowledged=read_acks(events),
+        paused=read_pause(events),
+        armed=armed,
+        ever_armed=any(event.type == ARMED for event in events),
+        since_tend=since,
+        since_armed=_elapsed(armed.ts) if armed is not None else None,
     )
+
+
+def _elapsed(ts: str) -> float | None:
+    """Seconds from a recorded instant until now, or `None` where it cannot be read.
+
+    Unparseable rather than absent: a journal written by a version that stamped its timestamps differently is history, not damage, and the caller's answer to *how long since the last tend* is then *unknown* rather than *forever*.
+    """
+    try:
+        recorded = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if recorded.tzinfo is None:
+        return None
+    return (datetime.now(timezone.utc) - recorded).total_seconds()
 
 
 def _pool(recorded: object) -> Pool | None:
@@ -342,6 +388,12 @@ class _Settings:
     degraded: str | None
     degraded_at: str | None = None
     """`_steward.md`'s modification time when it would not parse — what keys the item, so an edit that still fails is heard again."""
+
+    interval: int | None = None
+    """How often `_steward.md` asks to be tended, or `None` where it does not ask.
+
+    Not something a turn acts on, and deliberately the *expressed* preference rather than the resolved one — it exists to be compared against what is actually armed, and a comparison against Steward's own default would report drift from a number nobody wrote.
+    """
 
 
 def _turn(
@@ -379,7 +431,13 @@ def _turn(
         ) from ex
 
     observed = observe_tasks(manifest, logs)
-    decision = reconcile(manifest, inflight, observed, pool=settings.pool)
+    decision = reconcile(
+        manifest,
+        inflight,
+        observed,
+        pool=settings.pool,
+        paused=history.paused is not None,
+    )
     progress = Progress(rows=task_progress(observed, _live(inflight)))
 
     result = TendResult(
@@ -391,6 +449,13 @@ def _turn(
         broke=broke,
         definition_hash=drift.digest,
         degraded_at=settings.degraded_at,
+        supervision=Supervision(
+            armed=history.armed,
+            ever_armed=history.ever_armed,
+            interval=settings.interval,
+            since_tend=history.since_tend,
+            since_armed=history.since_armed,
+        ),
         executed=execute,
         progress=progress,
     )
@@ -642,13 +707,22 @@ def _settings(
                 f"{workspace.directives.name} could not be read ({ex}); "
                 f"running on the settings the last turn recorded",
             )
+        # no interval at all: the file that would have expressed one is the
+        # thing that will not parse, and there is no last known good to fall
+        # back to since an `observation` does not carry it. Reporting timer
+        # drift here would be a second complaint about a file the `degraded`
+        # item has already reported
         return _Settings(
-            pool=pool, degraded=str(ex), degraded_at=_stamp(workspace.directives)
+            pool=pool,
+            degraded=str(ex),
+            degraded_at=_stamp(workspace.directives),
+            interval=None,
         )
 
     return _Settings(
         pool=resolve_pool(directives, max_workers=max_workers, max_samples=max_samples),
         degraded=None,
+        interval=directives.tend_interval,
     )
 
 

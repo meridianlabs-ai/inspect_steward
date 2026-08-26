@@ -33,6 +33,13 @@ dependencies = [
     # `inspect ctl` (see _worker/live.py). inspect-ai depends on httpx too, but
     # this is a direct import and a transitive dependency is not a promise.
     "httpx>=0.27",
+    # arming a timer checks which credentials a workspace's `.env` really
+    # defines, and only the resolved value answers that -- `KEY=""` and
+    # `KEY=${UNSET}` both look like assignments and both arrive as nothing. Read
+    # with the same parser inspect will use so the two cannot disagree.
+    # inspect-ai depends on python-dotenv too, but this is a direct import and a
+    # transitive dependency is not a promise.
+    "python-dotenv>=1.0",
 ]
 
 [project.optional-dependencies]

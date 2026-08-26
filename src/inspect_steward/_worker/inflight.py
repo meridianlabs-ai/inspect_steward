@@ -27,6 +27,7 @@ from inspect_ai._eval.eval_set_selection import INSPECT_EVAL_SET_SELECTION
 
 from .._schedule import DepartedWorker, InFlight, RunningWorker
 from .._util.jsonl import Event, append_event, read_events
+from .._util.process import process_table
 
 INTENT = "intent"
 """Written before the spawn: a worker that may exist."""
@@ -245,27 +246,24 @@ def scan_processes(workers_dir: Path) -> list[ScannedWorker]:
     """
     root = workers_dir.resolve()
     matched: dict[int, tuple[int, ScannedWorker]] = {}
-    for process in psutil.process_iter():
-        try:
-            environ = process.environ()
-            selection = environ.get(INSPECT_EVAL_SET_SELECTION)
-            if not selection:
-                continue
-            path = Path(selection).resolve()
-            if path.is_relative_to(root):
-                matched[process.pid] = (
-                    process.ppid(),
-                    ScannedWorker(
-                        pid=process.pid,
-                        selection=path,
-                        worker=environ.get(STEWARD_WORKER),
-                        identifier=environ.get(STEWARD_TASK),
-                    ),
-                )
-        except psutil.Error:
-            # gone between the listing and the read, a zombie, or another
-            # user's. None of the three is a worker of ours.
+    # a process that could not be read is already skipped: gone between the
+    # listing and the read, a zombie, or another user's, and none of the three
+    # is a worker of ours (`_util.process`)
+    for found in process_table():
+        selection = found.environ.get(INSPECT_EVAL_SET_SELECTION)
+        if not selection:
             continue
+        path = Path(selection).resolve()
+        if path.is_relative_to(root):
+            matched[found.pid] = (
+                found.ppid,
+                ScannedWorker(
+                    pid=found.pid,
+                    selection=path,
+                    worker=found.environ.get(STEWARD_WORKER),
+                    identifier=found.environ.get(STEWARD_TASK),
+                ),
+            )
     return [found for ppid, found in matched.values() if ppid not in matched]
 
 

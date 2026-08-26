@@ -13,8 +13,19 @@ DEFINITION_NAMES: dict[DefinitionType, str] = {
 }
 """Conventional definition filename per type. The definition pointer is discovered by name rather than configured, so these are the names looked for."""
 
-GITIGNORE_ENTRIES = (".steward/", "logs/", "logs-archive/")
-"""Paths a workspace never commits. `logs/` and `logs-archive/` hold `.eval` archives, which are large outputs shared through a log store rather than through git; `.steward/` is disposable by construction. Ignored is not the same category as disposable — only `.steward/` is safe to delete."""
+GITIGNORE_ENTRIES = (
+    ".steward/",
+    "logs/",
+    "logs-archive/",
+    ".env",
+    "steward.log",
+    "timer.log",
+)
+"""Paths a workspace never commits. `logs/` and `logs-archive/` hold `.eval` archives, which are large outputs shared through a log store rather than through git; `.steward/` is disposable by construction. Ignored is not the same category as disposable — only `.steward/` is safe to delete.
+
+`.env` is here because arming a timer tells people to write one: a scheduled tend runs under a stripped environment, and the answer Steward gives is *put the credentials in a file the workers already read* (`_timer.env`). Suggesting that without ignoring the file would be handing somebody a way to commit their API keys.
+
+**The two logs are here for the reason `steward.log` exists in the first place.** workflow.md §5.7 justifies splitting machinery out of the journal partly because appending to a committed file every ten minutes "would dirty the working tree on a cadence" — which is only true of the journal if it is *not* true of the file the machinery went to instead. Both are high-volume, low-value, and disposable, and neither belongs in a diff."""
 
 
 @dataclass(frozen=True)
@@ -106,6 +117,14 @@ class Workspace:
         return self.state / "inflight.jsonl"
 
     @property
+    def env(self) -> Path:
+        """`.env` — credentials a scheduled tend and its workers both read.
+
+        Not written by Steward and not required to exist. Named here because arming checks it (`_timer.env`) and because inspect loads it for free: `find_dotenv(usecwd=True)` searches up from a worker's cwd, which is this directory.
+        """
+        return self.root / ".env"
+
+    @property
     def status(self) -> Path:
         """`status.md` — rewritten by every tend."""
         return self.root / "status.md"
@@ -114,6 +133,16 @@ class Workspace:
     def log(self) -> Path:
         """`steward.log` — whether the machinery worked, as opposed to what it found."""
         return self.root / "steward.log"
+
+    @property
+    def timer_log(self) -> Path:
+        """`timer.log` — what a scheduled tend printed, before Steward could log anything.
+
+        **At the root rather than under `.steward/`, and that is the whole point of it.** Every backend opens this path *before* starting Python — cron through a shell redirect, launchd through `StandardOutPath`, systemd through `StandardOutput=append:` — and none of the three creates a missing parent directory. Under `.steward/` the file would therefore make a directory documented as safe to delete into one that silently stops supervision forever: the redirect fails, the command never runs, and so nothing is left to recreate what was deleted, while the journal goes on reporting an armed timer.
+
+        Ordinary tends write nothing interesting here; `steward.log` remains where Steward says whether its own machinery worked. What lands here is the failure that happens too early to be logged anywhere else.
+        """
+        return self.root / "timer.log"
 
     def definition(self, type: DefinitionType) -> Path:
         """Conventional path for a definition of `type`.

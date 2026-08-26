@@ -12,12 +12,38 @@ must not silence the next one. And **the verdict is run-level**, so a finished
 run with a caveat and a stuck run with the same caveat must not read alike.
 """
 
+import json
+from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from typing import Any
 
 import pytest
-from inspect_steward._tend import Level, Owner, Verdict, status, verdict, verdict_line
-from inspect_steward._tend.items import ACTION_FAILED, DRIFT, STALLED, UNREADABLE, Item
-from inspect_steward._workspace import ACKNOWLEDGED, Workspace, append_event
+from inspect_steward._tend import (
+    OBSERVATION,
+    Level,
+    Owner,
+    Verdict,
+    status,
+    verdict,
+    verdict_line,
+)
+from inspect_steward._tend.items import (
+    ACTION_FAILED,
+    DEGRADED,
+    DRIFT,
+    STALLED,
+    TIMER_DRIFT,
+    UNREADABLE,
+    UNSUPERVISED,
+    Item,
+)
+from inspect_steward._workspace import (
+    ACKNOWLEDGED,
+    ARMED,
+    DISARMED,
+    Workspace,
+    append_event,
+)
 
 from .._logs import DEFINITION, SynthTask, write_log
 from .test_tend import prepared, turn
@@ -340,3 +366,260 @@ def test_a_status_diffs_against_the_last_tend_without_recording_one(
     assert len(workspace.journal.read_text().splitlines()) == before
     # and a status twice running says the same thing, since nothing advanced
     assert status(workspace).appeared == previewed.appeared
+
+
+# --- supervision ---------------------------------------------------------
+#
+# The item a timer creates the need for, and the one condition in this file that
+# is about Steward's own machinery rather than about the run. Its whole design
+# problem is staying quiet: a workspace somebody is driving by hand has not lost
+# supervision, so the item is about an *expectation that broke* and there has to
+# have been one.
+
+
+def armed(
+    workspace: Workspace,
+    *,
+    interval: int = 600,
+    scheduler: str = "cron",
+    ago: int = 0,
+) -> None:
+    """Record a timer, optionally as of `ago` seconds in the past.
+
+    A silence has to be longer than the timer that failed to fill it, so any case
+    about staleness needs an arming that predates the gap — `ago` is how a
+    clock-free projection is told that. The payload's `ts` overrides the envelope's
+    because `append_event` merges the fields last.
+    """
+    stamp = datetime.now(timezone.utc) - timedelta(seconds=ago)
+    append_event(
+        workspace.journal,
+        ARMED,
+        ts=stamp.isoformat(timespec="milliseconds").replace("+00:00", "Z"),
+        scheduler=scheduler,
+        interval=interval,
+        label="steward-aaa",
+    )
+
+
+def aged(workspace: Workspace, seconds: int) -> None:
+    """Backdate every recorded turn, as if the timer had stopped firing.
+
+    The only thing a clock-free projection can be given: the item compares the
+    last turn's timestamp against now, so making a run look unsupervised means
+    moving the timestamps rather than the clock. Goes with `armed(ago=...)` — a
+    gap only counts against a timer that was there for it.
+    """
+    moved = datetime.now(timezone.utc) - timedelta(seconds=seconds)
+    lines = workspace.journal.read_text(encoding="utf-8").splitlines()
+    rewritten: list[str] = []
+    for line in lines:
+        event: dict[str, Any] = json.loads(line)
+        if event["type"] == OBSERVATION:
+            event["ts"] = moved.isoformat(timespec="milliseconds").replace(
+                "+00:00", "Z"
+            )
+        rewritten.append(json.dumps(event))
+    workspace.journal.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
+
+
+def unfinished(tmp_path: Path) -> Workspace:
+    """A run with work left, which is the only kind supervision matters for."""
+    workspace, _ = prepared(tmp_path, [TASK, SynthTask("waiting")])
+    write_log(workspace.logs, TASK)
+    return workspace
+
+
+def test_a_run_nobody_ever_armed_is_not_reported_as_unsupervised(
+    tmp_path: Path,
+) -> None:
+    # a workspace somebody is driving by hand at their terminal, and telling
+    # them so every ten minutes is how an attention list stops being read
+    workspace = unfinished(tmp_path)
+
+    assert UNSUPERVISED not in items(workspace)
+
+
+def test_a_timer_that_was_armed_and_is_gone_is_reported(tmp_path: Path) -> None:
+    workspace = unfinished(tmp_path)
+    armed(workspace)
+    append_event(workspace.journal, DISARMED, scheduler="cron")
+
+    item = items(workspace)[UNSUPERVISED]
+
+    assert item.owner is Owner.HUMAN
+    assert item.action == "steward timer arm"
+    assert item.acknowledgeable
+    # acknowledging says *I am driving this by hand*, which stays true -- so no
+    # discriminator, and disarming again is the same statement not a new one
+    assert item.id == UNSUPERVISED
+
+
+def test_a_timer_tending_on_time_says_nothing(tmp_path: Path) -> None:
+    workspace = unfinished(tmp_path)
+    armed(workspace, interval=600)
+    turn(workspace)
+
+    assert UNSUPERVISED not in {item.kind for item in status(workspace).items}
+
+
+def test_a_timer_that_has_stopped_firing_is_reported(tmp_path: Path) -> None:
+    # the better signal of the two, because it catches a crontab somebody
+    # edited by hand as well as one Steward removed
+    workspace = unfinished(tmp_path)
+    armed(workspace, interval=600, ago=7200)
+    turn(workspace)
+    aged(workspace, 3600)
+
+    (item,) = [entry for entry in status(workspace).items if entry.kind == UNSUPERVISED]
+
+    assert "has not tended" in item.summary
+    assert "10m" in item.summary
+    assert item.subject == "cron"
+
+
+def test_a_recovery_tend_does_not_report_the_silence_it_just_ended(
+    tmp_path: Path,
+) -> None:
+    """The staleness half is vacuous during a tend and meaningful during a `status`.
+
+    The gap is measured against the previous turn, so a tend that has just
+    converged the run would otherwise announce the very silence it broke — and
+    the reader who needs telling that supervision stopped is the person typing
+    `status`, not the timer that is evidently working.
+    """
+    workspace = unfinished(tmp_path)
+    armed(workspace, interval=600, ago=7200)
+    turn(workspace)
+    aged(workspace, 3600)
+    assert UNSUPERVISED in {entry.kind for entry in status(workspace).items}
+
+    assert UNSUPERVISED not in {entry.kind for entry in turn(workspace).items}
+
+
+def test_re_arming_resets_the_clock_the_staleness_check_reads(tmp_path: Path) -> None:
+    """A timer armed a moment ago has not been silent for the hours before it existed.
+
+    Otherwise `steward timer arm` — the remedy the item's own `action` names —
+    appears not to have worked: the operator arms a replacement and `status`
+    immediately tells them the new timer has been quiet since last night.
+    """
+    workspace = unfinished(tmp_path)
+    armed(workspace, interval=600, ago=7200)
+    turn(workspace)
+    aged(workspace, 3600)
+    assert UNSUPERVISED in {entry.kind for entry in status(workspace).items}
+
+    armed(workspace, interval=600)
+
+    assert UNSUPERVISED not in {entry.kind for entry in status(workspace).items}
+
+
+def test_a_timer_armed_and_never_tended_at_all_is_reported(tmp_path: Path) -> None:
+    # the other direction the same comparison closes: with nothing but the last
+    # tend to go on, a run that has never had one reads as *no evidence of a
+    # problem* when it is the plainest case of one
+    workspace = unfinished(tmp_path)
+    armed(workspace, interval=600, ago=7200)
+
+    (item,) = [entry for entry in status(workspace).items if entry.kind == UNSUPERVISED]
+
+    assert "has not tended" in item.summary
+
+
+def test_a_stale_timer_re_armed_asks_the_question_again(tmp_path: Path) -> None:
+    # keyed on when this timer was armed, so an acknowledged silence does not
+    # cover the next timer's
+    workspace = unfinished(tmp_path)
+    armed(workspace, interval=600, ago=7200)
+    turn(workspace)
+    aged(workspace, 3600)
+    first = [e for e in status(workspace).items if e.kind == UNSUPERVISED][0]
+
+    ack(workspace, first.id)
+    # an hour ago rather than now, because the replacement has to have had a
+    # chance to fire and missed it -- re-arming this instant is quiet, which is
+    # the case above
+    armed(workspace, interval=600, ago=3600)
+
+    second = [e for e in status(workspace).items if e.kind == UNSUPERVISED]
+    assert second and second[0].id != first.id
+
+
+def test_a_finished_run_needs_no_timer(tmp_path: Path) -> None:
+    # signing a run off disarms its timer deliberately, and reporting that as
+    # lost supervision would make the last act of every run produce an item
+    workspace, _ = prepared(tmp_path, [TASK])
+    write_log(workspace.logs, TASK)
+    armed(workspace)
+    append_event(workspace.journal, DISARMED, scheduler="cron")
+
+    assert UNSUPERVISED not in items(workspace)
+
+
+def test_an_interval_the_workspace_no_longer_asks_for_is_reported(
+    tmp_path: Path,
+) -> None:
+    workspace = unfinished(tmp_path)
+    armed(workspace, interval=1800)
+    workspace.directives.write_text("---\ntend_interval: 5m\n---\n", encoding="utf-8")
+
+    item = items(workspace)[TIMER_DRIFT]
+
+    assert "every 30m" in item.summary and "asks for 5m" in item.summary
+    assert item.action == "steward timer arm"
+
+
+def test_editing_the_interval_again_asks_the_question_again(tmp_path: Path) -> None:
+    # both values key the id, so a further edit is a new question and arming to
+    # match clears it
+    workspace = unfinished(tmp_path)
+    armed(workspace, interval=1800)
+    workspace.directives.write_text("---\ntend_interval: 5m\n---\n", encoding="utf-8")
+    first = items(workspace)[TIMER_DRIFT]
+
+    ack(workspace, first.id)
+    workspace.directives.write_text("---\ntend_interval: 1m\n---\n", encoding="utf-8")
+
+    assert items(workspace)[TIMER_DRIFT].id != first.id
+
+
+def test_a_timer_armed_at_the_interval_asked_for_is_quiet(tmp_path: Path) -> None:
+    workspace = unfinished(tmp_path)
+    armed(workspace, interval=1800)
+    workspace.directives.write_text("---\ntend_interval: 30m\n---\n", encoding="utf-8")
+
+    assert TIMER_DRIFT not in items(workspace)
+
+
+def test_a_broken_steward_md_does_not_also_report_timer_drift(
+    tmp_path: Path,
+) -> None:
+    # one complaint per broken file: the degraded item already says the file
+    # could not be read, and a second saying its interval disagrees would be
+    # reporting a value nobody could have written
+    workspace = unfinished(tmp_path)
+    armed(workspace, interval=1800)
+    turn(workspace)
+    workspace.directives.write_text("---\nnot: [valid\n---\n", encoding="utf-8")
+
+    found = items(workspace)
+    assert DEGRADED in found
+    assert TIMER_DRIFT not in found
+
+
+def test_a_one_off_interval_against_a_silent_file_is_not_drift(
+    tmp_path: Path,
+) -> None:
+    """The comparison is against what the workspace *expressed*, not what resolved.
+
+    An operator who armed `--interval 1m` against a `_steward.md` with no
+    opinion about intervals has not created a conflict — and reporting one
+    would be reporting drift from Steward's own default, a number nobody wrote.
+    Found by arming a real timer and being told, one second later, that the
+    workspace wanted something else.
+    """
+    workspace = unfinished(tmp_path)
+    armed(workspace, interval=60)
+
+    assert TIMER_DRIFT not in items(workspace)

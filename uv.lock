@@ -1423,6 +1423,7 @@ dependencies = [
     { name = "inspect-ai" },
     { name = "inspect-scout" },
     { name = "psutil" },
+    { name = "python-dotenv" },
     { name = "pyyaml" },
 ]
 
@@ -1478,6 +1479,7 @@ requires-dist = [
     { name = "inspect-flow", marker = "extra == 'flow'", specifier = ">=0.12.0" },
     { name = "inspect-scout", specifier = ">=0.4.46" },
     { name = "psutil", specifier = ">=5.9" },
+    { name = "python-dotenv", specifier = ">=1.0" },
     { name = "pyyaml", specifier = ">=6.0" },
     { name = "uv", marker = "python_full_version >= '3.13' and extra == 'hawk'", specifier = ">=0.5" },
 ]

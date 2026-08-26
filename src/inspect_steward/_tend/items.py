@@ -18,8 +18,10 @@ from enum import IntEnum, StrEnum
 from hashlib import sha256
 from typing import TYPE_CHECKING
 
-from .._evalset.observe import ObservedTasks, TaskObservation
+from .._evalset.observe import ObservedTasks, TaskObservation, TaskState
 from .._schedule import InFlight, attempts_made
+from .._util.duration import format_duration
+from .._workspace import Armed
 
 if TYPE_CHECKING:
     # the turn assembles its result and then projects it, so the type it passes
@@ -64,6 +66,8 @@ DEGRADED = "degraded"
 ORPHAN_RUNNING = "orphan_running"
 UNREADABLE = "unreadable"
 ACTION_FAILED = "action_failed"
+UNSUPERVISED = "unsupervised"
+TIMER_DRIFT = "timer_drift"
 
 OWNERS = {
     STALLED: Owner.HUMAN,
@@ -72,6 +76,8 @@ OWNERS = {
     ORPHAN_RUNNING: Owner.HUMAN,
     UNREADABLE: Owner.AGENT,
     ACTION_FAILED: Owner.AGENT,
+    UNSUPERVISED: Owner.HUMAN,
+    TIMER_DRIFT: Owner.HUMAN,
 }
 """Default owner per kind. Policy may move some of these once `_steward.md` can say so (step 23); a kind absent from the table is the agent's, since an unrouted item is an investigation rather than a question."""
 
@@ -80,6 +86,41 @@ UNACKNOWLEDGEABLE = frozenset({ACTION_FAILED})
 
 An action that failed is a single-turn fact: the next turn either hits it again or does not. Letting it be acknowledged would give it a persistence it does not have, and would silence a recurrence that happens to reuse the same words.
 """
+
+
+@dataclass(frozen=True)
+class Supervision:
+    """Whether anything is scheduled to tend this run, as the journal knows it.
+
+    **Nothing here probes a scheduler.** A turn runs every ten minutes and `status` is meant to be cheap enough to type constantly, so asking `launchctl` would undo the header cache the step before this one built. What is compared instead is the arming Steward recorded against how long it has actually been since a tend — which is the better signal anyway, because it detects *not firing* whatever the cause, including a crontab somebody edited by hand.
+    """
+
+    armed: Armed | None
+    """The timer the journal says is installed, or `None`."""
+
+    ever_armed: bool
+    """Whether one was ever installed.
+
+    What keeps a hand-driven run quiet. A workspace that has never armed anything has not lost supervision — it never had any, and reporting that every ten minutes to somebody sitting at the terminal typing `steward tend` is how an attention list stops being read. The item is about an *expectation that broke*, so there has to have been one.
+    """
+
+    interval: int | None
+    """The interval `_steward.md` asks for, or `None` where it does not ask for one.
+
+    **What the workspace *expressed*, never what a resolution produced.** `None` covers both a file that says nothing about intervals and one that would not parse, and in each case the right number of complaints is zero: an operator who armed a one-off `--interval 1m` against a file with no opinion has not created a conflict, and reporting one against Steward's own default would be reporting drift from a value nobody wrote. The same reasoning that keeps a `degraded` file from producing two items.
+    """
+
+    since_tend: float | None
+    """Seconds since the previous recorded turn, or `None` where there has not been one.
+
+    Read only by a `status`, and ignored by a tend. A turn asking how long it has been since a turn is asking about the gap *before itself*: on a schedule that is vacuous, and on a tend recovering from a long silence it is a fact about a condition that turn has just ended. The reader who needs telling that supervision stopped is the human typing `status` the next morning, not the timer that is evidently working.
+    """
+
+    since_armed: float | None
+    """Seconds since the timer in force was armed, or `None` where none is.
+
+    Here so that the silence attributed to a timer starts when the timer does. See `_silence`.
+    """
 
 
 @dataclass(frozen=True)
@@ -133,6 +174,7 @@ def tend_items(
         *_degraded(result),
         *_orphans(result, lookup),
         *_unreadable(observed),
+        *_supervision(result),
         *_failures(result),
     ]
     items = [item for item in items if item.id not in acknowledged]
@@ -329,6 +371,126 @@ def _unreadable(observed: ObservedTasks) -> list[Item]:
         )
         for log in observed.unreadable
     ]
+
+
+STALE_INTERVALS = 2
+"""How many intervals may pass with no tend before supervision is called broken.
+
+One would be a race with the timer itself — a turn that takes ninety seconds pushes the next one past its slot without anything being wrong. Two is the smallest number that cannot be produced by an ordinary slow turn, and a ten-minute timer silent for twenty minutes has missed one and is about to miss another.
+"""
+
+
+def _silence(state: Supervision) -> float | None:
+    """How long the timer in force has had nothing to show for itself.
+
+    Measured from the later of *the last recorded turn* and *this arming*, which is the smaller of the two ages. **A timer armed a minute ago has not been silent for the three hours before it existed**, and reporting that it has makes `steward timer arm` — the remedy the item itself names — look as though it did not work. Re-arming therefore resets the clock, and the item's id is keyed on the arming for the same reason.
+
+    It also closes the other direction: a run armed and then never tended at all has `since_tend` of `None`, which on its own read as *no evidence of a problem* when it is the plainest case of one.
+
+    Args:
+        state: What the journal said about supervision.
+
+    Returns:
+        Seconds, or `None` where neither instant could be read.
+    """
+    ages = [age for age in (state.since_tend, state.since_armed) if age is not None]
+    return min(ages) if ages else None
+
+
+def _supervision(result: "TendResult") -> list[Item]:
+    """Whether anything is going to run the next turn.
+
+    Only for a run with work left. A finished sweep needs no timer, and signing one off (step 26) disarms it deliberately — reporting that as lost supervision would make the last act of every run produce an item.
+    """
+    state = result.supervision
+    if state is None:
+        return []
+
+    unfinished = sum(
+        result.summary.states.get(task_state.value, 0)
+        for task_state in (TaskState.MISSING, TaskState.INCOMPLETE)
+    )
+    if not unfinished:
+        return []
+
+    if state.armed is None:
+        if not state.ever_armed:
+            # never supervised is not the same as no longer supervised, and only
+            # the second one is news
+            return []
+        return [
+            Item(
+                # no discriminator: acknowledging this says *I am driving this
+                # run by hand*, which stays true for as long as the condition
+                # does. Arming a timer ends it, and disarming again is the same
+                # statement rather than a new one
+                id=UNSUPERVISED,
+                kind=UNSUPERVISED,
+                owner=OWNERS[UNSUPERVISED],
+                level=Level.ATTENTION,
+                subject="",
+                summary=(
+                    "no timer is armed, so nothing will tend this run until "
+                    "somebody does it by hand"
+                ),
+                action="steward timer arm",
+            )
+        ]
+
+    items: list[Item] = []
+    armed = state.armed
+    silence = _silence(state)
+    # **Only a `status` may raise this, and a tend never may.** The age measured
+    # is the gap before *this* turn, so on a tend that is recovering from a long
+    # silence it is a past-tense fact stated in the present tense by the very
+    # turn that disproves it -- recorded, then resolved next turn, which is
+    # notification churn over a condition that has already ended. `status` is
+    # the disposition a person types hours later, and the only one for which
+    # *nothing has tended in an hour* is still true when it is said
+    if (
+        not result.executed
+        and silence is not None
+        and silence > STALE_INTERVALS * armed.interval
+    ):
+        items.append(
+            Item(
+                # keyed on when this timer was armed, so re-arming asks the
+                # question again and an acknowledged silence does not cover the
+                # next timer's
+                id=f"{UNSUPERVISED}:{armed.ts}",
+                kind=UNSUPERVISED,
+                owner=OWNERS[UNSUPERVISED],
+                level=Level.ATTENTION,
+                subject=armed.scheduler,
+                summary=(
+                    f"the {armed.scheduler} timer has not tended for "
+                    f"{format_duration(int(silence))}, which is longer "
+                    f"than {STALE_INTERVALS} intervals of "
+                    f"{format_duration(armed.interval)}"
+                ),
+                action="steward timer status",
+            )
+        )
+
+    if state.interval is not None and armed.interval != state.interval:
+        items.append(
+            Item(
+                # both values, so changing the file again is a new question and
+                # arming to match clears it
+                id=f"{TIMER_DRIFT}:{armed.interval}:{state.interval}",
+                kind=TIMER_DRIFT,
+                owner=OWNERS[TIMER_DRIFT],
+                level=Level.ATTENTION,
+                subject=armed.scheduler,
+                summary=(
+                    f"the timer tends every {format_duration(armed.interval)} "
+                    f"but this workspace now asks for "
+                    f"{format_duration(state.interval)}"
+                ),
+                action="steward timer arm",
+            )
+        )
+    return items
 
 
 def _basename(location: str) -> str:

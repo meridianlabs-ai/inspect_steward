@@ -8,11 +8,13 @@ from pathlib import Path
 import pytest
 from inspect_steward._schedule import DEFAULT_MAX_WORKERS, DEFAULT_STALL_AFTER
 from inspect_steward._workspace import (
+    DEFAULT_TEND_INTERVAL,
     REFUSED,
     Directives,
     DirectivesError,
     create_workspace,
     read_directives,
+    resolve_interval,
     resolve_pool,
 )
 
@@ -180,3 +182,50 @@ def test_the_file_is_never_a_source_of_sample_concurrency() -> None:
     # lets `resolve_max_samples` fall to the definition rather than to a default
     assert resolve_pool(Directives()).max_samples is None
     assert resolve_pool(Directives(), max_samples=20).max_samples == 20
+
+
+INTERVAL: list[tuple[str, str | None, str, int]] = [
+    ("nobody expressed one", None, "---\nmax_workers: 8\n---\n", DEFAULT_TEND_INTERVAL),
+    ("the workspace did", None, "---\ntend_interval: 30m\n---\n", 1800),
+    ("the command line did", "5m", "---\ntend_interval: 30m\n---\n", 300),
+    ("the command line, with nothing in the file", "1h", "---\n---\n", 3600),
+]
+
+
+@pytest.mark.parametrize(
+    ("cli", "text", "expected"),
+    [(cli, text, expected) for _, cli, text, expected in INTERVAL],
+    ids=[case for case, _, _, _ in INTERVAL],
+)
+def test_the_tend_interval_resolves_most_specific_first(
+    cli: str | None, text: str, expected: int, tmp_path: Path
+) -> None:
+    # the `max_workers` chain rather than the `max_samples` one: how often to
+    # converge is a standing property of the host, so the file is a real source
+    directives = read_directives(written(tmp_path, text))
+
+    assert resolve_interval(directives, interval=cli) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        pytest.param("---\ntend_interval: 10\n---\n", "unit", id="a_bare_number"),
+        pytest.param("---\ntend_interval: 10d\n---\n", "10d", id="an_unknown_unit"),
+        pytest.param("---\ntend_interval: 0m\n---\n", "zero", id="never"),
+        pytest.param("---\ntend_interval: yes\n---\n", "unit", id="coerced"),
+    ],
+)
+def test_an_interval_that_is_not_one_is_refused(
+    text: str, message: str, tmp_path: Path
+) -> None:
+    # the one key where strict typing is not enough on its own: `10` is a
+    # perfectly good integer and means two different things to two readers
+    with pytest.raises(DirectivesError, match=message):
+        read_directives(written(tmp_path, text))
+
+
+def test_an_interval_is_stored_as_seconds(tmp_path: Path) -> None:
+    directives = read_directives(written(tmp_path, "---\ntend_interval: 2h\n---\n"))
+
+    assert directives.tend_interval == 7200

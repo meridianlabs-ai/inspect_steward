@@ -120,6 +120,13 @@ def worker(
         writer.write(
             f"HTTP/1.1 {200 if found else 404} .\r\n"
             f"Content-Type: application/json\r\n"
+            # this server answers one request per connection, and HTTP/1.1
+            # means keep-alive unless a response says otherwise. Without this
+            # header the client pools a socket the next line closes, and the
+            # second of `_read`'s three requests dies on EOF -- a
+            # `RemoteProtocolError`, which reports a healthy worker as `gone`.
+            # Rare when idle and reliable under load, so it read as a flake
+            f"Connection: close\r\n"
             f"Content-Length: {len(body)}\r\n\r\n".encode()
             + body
         )

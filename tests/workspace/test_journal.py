@@ -13,11 +13,17 @@ from pathlib import Path
 import pytest
 from inspect_steward._workspace import (
     ACKNOWLEDGED,
+    ARMED,
+    DISARMED,
+    PAUSED,
+    RESUMED,
     JournalEvent,
     append_event,
     create_workspace,
     read_acks,
+    read_armed,
     read_journal,
+    read_pause,
     summarize,
 )
 
@@ -254,3 +260,95 @@ def test_init_writes_a_readable_first_event(tmp_path: Path) -> None:
     event: JournalEvent = read.events[0]
     assert event.type == "initialized"
     assert event.payload == {"definition": "evalset.py"}
+
+
+# --- two-state folds ----------------------------------------------------
+#
+# `paused` and `armed` are both *switches* rather than accumulations, which is
+# what makes them different from `acknowledged`: the last word wins, and a
+# double pause or a resume with nothing to resume is simply the state it leaves
+# behind rather than an error somebody has to handle.
+
+
+PAUSES: list[tuple[str, list[str], bool]] = [
+    ("nothing", [], False),
+    ("paused", [PAUSED], True),
+    ("paused then resumed", [PAUSED, RESUMED], False),
+    ("resumed then paused again", [PAUSED, RESUMED, PAUSED], True),
+    ("paused twice", [PAUSED, PAUSED], True),
+    ("resumed with nothing to resume", [RESUMED], False),
+    ("resumed twice", [PAUSED, RESUMED, RESUMED], False),
+]
+
+
+@pytest.mark.parametrize(
+    ("types", "expected"),
+    [(types, expected) for _, types, expected in PAUSES],
+    ids=[case for case, _, _ in PAUSES],
+)
+def test_the_last_word_decides_whether_a_run_is_paused(
+    types: list[str], expected: bool, tmp_path: Path
+) -> None:
+    journal = tmp_path / "journal.jsonl"
+    write_lines(
+        journal,
+        *(event_line(type, by="human", reason="because") for type in types),
+    )
+
+    assert (read_pause(read_journal(journal).events) is not None) is expected
+
+
+def test_a_pause_carries_who_and_why(tmp_path: Path) -> None:
+    # the only account of the decision that survives, and a later reader has to
+    # be able to tell a deliberate hold from a forgotten one
+    journal = tmp_path / "journal.jsonl"
+    append_event(journal, PAUSED, by="agent", reason="the quota is exhausted")
+
+    paused = read_pause(read_journal(journal).events)
+
+    assert paused is not None
+    assert (paused.by, paused.reason) == ("agent", "the quota is exhausted")
+    assert paused.ts.endswith("Z")
+
+
+def test_the_last_arming_is_the_one_in_force(tmp_path: Path) -> None:
+    # re-arming at a new interval is the ordinary second reason to arm
+    journal = tmp_path / "journal.jsonl"
+    append_event(journal, ARMED, scheduler="cron", interval=600, label="steward-aaa")
+    append_event(
+        journal, ARMED, scheduler="launchd", interval=1800, label="steward-aaa"
+    )
+
+    armed = read_armed(read_journal(journal).events)
+
+    assert armed is not None
+    assert (armed.scheduler, armed.interval) == ("launchd", 1800)
+
+
+def test_disarming_clears_it(tmp_path: Path) -> None:
+    journal = tmp_path / "journal.jsonl"
+    append_event(journal, ARMED, scheduler="cron", interval=600, label="steward-aaa")
+    append_event(journal, DISARMED, scheduler="cron")
+
+    assert read_armed(read_journal(journal).events) is None
+
+
+ARMED_PAYLOADS: list[tuple[str, dict[str, object]]] = [
+    ("no scheduler", {"interval": 600}),
+    ("no interval", {"scheduler": "cron"}),
+    ("an interval that is not a number", {"scheduler": "cron", "interval": "10m"}),
+]
+
+
+@pytest.mark.parametrize(
+    "payload",
+    [payload for _, payload in ARMED_PAYLOADS],
+    ids=[case for case, _ in ARMED_PAYLOADS],
+)
+def test_an_arming_this_version_cannot_use_is_data_rather_than_damage(
+    payload: dict[str, object], tmp_path: Path
+) -> None:
+    journal = tmp_path / "journal.jsonl"
+    write_lines(journal, event_line(ARMED, **payload))
+
+    assert read_armed(read_journal(journal).events) is None

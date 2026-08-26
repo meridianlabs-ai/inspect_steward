@@ -145,25 +145,48 @@ def _create_definition(
     )
 
 
-def _update_gitignore(report: CreateReport, workspace: Workspace) -> None:
-    """Ensure the workspace's own ignore rules are present, without disturbing any already there."""
+def ensure_gitignore(workspace: Workspace) -> list[str]:
+    """Ensure the workspace's own ignore rules are present, without disturbing any already there.
+
+    Public because `init` is not the only caller that needs it. A workspace created before an entry existed does not have it, and nothing re-runs `init` — so the command that makes a path load-bearing is the one that has to know it is ignored. `steward timer arm` is the case that matters: it tells people to put credentials in `.env`, and giving that advice for a path git would track is worse than not giving it.
+
+    **What this cannot fix is a file already tracked.** An ignore rule does not untrack anything, so a `.env` committed before the rule arrived stays committed. Adding the rule is still the whole of what Steward can do about it from here.
+
+    Args:
+        workspace: The workspace.
+
+    Returns:
+        The entries this added, in `GITIGNORE_ENTRIES` order. Empty where every one was already there.
+
+    Raises:
+        OSError: If `.gitignore` cannot be read or written.
+    """
     path = workspace.root / ".gitignore"
     if not path.exists():
         path.write_text(_template("gitignore.txt"), encoding="utf-8")
-        report.record(".gitignore", Outcome.CREATED)
-        return
+        return list(GITIGNORE_ENTRIES)
 
     current = path.read_text(encoding="utf-8")
     present = {line.strip() for line in current.splitlines()}
     missing = [entry for entry in GITIGNORE_ENTRIES if entry not in present]
     if not missing:
-        report.record(".gitignore", Outcome.KEPT)
-        return
+        return []
 
     separator = "" if current.endswith("\n") else "\n"
     addition = "\n".join(missing)
     path.write_text(f"{current}{separator}\n# Steward workspace\n{addition}\n", "utf-8")
-    report.record(".gitignore", Outcome.UPDATED, f"added {', '.join(missing)}")
+    return missing
+
+
+def _update_gitignore(report: CreateReport, workspace: Workspace) -> None:
+    existed = (workspace.root / ".gitignore").exists()
+    added = ensure_gitignore(workspace)
+    if not existed:
+        report.record(".gitignore", Outcome.CREATED)
+    elif added:
+        report.record(".gitignore", Outcome.UPDATED, f"added {', '.join(added)}")
+    else:
+        report.record(".gitignore", Outcome.KEPT)
 
 
 def _in_repository(directory: Path) -> bool:

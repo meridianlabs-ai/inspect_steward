@@ -13,6 +13,7 @@ The two claims the step is held to are the last two tests plus
 a turn interrupted at any point is recovered by the following one.
 """
 
+import shutil
 from pathlib import Path
 from typing import Any
 
@@ -28,15 +29,19 @@ from inspect_steward._tend import (
     Refused,
     TendError,
     TendResult,
+    Verdict,
     status,
     tend,
 )
 from inspect_steward._worker import resolve_inflight
 from inspect_steward._workspace import (
+    PAUSED,
+    RESUMED,
     Claim,
     DirectivesError,
     Workspace,
     acquire,
+    append_event,
     read_journal,
 )
 
@@ -500,3 +505,88 @@ def test_status_md_is_quiet_when_there_is_nothing_to_say(tmp_path: Path) -> None
     turn(workspace)
 
     assert "Nothing needs attention." in workspace.status.read_text(encoding="utf-8")
+
+
+# --- pausing ------------------------------------------------------------
+#
+# `reconcile` has taken `paused` since step 5 and nothing set it until the timer
+# existed: before an armed timer, *not tending* was pausing. These are the turn
+# honouring the flag, which is the whole of what pausing means.
+
+
+def paused(workspace: Workspace, reason: str = "hold everything") -> None:
+    append_event(workspace.journal, PAUSED, by="human", reason=reason)
+
+
+def test_a_paused_run_schedules_nothing(tmp_path: Path) -> None:
+    workspace, _ = prepared(tmp_path, [SynthTask("waiting")])
+    paused(workspace)
+
+    result = turn(workspace)
+
+    assert result.spawned == []
+    assert result.summary.spawning == 0
+    assert result.verdict is Verdict.PAUSED
+
+
+def test_a_paused_run_moves_nothing_either(tmp_path: Path) -> None:
+    # a paused run makes no changes to itself, and archiving a superseded log
+    # is a change
+    done = SynthTask("done")
+    workspace, _ = prepared(tmp_path, [done])
+    write_log(workspace.logs, done)
+    write_log(workspace.logs, SynthTask("removed"))
+    paused(workspace)
+
+    assert turn(workspace).archived == []
+
+
+def test_a_paused_run_still_records_what_it_saw(tmp_path: Path) -> None:
+    # the series is what an agent reads the run as, and a night of silence in
+    # it is indistinguishable from a night of nothing happening
+    workspace, _ = prepared(tmp_path, [SynthTask("waiting")])
+    paused(workspace)
+
+    turn(workspace)
+
+    assert len(observations(workspace)) == 1
+
+
+def test_resuming_schedules_again(tmp_path: Path) -> None:
+    workspace, _ = prepared(tmp_path, [SynthTask("waiting")], definition=EMPTY)
+    paused(workspace)
+    assert turn(workspace, max_workers=1).spawned == []
+
+    append_event(workspace.journal, RESUMED)
+
+    assert len(turn(workspace, max_workers=1).spawned) == 1
+
+
+def test_status_previews_a_paused_run_as_paused(tmp_path: Path) -> None:
+    # the preview has to describe what the next tend does, and what it does is
+    # nothing
+    workspace, _ = prepared(tmp_path, [SynthTask("waiting")])
+    paused(workspace)
+
+    result = status(workspace)
+
+    assert result.summary.spawning == 0
+    assert result.verdict is Verdict.PAUSED
+
+
+def test_a_pause_survives_a_deleted_state_directory(tmp_path: Path) -> None:
+    """Why the flag is a journal event rather than a file under `.steward/`.
+
+    That directory is documented as safe to delete. A pause living there would
+    mean clearing a cache silently resumes an expensive run — and between the
+    two directions this can fail in, a pause that outlives a wiped cache is
+    recoverable and a resume nobody asked for is not.
+    """
+    workspace, _ = prepared(tmp_path, [SynthTask("waiting")])
+    paused(workspace)
+    turn(workspace)
+
+    shutil.rmtree(workspace.state)
+    prepared(tmp_path, [SynthTask("waiting")])
+
+    assert turn(workspace).verdict is Verdict.PAUSED
