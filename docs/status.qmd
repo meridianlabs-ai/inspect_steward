@@ -1,0 +1,192 @@
+---
+title: Reading Status
+llms-description: "How to read what Steward reports: the verdict glyph, task states, the per-task progress table, and the attention list of things that need a person or an agent — plus acknowledging an item."
+---
+
+## Overview
+
+``` bash
+steward status
+```
+
+`status` is `tend` with its actions discarded — the same reads and the same
+decision, with nothing carried out. So it answers two questions at once: where
+the run stands, and what the next turn would do. It takes no lock, spawns
+nothing, and writes nothing, which is what makes it safe to run as often as you
+like while a tend is in flight.
+
+Every turn also leaves the same snapshot in `status.md` at the top of the
+workspace. The two cannot disagree about anything, because they are one
+function with two renderings.
+
+::: {.callout-note appearance="simple"}
+`status` never *writes* `status.md`. So the file holds the last **tend's**
+snapshot and can be a full interval stale; the command is always current. If
+you want the live picture, run the command.
+:::
+
+## The verdict
+
+The first line is one glyph and a count of who is holding the run:
+
+| | |
+|----|----|
+| ✅ | `nothing needs you` |
+| ⚠️ | something does, and work continues — e.g. `⚠️ 1 needs a person, 2 for the agent` |
+| 🛑 | `nothing is progressing` — either something is blocking, or there is unfinished work and no worker running or about to |
+| ⏸ | `paused — nothing new is being scheduled` |
+
+The verdict is **run-level, not item-level**: one blocked worker among twenty
+running is ⚠️, because a rule that paints red whenever any single thing is
+blocked makes red mean nothing.
+
+## Task states
+
+``` text
+6 tasks: 3 complete, 2 incomplete, 1 missing
+```
+
+Four states, and they are named for the action they imply rather than as a
+taxonomy of log conditions:
+
+| state | means | what a turn does |
+|----|----|----|
+| `complete` | enough of it has been done | leave it alone |
+| `incomplete` | a log exists but is short, errored, cancelled, or still being written | resume it |
+| `missing` | wanted, and nothing has run | spawn it |
+| `orphaned` | a log exists for something the definition no longer asks for | move it to the archive |
+
+`complete` deliberately covers both a clean task and one carrying errored
+samples, because both mean *do not spawn*. Whether those errors matter is a
+separate question, and it is the one the attention list is for.
+
+## Progress
+
+The task-state counts answer *what is left*; they do not answer *how is it
+going*. That is a question about samples:
+
+``` text
+## progress
+
+| task           | samples | done | running | queued | connections | limit          | score |
+|----------------|--------:|-----:|--------:|-------:|------------:|---------------:|------:|
+| mbpp@gpt-5     | 500/500 | 100% |         |        |             |                | 0.742 |
+| gsm8k@gpt-5    | 318/500 |  64% |      38 |    144 |       22/40 | 61k/200k token | 0.669 |
+| gsm8k@opus-5   |   0/500 |   0% |         |        |             |                |       |
+```
+
+Two sources fill it, and the split is why it is cheap. The denominators, the
+score, and the declared limits come from the log headers, which never change
+once a log lands — so they are cached and re-read only when the directory
+actually changes. Everything that moves — samples running and queued, how hard
+the model pool is working, how much of its limit the leading sample has spent —
+comes from each live worker's own socket, concurrently, and costs nothing when
+nothing is running.
+
+Columns are present or absent for the whole table rather than per row, so a
+settled campaign renders four columns instead of eight. A task whose worker does
+not answer promptly is reported from its log rather than held up.
+
+`limit` shows the leading sample's progress toward whichever limit will stop it
+first. `score` is the task's headline metric — and because nothing in an eval log
+marks a metric as primary, Steward applies a convention and says which one it
+picked underneath the table.
+
+## The attention list
+
+Everything a turn has to report beyond a number is an **item**:
+
+``` text
+## attention
+
+### needs a person
+
+- gsm8k@opus-5 has stopped making progress after 3 attempts and will not be
+  respawned — `stalled:gsm8k@opus-5:3`
+- the definition has changed since it was captured — `steward launch` · `drift:9f3a1c`
+
+### for the agent
+
+- 2026-08-26T04-11_gsm8k_bad.eval could not be read as a log (unexpected EOF)
+  — `unreadable:2026-08-26T04-11_gsm8k_bad.eval`
+```
+
+Items are **grouped by who resolves them**, not by kind, because the first
+question a reader has is whether any of it is theirs. Yours comes first,
+always.
+
+There is one list, filtered rather than duplicated, so the terminal and
+`status.md` cannot drift apart in what they say. Where an item has a command
+that resolves it, the command is printed with it.
+
+### The kinds
+
+| kind | what it means | whose |
+|----|----|----|
+| `stalled` | a task has stopped getting anywhere and will not be respawned. Steward never restarts a failed task on its own — see [Running a Sweep](running.qmd#errors-are-counted-not-fixed) | a person |
+| `drift` | the definition file has changed since it was captured, so what is running is not what the file says. Resolved by `steward launch` | a person |
+| `degraded` | `_steward.md` could not be parsed, so the turn ran on the settings the last one recorded | a person |
+| `orphan_running` | a worker is still running work the definition no longer asks for. Stopping it is not a mechanical act, so Steward leaves it and tells you | a person |
+| `unsupervised` | no tend has happened for two intervals, so nothing is keeping the run going. A scheduler cannot report its own absence, which is why this is computed rather than raised | a person |
+| `timer_drift` | the interval `_steward.md` asks for is not the one that is actually armed. Reaching into your crontab unprompted is not a mechanical act, so Steward reports it rather than fixing it — re-arm to resolve | a person |
+| `unreadable` | a file in the log directory would not parse as a log. One item per file, so one bad file is not a permanent count | the agent |
+| `action_failed` | something a turn tried to do did not work. A single-turn fact that either recurs or does not, so it cannot be acknowledged | the agent |
+
+### An id says when you will hear about it again
+
+Each item's id is chosen so that **what re-arms it is what changes it**:
+
+| kind | id | says it again when |
+|----|----|----|
+| `drift` | the definition's content hash | the definition changes again — and it clears at relaunch for free |
+| `stalled` | the task, plus its attempt count | another attempt is made and also fails |
+| `degraded` | when the file was last edited | the file is edited and still will not parse |
+| `orphan_running` | the task | never — the condition ends when the worker exits |
+| `unreadable` | the filename | per file |
+
+## Acknowledging an item
+
+Some conditions nothing will clear by itself. A definition you edited on
+purpose keeps reporting drift; a file that was never a log stays unreadable
+forever. Left alone, those turn an attention list into something nobody reads.
+
+``` bash
+steward ack drift --reason "renamed a task arg deliberately; relaunching in the morning"
+```
+
+`ITEM` is an item id or any unambiguous prefix of one. The item then leaves
+`status.md`, the turn's output, and the verdict — a run whose last open item was
+accepted reads ✅ — while the journal keeps the record of who accepted it and
+why. A reason is required, because it is the only account of the decision that
+survives.
+
+It comes back if the condition changes in a way that matters, which is exactly
+what the id table above encodes: acknowledging one edit to a definition does not
+acknowledge the next one.
+
+`--by` records who decided. An agent relaying your answer records `human`; one
+disposing of something on its own judgement — a file it investigated and found
+to be a partial upload — records `agent`.
+
+::: {.callout-note appearance="simple"}
+`ack` disposes of a *line in a list*. It changes nothing in the run: no worker
+is stopped, no sample is re-run, no log is moved.
+:::
+
+## Other renderings
+
+``` bash
+steward status --format md   # markdown tables, for relaying somewhere
+steward status --json        # the whole state as JSON
+```
+
+`--format md` matters more than it looks. The default is aligned monospace
+columns for a terminal, which collapse into a line of words the moment they are
+rendered as markdown — so anything passing the snapshot on to a person should
+ask for `md`.
+
+You can also preview against different settings without changing anything:
+
+``` bash
+steward status --max-workers 24
+```

@@ -40,9 +40,15 @@ exits zero. **Completion is not success.** Read the artifact.
 "How is it going", "what's the latest", "any update" are requests for the
 snapshot, not for your reading of it.
 
-> Run `steward status` and render what it printed — every section, in its
-> order, in full, with nothing above it. As markdown, not inside a code fence,
-> because it is a document with tables meant to be read rendered.
+> Run `steward status --format md` and render what it printed — every section,
+> in its order, in full, with nothing above it. As markdown, not inside a code
+> fence, because it is a document with tables meant to be read rendered.
+
+`--format md` rather than plain `status`: the default is aligned monospace
+columns for a terminal, which collapse into a line of words once rendered as
+markdown. Do not read `status.md` instead — `status` never writes that file, so
+it holds the last *tend*'s snapshot and can be a full interval stale while
+claiming to be current.
 
 Brevity is not the failure; substitution is. The detail *is* the answer, and a
 summary replaces the reader's judgement with yours at the moment they were

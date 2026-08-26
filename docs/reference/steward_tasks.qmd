@@ -1,0 +1,4 @@
+---
+reference: steward tasks
+description: Enumerate the tasks an eval set definition resolves to.
+---

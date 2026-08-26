@@ -1451,6 +1451,7 @@ dev = [
     { name = "pytest-xdist" },
     { name = "pyyaml" },
     { name = "quarto-cli" },
+    { name = "rich" },
     { name = "ruff" },
     { name = "types-psutil" },
     { name = "types-pyyaml" },
@@ -1467,6 +1468,7 @@ doc = [
     { name = "panflute" },
     { name = "pyyaml" },
     { name = "quarto-cli" },
+    { name = "rich" },
     { name = "types-pyyaml" },
 ]
 
@@ -1487,7 +1489,7 @@ provides-extras = ["flow", "hawk"]
 
 [package.metadata.requires-dev]
 dev = [
-    { name = "griffe" },
+    { name = "griffe", specifier = ">=2" },
     { name = "hawk", extras = ["cli", "runner"], marker = "python_full_version >= '3.13'", specifier = ">=2.4.0" },
     { name = "inspect-flow", specifier = ">=0.12.0" },
     { name = "jupyter" },
@@ -1500,6 +1502,7 @@ dev = [
     { name = "pytest-xdist" },
     { name = "pyyaml" },
     { name = "quarto-cli", specifier = ">=1.9.36" },
+    { name = "rich" },
     { name = "ruff" },
     { name = "types-psutil" },
     { name = "types-pyyaml" },
@@ -1510,12 +1513,13 @@ dist = [
     { name = "twine" },
 ]
 doc = [
-    { name = "griffe" },
+    { name = "griffe", specifier = ">=2" },
     { name = "jupyter" },
     { name = "markdown" },
     { name = "panflute" },
     { name = "pyyaml" },
     { name = "quarto-cli", specifier = ">=1.9.36" },
+    { name = "rich" },
     { name = "types-pyyaml" },
 ]
 

@@ -1,0 +1,10 @@
+---
+title: The Agent Runbook
+llms-description: "The operating instructions Steward ships to the agent supervising a run, reproduced here so a human can see the bounds their agent works under."
+---
+
+This is the runbook an agent reads, reproduced verbatim from the copy that ships
+with the package — the same text `steward runbook` prints. It is here so that
+you can see what your agent has been told; you never need to run it yourself.
+
+{{< include ../src/inspect_steward/_workspace/templates/runbook.md >}}

@@ -12,6 +12,20 @@ inspect-docs:
   navigation:
     - text: Getting Started
       href: index.qmd
+    - text: Using Steward
+      contents:
+        - href: definitions.qmd
+        - href: running.qmd
+        - href: status.qmd
+        - href: amending.qmd
+        - href: workspace.qmd
+        - href: directives.qmd
+        - href: agents.qmd
+        - href: runbook.qmd
+    - text: Platforms
+      contents:
+        - href: flow.qmd
+        - href: hawk.qmd
   sidebar: unified
   external_refs:
     inspect_ai: https://inspect.aisi.org.uk

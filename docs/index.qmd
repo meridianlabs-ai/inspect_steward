@@ -1,23 +1,287 @@
 ---
 title: "Inspect Steward"
 description: "An agent that supervises evaluations on your behalf."
-llms-description: "Installation and getting started with Inspect Steward."
+llms-description: "What Steward is, how supervision divides between a timer, a tend loop, an agent, and you, and how to start and walk away from a run."
+tbl-colwidths: [30,70]
 ---
 
 ## Introduction
 
-Inspect Steward provides agent-driven supervision for evaluations. It plays the role of the human sitting in front of a running eval — watching progress, diagnosing problems as they surface, and adjusting runtime state.
+Inspect Steward runs an eval set the way a person would if they sat in front of
+it all night — and then does the sitting for you.
 
-A steward acts on behalf of someone who isn't there. That's the relationship this package models: you start a run and step away, and the steward minds it.
+A steward acts on behalf of someone who isn't there. That is the relationship
+this package models: you start a run and step away, and the steward minds it.
+Concretely, Steward:
 
-## Installation
+1.  Enumerates what a definition resolves to **before** anything runs, so you
+    can see what you are committing to.
+2.  Runs each task in its own process, so one crash costs one task rather than
+    the run.
+3.  Reconciles the log directory against that enumeration on a schedule —
+    spawning what should be running, recording what died, and leaving alone
+    what is already done.
+4.  Reports where the run stands cheaply enough to ask constantly.
+5.  Says what needs a person, once each, rather than every ten minutes.
 
-```bash
-pip install inspect-steward
+You do not have to be there for any of it, and neither does a coding agent. A
+timer guarantees the mechanical half; the parts that need judgement wait for
+someone who can exercise it.
+
+### If you already use `eval_set()`
+
+Steward is not a replacement for `eval_set()` — it *calls* it. Your definition
+stays exactly what it is today: a program culminating in one `eval_set()` call.
+What changes is who orchestrates.
+
+|  |  |
+|----|----|
+| **One process per task** | `eval_set()` runs an eval set in one process, so an OOM or a segfault takes the whole run with it, and every task's Python work — transcript construction, JSON serialization, `.eval` compression, non-model scorers — serializes behind the GIL on one core. Steward spawns one worker per task, so a crash is isolated and CPU-bound work actually runs in parallel. |
+| **Load you chose rather than load that emerged** | Inside one process, sample concurrency adapts to what the provider allows. Across N processes, N independent controllers each discover headroom the others have not claimed yet, overshoot together, and get throttled together. Steward owns both factors — how many workers, and each one's share — so the fleet's demand is a number you set. |
+| **Errored samples become a work list** | Steward runs workers with `fail_on_error=False`, so a task always reaches the end of its dataset. That means a log can say `success` while carrying errored samples, and **completion is not success**. What you get instead of a silent pass is an explicit queue of samples that need a decision. |
+| **A record of how the run was conducted** | Which samples were re-run, which were accepted as failed, who decided, and why — kept as it happens rather than reconstructed afterwards. |
+
+Everything downstream still works, unmodified and live: one flat log directory
+means `inspect view`, `samples_df()`, and `inspect log` see exactly what they
+would see if you had run `eval_set()` by hand.
+
+## The shape
+
+```text
+       your definition                        one flat log directory
+   (evalset.py / flow.yaml / hawk.yaml)
+              │                                   task₁.eval
+              │  read once                        task₂.eval
+              ▼                                   task₃.eval
+          manifest  ────────────┐                      ▲
+     (every resolved task)      │                      │
+                                ▼                      │
+                          steward tend  ───► worker ───┘
+                       (reconcile, spawn,   one task,
+                        reap, record)       one process
+                                ▲
+                                │  every ~10 minutes
+                            the timer
 ```
+
+Steward reads your definition once to learn what it resolves to — the
+**manifest**. From then on, a **tend** compares that against the log directory
+and closes the gap: anything wanted with no log gets a worker, anything
+finished is left alone, anything the definition no longer asks for is moved
+aside. Miss a tend and nothing breaks; the workers already running keep
+running, and the next tend picks up where the last one left off.
+
+## Who does what
+
+Supervising a run is not one job, and Steward's central design decision is
+where it draws the lines. Four parties, in order of how much judgement each
+exercises:
+
+| party | does | exercises judgement? |
+|----|----|----|
+| **the timer** | makes a turn happen on a schedule | no |
+| **`steward tend`** | reconcile, spawn, reap, archive, record, write the snapshot | no — and it never does long work, so it always returns in seconds |
+| **a coding agent** | tunes concurrency, groups error classes into questions you can answer, investigates, writes up what happened | yes |
+| **you** | decide what is being measured, rule on anomalies, answer approvals, sign off | yes, and some of it is yours alone |
+
+The reason to care about the split is that **each party's absence fails
+differently**, and only some of those failures are acceptable overnight:
+
+| what is missing | what happens |
+|----|----|
+| nothing | the fleet converges, questions get answered as they arise, the run ends in an attestation |
+| **the agent** | the fleet still converges — logs land, the snapshot stays current, nothing stalls. What accumulates is judgement: unruled anomalies, untuned concurrency, nothing written up. A run waiting for a decision, which is a fine thing to be at 4am. |
+| **the agent and you** | the same, for longer |
+| **the timer** | nothing happens at all, *and nothing says so* — silence is indistinguishable from a healthy run. This is the failure the whole arrangement exists to prevent, which is why `launch` arms a timer or refuses. |
+
+There is one exception worth knowing about before you rely on the second row. A
+worker that stops on a tool approval or an `ask_user` is alive, holding its
+slot, and waiting for a *person* — not the timer, and not the agent, which is
+barred from answering. A definition with human approvers therefore loses
+throughput as well as accumulating decisions. Steward reports those loudly, but
+it cannot resolve them.
+
+### Moving work down the stack
+
+The table above is not fixed. `_steward.md` in your workspace is how you hand
+work to a party that needs less judgement than you do:
+
+-   Writing `max_workers: 8` in its front matter turns a judgement into a
+    constraint Steward enforces unattended, with nobody in session.
+-   Writing *"re-run samples that failed on provider rate limits, up to twice,
+    without asking"* in its prose turns a decision you would otherwise be woken
+    for into one the agent may act on, because you already made it.
+
+Rules accumulate as you notice yourself answering the same question twice, and
+the run gets quieter as they do. See [Standing Rules](directives.qmd).
 
 ## Getting started
 
-```bash
-steward init
+``` bash
+pip install inspect-steward
 ```
+
+Steward runs on macOS and Linux. Windows is not supported: a run has to outlive
+the process that started it, and the detached-process, control-socket, and
+process-table mechanisms that achieve that are POSIX-only.
+
+Then create a workspace:
+
+``` bash
+steward init my-sweep
+```
+
+That is a directory a person and an agent co-inhabit, and that a third party
+can pick up cold — everything important is written down rather than held in
+somebody's session. See [The Workspace](workspace.qmd) for what each file is
+for.
+
+## Running a sweep
+
+### 1. Write the definition
+
+A definition is **any program culminating in a single `eval_set()` call**.
+`init` leaves an empty placeholder; what goes in it is exactly what you would
+write anyway:
+
+``` {.python filename="evalset.py"}
+from inspect_ai import eval_set
+
+from my_evals import mbpp, gsm8k
+
+eval_set(
+    tasks=[mbpp(), gsm8k()],
+    model=["openai/gpt-5", "anthropic/claude-opus-5"],
+    log_dir="logs",
+    max_samples=40,          # <1>
+    retry_on_error=3,        # <2>
+)
+```
+
+1.  Set this explicitly. It is the difference between sample concurrency
+    Steward can retune on a live worker and concurrency it can only watch.
+2.  How many attempts a flaky sample deserves is a property of your eval, so it
+    stays yours. It is also the *only* automatic recovery tier — past it, every
+    further attempt is a decision.
+
+An Inspect Flow spec and a Hawk eval set config are definitions too, and
+Steward drives their own entrypoints rather than reimplementing them. See
+[Definitions](definitions.qmd).
+
+### 2. See what it resolves to
+
+``` bash
+steward tasks
+```
+
+This executes the definition to enumerate it and prints one row per resolved
+task — task × model × solver, with sample counts. Nothing runs. This is the
+moment to notice that a sweep is four times larger than you meant it to be.
+
+### 3. Launch
+
+``` bash
+steward launch
+```
+
+`launch` reads the definition, commits the manifest as desired state, spawns
+the first workers, arms a timer, and **returns**. It does not block, because
+the thing that supervises the run is not the terminal you typed into.
+
+Check what it armed:
+
+``` bash
+steward timer status
+```
+
+### 4. Walk away
+
+From here the run tends itself. Each turn spawns what should be running, reaps
+what died, rewrites `status.md`, and appends what it observed to the journal.
+
+### 5. Come back
+
+``` bash
+steward status
+```
+
+`status` is `tend` with its actions discarded — the same reads, the same
+decision, nothing carried out. So it reports both where the run stands *and*
+what the next turn would do, and it is safe to run as often as you like:
+
+``` text
+⚠️ 1 needs a person
+4 tasks: 2 complete, 1 incomplete, 1 missing
+
+task            samples  done  running  queued   score
+mbpp@gpt-5      500/500  100%                    0.742
+mbpp@opus-5     500/500  100%                    0.781
+gsm8k@gpt-5     318/500   64%       38     144   0.669
+gsm8k@opus-5      0/500    0%
+
+3 running · next tend: 1 to spawn
+
+## attention
+
+### needs a person
+
+- gsm8k@opus-5 has stopped making progress after 3 attempts and will not be
+  respawned — `stalled:gsm8k@opus-5:3`
+```
+
+For what each part means, see [Reading Status](status.qmd).
+
+If you need to change the sweep — add a model, raise epochs, fix a task
+argument — edit the definition and run `steward launch` again. A workspace is a
+project rather than a single run, and amending it is the same verb as starting
+it. See [Amending a Run](amending.qmd).
+
+::: {.callout-note appearance="simple"}
+### Not yet implemented
+
+The arc above ends at `status`. The half that turns an attention list into
+settled results — anomalies with a lifecycle, notification that reaches you
+when you are not at a terminal, and `steward signoff` as an attestation that
+you accept the results — is designed but not yet built. Until it is, a run's
+open questions are answered by a person reading `status` and deciding, and a
+run has no terminal state beyond "nothing is progressing".
+:::
+
+## Responsible use
+
+Steward exists to start long, expensive work and stop watching it, and both
+halves of that deserve respect.
+
+-   **Know what you are committing to.** `steward tasks` enumerates the whole
+    sweep before a dollar is spent. A definition that crosses four models with
+    three epochs over two thousand samples is twenty-four thousand samples, and
+    that is visible in advance rather than discovered in the morning.
+-   **Steward does not manage spend.** It does not track, project, cap, or act
+    on cost. The real control is upstream of the run: run less. Per-sample
+    limits belong in your definition, and account-level budgets belong to your
+    platform.
+-   **A `success` log is not a good result.** Because sample errors never fail a
+    task, a task whose model API was down for its entire duration completes
+    "successfully" with a meaningless score. Read the attention list, not the
+    exit code.
+
+## Learning More
+
+-   [Definitions](definitions.qmd) — what Steward will accept as a definition,
+    the three supported formats, and what makes one enumerable.
+-   [Running a Sweep](running.qmd) — `launch`, what a turn actually does, the
+    timer that guarantees turns happen, and pausing.
+-   [Reading Status](status.qmd) — the verdict, the progress table, and the
+    attention list.
+-   [Amending a Run](amending.qmd) — editing a definition mid-project, and
+    which edits create work.
+-   [The Workspace](workspace.qmd) — what is in the directory, what is durable,
+    and what you may safely delete.
+-   [Standing Rules](directives.qmd) — `_steward.md`, and how a run gets
+    quieter over time.
+-   [Working with an Agent](agents.qmd) — what an agent supervising your run
+    may do, and what it may never do.
+
+Platform-specific notes are in [Inspect Flow](flow.qmd) and [Hawk](hawk.qmd),
+and the complete CLI and Python API are in the
+[Reference](reference/index.qmd).

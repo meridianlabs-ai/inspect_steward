@@ -1,0 +1,22 @@
+---
+title: Reference
+---
+
+### Python API
+
+| | |
+|---|---|
+| [Enumeration](enumeration.qmd) | Reading an eval set definition into a manifest of resolved tasks. |
+: {.borderless tbl-colwidths=[35,65]}
+
+### CLI
+
+| | |
+|---|---|
+| [steward ack](steward_ack.qmd) | Accept an open item, so that nothing reports it again. |
+| [steward init](steward_init.qmd) | Create a Steward workspace. |
+| [steward runbook](steward_runbook.qmd) | Print the agent runbook that ships with the package. |
+| [steward status](steward_status.qmd) | Report where the run stands, and what the next turn would do. |
+| [steward tasks](steward_tasks.qmd) | Enumerate the tasks an eval set definition resolves to. |
+| [steward tend](steward_tend.qmd) | Run one turn of the supervision loop. |
+: {.borderless tbl-colwidths=[35,65]}

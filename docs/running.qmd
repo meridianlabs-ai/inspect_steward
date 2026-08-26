@@ -1,0 +1,202 @@
+---
+title: Running a Sweep
+llms-description: "Launching a run, what one turn of the supervision loop does, arming the timer that guarantees those turns happen with nobody watching, and pausing."
+---
+
+## Overview
+
+Running a sweep under Steward is three things, and only the first is a
+foreground act:
+
+``` bash
+steward launch          # commit what should run, start it, arm the timer
+steward timer status    # confirm something will keep tending it
+steward status          # ask how it is going, whenever you like
+```
+
+Everything between the first and the last happens without you. This page is
+about the machinery that makes that true.
+
+## `steward launch`
+
+`launch` is the only verb that reads your definition. It captures the manifest,
+reports what committing it would change, commits it as **desired state**, spawns
+the first workers, arms a timer, and returns.
+
+It deliberately does not block. The thing supervising the run is not the
+terminal you typed into — if it were, closing your laptop would end the sweep.
+
+Because `launch` is what commits desired state, it is also how you *change* a
+run: edit the definition, launch again. See [Amending a Run](amending.qmd).
+
+## What a turn does
+
+``` bash
+steward tend
+```
+
+One turn — a **tend** — compares the manifest against the log directory and
+closes the gap:
+
+1.  **Observe.** Read the log directory's headers and sweep the process table
+    for live workers.
+2.  **Decide.** Work out which tasks need a worker, which finished, which died,
+    and which the definition no longer asks for.
+3.  **Act.** Spawn, reap, archive.
+4.  **Record.** Rewrite `status.md` and append what it observed to the journal.
+
+Three properties make that safe to put on a timer, and they are worth trusting
+rather than working around:
+
+|  |  |
+|----|----|
+| **A repeated turn is a no-op.** | Tend twice in a row and the second does nothing. There is no harm in an extra one. |
+| **An interrupted turn is repaired by the next.** | Kill a tend halfway through and nothing is left inconsistent — the following turn observes whatever actually happened and proceeds from there. |
+| **A turn never blocks.** | Anything whose duration is unbounded is spawned as a detached child that some later turn observes. A tend returns in seconds. |
+
+That last one is why a missed turn is not a stall. Workers execute continuously
+between turns; what a late turn delays is the *scheduling of new work*, not the
+progress of work already running.
+
+### One task, one process
+
+Steward spawns exactly one worker per task — always, not by default. Two
+reasons, and the first is the binding one:
+
+-   **The GIL.** Evals are mostly I/O-bound, but the work that is *not* waiting
+    — transcript construction, JSON serialization, `.eval` compression,
+    non-model scorers — is all Python bytecode, and it serializes within a
+    process however high sample concurrency goes. One process saturates one
+    core.
+-   **Failure isolation.** One crash costs one task.
+
+Workers are spawned **detached**, so the run survives Steward exiting, your
+shell closing, or the machine you launched from going to sleep.
+
+### How many run at once
+
+The ceiling is **10 concurrent workers** by default, and you are expected to
+raise it once a run is behaving:
+
+``` yaml
+---
+max_workers: 24
+---
+```
+
+in [`_steward.md`](directives.qmd), or `--max-workers` for one turn. It is a
+resource guard — memory, file descriptors, how much simultaneous spike a box
+should be asked to absorb — rather than a parallelism budget, which is why it is
+a flat number rather than something derived from your core count. Ten workers on
+four cores is entirely ordinary: a worker is on the CPU in bursts and waiting on
+a model API in between.
+
+Anything past the ceiling queues. Steward spawns **task-major** — every model
+for the first task, then every model for the second — rather than in the order
+enumeration happens to produce, which is model-major. That matters for a reason
+that only shows up when a run is interrupted: stop a model-major sweep halfway
+and one model is complete and the other untouched, so the arms cannot be
+compared at all. Task-major means a halted run is still a comparison. It also
+spreads load across several rate-limit buckets instead of hammering one.
+
+### Errors are counted, not fixed
+
+Workers run with `fail_on_error=False`, so a task always reaches the end of its
+dataset and finishes carrying whatever errored samples remain. A sample gets the
+`retry_on_error` attempts your definition asked for, and that is the **only**
+automatic recovery tier — every further attempt, at sample or task level, is a
+decision rather than a rule Steward executes.
+
+The consequence is that Steward never restarts a failed task on its own. A task
+that fails despite `fail_on_error=False` has failed structurally — a bad import,
+an OOM, a scorer that throws — and respawning a definition that will not import
+spends money to arrive where it started. A task that has stopped getting
+anywhere is reported as needing attention instead ([Reading
+Status](status.qmd)).
+
+## The timer
+
+A tend has to happen whether or not anyone is around to type it, and nothing
+else in the design guarantees that. So arming a timer is part of starting a run
+rather than a step in a checklist somebody remembers.
+
+``` bash
+steward timer arm                    # detect a scheduler and install
+steward timer arm --interval 5m      # override the interval
+steward timer status                 # ask the scheduler what is really there
+steward timer disarm                 # remove it
+```
+
+Steward prefers a scheduler that survives a reboot, trying in order:
+
+| scheduler | |
+|----|----|
+| `launchd` | macOS user agent |
+| `systemd` | user timer |
+| `cron` | a marked block in your crontab |
+| `ticker` | Steward's own detached process — the fallback where a machine has none of the three. It does not survive a reboot, which is a reason to prefer the others rather than a reason to avoid it. |
+
+Arming is idempotent: an existing timer is removed first, so re-arming at a new
+interval leaves exactly one.
+
+### Arming checks that a scheduled tend can authenticate
+
+A timer does not inherit your shell. So if the credentials your run needs are
+exported in the terminal you armed from and are not available to a scheduled
+process, `arm` **refuses** and says which ones are missing.
+
+That refusal is worth the friction. The alternative is a fleet that fails to
+authenticate every ten minutes all night while `status.md` reports it dutifully
+trying. Use `--no-env-check` to arm anyway when you know better.
+
+### A run says when nothing is tending it
+
+A scheduler cannot report its own absence, so arming writes down what it
+installed, and any turn that finds no tend for two intervals reports the run as
+**unsupervised**. That catches a crontab somebody rewrote as readily as one
+Steward removed.
+
+::: {.callout-note appearance="simple"}
+`steward timer status` is the one command that asks the scheduler directly.
+Everything else — a tend, a `status`, the attention list — goes on what arming
+recorded, because those run every few minutes and asking costs a subprocess.
+:::
+
+## Pausing
+
+``` bash
+steward pause --reason "provider incident, waiting it out"
+steward resume
+```
+
+Pausing means **stop scheduling**. Every later turn reports the run as paused
+and spawns nothing; workers already in flight are left alone to finish, because
+stopping one is not a mechanical act and it is not what pausing means.
+
+The pause is recorded in the journal rather than in disposable state, so
+clearing Steward's cache cannot silently resume an expensive run. On resume, the
+next turn converges from whatever it finds — which is not necessarily where the
+run was when you paused it, since logs landed and workers exited in the
+meantime. That is the ordinary behaviour of the loop rather than a caveat about
+pausing.
+
+Note the distinction from disarming the timer. `disarm` stops anything happening
+without somebody typing it, including the reaping and reporting that make a
+paused run legible; `pause` keeps the loop running and tells it not to start
+work.
+
+## Two Stewards cannot collide
+
+A tend takes a short-lived lock before it writes anything, held for the seconds
+the turn runs. So a timer and an agent tending at the same moment is a non-event
+— two callers of the same function, serialized.
+
+If a tend crashes, the lock is released by the operating system, and the next
+turn simply takes it. If one *wedges* — alive but stuck — it is killed and the
+lock taken, because a wedged supervisor blocking its own replacement is worse
+than a dead one, and escalating to a human at 2am is worth nothing when the
+whole premise is that nobody is there. `steward tend --no-break-claim` inverts
+that for when you are attached and would rather examine the wedge.
+
+Killing a tend destroys no work: workers are detached and outlive it, and every
+write a turn makes is built to be interrupted.
