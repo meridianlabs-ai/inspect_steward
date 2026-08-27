@@ -31,6 +31,7 @@ from inspect_steward._tend.items import (
     ACTION_FAILED,
     DEGRADED,
     DRIFT,
+    SIGNOFF_READY,
     STALLED,
     TIMER_DRIFT,
     UNREADABLE,
@@ -170,6 +171,79 @@ def test_a_blocked_item_stops_a_run_that_is_otherwise_working(
     )
 
 
+def test_accepting_results_survives_an_edit_that_produces_no_new_results(
+    tmp_path: Path,
+) -> None:
+    """The signoff item is keyed on the manifest, not on the file on disk.
+
+    What is being accepted is a *set of results*, and results change at a
+    launch. An edit sitting unlaunched in the definition changes nothing on
+    disk — `drift` is what reports it — so keying the acceptance on the live
+    hash re-opened a settled decision every time somebody saved the file.
+    """
+    workspace, _ = prepared(tmp_path, [TASK])
+    write_log(workspace.logs, TASK)
+    signoff = items(workspace)[SIGNOFF_READY]
+    ack(workspace, signoff.id)
+
+    (workspace.root / DEFINITION).write_bytes(b"# edited, not launched\n")
+    after = items(workspace)
+
+    # the edit is heard, once, as the thing it actually is
+    assert DRIFT in after
+    assert SIGNOFF_READY not in after
+
+
+def test_accepting_one_result_set_does_not_accept_a_different_one(
+    tmp_path: Path,
+) -> None:
+    """A byte-identical definition can enumerate different tasks.
+
+    Flow arguments live beside the file, an import can change under it, and
+    `definition_hash` covers the top-level file and nothing else — so a hash of
+    the definition is not an identity for a *result set*. Keying the acceptance
+    on it let an old acknowledgment silently cover results nobody had looked at.
+    """
+    other = SynthTask("second")
+    workspace, _ = prepared(tmp_path, [TASK])
+    write_log(workspace.logs, TASK)
+    ack(workspace, items(workspace)[SIGNOFF_READY].id)
+
+    # the same definition bytes, and therefore the same content hash, enumerating
+    # one more task -- which is what a Flow spec run with different arguments does
+    prepared(tmp_path, [TASK, other])
+    write_log(workspace.logs, other)
+
+    assert SIGNOFF_READY in items(workspace)
+
+
+def test_accepting_a_short_run_does_not_accept_the_longer_one(
+    tmp_path: Path,
+) -> None:
+    """The identifier deliberately does not move when the sample count does.
+
+    `task_identifier` covers the solver plan, config and limits, and pointedly
+    not `samples` or `epochs` — so that raising either leaves existing logs
+    resumable instead of orphaning them. Steward relies on that: `observe`
+    computes `samples × epochs` separately and calls a short log `SHORT`. So a
+    ten-sample run relaunched for twenty is the same identifier and a genuinely
+    different set of results, and a digest over identifiers alone let the first
+    acceptance cover the second in silence.
+    """
+    short = SynthTask("probe", samples=4)
+    workspace, _ = prepared(tmp_path, [short])
+    write_log(workspace.logs, short)
+    ack(workspace, items(workspace)[SIGNOFF_READY].id)
+    assert SIGNOFF_READY not in items(workspace)
+
+    longer = SynthTask("probe", samples=8)
+    assert longer.identifier == short.identifier, "the premise of this test"
+    prepared(tmp_path, [longer])
+    write_log(workspace.logs, longer)
+
+    assert SIGNOFF_READY in items(workspace)
+
+
 # --- the id is the re-notification policy -------------------------------
 
 
@@ -183,10 +257,19 @@ def test_acknowledging_removes_an_item_from_the_turn_entirely(
     ack(workspace, "unreadable:broken.eval")
     result = turn(workspace)
 
-    assert result.items == []
-    assert result.verdict is Verdict.CLEAR
-    # and it is gone from what a reader sees, not merely from the list
-    assert "broken.eval" not in workspace.status.read_text()
+    # the run's one task completed, so what remains is the acceptance nobody
+    # has given -- which is the point of that item and not a leak from this one
+    assert [item.kind for item in result.items] == [SIGNOFF_READY]
+    assert result.verdict is Verdict.COMPLETE
+
+    # and it **moved** rather than vanishing: gone from the decisions, present
+    # in what happened with who decided and why. A disposal that erased itself
+    # would take *somebody dealt with this at 2am* with it, which is exactly
+    # what a reader arriving at six has no other way to learn
+    rendered = workspace.status.read_text()
+    decisions, _, history = rendered.partition("## what happened")
+    assert "broken.eval" not in decisions
+    assert "accepted by human" in history and "broken.eval" in history
 
 
 def test_a_second_edit_is_heard_again(tmp_path: Path) -> None:
@@ -214,8 +297,7 @@ def test_acknowledging_one_bad_file_does_not_silence_the_next(
     ack(workspace, "unreadable:first.eval")
     (workspace.logs / "second.eval").write_bytes(b"also not a log")
 
-    (item,) = turn(workspace).items
-    assert item.id == "unreadable:second.eval"
+    assert items(workspace)[UNREADABLE].id == "unreadable:second.eval"
 
 
 def test_a_stall_that_gets_worse_is_a_new_item(tmp_path: Path) -> None:
@@ -328,7 +410,10 @@ def test_a_turn_reports_what_changed_since_the_last_one(tmp_path: Path) -> None:
     (workspace.logs / "first.eval").write_bytes(b"not a log")
 
     first = turn(workspace)
-    assert first.appeared == ["unreadable:first.eval"]
+    # `in` rather than `==`: this fixture's one task is complete, so the first
+    # turn also raises the acceptance item. The claim under test is the pair of
+    # assertions below, where that item persists and therefore appears in neither
+    assert "unreadable:first.eval" in first.appeared
     assert first.resolved == []
 
     (workspace.logs / "first.eval").unlink()
@@ -348,7 +433,9 @@ def test_a_condition_that_persists_is_not_reported_as_new(tmp_path: Path) -> Non
     second = turn(workspace)
 
     assert second.appeared == [] and second.resolved == []
-    assert [item.id for item in second.items] == ["unreadable:broken.eval"]
+    assert [item.id for item in second.items if item.kind == UNREADABLE] == [
+        "unreadable:broken.eval"
+    ]
 
 
 def test_a_status_diffs_against_the_last_tend_without_recording_one(

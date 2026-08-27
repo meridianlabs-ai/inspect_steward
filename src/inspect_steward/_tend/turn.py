@@ -28,6 +28,7 @@ from .._evalset.cache import read_attempt_cache, write_attempt_cache
 from .._evalset.manifest import (
     Manifest,
     definition_hash,
+    manifest_digest,
     read_manifest,
 )
 from .._evalset.observe import (
@@ -62,24 +63,30 @@ from .._workspace import (
     Ack,
     Armed,
     Claim,
+    Collected,
     DirectivesError,
     Held,
+    JournalEvent,
     Paused,
+    Raised,
     Workspace,
     acquire,
     append_event,
     read_acks,
     read_armed,
     read_claim,
+    read_collected,
     read_directives,
     read_journal,
     read_launched,
     read_pause,
+    read_raised,
     resolve_pool,
     steward_log,
 )
+from .history import Happened, happened
 from .items import Item, Supervision, Verdict, tend_items, verdict
-from .progress import Progress, task_progress
+from .progress import Progress, live_totals, task_progress
 from .render import status_markdown
 
 OBSERVATION = "observation"
@@ -139,6 +146,12 @@ class TendResult:
     definition_hash: str | None = None
     """What the definition hashes to now. Carried because it is what keys the drift item: a further edit makes a new id, so an accepted drift stays accepted and the next one is heard."""
 
+    manifest_digest: str | None = None
+    """A digest of the task set the committed manifest asks for.
+
+    **What identifies a set of *results*, and deliberately not `definition_hash`**, which identifies a *file*. The two come apart in both directions: an edit sitting unlaunched changes the file and not the results, and a Flow spec relaunched with different arguments — or one whose imported module changed — produces different tasks from a byte-identical file. Anything keyed on the file hash therefore both re-opens settled decisions and silently suppresses new ones. See `manifest_digest`.
+    """
+
     degraded_at: str | None = None
     """`_steward.md`'s modification time when it would not parse, for the same reason — an edited file that still fails is a new item rather than one already acknowledged."""
 
@@ -166,6 +179,27 @@ class TendResult:
 
     executed: bool = False
     """Whether the actions were carried out (`tend`) or discarded (`status`)."""
+
+    happened: Happened = field(default_factory=Happened)
+    """What has been done to this run, oldest first — the summary's third section.
+
+    Computed here rather than in the renderer because it is a fold over the journal this turn already read, and because two renderings of it would be two chances to disagree.
+    """
+
+    collected: Collected | None = None
+    """The most recent collection, or `None` where no agent has attached.
+
+    Two things read it: the delta `steward collect` shows, and the collection age beside the tend age — the pair that separates *the timer stopped* from *nobody is looking* (agent.md §2.2).
+    """
+
+    since_collected: float | None = None
+    """Seconds since an agent last collected, or `None` where none ever has.
+
+    Beside `Supervision.since_tend` rather than inside it: that type is about whether a *timer* is firing, and this is about whether anyone is reading what it produces. Two failures, two ages (agent.md §2.2).
+    """
+
+    position: int = 0
+    """The journal's last line at the moment this turn read it. What a collection advances the cursor *to* — taken from the read rather than from the file's length now, so a `collect` acknowledges what it was shown rather than whatever landed while it was being shown."""
 
     progress: Progress = field(default_factory=Progress)
     """One row per task: samples done, in flight, and queued, the budget the leading sample is closest to spending, and the headline metric.
@@ -310,7 +344,7 @@ def status(
 class _History:
     """What the journal says, read once and used for everything that asks.
 
-    A turn used to read the journal only when `_steward.md` would not parse. It now has six questions for it — the last good settings, the previous turn's items and when it happened, what has been acknowledged, whether the run is paused, and what timer is armed — and they are one pass over the same events. The file is small by design (roughly sixty records a night, workflow.md §5.6) and the alternative is six reads of it per turn.
+    A turn used to read the journal only when `_steward.md` would not parse. It now has eight questions for it — the last good settings, the previous turn's items and when it happened, what has been acknowledged, what the agent has raised, how far anyone has collected, whether the run is paused, and what timer is armed — and they are one pass over the same events. The file is small by design (roughly sixty records a night, workflow.md §5.6) and the alternative is six reads of it per turn.
     """
 
     pool: Pool | None
@@ -321,6 +355,18 @@ class _History:
 
     acknowledged: dict[str, Ack]
     """Items somebody has disposed of, by id."""
+
+    raised: dict[str, Raised] = field(default_factory=dict[str, "Raised"])
+    """Items the agent has handed to their owner, by id. Marked rather than removed — see `items.tend_items`."""
+
+    collected: Collected | None = None
+    """The most recent collection, or `None` where nobody has attached. What the collection age and the agent's delta are both computed from."""
+
+    events: list[JournalEvent] = field(default_factory=list["JournalEvent"])
+    """Every journal event, in file order.
+
+    Carried whole rather than folded because the summary's *what happened* section is a filter over history rather than a fold of it, and the read has already happened. A fold per question would mean adding one every time that section admits another event type.
+    """
 
     paused: Paused | None = None
     """The pause in force, or `None` where the run is scheduling normally."""
@@ -367,6 +413,9 @@ def _history(workspace: Workspace) -> _History:
         pool=pool,
         previous=previous if previous is not None else frozenset(),
         acknowledged=read_acks(events),
+        raised=read_raised(events),
+        collected=read_collected(events),
+        events=events,
         paused=read_pause(events),
         armed=armed,
         ever_armed=any(event.type == ARMED for event in events),
@@ -473,7 +522,19 @@ def _turn(
         pool=settings.pool,
         paused=history.paused is not None,
     )
-    progress = Progress(rows=task_progress(observed, _live(inflight, logs)))
+    # one read of the running fleet, feeding both the table's live columns and
+    # the block under it -- a second read would be a second set of numbers, and
+    # a row saying `83 running` beside a block saying nothing is running is the
+    # kind of disagreement a reader has no way to resolve
+    fleet = _live(inflight, logs)
+    progress = Progress(
+        rows=task_progress(observed, fleet),
+        # the pids come from the in-flight record rather than from the fleet,
+        # because they answer a different question: a worker too busy to serve
+        # its socket, and one that has not bound one yet, are both costing the
+        # machine memory right now and neither appears in `fleet` as answered
+        live=live_totals(fleet, [worker.pid for worker in inflight.running]),
+    )
 
     result = TendResult(
         summary=decision.summary,
@@ -483,6 +544,7 @@ def _turn(
         claim=claim,
         broke=broke,
         definition_hash=drift.digest,
+        manifest_digest=manifest_digest(manifest),
         degraded_at=settings.degraded_at,
         supervision=Supervision(
             armed=history.armed,
@@ -498,7 +560,19 @@ def _turn(
     if not execute:
         return _projected(result, observed, inflight, history)
 
-    acted = _act(workspace, manifest, log_dir, decision.actions)
+    acted = _act(workspace, manifest, log_dir, decision.actions, observed)
+    if acted.journalled:
+        # the projection below reports *what has been done to this run*, and
+        # this turn has just done something to it -- so the read that fed it is
+        # already out of date. `status.md` saying "nothing has been done to this
+        # run yet" beside an archive it performed a millisecond earlier is the
+        # summary contradicting its own side effects, and the entry would not
+        # surface until some later turn happened to read the file again.
+        #
+        # Only `events` is replaced, and only on the turns that wrote: nothing
+        # an action appends is an ack, a hand-off, or a collection, so every
+        # other fold in this history is still the answer it was
+        history = replace(history, events=_reread(workspace, history.events))
     result = _projected(
         replace(
             result,
@@ -533,6 +607,17 @@ def _turn(
     return result
 
 
+def _reread(workspace: Workspace, previous: list[JournalEvent]) -> list[JournalEvent]:
+    """The journal again, or what was already read where it cannot be.
+
+    Falling back rather than raising, and rather than falling back to nothing: the turn has already happened, and the cost of a failed re-read is one section of one document missing an entry until the next turn. Returning an empty list instead would report the whole night as never having happened.
+    """
+    try:
+        return read_journal(workspace.journal).events
+    except OSError:
+        return previous
+
+
 def _projected(
     result: TendResult,
     observed: ObservedTasks,
@@ -543,7 +628,22 @@ def _projected(
 
     Last, because an item can be about something the acting produced — an action that failed is a fact about this turn, not about the directory it read. Which also makes the two dispositions honest against each other: a `status` projects a turn that did nothing, so it reports what is open *now* rather than what would be open afterwards.
     """
-    items = tend_items(result, observed, inflight, frozenset(history.acknowledged))
+    items = tend_items(
+        result,
+        observed,
+        inflight,
+        frozenset(history.acknowledged),
+        frozenset(history.raised),
+    )
+    result = replace(
+        result,
+        happened=happened(history.events),
+        collected=history.collected,
+        since_collected=(
+            _elapsed(history.collected.ts) if history.collected is not None else None
+        ),
+        position=max((event.line for event in history.events), default=0),
+    )
     current = {item.id for item in items}
     return replace(
         result,
@@ -572,12 +672,19 @@ class _Acted:
     archived: list[str] = field(default_factory=list[str])
     failures: list[str] = field(default_factory=list[str])
 
+    journalled: bool = False
+    """Whether any of this landed in the journal.
+
+    Set explicitly rather than inferred from `archived`, which is the only action that writes one today. The turn re-reads the journal when this is true, so an action added later that appends and forgets to set this would quietly reintroduce a summary that omits its own side effects.
+    """
+
 
 def _act(
     workspace: Workspace,
     manifest: Manifest,
     log_dir: str,
     actions: list[Action],
+    observed: ObservedTasks,
 ) -> _Acted:
     """Carry out a turn's actions, in the order `reconcile` put them in.
 
@@ -585,6 +692,30 @@ def _act(
     """
     acted = _Acted()
     spawns: list[SpawnWorker] = []
+    # identifier to display key, because the journal is read by a person: an
+    # identifier is ~200 characters with two hashes in it, and an entry naming
+    # one is an entry nobody reads. Both go into the payload — the key to be
+    # read, the identifier to be matched against.
+    #
+    # **Wanted and not done, rather than merely not complete.** An orphan is
+    # neither: the manifest stopped asking for it, so a worker of its leaving
+    # is not work left undone, and this turn is archiving its log rather than
+    # picking the task back up
+    unfinished = {
+        task.identifier: task.key
+        for task in observed.tasks
+        if task.state in (TaskState.MISSING, TaskState.INCOMPLETE)
+    }
+    # what is actually being picked up again this turn, so the entry can say so
+    # only where it is true. A departure on the turn the stall guard trips is
+    # reaped and *not* respawned, and promising otherwise sends a reader
+    # looking for a worker that was never going to start
+    retrying = {
+        task.identifier
+        for action in actions
+        if isinstance(action, SpawnWorker)
+        for task in action.tasks
+    }
 
     for action in actions:
         if isinstance(action, SpawnWorker):
@@ -593,7 +724,7 @@ def _act(
             # collecting them here preserves that order rather than imposing it
             spawns.append(action)
         else:
-            _carry_out(workspace, log_dir, action, acted)
+            _carry_out(workspace, log_dir, action, acted, unfinished, retrying)
 
     if spawns:
         _spawn_all(workspace, manifest, log_dir, spawns, acted)
@@ -605,6 +736,8 @@ def _carry_out(
     log_dir: str,
     action: ReapWorker | ArchiveLog,
     acted: _Acted,
+    unfinished: dict[str, str],
+    retrying: set[str],
 ) -> None:
     """Do one thing that is not a spawn, and survive it not working."""
     try:
@@ -612,6 +745,7 @@ def _carry_out(
             case ReapWorker():
                 record_exited(workspace.inflight, worker=action.worker.worker)
                 acted.reaped.append(action.worker.worker)
+                _record_departure(workspace, action, unfinished, retrying, acted)
 
             case ArchiveLog():
                 # journalled after the move, and carrying where the log
@@ -629,8 +763,45 @@ def _carry_out(
                     archived=destination,
                 )
                 acted.archived.append(destination)
+                acted.journalled = True
     except Exception as ex:
         _failed(workspace, acted, _describe(action), ex)
+
+
+def _record_departure(
+    workspace: Workspace,
+    action: ReapWorker,
+    unfinished: dict[str, str],
+    retrying: set[str],
+    acted: _Acted,
+) -> None:
+    """Journal a worker that went away with work still to do.
+
+    **Only the ones that did not finish, and that narrowing is the admission test rather than a saving.** A worker exits at the end of every task, so recording every reap would put a line in *what happened* for each task that completed — which is the run happening, not something that happened to the run (`history.py`). A worker that exits with its task unfinished is the other thing entirely: nothing asked it to stop, its work is being repeated, and it is the single event a reader of an overnight history most needs and currently has no other way to learn.
+
+    **The observation is a reliable verdict on it**, because the reap and the read are ordered: `resolve_inflight` decided this worker was gone before `observe_logs` read the directory, so its log had already settled by then.
+
+    The respawn is not recorded as its own entry — Steward converging is the normal thing it does — but *whether* one was decided is, because the two cases read completely differently to somebody working through a night. A departure this turn picks back up is a hiccup; one it does not is either a run at its width or a task the stall guard has given up on, and both are things to go and look at.
+    """
+    departed = action.worker
+    stranded = sorted(set(departed.identifiers) & set(unfinished))
+    if not stranded:
+        return
+    append_event(
+        workspace.journal,
+        ACTION,
+        action="reap",
+        # never launched is a different diagnosis from died mid-task, and the
+        # record cannot recover the distinction later -- a worker with no pid
+        # is one whose intent was written and whose spawn never returned
+        reason="never_started" if departed.pid is None else "died",
+        worker=departed.worker,
+        pid=departed.pid,
+        tasks=[unfinished[identifier] for identifier in stranded],
+        identifiers=stranded,
+        retrying=all(identifier in retrying for identifier in stranded),
+    )
+    acted.journalled = True
 
 
 def _spawn_all(

@@ -10,11 +10,13 @@ No processes: a `LiveFleet` is a dataclass, which is exactly why `read_fleet`
 returns one rather than reaching into the table itself.
 """
 
+import os
 from pathlib import Path
 
 import pytest
 from inspect_steward._evalset.observe import TaskState, observe_logs, observe_tasks
 from inspect_steward._tend import Progress, progress_table, task_progress
+from inspect_steward._tend.progress import LIVE_ONLY, live_totals
 from inspect_steward._worker import (
     LiveConnections,
     LiveFleet,
@@ -340,3 +342,81 @@ def test_a_shortened_key_uses_the_name_the_manifest_shows(tmp_path: Path) -> Non
 
     assert "Friendly Name" in line
     assert "internal_name" not in line
+
+
+# --- the live block -----------------------------------------------------
+
+
+def test_the_block_is_per_task_for_tallies_and_per_process_for_cost() -> None:
+    """The split that decides how each figure is summed.
+
+    A packed worker reports a row per task and every one names the same
+    process. Refusals really are per task and add up; memory is not, and adding
+    it up would multiply one process's resident set by its batch size.
+    """
+    packed = LiveFleet(
+        tasks={
+            f"task-{index}": LiveTask(
+                pid=os.getpid(),
+                identifier=f"task-{index}",
+                refusals=index,
+                http_retries=index * 2,
+            )
+            for index in range(4)
+        }
+    )
+
+    block = live_totals(packed)
+
+    assert block is not None
+    assert block.tasks == 4
+    assert block.usage.processes == 1
+    assert (block.refusals, block.http_retries) == (6, 12)
+
+
+def test_a_busy_worker_costs_its_tallies_and_not_its_memory() -> None:
+    """The two figures come from different places and fail independently.
+
+    A refusal count comes from the socket the worker is too busy to serve, so
+    it is *absent* rather than zero. Its resident set comes from the kernel,
+    which answers regardless — and a fleet where nothing answered used to
+    render as *nothing is running*, falling back to a startup projection while
+    real processes held real memory.
+    """
+    busy = LiveFleet(
+        tasks={
+            "task-1": LiveTask(pid=os.getpid(), identifier="task-1", unavailable="busy")
+        }
+    )
+
+    block = live_totals(busy, [os.getpid()])
+
+    assert block is not None
+    assert (block.tasks, block.unavailable) == (0, 1)
+    assert block.usage.processes == 1
+    # no false zeros: with nothing answering there is no refusal count to show
+    assert "refusals" not in block.figures
+    assert "1 not answering" in block.figures
+
+
+def test_nothing_running_is_no_block_at_all() -> None:
+    # absent rather than zeroed, which is what lets the renderer put the
+    # capture's startup bound in its place
+    assert live_totals(LiveFleet()) is None
+    assert live_totals(LiveFleet(), []) is None
+
+
+def test_the_block_says_what_it_covers_and_that_it_is_only_now() -> None:
+    # a figure that *falls* as tasks complete reads as a problem fixing itself,
+    # so the denominator and the caveat are part of the block rather than
+    # something a renderer might or might not add
+    block = live_totals(
+        LiveFleet(
+            tasks={"task-1": LiveTask(pid=os.getpid(), identifier="task-1", refusals=3)}
+        )
+    )
+
+    assert block is not None
+    assert block.figures.startswith("1 task · 3 refusals · 0 HTTP retries")
+    assert "average since start" in block.figures
+    assert "fall as tasks finish" in LIVE_ONLY

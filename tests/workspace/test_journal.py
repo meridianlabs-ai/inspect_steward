@@ -8,22 +8,27 @@ those is a claim the design makes, and none is visible on a run that goes well.
 
 import json
 import multiprocessing
+from collections.abc import Callable
 from pathlib import Path
 
 import pytest
 from inspect_steward._workspace import (
     ACKNOWLEDGED,
     ARMED,
+    COLLECTED,
     DISARMED,
     PAUSED,
+    RAISED,
     RESUMED,
     JournalEvent,
     append_event,
     create_workspace,
     read_acks,
     read_armed,
+    read_collected,
     read_journal,
     read_pause,
+    read_raised,
     summarize,
 )
 
@@ -238,6 +243,119 @@ def test_an_ack_this_version_cannot_use_is_data_rather_than_damage(
 
 def test_acks_of_nothing() -> None:
     assert read_acks([]) == {}
+
+
+# --- positions, and the two folds keyed on them -------------------------
+
+
+def test_a_position_is_the_line_it_was_read_from(tmp_path: Path) -> None:
+    """Assigned by the reader, and counted over lines rather than over events.
+
+    A damaged line keeps its number and stays counted, which is what makes a
+    position stable: an index into `events` would silently renumber everything
+    after the damage, so a cursor recorded before a torn append would come back
+    pointing at the wrong entry.
+    """
+    journal = tmp_path / "journal.jsonl"
+    write_lines(
+        journal,
+        event_line(PAUSED, by="human", reason="?"),
+        "{not json at all",
+        event_line(RESUMED),
+    )
+
+    read = read_journal(journal)
+
+    assert [event.line for event in read.events] == [1, 3]
+    assert read.damage[0].line == 2
+
+
+def test_an_event_that_never_came_from_a_file_has_no_position() -> None:
+    # a caller assembling one by hand is not naming a place in a journal, and a
+    # `1` here would be a position pointing at somebody else's first line
+    assert JournalEvent(ts="2026-08-23T19:00:00.000Z", type=RESUMED).line == 0
+
+
+def test_a_position_does_not_leak_into_a_payload(tmp_path: Path) -> None:
+    # every reader of an event iterates its payload; a key the writer never
+    # wrote would show up in the journal summary and in `what happened`
+    journal = tmp_path / "journal.jsonl"
+    append_event(journal, COLLECTED, position=4)
+
+    (event,) = read_journal(journal).events
+
+    assert event.payload == {"position": 4}
+    assert event.line == 1
+
+
+def test_the_last_collection_is_the_one_in_force(tmp_path: Path) -> None:
+    # a switch, like the pause: reaching backwards with `--since` and then
+    # collecting again leaves the newer position behind
+    journal = tmp_path / "journal.jsonl"
+    append_event(journal, COLLECTED, position=12)
+    append_event(journal, COLLECTED, position=40)
+
+    collected = read_collected(read_journal(journal).events)
+
+    assert collected is not None
+    assert collected.position == 40
+    assert collected.ts.startswith("20")
+
+
+def test_never_collected_is_not_collected_at_zero() -> None:
+    # *everything is new*, which is the right answer for a workspace no agent
+    # has attached to, and not the same fact as a deliberate collection at 0
+    assert read_collected([]) is None
+
+
+def test_raising_folds_per_item_and_keeps_its_note(tmp_path: Path) -> None:
+    journal = tmp_path / "journal.jsonl"
+    append_event(journal, RAISED, id="drift:abc", note="asked in #evals")
+    append_event(journal, RAISED, id="stalled:t:2", note="")
+
+    raised = read_raised(read_journal(journal).events)
+
+    assert set(raised) == {"drift:abc", "stalled:t:2"}
+    assert raised["drift:abc"].note == "asked in #evals"
+    # optional where an ack's reason is required: handing a decision off does
+    # not owe the account that disposing of one does
+    assert raised["stalled:t:2"].note == ""
+
+
+Fold = Callable[[list[JournalEvent]], object]
+
+UNUSABLE: list[tuple[str, str, dict[str, object], Fold, object]] = [
+    ("a collection with no position", COLLECTED, {}, read_collected, None),
+    (
+        "a collection positioned by text",
+        COLLECTED,
+        {"position": "4"},
+        read_collected,
+        None,
+    ),
+    ("a hand-off with no id", RAISED, {"note": "?"}, read_raised, {}),
+    ("a hand-off with an empty id", RAISED, {"id": ""}, read_raised, {}),
+]
+
+
+@pytest.mark.parametrize(
+    ("type", "payload", "fold", "expected"),
+    [(type, payload, fold, expected) for _, type, payload, fold, expected in UNUSABLE],
+    ids=[case for case, *_ in UNUSABLE],
+)
+def test_a_record_this_version_cannot_use_is_data_rather_than_damage(
+    type: str,
+    payload: dict[str, object],
+    fold: Fold,
+    expected: object,
+    tmp_path: Path,
+) -> None:
+    # the rule the whole vocabulary follows: a workspace outlives the version
+    # that wrote it, so an unusable record is skipped rather than raised on
+    journal = tmp_path / "journal.jsonl"
+    write_lines(journal, event_line(type, **payload))
+
+    assert fold(read_journal(journal).events) == expected
 
 
 def test_summarize_of_nothing() -> None:

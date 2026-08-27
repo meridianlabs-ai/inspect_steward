@@ -69,6 +69,61 @@ anything in the anomaly list that is growing.
 This applies to a wake-up at 3am exactly as it applies to a question asked
 directly.
 
+## Your queue, and what takes something out of it
+
+```bash
+steward collect              # what is true now, and what happened since you last looked
+steward collect --peek       # the same, without marking it read
+steward collect --since 0    # the whole history, however far back
+```
+
+`collect` is the verb to start a session with. It prints the same three
+sections `status` does — what needs a decision, where the run stands, what
+happened — and adds the one thing a snapshot cannot give you: the stretch of
+history since your last collection. A snapshot says what is true now. It cannot
+say that a task died at 1am and was respawned, or that a class grew from three
+instances to forty, and that series is what most judgement calls need.
+
+**Reading consumes nothing.** The cursor governs history alone, and an open
+decision leaves your queue only because you *acted* on it. So a session that
+dies mid-investigation finds its work waiting, and there is no ordering
+discipline for you to remember.
+
+Two acts take an item out of the queue, and which one is right is decided by
+who owns the item — `collect` prints that beside each one.
+
+- **`steward ack <id> --reason "..."`** closes it. Ask first: acking removes an
+  item from every surface including the verdict, so an agent free to ack unasked
+  can silence its own attention list. Record the human's answer as
+  `--by human`. The narrow exception is something you investigated and resolved
+  yourself — a file that turned out to be a partial upload — which is
+  `--by agent`. The test is whether anyone but you would need to know.
+
+- **`steward raise <id> [--note "..."]`** hands it to the person who can decide
+  it, and **closes nothing**. Do this freely and without asking: putting a
+  human-owned item in front of the human is you doing your job, not deciding
+  anything. The item stays in the summary's decisions and the verdict still
+  counts it; what changes is that `collect` stops offering it back to you every
+  time you look. The note is optional, and is for what you actually did to
+  surface it — where you asked, and of whom.
+
+  **Only a human-owned item can be raised**, and the command refuses the rest.
+  Raising takes something out of your queue without closing it, which is safe
+  only because somebody else is going to close it — do that to your own item
+  and it is stranded: open forever, and gone from the one list that would have
+  brought it back to you. If you are stuck on an agent-owned item, that is a
+  question to ask in the conversation, not a hand-off to record.
+
+An item comes back if the condition **changes**, because its id encodes the
+instance rather than the condition: a task that stalls again at attempt 3 has a
+different id from the one that stalled at attempt 2, so it arrives as new work,
+while an unchanged condition stays raised and stays quiet.
+
+**Nothing `collect` sets aside is dropped silently.** A shortened section says
+how much it left out and how to see it. Take those counts literally: `1 raised,
+awaiting a person` under an otherwise empty decisions section means there *is*
+an open decision, and it is not yours.
+
 ## Context is the real budget
 
 - **Never read a full eval log.** Use `header_only=True` for status and counts;
@@ -83,7 +138,12 @@ directly.
 
 ## Cold pickup
 
-*Not yet written.* The procedure for attaching to a run you did not start.
+*Partly written.* The full procedure for attaching to a run you did not start
+depends on machinery that does not exist yet — the anomaly list and
+`analysis.md`. What is settled is where it begins: `steward runbook`, then
+`_steward.md` for this human's standing rules, then **`steward collect`** for
+what is true and what you missed. Everything you need is in the workspace, so
+nothing depends on a conversation this session did not have.
 
 ## Tuning inside the envelope
 

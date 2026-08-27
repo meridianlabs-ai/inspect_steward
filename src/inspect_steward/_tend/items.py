@@ -13,7 +13,7 @@ Everything a turn wants to *say* beyond counts is an **item**: a stalled task, a
 **A summary names its task in full, where the table beside it does not.** That looks like an inconsistency and is the deliberate consequence of what each is for. A table row is a *comparison*, so `shorten_keys` elides whatever every row shares; an item is a *statement*, and it travels alone — into a channel, into a notification title, into a line somebody reads with no table under it. `sec_bench_pro` is enough to pick a row out of five; only the full key is enough to name a task to somebody who cannot see the other four.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from enum import IntEnum, StrEnum
 from hashlib import sha256
 from typing import TYPE_CHECKING
@@ -58,6 +58,10 @@ class Verdict(StrEnum):
     ATTENTION = "⚠️"
     STOPPED = "🛑"
     PAUSED = "⏸"
+    COMPLETE = "🏁"
+    """Every task finished and nobody has accepted the results yet.
+
+    Not ✅, which claims nothing is owed. A finished run owes the most consequential decision in the workflow, and reporting it as all-clear is how a sweep sits unread for a week. Distinct from ⚠️ for the opposite reason: nothing is wrong, and a warning glyph over a successful run trains a reader to discount warnings."""
 
 
 STALLED = "stalled"
@@ -68,6 +72,7 @@ UNREADABLE = "unreadable"
 ACTION_FAILED = "action_failed"
 UNSUPERVISED = "unsupervised"
 TIMER_DRIFT = "timer_drift"
+SIGNOFF_READY = "signoff_ready"
 
 OWNERS = {
     STALLED: Owner.HUMAN,
@@ -78,6 +83,7 @@ OWNERS = {
     ACTION_FAILED: Owner.AGENT,
     UNSUPERVISED: Owner.HUMAN,
     TIMER_DRIFT: Owner.HUMAN,
+    SIGNOFF_READY: Owner.HUMAN,
 }
 """Default owner per kind. Policy may move some of these once `_steward.md` can say so (step 23); a kind absent from the table is the agent's, since an unrouted item is an investigation rather than a question."""
 
@@ -151,6 +157,12 @@ class Item:
     action: str | None = None
     """The command that resolves it, where one exists."""
 
+    raised: bool = False
+    """Whether the agent has put this in front of the owner who can decide it.
+
+    The third item state, and it changes exactly one projection: `steward collect` sets a raised item aside and counts it, where `status` still shows it because a person still owes an answer. Not a form of disposal — the item is as open as it was, and only the *agent's* work on it has ended (agent.md §2.2).
+    """
+
     @property
     def acknowledgeable(self) -> bool:
         return self.kind not in UNACKNOWLEDGEABLE
@@ -161,6 +173,7 @@ def tend_items(
     observed: ObservedTasks,
     inflight: InFlight,
     acknowledged: frozenset[str] = frozenset(),
+    raised: frozenset[str] = frozenset(),
 ) -> list[Item]:
     """Everything this turn has to say, as one list.
 
@@ -171,9 +184,10 @@ def tend_items(
         observed: The log directory read against the manifest — supplies display keys and attempt counts the summary does not carry.
         inflight: What is running, for the attempt counts that key a stall.
         acknowledged: Item ids somebody has already disposed of. Those are dropped entirely rather than marked — gone from the list and therefore from the verdict, every rendering, and the diff — with the journal event as the record (workflow.md, *The caveats that reached the final data*).
+        raised: Item ids the agent has handed to their owner. **Marked rather than dropped**, which is the difference from an acknowledgment: the item is still open and a person still owes an answer, so it stays in the list, the verdict, and `status`. Only the agent's own projection sets it aside.
 
     Returns:
-        Open items, acknowledged ones removed.
+        Open items, acknowledged ones removed and raised ones marked.
     """
     lookup = {task.identifier: task for task in observed.tasks}
     items = [
@@ -184,8 +198,16 @@ def tend_items(
         *_unreadable(observed),
         *_supervision(result),
         *_failures(result),
+        *_signoff(result),
     ]
-    items = [item for item in items if item.id not in acknowledged]
+    items = [
+        replace(item, raised=True) if item.id in raised else item
+        for item in items
+        if item.id not in acknowledged
+    ]
+    # owner first so a person meets their own decisions before the agent's,
+    # then level so that within a person's own the ones costing something now
+    # come before the ones that can wait (agent.md §4.1)
     return sorted(items, key=lambda item: (item.owner, -item.level, item.id))
 
 
@@ -194,9 +216,11 @@ def verdict(
 ) -> Verdict:
     """Where the run stands.
 
-    Four states, in the order they override each other. **Paused** wins outright: a run nobody is advancing is not making a claim about its own health. **Stopped** is the one that is *not* `max(level)` over the items — a run can contain nothing blocking and still be going nowhere, which is exactly what a fleet of stalled tasks is. So it is computed from the run rather than from the list: work left, nothing running, and nothing about to start.
+    Five states, in the order they override each other. **Paused** wins outright: a run nobody is advancing is not making a claim about its own health. **Stopped** is the one that is *not* `max(level)` over the items — a run can contain nothing blocking and still be going nowhere, which is exactly what a fleet of stalled tasks is. So it is computed from the run rather than from the list: work left, nothing running, and nothing about to start.
 
     **`unfinished` is what keeps a completed run from reading as a stuck one.** A sweep that finished every task and left one unreadable file has nothing running and nothing to spawn, and it is not stopped — it is done, with a caveat. Only a run with work remaining can be stuck.
+
+    **Complete is the last check rather than the first**, because it is the weakest claim here: it says the only thing left open is that nobody has accepted the results. Anything else open — a caveat, an unreadable file, a drift — outranks it, and the run reads as ⚠️ with the acceptance waiting inside it.
 
     Args:
         items: Open items, acknowledged ones already removed.
@@ -216,6 +240,11 @@ def verdict(
         return Verdict.STOPPED
     if unfinished and running == 0 and spawning == 0:
         return Verdict.STOPPED
+    # a finished run whose only open decision is that nobody has accepted it is
+    # not a warning. ⚠️ over a sweep that did exactly what was asked of it is how
+    # a reader learns to discount the glyph, and ✅ would claim nothing is owed
+    if all(item.kind == SIGNOFF_READY for item in items):
+        return Verdict.COMPLETE
     return Verdict.ATTENTION
 
 
@@ -239,6 +268,8 @@ def verdict_line(verdict: Verdict, items: list[Item]) -> str:
         return f"{verdict.value} paused — nothing new is being scheduled"
     if verdict is Verdict.CLEAR or not items:
         return f"{verdict.value} nothing needs you"
+    if verdict is Verdict.COMPLETE:
+        return f"{verdict.value} complete — the results are waiting to be accepted"
 
     human = sum(1 for item in items if item.owner is Owner.HUMAN)
     agent = len(items) - human
@@ -527,6 +558,42 @@ def _named(observation: TaskObservation | None, identifier: str) -> str:
     readable = "".join(char for char in name if char.isalnum() or char in "._-")
     digest = sha256(identifier.encode("utf-8")).hexdigest()[:8]
     return f"{readable}:{digest}" if readable else digest
+
+
+def _signoff(result: "TendResult") -> list[Item]:
+    """The run has finished and nobody has accepted it.
+
+    **The gap the verdict had.** A sweep whose every task completed reported ✅ *nothing needs you*, which is false in the one way that matters: the results exist and no person has looked at them. Reporting a finished run as all-clear is how one sits unread for a week.
+
+    **Worded as a state rather than as an instruction, deliberately.** `steward signoff` is step 26, and a surface telling somebody to run a command that does not exist is the same lie as a `_steward.md` key that parses and does nothing. So this says what is true — every task is complete and nothing further will run — and gains the command when there is one. It is acknowledgeable meanwhile, which is how a person who has accepted the results silences it today.
+
+    Fires on completeness alone rather than on *completeness and nothing else wrong*: a run that finished with an unreadable file beside it is still finished, and signoff accepts exceptions (workflow.md, *The attestation*).
+    """
+    summary = result.summary
+    complete = summary.states.get(TaskState.COMPLETE.value, 0)
+    if not summary.tasks or complete != summary.tasks:
+        return []
+    return [
+        Item(
+            # **keyed on the task set the committed manifest asks for, not on
+            # the definition's hash.** What is being accepted is a set of
+            # *results*, and a file hash answers neither direction of that: an
+            # edit sitting unlaunched would re-open a settled acceptance with
+            # no new results behind it, and a relaunch that changed the tasks
+            # without changing the file — different Flow arguments, a changed
+            # import — would be silently covered by the old one
+            id=f"{SIGNOFF_READY}:{_digest(result.manifest_digest)}",
+            kind=SIGNOFF_READY,
+            owner=OWNERS[SIGNOFF_READY],
+            level=Level.INFO,
+            subject=result.manifest_digest or "",
+            summary=(
+                f"every task is complete ({summary.tasks} of {summary.tasks}) "
+                f"and nothing further will run — the results are waiting to be "
+                f"accepted"
+            ),
+        )
+    ]
 
 
 def _failures(result: "TendResult") -> list[Item]:

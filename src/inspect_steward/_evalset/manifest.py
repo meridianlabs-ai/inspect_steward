@@ -73,6 +73,30 @@ class Manifest(BaseModel):
     """Resolved tasks in the eval set."""
 
 
+def manifest_digest(manifest: Manifest) -> str:
+    """Hash the work a committed manifest asks for: which tasks, and how much of each.
+
+    **What identifies a *result set*, where `ManifestSource.content_hash` identifies a *file*.** The two are different questions and only one of them is answerable by hashing the definition. A hash of the top-level file misses an argument passed alongside it (`ManifestSource.args` for a Flow spec), an imported module that changed, and an `include:` fragment — all of which produce a different eval set from a byte-identical file. It also *changes* on an edit that has not been launched, where the results on disk have not moved at all.
+
+    **Identifiers alone are not enough either, and the reason is a deliberate property of the identifier.** `task_identifier` covers the solver plan, generate config, model args, roles, version and execution limits — and pointedly not the sample count or the epochs, so that raising either leaves existing logs resumable rather than orphaning them. Steward relies on exactly that: `observe` computes `samples × epochs` separately and calls a task `SHORT` when its log has fewer. So a ten-sample run relaunched for twenty is the *same* identifier and a genuinely different set of results, and a digest over identifiers alone would let the first acceptance cover the second silently.
+
+    Sorted, so that a capture which enumerates the same tasks in a different order is the same result set rather than a new one.
+
+    Args:
+        manifest: A committed manifest.
+
+    Returns:
+        `sha256:<hex>` over each task's identifier, sample count, and epochs.
+    """
+    joined = "\n".join(
+        sorted(
+            f"{task.identifier}\t{task.samples}\t{task.epochs}"
+            for task in manifest.tasks
+        )
+    )
+    return f"sha256:{hashlib.sha256(joined.encode('utf-8')).hexdigest()}"
+
+
 def definition_hash(path: Path) -> str:
     """Hash a definition file's contents.
 

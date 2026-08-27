@@ -1,6 +1,6 @@
 ---
 title: Reading Status
-llms-description: "How to read what Steward reports: the verdict glyph, task states, the per-task progress table, and the attention list of things that need a person or an agent — plus acknowledging an item."
+llms-description: "How to read what Steward reports: the verdict glyph, the decisions that need a person or an agent, task states and the per-task progress table, the live block, and the run's history — plus acknowledging and raising an item."
 ---
 
 ## Overview
@@ -19,6 +19,12 @@ Every turn also leaves the same snapshot in `status.md` at the top of the
 workspace. The two cannot disagree about anything, because they are one
 function with two renderings.
 
+The snapshot is three sections, and the order is deliberate: **what needs a
+decision**, then **where the run stands**, then **what happened**. Surfacing
+what a person has to decide is the whole job, and everything else is context
+for it — so the decisions are at the top, in full, rather than under a table of
+tasks that are fine.
+
 ::: {.callout-note appearance="simple"}
 `status` never *writes* `status.md`. So the file holds the last **tend's**
 snapshot and can be a full interval stale; the command is always current. If
@@ -33,12 +39,19 @@ The first line is one glyph and a count of who is holding the run:
 |----|----|
 | ✅ | `nothing needs you` |
 | ⚠️ | something does, and work continues — e.g. `⚠️ 1 needs a person, 2 for the agent` |
+| 🏁 | `complete — the results are waiting to be accepted` |
 | 🛑 | `nothing is progressing` — either something is blocking, or there is unfinished work and no worker running or about to |
 | ⏸ | `paused — nothing new is being scheduled` |
 
 The verdict is **run-level, not item-level**: one blocked worker among twenty
 running is ⚠️, because a rule that paints red whenever any single thing is
 blocked makes red mean nothing.
+
+🏁 is what a finished run reads as, and it is the reason ✅ is narrower than it
+looks. A sweep that did everything asked of it is not *nothing needs you* —
+nobody has accepted the results yet, which is the most consequential decision in
+the whole workflow. Genuine all-clear is a run that is progressing with nothing
+outstanding, a paused one, or one whose acceptance you have already recorded.
 
 ## Task states
 
@@ -58,7 +71,7 @@ taxonomy of log conditions:
 
 `complete` deliberately covers both a clean task and one carrying errored
 samples, because both mean *do not spawn*. Whether those errors matter is a
-separate question, and it is the one the attention list is for.
+separate question, and it is the one the decisions section is for.
 
 ## Progress
 
@@ -97,12 +110,49 @@ first. `score` is the task's headline metric — and because nothing in an eval 
 marks a metric as primary, Steward applies a convention and says which one it
 picked underneath the table.
 
-## The attention list
+### What is running right now
+
+Under the table sits a small block of figures that exist only while something is
+running:
+
+``` text
+running now: 3 tasks · 12 refusals · 143 HTTP retries · 6.1 GiB across 3 processes · 2.4 cores, average since start
+  Live only: refusals and HTTP retries are recorded in no eval log, so these
+  describe the tasks running right now and fall as tasks finish.
+```
+
+The caveat is not boilerplate. Inspect records neither refusals nor HTTP retries
+in an eval log, so nothing can report them for a task that has finished — which
+means every number here **falls** as the run completes, and a refusal count
+dropping from forty to zero is work finishing rather than a problem resolving
+itself.
+
+Memory and CPU are counted **per process, not per task**, because a packed
+worker runs several tasks in one process. CPU is an average over each process's
+whole life rather than an instantaneous rate: `status` is a read you type on a
+whim, and measuring a rate would mean pausing to watch.
+
+The two halves come from different places and fail apart. Refusals and retries
+come from each worker's control socket, which a worker deep in a generate may
+not answer within the two seconds `status` is willing to wait; memory and CPU
+come from the kernel, which answers either way. So a worker that did not answer
+is **counted as such** rather than contributing a zero, and its memory is still
+in the total:
+
+``` text
+running now: 2 tasks · 0 refusals · 3 HTTP retries · 1 not answering · 6.1 GiB across 3 processes · 2.4 cores, average since start
+```
+
+When nothing is running the block is absent, and the startup bound the capture
+measured takes its place — a ceiling is the useful figure before there is an
+actual, and the actual is the useful one once there is.
+
+## What needs a decision
 
 Everything a turn has to report beyond a number is an **item**:
 
 ``` text
-## attention
+## what needs a decision
 
 ### needs a person
 
@@ -134,6 +184,7 @@ that resolves it, the command is printed with it.
 | `orphan_running` | a worker is still running work the definition no longer asks for. Stopping it is not a mechanical act, so Steward leaves it and tells you | a person |
 | `unsupervised` | no tend has happened for two intervals, so nothing is keeping the run going. A scheduler cannot report its own absence, so this is computed from the journal rather than raised — and only `status` says it, because a tend saying *nothing has tended* is a past-tense fact stated by the turn that disproves it | a person |
 | `timer_drift` | the interval `_steward.md` asks for is not the one that is actually armed. Reaching into your crontab unprompted is not a mechanical act, so Steward reports it rather than fixing it — re-arm to resolve | a person |
+| `signoff_ready` | every task is complete and nothing further will run, so the results are waiting to be accepted. Worded as a state rather than an instruction, because there is nothing mechanical left to do | a person |
 | `unreadable` | a file in the log directory would not parse as a log. One item per file, so one bad file is not a permanent count | the agent |
 | `action_failed` | something a turn tried to do did not work. A single-turn fact that either recurs or does not, so it cannot be acknowledged | the agent |
 
@@ -150,12 +201,13 @@ Each item's id is chosen so that **what re-arms it is what changes it**:
 | `unreadable` | the filename | per file |
 | `unsupervised` | when the timer in force was armed | you re-arm — so an acknowledged silence never covers the next timer's |
 | `timer_drift` | both intervals, armed and asked for | you edit the file again, and it clears by arming to match |
+| `signoff_ready` | a digest of the **committed manifest's work** — each task's identifier, sample count and epochs | a launch commits different work, so there is a different set of results to accept. Not the definition's hash: editing the file without launching changes no results (that is `drift`, a different question), and a byte-identical file can still enumerate different tasks. Not the identifiers alone either, since a task identifier deliberately does not move when the sample count does — that is what keeps existing logs resumable |
 
 ## Acknowledging an item
 
 Some conditions nothing will clear by itself. A definition you edited on
 purpose keeps reporting drift; a file that was never a log stays unreadable
-forever. Left alone, those turn an attention list into something nobody reads.
+forever. Left alone, those turn a decisions list into something nobody reads.
 
 ``` bash
 steward ack drift --reason "renamed a task arg deliberately; relaunching in the morning"
@@ -180,6 +232,70 @@ to be a partial upload — records `agent`.
 is stopped, no sample is re-run, no log is moved.
 :::
 
+### Raising, which is the agent's half of the same thing
+
+``` bash
+steward raise drift --note "asked in #evals whether the rename was deliberate"
+```
+
+An agent cannot accept a decision that is yours, but its own work on one ends
+long before you answer — it noticed the drift, looked into it, and put it in
+front of you. `raise` records that, and **closes nothing**: the item stays in
+`status.md` and the verdict still counts it, because you still owe an answer.
+What changes is that the agent stops being handed the same decision every time
+it looks.
+
+Only an item under **needs a person** can be raised, and the command refuses the
+rest. Taking something out of the agent's queue without closing it is safe only
+because you are going to close it; an agent that could do the same to its own
+work would strand it — open forever, and gone from the one list that would have
+brought it back.
+
+Without it there is no third state, and an agent supervising overnight either
+sees the same item sixty times or starts acking things that are not its to ack.
+The note is optional, where `ack --reason` is required: disposing of a decision
+owes an account, and handing one off does not.
+
+## What happened
+
+The last section is the run's history — what has been *done* to it, oldest
+first:
+
+``` text
+## what happened
+
+- `2026-08-26T22:14:03.101Z` launched 12 tasks from evalset.py
+- `2026-08-27T01:41:07.338Z` a worker exited (pid 40122) with gsm8k@opus-5 unfinished; it is being tried again
+- `2026-08-27T01:52:44.870Z` archived a log — orphaned: logs/2026-08-26T21-08_gsm8k.eval
+- `2026-08-27T02:03:19.412Z` accepted by human: the definition has changed since it was captured — renamed a task arg deliberately
+```
+
+It is the only place a reader arriving at six can learn that somebody dealt with
+something at two, which is why `ack` **moves** an item here rather than hiding
+it: *who decided, and why* is precisely what a snapshot cannot carry and used to
+be discarded.
+
+It is deliberately **complete** rather than a delta — everything material since
+the workspace began, not everything since some mark — which is what keeps the
+snapshot stateless. That is affordable only because admission is narrow. The
+test is whether something happened *to* the run rather than *as* the run: a task
+completing is the run happening, a task retried because its worker died is
+something that happened to it. Anything that can occur hundreds of times a night
+appears as a count, never as instances.
+
+That test is what decides which worker exits appear here. A worker exits at the
+end of every task, so recording each one would put a line here per task that
+finished. A worker that exits leaving work the manifest still **wants** and has
+not got is the other thing entirely, and it is the single event an overnight
+history most needs — by morning the snapshot shows that task running normally,
+with no sign of how it got there.
+
+The trailing clause is load-bearing. *It is being tried again* appears only when
+the same turn actually started a replacement; a departure on the turn the stall
+guard gives up, or on a run already at its width, gets no such promise. And a
+worker of a task the definition no longer asks for is not here at all — that
+story is the archive line.
+
 ## Other renderings
 
 ``` bash
@@ -197,3 +313,7 @@ You can also preview against different settings without changing anything:
 ``` bash
 steward status --max-tasks 24
 ```
+
+An agent supervising the run reads the same three sections through a different
+verb — `steward collect`, which adds the history since it last looked and marks
+how far it read. See [Working with an Agent](agents.qmd#its-own-queue).

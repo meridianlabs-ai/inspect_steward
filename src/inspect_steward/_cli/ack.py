@@ -17,6 +17,7 @@ import click
 
 from .._tend import TendResult, status
 from .._workspace import ACKNOWLEDGED, append_event, read_acks, read_journal
+from .items import match_item
 from .turn import TURN_ERRORS, find_workspace
 
 
@@ -57,18 +58,10 @@ def ack_command(item: str, reason: str, by: str, output_json: bool) -> None:
         raise click.ClickException(str(ex)) from ex
 
     open_items = [entry for entry in result.items if entry.acknowledgeable]
-    exact = [entry for entry in open_items if entry.id == item]
-    matched = exact or [entry for entry in open_items if entry.id.startswith(item)]
-
-    if len(matched) > 1:
-        raise click.ClickException(
-            f"'{item}' matches {len(matched)} items:\n"
-            + "\n".join(f"  {entry.id}" for entry in matched)
-        )
-    if not matched:
+    target = match_item(open_items, item)
+    if target is None:
         raise click.ClickException(_nothing_matched(workspace.journal, item, result))
 
-    target = matched[0]
     append_event(
         workspace.journal,
         ACKNOWLEDGED,

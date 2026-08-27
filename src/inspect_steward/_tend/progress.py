@@ -7,6 +7,7 @@ The counts a turn already computes answer *what is Steward doing* — two to spa
 **Settled and live rows are the same shape, filled from different places.** A task whose worker has exited is described entirely by its log; one still running is described by its log for the denominators and by its process for everything that moves. Both produce a `TaskProgress`, so the renderer has no branch and the two cannot drift apart in what they report.
 """
 
+from collections.abc import Iterable
 from dataclasses import dataclass, field
 
 from .._evalset.display import KeyParts, ShortKeys, shorten_keys
@@ -17,7 +18,8 @@ from .._evalset.observe import (
     TaskObservation,
     TaskState,
 )
-from .._worker import LiveFleet, LiveTask
+from .._util.size import format_bytes
+from .._worker import LiveFleet, LiveTask, ProcessUsage, process_usage
 
 SUFFIX = {
     "turns": "t",
@@ -106,6 +108,96 @@ def task_progress(observed: ObservedTasks, fleet: LiveFleet) -> list[TaskProgres
     return [_row(task, fleet.tasks.get(task.identifier)) for task in observed.tasks]
 
 
+@dataclass(frozen=True)
+class Live:
+    """What only a running process can say, and nothing writes down.
+
+    A block rather than more columns, because none of it is per task in the way the table is: refusals and retries are per task but meaningless once one finishes, and memory and CPU are per *process*, which a packed worker shares between tasks. Summing either down a column would answer a question nobody asked.
+
+    Everything here is **live-only** and every rendering of it says so. Inspect records neither refusals nor HTTP retries in an eval log, so a total built from them describes the tasks running at this instant — and one that *falls* as tasks complete reads as a problem resolving itself when it is only work finishing (agent.md §4.2).
+    """
+
+    tasks: int
+    """Running tasks whose worker answered, which is the denominator for the tallies below and for nothing else."""
+
+    refusals: int
+    http_retries: int
+
+    unavailable: int = 0
+    """Running tasks whose worker did not answer.
+
+    Counted and named rather than dropped, for the reason every other omission in this summary is: `0 refusals` over a fleet where nothing answered is a claim about the run, and the reading that produced it made no such claim.
+    """
+
+    usage: ProcessUsage = field(default_factory=ProcessUsage)
+    """What the live processes are costing the machine, counted once per pid.
+
+    **Measured over every worker Steward believes is alive, not only the ones that answered.** A busy worker is exactly the one whose memory is worth knowing, and its resident set comes from the kernel rather than from the socket it is too busy to serve — so its silence costs the tallies above and must not cost this. It also covers a worker that has not bound a control socket yet, which is the fleet's first seconds, when the figure is climbing fastest.
+    """
+
+    @property
+    def figures(self) -> str:
+        """The block as one line, which both renderings put their own label in front of.
+
+        Here rather than in either renderer, for the reason the item type exists: two hand-written versions of the same figures are two chances to disagree, and the summary is required to say the same thing in a terminal and in a document.
+        """
+        parts: list[str] = []
+        if self.tasks:
+            parts += [
+                f"{self.tasks} task{'' if self.tasks == 1 else 's'}",
+                f"{self.refusals} refusals",
+                f"{self.http_retries} HTTP retries",
+            ]
+        if self.unavailable:
+            parts.append(f"{self.unavailable} not answering")
+        if self.usage.processes:
+            processes = self.usage.processes
+            parts.append(
+                f"{format_bytes(self.usage.rss)} across {processes} "
+                f"process{'' if processes == 1 else 'es'}"
+            )
+            parts.append(f"{self.usage.cores:.1f} cores, average since start")
+        return " · ".join(parts)
+
+
+LIVE_ONLY = (
+    "Live only: refusals and HTTP retries are recorded in no eval log, so these "
+    "describe the tasks running right now and fall as tasks finish."
+)
+"""The caveat that has to travel with the block, in one place so both renderings carry the same one.
+
+Not a nicety. Every figure in the block is about *what is running*, so all of them shrink as a run completes — and a reader watching refusals drop from forty to zero will read a problem resolving itself when what happened is that the work finished (agent.md §4.2).
+"""
+
+
+def live_totals(fleet: LiveFleet, pids: Iterable[int] = ()) -> Live | None:
+    """The fleet's live block, or `None` where nothing is running.
+
+    **Two populations, because the two kinds of figure fail independently.** A refusal count comes from a worker's control socket, so a worker that did not answer contributes *no* refusals rather than zero of them — and is counted as unavailable instead. Resident memory comes from the kernel, which answers for a busy worker exactly as readily as for an idle one, so usage is measured over every process Steward believes is alive.
+
+    Conflating the two is what made a fleet of eight busy workers render as *nothing is running* and fall back to a startup projection while eight processes held real memory.
+
+    Args:
+        fleet: What the running workers reported.
+        pids: Every worker Steward believes is alive, whether or not it answered. Deduplicated downstream, since a packed worker reports a row per task and all of them name one process.
+
+    Returns:
+        The block, or `None` when nothing is running to describe.
+    """
+    running = list(fleet.tasks.values())
+    answered = [task for task in running if task.unavailable is None]
+    usage = process_usage([*pids, *(task.pid for task in answered)])
+    if not answered and not usage.processes:
+        return None
+    return Live(
+        tasks=len(answered),
+        refusals=sum(task.refusals for task in answered),
+        http_retries=sum(task.http_retries for task in answered),
+        unavailable=len(running) - len(answered),
+        usage=usage,
+    )
+
+
 def _row(task: TaskObservation, live: LiveTask | None) -> TaskProgress:
     attempt = task.current
     answered = live is not None and live.unavailable is None
@@ -191,6 +283,12 @@ class Progress:
     """The whole run, as rows plus the totals a header line wants."""
 
     rows: list[TaskProgress] = field(default_factory=list[TaskProgress])
+
+    live: Live | None = None
+    """The live block, or `None` where nothing is running to have one.
+
+    Absent rather than zeroed, and the distinction is the whole reason for the type: `0 refusals` about a finished campaign is a claim about the run, and there is nothing here that could support it. What takes its place is the capture's startup bound — a ceiling is the useful figure before there is an actual, and the actual is the useful one once there is.
+    """
 
     @property
     def completed(self) -> int:

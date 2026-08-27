@@ -18,6 +18,8 @@ from dataclasses import dataclass
 
 import psutil
 
+from .._util.size import format_bytes
+
 SAMPLE_INTERVAL = 0.05
 """Seconds between polls. Fine enough to catch a dataset load, coarse enough that a two-second capture pays about forty reads of a procfs entry."""
 
@@ -123,12 +125,8 @@ def projection(peak_rss: int | None, width: int) -> str | None:
         return None
     total = psutil.virtual_memory().total
     return (
-        f"startup memory: at most {_gib(peak_rss)} per worker, "
-        f"{_gib(peak_rss * width)} across {width} "
-        f"worker{'' if width == 1 else 's'}, of {_gib(total)} on this machine"
+        f"startup memory: at most {format_bytes(peak_rss)} per worker, "
+        f"{format_bytes(peak_rss * width)} across {width} "
+        f"worker{'' if width == 1 else 's'}, "
+        f"of {format_bytes(total)} on this machine"
     )
-
-
-def _gib(value: int) -> str:
-    gib = value / (1024**3)
-    return f"{gib:.1f} GiB" if gib >= 0.1 else f"{value / (1024**2):.0f} MiB"

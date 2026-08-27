@@ -20,6 +20,9 @@ from pydantic import BaseModel, ConfigDict
 
 _MAX_DAMAGE_TEXT = 200
 
+_LINE = "__line__"
+"""Extras key carrying an event's line number, set by the reader and never written to a file. Dunder-flanked because a file's own vocabulary must never collide with it."""
+
 
 def utc_now() -> str:
     """Current time as a UTC ISO-8601 string.
@@ -53,7 +56,22 @@ class Event(BaseModel):
     @property
     def payload(self) -> dict[str, Any]:
         """Fields beyond the envelope."""
-        return self.__pydantic_extra__ or {}
+        return {
+            name: value
+            for name, value in (self.__pydantic_extra__ or {}).items()
+            if name != _LINE
+        }
+
+    @property
+    def line(self) -> int:
+        """Which line of the file this came from, 1-based. `0` for an event that was not read from one.
+
+        **Assigned when the file is read rather than written into it**, which is what makes it usable as a cursor position. A sequence number in the envelope would have to be computed from the last one, so an append would first have to read — and two appenders racing (a tend and a concurrent `steward ack`, which the run claim does not serialise) would mint the same number.
+
+        Counted over *lines* rather than over parsed events, so damage does not shift it: a torn line keeps its number and stays counted, where an index into `events` would silently renumber everything after it.
+        """
+        value = (self.__pydantic_extra__ or {}).get(_LINE)
+        return value if isinstance(value, int) else 0
 
 
 @dataclass(frozen=True)
@@ -156,5 +174,11 @@ def _parse(line: str, number: int, into: list[Event]) -> DamagedLine | None:
     # deliberately not dispatched to a typed subclass: a reader's job is to
     # yield history, and an event whose payload a later version changed is
     # still history. Callers that need a typed view validate what they asked for.
-    into.append(Event.model_validate(document))
+    #
+    # the line number rides in the extras so that `Event.line` can answer
+    # without a declared field that `payload` would then have to hide from
+    # every caller iterating it. A file carrying this key already is reading
+    # its own writing back, which nothing does -- appends go through
+    # `append_event`, which never writes it
+    into.append(Event.model_validate({**document, _LINE: number}))
     return None

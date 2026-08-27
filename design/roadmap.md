@@ -71,7 +71,7 @@ What M2 deliberately lacks: it does not notice anything. Tasks run, logs land, a
 
 ### 3.2 M3 — walk away
 
-1. **The tend summary and its queue**, which is the agent's whole surface at this milestone.
+1. **The tend summary and its queue**, which is the agent's whole surface at this milestone. **Built** ([plan.md](plan.md) step 19): three sections led by what needs a decision, `collect` with a cursor over history alone, and `raise` as the state between open and closed.
 2. **Human interaction in a detached worker** — a worker parked on a tool approval or an `ask_user`, surfaced as blocked work with a command that attaches to it. Depends on **upstream items 12 and 13**, which land together. Placed second because the summary is what it reports through, and because it is the one condition where walking away does not work: a parked worker holds its slot until a person answers.
 3. **The tuning policy** — the growth signal, the envelope, the asymmetric ratchet. Only the judgement is here; the mechanism landed in M2 because `pause` and adjudication needed it anyway.
 4. **`steward.log` and the sync**, with the two ages.

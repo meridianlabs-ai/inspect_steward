@@ -8,12 +8,15 @@ and that `--json` is a document rather than prose with braces in it.
 """
 
 import json
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 from inspect_steward._cli.main import steward
+from inspect_steward._cli.turn import echo_turn
 from inspect_steward._evalset.manifest import write_manifest
+from inspect_steward._tend import Live, status_markdown
 from inspect_steward._workspace import Claim, Workspace, acquire, create_workspace
 
 from .._logs import SynthTask, write_log
@@ -343,7 +346,7 @@ def test_status_prints_markdown_on_request_and_not_otherwise(
     _, text = run("status")
 
     assert "| state | tasks |" in markdown
-    assert "## progress" in markdown
+    assert "### tasks" in markdown
     # ...and no warning about editing a file, since this one is not a file
     assert "Regenerated every turn" not in markdown
     assert "| state | tasks |" not in text
@@ -361,6 +364,36 @@ def test_every_rendering_leads_with_the_same_verdict(workspace: Workspace) -> No
     assert "✅" in markdown
     assert document["verdict"] == "✅"
     assert code == 0
+
+
+def test_the_live_block_replaces_the_startup_bound_and_both_renderings_agree(
+    workspace: Workspace, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Under the table: what the fleet costs now, or what starting it would.
+
+    A real turn with a synthesized fleet, because the two branches are a
+    rendering decision rather than a reading one — and no synthesized *state*
+    can produce a running worker.
+    """
+    result = turn(workspace)
+    running = replace(
+        result,
+        progress=replace(
+            result.progress, live=Live(tasks=2, refusals=3, http_retries=41)
+        ),
+    )
+
+    markdown = status_markdown(running, header=False)
+    echo_turn(running)
+    text = capsys.readouterr().out
+
+    for rendering in (markdown, text):
+        assert "2 tasks · 3 refusals · 41 HTTP retries" in rendering
+        # the caveat travels with the figures, because a total that falls as
+        # tasks complete otherwise reads as a problem resolving itself
+        assert "fall as tasks finish" in rendering
+    # and with nothing running there is no block to caveat
+    assert "refusals" not in status_markdown(result, header=False)
 
 
 def test_markdown_says_when_a_tend_holds_the_claim(workspace: Workspace) -> None:

@@ -174,6 +174,58 @@ def test_a_worker_that_lands_no_log_is_tried_twice_and_then_left(
     assert third.reaped == second.spawned
     assert manifest.tasks[0].identifier == probe.identifier
 
+    # and each departure is in the history, which is the only place a reader
+    # arriving in the morning can learn that a task died twice in the night —
+    # by then the snapshot shows one stalled task and no sign of how it got there
+    written = workspace.status.read_text(encoding="utf-8")
+    assert written.count("with probe") == 2
+    # the promise of a retry is made only by the turn that made one: the second
+    # departure is the one the guard gives up on, and telling a reader it is
+    # being tried again would send them looking for a worker that never starts
+    assert written.count("unfinished; it is being tried again") == 1
+
+
+def test_a_worker_that_finished_its_task_is_not_history(tmp_path: Path) -> None:
+    """A worker exits at the end of every task, so reaping is not news.
+
+    Recording every reap would put a line in *what happened* for each task that
+    completed, which is the run happening rather than something that happened
+    to the run — and would drown the entries that are.
+    """
+    done = SynthTask("done")
+    workspace, _ = prepared(tmp_path, [done])
+    write_log(workspace.logs, done)
+
+    turn(workspace)
+
+    written = workspace.status.read_text(encoding="utf-8")
+    assert "a worker exited" not in written
+
+
+def test_a_worker_leaving_orphaned_work_behind_is_not_unfinished_work(
+    tmp_path: Path,
+) -> None:
+    """An orphan is not *incomplete*; the manifest stopped asking for it.
+
+    Every non-complete state used to count as work left undone, so a worker of
+    a removed task departing was reported as something being picked up again —
+    while the same turn archived its log and nothing ever respawned it. What a
+    reader is owed there is the archive line, which says the true thing.
+    """
+    kept, removed = SynthTask("kept"), SynthTask("removed")
+    workspace, _ = prepared(tmp_path, [kept])
+    write_log(workspace.logs, kept)
+    write_log(workspace.logs, removed, status="started", total=10, completed=3)
+
+    turn(workspace)
+
+    written = workspace.status.read_text(encoding="utf-8")
+    assert (
+        "removed"
+        not in written.partition("## what happened")[2].partition("archived")[0]
+    )
+    assert "tried again" not in written
+
 
 def test_an_orphan_is_archived_once_and_the_journal_says_why(tmp_path: Path) -> None:
     removed = SynthTask("removed")
@@ -201,6 +253,49 @@ def test_an_orphan_is_archived_once_and_the_journal_says_why(tmp_path: Path) -> 
     assert action["reason"] == "orphaned"
     assert action["identifier"] == removed.identifier
     assert action["archived"] == str(archive)
+
+
+def test_the_status_a_turn_writes_says_it_was_tended_just_now(tmp_path: Path) -> None:
+    """The turn writing the file *is* the tend, so the recorded age is the last one.
+
+    `As of <now>` and `tended 10m ago` on the same line is one of them wrong,
+    and on a first turn the age vanished entirely for a run being tended as the
+    reader looked. A `status` renders the recorded age, which is right there
+    for exactly the same reason.
+    """
+    done = SynthTask("done")
+    workspace, _ = prepared(tmp_path, [done])
+    write_log(workspace.logs, done)
+
+    turn(workspace)
+    first = workspace.status.read_text(encoding="utf-8")
+    turn(workspace)
+    second = workspace.status.read_text(encoding="utf-8")
+
+    assert "tended just now" in first
+    assert "tended just now" in second
+    assert "ago" not in second.partition("\n\n##")[0]
+
+
+def test_the_status_a_turn_writes_reports_what_that_turn_did(tmp_path: Path) -> None:
+    """A summary must not contradict its own side effects.
+
+    *What happened* is projected from a journal read taken before the actions
+    run, so a turn that archives something wrote `status.md` saying nothing had
+    ever been done to the run — and the entry surfaced only when some later
+    turn happened to read the file again.
+    """
+    removed = SynthTask("removed")
+    kept = SynthTask("kept")
+    workspace, _ = prepared(tmp_path, [kept])
+    write_log(workspace.logs, kept)
+    write_log(workspace.logs, removed)
+
+    turn(workspace)
+
+    written = workspace.status.read_text(encoding="utf-8")
+    assert "archived a log — orphaned" in written
+    assert "Nothing has been done to this run yet" not in written
 
 
 def test_the_archive_is_a_sibling_of_whatever_log_dir_the_definition_chose(
@@ -498,10 +593,31 @@ def test_status_md_says_how_old_it_is_and_what_needs_a_person(
     assert "| complete | 1 |" in rendered
 
 
-def test_status_md_is_quiet_when_there_is_nothing_to_say(tmp_path: Path) -> None:
+def test_a_finished_run_asks_to_be_accepted_rather_than_reading_as_all_clear(
+    tmp_path: Path,
+) -> None:
+    """The one thing a completed sweep is owed, which it used to report as nothing.
+
+    Every task done and no caveats used to render *Nothing needs attention.* —
+    true of the machinery and false of the run, since the results exist and
+    nobody has looked at them. Worded as a state because `steward signoff` is
+    step 26; the item is acknowledgeable meanwhile.
+    """
     done = SynthTask("done")
     workspace, _ = prepared(tmp_path, [done])
     write_log(workspace.logs, done)
+
+    turn(workspace)
+
+    rendered = workspace.status.read_text(encoding="utf-8")
+    assert "waiting to be accepted" in rendered
+    assert "Nothing needs attention." not in rendered
+
+
+def test_status_md_is_quiet_when_there_is_nothing_to_say(tmp_path: Path) -> None:
+    # a run with work still to do and nothing wrong with it -- the state that
+    # genuinely owes a reader nothing
+    workspace, _ = prepared(tmp_path, [SynthTask("pending")])
 
     turn(workspace)
 

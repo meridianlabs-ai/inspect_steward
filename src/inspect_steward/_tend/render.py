@@ -4,18 +4,24 @@ The one artifact that reaches a human who is not in a session. On a machine with
 
 **It states its own age, and that is load-bearing rather than a courtesy.** A remote reader detects a stopped timer, a crashed tend, or a broken sync in exactly one way: by noticing this file is old. A timestamp buried among the numbers gets skimmed past, so it goes at the top, on its own, before anything that could be mistaken for current.
 
-**The verdict leads, and everything under it is elaboration.** A reader who takes one line from this file should have taken the true one. Below that the file answers three questions in the order they are asked: where the tasks are, how the samples are going, and what somebody has to do about it.
+**The verdict leads, and everything under it is elaboration.** A reader who takes one line from this file should have taken the true one.
+
+**Then decisions, in full, before anything else** — because surfacing what a person has to decide is the summary's main job and everything else is context for it (agent.md §4.1). This section used to be last, under the task table, and running the M2 gate showed the cost: the verdict said one thing needed a person and finding out *what* meant scrolling past fifteen tasks that did not. Ordering matters more here than in most files, since agent.md §5 requires an agent to relay this document verbatim — so whatever is at the top is what a human is read first.
+
+Below that, where the run stands, and then what has been done to it.
 
 **Both this and the terminal render the same items.** They used to render two hand-written lists of the same conditions, and those lists had already drifted apart in what they reported — which is the argument for the item type rather than an anecdote about it.
 """
 
 from typing import TYPE_CHECKING
 
+from .._evalset.cost import fleet_width, projection
 from .._evalset.observe import TaskState
 from .._schedule import Summary
+from .._util.duration import format_duration
 from .._util.jsonl import utc_now
 from .items import HEADINGS, by_owner, verdict_line
-from .progress import short_keys
+from .progress import LIVE_ONLY, short_keys
 
 if TYPE_CHECKING:
     # the turn imports this module to write its file, so the type it passes can
@@ -25,12 +31,22 @@ if TYPE_CHECKING:
 _HEADER = "<!-- Written by `steward tend`. Regenerated every turn; edits are lost. -->"
 
 
-def status_markdown(result: "TendResult", *, header: bool = True) -> str:
+def status_markdown(
+    result: "TendResult",
+    *,
+    header: bool = True,
+    for_agent: bool = False,
+    since: int = 0,
+) -> str:
     """Render a turn as markdown.
+
+    **One renderer, two projections**, which is the same argument the item type itself rests on: two renderings of the same conditions are two chances to disagree, and the pair this replaced had already drifted. `for_agent` is a filter over what a person sees and never a different document.
 
     Args:
         result: The turn that just ran.
         header: Include the generated-file comment. `status.md` wants it; `steward status --format md` does not, since nothing there is a file anybody could edit by mistake.
+        for_agent: Set decisions the agent has already raised aside, and count them. The agent's queue is its own work — an item it surfaced at 1am is not work it can do anything more about, and showing it at every collection all night is what `raise` exists to stop (agent.md §2.2).
+        since: Show only history after this journal position, counting what that leaves out.
 
     Returns:
         The complete body.
@@ -43,9 +59,14 @@ def status_markdown(result: "TendResult", *, header: bool = True) -> str:
         [
             f"{verdict_line(result.verdict, result.items)}",
             "",
-            f"**As of** `{utc_now()}`{_qualified(result)}",
+            f"**As of** `{utc_now()}`{_ages(result)}{_qualified(result)}",
             "",
-            "## tasks",
+        ]
+    )
+    lines.extend(_items(result, for_agent=for_agent))
+    lines.extend(
+        [
+            "## the run",
             "",
             "| state | tasks |",
             "| --- | ---: |",
@@ -67,8 +88,30 @@ def status_markdown(result: "TendResult", *, header: bool = True) -> str:
         counts.insert(2, f"{summary.spawning} would be spawned")
     lines.extend(["", " · ".join(counts), ""])
     lines.extend(_progress(result))
-    lines.extend(_items(result))
+    lines.extend(_live(result))
+    lines.extend(_happened(result, since=since))
     return "\n".join(lines)
+
+
+def _live(result: "TendResult") -> list[str]:
+    """Under the table: what the running processes cost, or what starting them would.
+
+    **One or the other, never both and never neither.** While something runs, the measured figures are the answer; before anything does, the capture's startup ceiling is — a bound is the useful number when there is no actual, and the actual is the useful number once there is (agent.md §4.2).
+    """
+    if (live := result.progress.live) is not None:
+        return [f"**Running now** · {live.figures}", "", f"_{LIVE_ONLY}_", ""]
+    summary = result.summary
+    bound = projection(
+        summary.capture_rss,
+        fleet_width(
+            summary.tasks,
+            max_workers=summary.max_workers,
+            max_tasks=summary.max_tasks,
+        ),
+    )
+    # silent where nothing measured it, which is every manifest committed before
+    # the measurement existed -- and a reader should see nothing rather than a zero
+    return [bound[0].upper() + bound[1:], ""] if bound is not None else []
 
 
 def _shape(summary: Summary) -> str:
@@ -127,8 +170,11 @@ def _progress(result: "TendResult") -> list[str]:
         header += ["score"]
         align += ["---:"]
 
+    # a sub-heading rather than a section of its own, because the document has
+    # exactly three sections and an agent is required to relay it whole
+    # (agent.md §4): a fourth `##` would read as a fourth thing to attend to
     lines = [
-        "## progress",
+        "### tasks",
         "",
         "| " + " | ".join(header) + " |",
         "| " + " | ".join(align) + " |",
@@ -173,21 +219,92 @@ def _progress(result: "TendResult") -> list[str]:
     return lines + [""]
 
 
-def _items(result: "TendResult") -> list[str]:
-    """Everything a reader should not have to infer from the counts above.
+def _raised(count: int) -> str:
+    """How an omission is named. One phrase, so the two renderings cannot word it differently."""
+    return (
+        f"{count} raised, awaiting a person"
+        if count > 1
+        else "1 raised, awaiting a person"
+    )
 
-    Grouped by who has to act rather than by kind, because the first question a reader has is whether any of this is theirs. Each line carries its id, which is how it is disposed of once somebody has decided it is fine — `steward ack` takes any unambiguous prefix of one.
+
+def _items(result: "TendResult", *, for_agent: bool = False) -> list[str]:
+    """What somebody has to decide, which is what this document is mainly for.
+
+    Grouped by who has to act, because the first question a reader has is whether any of this is theirs — and within a group by level, so that among a person's own decisions the ones costing something now come before the ones that can wait. Each line carries its id, which is how it is disposed of once somebody has decided it is fine: `steward ack` takes any unambiguous prefix of one.
+
+    A raised item is marked rather than removed. It is still open and a person still owes an answer; what raising records is that the *agent's* part is done, and only the agent's own projection acts on that (agent.md §2.2).
     """
-    lines = ["## attention", ""]
-    if not result.items:
-        return lines + ["Nothing needs attention.", ""]
+    shown = [item for item in result.items if not (for_agent and item.raised)]
+    set_aside = len(result.items) - len(shown)
 
-    for owner, group in by_owner(result.items):
+    lines = ["## what needs a decision", ""]
+    if not shown:
+        note = "Nothing needs attention."
+        if set_aside:
+            note = f"Nothing for you. {_raised(set_aside)}."
+        return lines + [note, ""]
+
+    if set_aside:
+        lines.extend([f"_{_raised(set_aside)}, not shown._", ""])
+
+    for owner, group in by_owner(shown):
         lines.extend([f"### {HEADINGS[owner]}", ""])
         for item in group:
             trailer = f"`{item.id}`" if item.acknowledgeable else "_transient_"
             if item.action is not None:
                 trailer = f"`{item.action}` · {trailer}"
+            if item.raised:
+                trailer = f"{trailer} · _raised_"
             lines.append(f"- {item.summary} — {trailer}")
         lines.append("")
     return lines
+
+
+def _happened(result: "TendResult", *, since: int = 0) -> list[str]:
+    """What has been done to this run, oldest first.
+
+    **Complete rather than a delta**, which is what keeps this document stateless — see `history.py` for the admission test that makes completeness affordable. `since` is for the agent's projection only; a person's copy shows everything.
+
+    **An omission is counted, never silent.** A reader who is shown a shortened list with nothing saying so concludes the list is the whole of it, which for a history is the difference between *the night was quiet* and *you were not shown the night*.
+    """
+    entries = result.happened.since(since)
+    omitted = result.happened.before(since)
+    lines = ["## what happened", ""]
+    if not entries:
+        note = "Nothing has been done to this run yet."
+        if omitted:
+            note = f"Nothing new. {omitted} earlier — `--since 0` for all."
+        return lines + [note, ""]
+
+    if omitted:
+        lines.extend([f"_{omitted} earlier, not shown — `--since 0` for all._", ""])
+    lines.extend(f"- `{entry.ts}` {entry.text}" for entry in entries)
+    lines.append("")
+    return lines
+
+
+def _ages(result: "TendResult") -> str:
+    """How old this information is, and how long since anyone read it.
+
+    **Two ages rather than one**, because they fail differently and either alone is ambiguous: a stale tend age means the timer stopped, a stale collection age means nobody is exercising judgement (agent.md §2.2). A workspace tended four minutes ago and collected six hours ago is describing its own situation accurately, and neither number says that by itself.
+    """
+    parts: list[str] = []
+    supervision = result.supervision
+    if result.executed:
+        # **the turn writing this file is the tend**, so the recorded age is the
+        # *previous* one — this document would otherwise be stamped `as of now`
+        # and `tended 10m ago` on the same line, one of them wrong, and on a
+        # first turn would omit the age entirely for a run being tended as the
+        # reader looks. A `status` renders the recorded age, which is correct
+        # there for exactly the same reason
+        parts.append("tended just now")
+    elif supervision is not None and supervision.since_tend is not None:
+        parts.append(f"tended {format_duration(int(supervision.since_tend))} ago")
+    if result.collected is None:
+        # never, rather than long ago -- a workspace no agent has attached to is
+        # not one whose agent has gone quiet, and the two want different answers
+        parts.append("never collected")
+    elif result.since_collected is not None:
+        parts.append(f"collected {format_duration(int(result.since_collected))} ago")
+    return f" · {' · '.join(parts)}" if parts else ""

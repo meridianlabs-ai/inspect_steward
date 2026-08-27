@@ -1,0 +1,4 @@
+---
+reference: steward raise
+description: Record that an item is now with the person who can decide it.
+---

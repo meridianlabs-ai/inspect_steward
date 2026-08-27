@@ -14,9 +14,11 @@ title: Reference
 | | |
 |---|---|
 | [steward ack](steward_ack.qmd) | Accept an open item, so that nothing reports it again. |
+| [steward collect](steward_collect.qmd) | Read what has accumulated, and mark how far you have read. |
 | [steward init](steward_init.qmd) | Create a Steward workspace. |
 | [steward launch](steward_launch.qmd) | Start a run: capture the definition, commit it, arm a timer, tend once. |
 | [steward pause](steward_pause.qmd) | Stop scheduling new work, leaving what is running to finish. |
+| [steward raise](steward_raise.qmd) | Record that an item is now with the person who can decide it. |
 | [steward resume](steward_resume.qmd) | Start scheduling again. |
 | [steward runbook](steward_runbook.qmd) | Print the agent runbook that ships with the package. |
 | [steward status](steward_status.qmd) | Report where the run stands, and what the next turn would do. |

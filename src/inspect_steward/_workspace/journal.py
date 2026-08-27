@@ -23,12 +23,15 @@ from .._util.jsonl import (
 __all__ = [
     "ACKNOWLEDGED",
     "ARMED",
+    "COLLECTED",
     "DISARMED",
     "LAUNCHED",
     "PAUSED",
+    "RAISED",
     "RESUMED",
     "Ack",
     "Armed",
+    "Collected",
     "DamagedLine",
     "InitializedEvent",
     "JournalEvent",
@@ -36,12 +39,15 @@ __all__ = [
     "JournalSummary",
     "LaunchedEvent",
     "Paused",
+    "Raised",
     "append_event",
     "read_acks",
     "read_armed",
+    "read_collected",
     "read_journal",
     "read_launched",
     "read_pause",
+    "read_raised",
     "summarize",
     "utc_now",
 ]
@@ -52,6 +58,28 @@ ACKNOWLEDGED = "acknowledged"
 The one event kind an item list was not supposed to need. Items are a projection, so a condition that ends stops being reported and a decision keeps its subject open — but neither covers a real condition nothing will clear mechanically that somebody has already accepted. Without this, a definition edited on purpose reports drift every ten minutes for the rest of the run, which is how an attention list stops being read.
 
 Written by `steward ack`, never by a tend. It carries `id`, `by` (`agent` or `human`), and a required `reason` — the discipline `inspect ctl` already imposes on every applied change, and what makes *who decided, and why* (workflow.md, *The audit trail*) true of this act too.
+"""
+
+RAISED = "raised"
+"""Journal event: the agent put an item in front of the person who can decide it.
+
+**It closes nothing, and that is the whole point.** An item owned by a human stays open until a human rules on it — but the *agent's* work on it ended when it was surfaced, and without a record of that the item returns to the agent's queue at every collection all night. Reading is the wrong verb for something the reader cannot dispose of (agent.md §2.2), so raising is the verb.
+
+The third of three item states, between *needs the agent* and *closed*. What it changes is one projection: `steward collect` sets a raised item aside and counts it; `status` still shows it, because a person still owes an answer.
+
+Carries `id` and an optional `note` — optional where `acknowledged`'s reason is required, because disposing of a decision owes an account and handing one off does not.
+"""
+
+COLLECTED = "collected"
+"""Journal event: how far an agent has read.
+
+A **position and nothing else** — no note, no claim about having acted. An event that asserts two things at once is eventually read as the wrong one, and what was *done* is recorded by `acknowledged`, `raised`, and `action` at the moment it was done.
+
+The position is a journal line number (`Event.line`), which is assigned when the file is read rather than written into it — see that property for why a stored sequence number would race.
+
+Two things read this fold: the delta an arriving agent is shown, and the collection age, which sits beside the tend age so that *the timer stopped* and *nobody is looking* are distinguishable (agent.md §2.2).
+
+Carries `position`.
 """
 
 PAUSED = "paused"
@@ -131,6 +159,28 @@ class Ack:
     """`agent` or `human`. An agent disposing of a transient it investigated is its own ack, not a human's relayed through it."""
 
     reason: str
+    ts: str
+
+
+@dataclass(frozen=True)
+class Collected:
+    """How far an agent has read, and when it last did."""
+
+    position: int
+    """Journal line number read to."""
+
+    ts: str
+    """When, which is the other half of what this fold is for: the collection age sits beside the tend age so that *the timer stopped* and *nobody is looking* are distinguishable."""
+
+
+@dataclass(frozen=True)
+class Raised:
+    """One hand-off, as the fold reports it."""
+
+    id: str
+    note: str
+    """What the agent did to surface it, or empty. Optional by design — see `RAISED`."""
+
     ts: str
 
 
@@ -217,6 +267,54 @@ def read_acks(events: list[JournalEvent]) -> dict[str, Ack]:
             ts=event.ts,
         )
     return acks
+
+
+def read_raised(events: list[JournalEvent]) -> dict[str, Raised]:
+    """Fold a journal down to what the agent has handed to its owner.
+
+    Keyed on the **item id** for the same reason `read_acks` is, and it buys the same property: a stall raised at attempt 2 does not raise the one at attempt 3, because the attempt count is in the id. So re-entry needs no expiry rule — a condition that materially changes arrives as new work, and one that does not stays quiet.
+
+    Args:
+        events: Events in file order, as `read_journal` returns them.
+
+    Returns:
+        The most recent hand-off per item id.
+    """
+    raised: dict[str, Raised] = {}
+    for event in events:
+        if event.type != RAISED:
+            continue
+        identifier = event.payload.get("id")
+        if not isinstance(identifier, str) or not identifier:
+            continue
+        note = event.payload.get("note")
+        raised[identifier] = Raised(
+            id=identifier,
+            note=note if isinstance(note, str) else "",
+            ts=event.ts,
+        )
+    return raised
+
+
+def read_collected(events: list[JournalEvent]) -> Collected | None:
+    """Fold a journal down to how far an agent has read.
+
+    A switch rather than an accumulation, like the pause: the last word wins, so a `--since` that deliberately reaches backwards and then advances again leaves the newer position behind.
+
+    Args:
+        events: Events in file order, as `read_journal` returns them.
+
+    Returns:
+        The most recent collection, or `None` where nobody has collected — which reads as *everything is new*, the right answer for a workspace no agent has attached to. Distinct from position `0`, which an agent could deliberately collect at.
+    """
+    collected: Collected | None = None
+    for event in events:
+        if event.type != COLLECTED:
+            continue
+        value = event.payload.get("position")
+        if isinstance(value, int) and not isinstance(value, bool):
+            collected = Collected(position=value, ts=event.ts)
+    return collected
 
 
 def read_pause(events: list[JournalEvent]) -> Paused | None:

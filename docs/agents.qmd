@@ -99,6 +99,36 @@ exception is narrow: an item the agent investigated and resolved itself — a fi
 that turned out to be a partial upload, say — is its own disposal, recorded
 `--by agent`. The test is whether anyone but the agent would have to know.
 
+`steward raise` is the opposite case and needs no permission at all. It records
+that a decision of yours is now in front of you, and it **closes nothing** — the
+item stays in `status.md`, and the verdict still counts it. All it changes is
+that the agent stops being handed work it has already done everything about
+([Reading Status](status.qmd#raising-which-is-the-agents-half-of-the-same-thing)).
+
+## Its own queue
+
+``` bash
+steward collect
+```
+
+This is the verb an agent starts a session with. It prints the same three
+sections `status` does and adds the stretch of history since the agent last
+looked — then records that it looked, which is what makes *nobody has read this
+run in six hours* something Steward can report rather than something you have to
+notice.
+
+The two halves behave differently on purpose. **History** is a stream with a
+cursor, so reading it advances a bookmark. **Decisions** are a set, and one
+leaves the agent's queue only when the agent *acts* — `ack` to close it, `raise`
+to hand it to you. Nothing is consumed by being looked at, so an agent whose
+session dies mid-investigation finds its work waiting.
+
+Anything the agent's view sets aside is **counted** rather than dropped: a
+decisions section reading `Nothing for you. 2 raised, awaiting a person.` is
+telling the agent there are two open decisions and neither is its to make. That
+matters because an agent can read a label but cannot reason about what it was
+never shown.
+
 ## When it should stop and ask you
 
 Rather than working around: identity or resume errors, where the manifest and the
@@ -118,14 +148,15 @@ obligation:
 |----|----|----|
 | **attached, reactive** | something watches the turn output or the journal and wakes it | seconds — worth setting up for a run being watched closely |
 | **attached, periodic** | its own wake-ups; it may call `tend` directly to force a turn early | its own interval |
-| **transient** | it reads accumulated state when it attaches | until somebody opens a session |
+| **transient** | it reads accumulated state when it attaches, with `steward collect` | until somebody opens a session |
 
 **The transient posture is the common one**, and it is the one to design your
 expectations around: somebody opens a session in the morning, and the agent reads
 what the night produced. That is why the workspace has to carry everything — the
 journal records what each turn *observed*, not only what was decided, so a fresh
 session can tell which problems are getting worse rather than inheriting a flat
-list.
+list. `steward collect` is how it reads that, and how it knows where it stopped
+last time.
 
 Calling `tend` is still useful, but it means *give me a turn now* rather than
 *keep this run alive*. An agent that has just resolved something should tend

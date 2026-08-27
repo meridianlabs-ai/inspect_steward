@@ -73,6 +73,15 @@ class LiveTask:
     connections: LiveConnections = field(default_factory=LiveConnections)
     total_tokens: int = 0
 
+    refusals: int = 0
+    """Model refusals this eval's samples have hit."""
+
+    http_retries: int = 0
+    """HTTP retries this eval's samples have made.
+
+    With `refusals`, the pair that says whether a run is *slow* or *in trouble*, and both are **live-only**: inspect tallies them per task on the control channel and records neither in an eval log, so nothing can report them for a task that has finished. Any total built from these describes what is running at this instant and falls as tasks complete — which has to be said wherever it is rendered, because a falling number otherwise reads as a problem fixing itself (agent.md §4.2).
+    """
+
     unavailable: str | None = None
     """Why this worker could not be read — `busy`, `gone`, or a reason. `None` when the reading worked."""
 
@@ -213,6 +222,8 @@ async def _read(
                 usage=_usage(samples.get(_text(row.get("eval_id")))),
                 connections=_connections(config, _model(row, target)),
                 total_tokens=_number(row.get("total_tokens")),
+                refusals=_number(row.get("refusals")),
+                http_retries=_number(row.get("http_retries")),
             )
         )
 

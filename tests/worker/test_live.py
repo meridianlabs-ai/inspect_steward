@@ -52,6 +52,8 @@ TASK: dict[str, object] = {
     "eval_id": "E1",
     "task_id": "T1",
     "total_tokens": 4096,
+    "refusals": 3,
+    "http_retries": 41,
     "samples": {
         "total": 123,
         "completed": 5,
@@ -176,6 +178,9 @@ def test_a_worker_reports_the_counts_its_log_has_not_caught_up_to(
     assert task.connections.in_use == 52
     assert task.connections.limit == 80
     assert task.total_tokens == 4096
+    # live-only, both of them: inspect records neither in an eval log, so this
+    # socket is the only place either number exists
+    assert (task.refusals, task.http_retries) == (3, 41)
 
 
 def test_usage_is_the_leading_sample_rather_than_the_mean(sockets: Path) -> None:

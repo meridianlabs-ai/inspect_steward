@@ -49,6 +49,7 @@ from .stop import (
     StopRequest,
     stop_workers,
 )
+from .usage import ProcessUsage, process_usage
 
 __all__ = [
     "ABSENT",
@@ -70,6 +71,7 @@ __all__ = [
     "LiveTarget",
     "LiveTask",
     "LiveUsage",
+    "ProcessUsage",
     "Samples",
     "ScannedWorker",
     "SpawnedWorker",
@@ -81,6 +83,7 @@ __all__ = [
     "WorkerScan",
     "list_tasks",
     "cancel_task",
+    "process_usage",
     "read_fleet",
     "record_exited",
     "record_intent",
