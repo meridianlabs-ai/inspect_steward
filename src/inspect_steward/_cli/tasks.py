@@ -45,7 +45,7 @@ def tasks_command(
     try:
         manifest = read_eval_set(
             definition,
-            args=_parse_args(definition_args),
+            args=parse_args(definition_args),
             type=definition_type,
         )
     except (ValueError, ReadEvalSetError) as ex:
@@ -57,8 +57,20 @@ def tasks_command(
         _print_tasks(manifest)
 
 
-def _parse_args(args: tuple[str, ...]) -> dict[str, Any] | None:
-    """Parse `-A KEY=VALUE` args with the same semantics as inspect_ai's `parse_cli_args` (YAML scalar coercion, comma-separated strings become lists, dashes in keys become underscores)."""
+def parse_args(args: tuple[str, ...]) -> dict[str, Any] | None:
+    """Parse `-A KEY=VALUE` args with the same semantics as inspect_ai's `parse_cli_args` (YAML scalar coercion, comma-separated strings become lists, dashes in keys become underscores).
+
+    Shared with `launch`, which takes the same flag against the same definitions and must coerce it the same way: two parsers would mean `steward tasks -A limit=10` enumerating a different eval set than `steward launch -A limit=10` captures.
+
+    Args:
+        args: The `-A` values as given.
+
+    Returns:
+        The parsed arguments, or `None` where none were given — which is what lets a re-launch distinguish *no arguments* from *the same arguments as last time*.
+
+    Raises:
+        click.UsageError: If a value is not `KEY=VALUE`.
+    """
     if not args:
         return None
     parsed: dict[str, Any] = {}

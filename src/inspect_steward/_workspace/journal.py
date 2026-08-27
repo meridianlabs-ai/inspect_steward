@@ -24,6 +24,7 @@ __all__ = [
     "ACKNOWLEDGED",
     "ARMED",
     "DISARMED",
+    "LAUNCHED",
     "PAUSED",
     "RESUMED",
     "Ack",
@@ -33,11 +34,13 @@ __all__ = [
     "JournalEvent",
     "JournalRead",
     "JournalSummary",
+    "LaunchedEvent",
     "Paused",
     "append_event",
     "read_acks",
     "read_armed",
     "read_journal",
+    "read_launched",
     "read_pause",
     "summarize",
     "utc_now",
@@ -76,6 +79,16 @@ Carries `scheduler`, `interval` in seconds, and `label`.
 DISARMED = "disarmed"
 """Journal event: the timer was removed. Carries `scheduler`."""
 
+LAUNCHED = "launched"
+"""Journal event: somebody started this run, and what they started it with.
+
+**Not `_worker.inflight`'s `launched`**, which is the same word about a different subject — that one says a worker's spawn returned, and lives in a rebuildable record. This one says a *run* was launched, and is here because losing it would change what Steward reports.
+
+What it buys is one item's correctness. `unsupervised` is gated on a timer having been armed, deliberately, so a workspace nobody armed stays quiet rather than nagging somebody sitting at the terminal typing `steward tend` (`_tend.items`). `launch --no-timer` falls in the gap that leaves: the operator asked to run unsupervised, execution.md §8.3 requires that to *look* unsupervised, and with nothing recorded the run looks exactly like a hand-driven experiment nobody promised to schedule. So a launch writes itself down, and the item asks *did anyone launch this* as well as *did anyone arm it*.
+
+Carries `tasks`, `definition`, and `timer` — the scheduler armed, or `None` where the launch was told not to arm one.
+"""
+
 JournalEvent = Event
 """One event in the journal."""
 
@@ -86,11 +99,27 @@ JournalRead = EventRead
 class InitializedEvent(JournalEvent):
     """The workspace was created.
 
-    The only typed event so far. Every other type in workflow.md's table arrives with the step that writes it, rather than being transcribed ahead of the code that gives it meaning.
+    One of two typed events. Every other type in workflow.md's table arrives with the step that writes it, rather than being transcribed ahead of the code that gives it meaning.
     """
 
     definition: str | None = None
     """Definition filename the workspace expects, if it had one at `init`."""
+
+
+class LaunchedEvent(JournalEvent):
+    """A run was launched, and under what.
+
+    Typed because a person reads this line: it is the top of the story every later `observation` continues, and the one place the journal says what the run is *of*.
+    """
+
+    definition: str
+    """The definition captured, as the manifest records it — so a journal read months later names the file even if it has since moved."""
+
+    tasks: int
+    """How many tasks the committed manifest holds."""
+
+    timer: str | None = None
+    """Scheduler armed, or `None` where the launch was told not to arm one. What `read_launched` is folded for."""
 
 
 @dataclass(frozen=True)
@@ -245,6 +274,24 @@ def read_armed(events: list[JournalEvent]) -> Armed | None:
                 ts=event.ts,
             )
     return armed
+
+
+def read_launched(events: list[JournalEvent]) -> str | None:
+    """Fold a journal down to when this run was last launched.
+
+    **Accumulating rather than two-state, because there is no un-launch.** `read_armed` and `read_pause` both have an event that undoes them, so the last word wins; a launch is a thing that happened, and the second one amends the first rather than cancelling it (workflow.md, *A second `launch` is the amend path*). So this only ever moves forward, and its answer to *was this run launched* is monotonic — which is the property `ever_launched` needs to be worth gating on.
+
+    Args:
+        events: Events in file order, as `read_journal` returns them.
+
+    Returns:
+        When the most recent launch was, or `None` where nothing ever launched this workspace.
+    """
+    launched: str | None = None
+    for event in events:
+        if event.type == LAUNCHED:
+            launched = event.ts
+    return launched
 
 
 def summarize(events: list[JournalEvent]) -> JournalSummary:

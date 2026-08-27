@@ -78,6 +78,10 @@ eventually capture a half-saved edit. So the division is sharp:
 | verb | reads the definition? | |
 |----|----|----|
 | `steward launch` | **yes** | captures a fresh manifest, reports the delta, commits it, spawns |
+
+Re-launching reuses the arguments you last launched with, so forgetting a `-A`
+cannot quietly capture a different eval set. `--no-args` is how you go back to
+the definition's own defaults.
 | `steward tend` | no | converges toward the *stored* manifest |
 | `steward status` | no | reports state, and whether the definition has drifted since capture |
 
@@ -95,16 +99,50 @@ reports its delta and treats the two asymmetrically:
 
 ``` text
 launching would:
-  add        3 tasks                              (1,500 samples)
-  extend    40 tasks   epochs 1 → 3               (12,000 samples)
-  archive   12 tasks   removed from definition     (8 logs, 2 workers stopped)
-  archive    8 tasks   args changed → superseded   (4,000 samples redone)
+  add        3 tasks                                (1,500 samples)
+  extend    40 tasks   epochs 1 → 3                 (12,000 samples)
+  restore    2 tasks   already run by this project  (1,000 samples, 2 logs)
+  archive   12 tasks   removed from the definition  (6,000 samples, 12 logs, 2 workers stopped)
+  archive    8 tasks   args changed → superseded    (4,000 samples, 8 logs)
 
-20 tasks would leave logs/. Proceed? [--accept-archive]
+Error: 20 tasks would leave logs/. Nothing has been committed — pass
+--accept-archive to proceed.
 ```
 
-A purely additive delta proceeds. Anything that would move logs out of `logs/`
-requires explicit acceptance.
+A purely additive delta proceeds — `add`, `extend`, and `restore` all commit
+without being asked. Anything that would cost you results requires explicit
+acceptance, and until you give it **nothing about the run has been written**:
+not the manifest, not the logs, not the journal. The refusal exits non-zero, so
+a script notices it too.
+
+There are two ways to cost yourself results, and only the first shows up as a
+row:
+
+``` text
+launching would:
+  the log directory moves: logs → results
+    18 tasks with results in the old one would run again in the new one, and
+    those results would be left where they are
+    4 workers still writing to the old one would be stopped
+```
+
+Changing `log_dir` in your definition leaves every task identity untouched, so
+the table is empty and the edit looks like the safest thing you could do — while
+committing it re-runs the whole sweep into the new directory and abandons what
+is in the old one. Steward gates it with the same flag for the same reason.
+
+Anything still running is stopped, because a worker's destination is fixed when
+it starts: after the move it would spend hours writing a log nothing reads, and
+its task would start again from nothing once it finished. If what you meant was
+*move the run*, copy the logs across first — a task whose results are already in
+the new directory will not run again.
+
+Two of those rows are worth reading closely. **`extend` is not a re-run**:
+raising `epochs` keeps a task's identity, so the work already in `logs/` still
+counts and the next turn resumes rather than starting over. And **archiving a
+task something is still running stops that worker first** — asked through its
+control channel rather than killed, so the samples it has already finished land
+in the log before it is archived.
 
 The same asymmetry bounds what an agent supervising your run may do unasked: it
 may commit an additive delta, because you typed the instruction and asking

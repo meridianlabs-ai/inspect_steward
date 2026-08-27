@@ -122,6 +122,14 @@ class Supervision:
     Here so that the silence attributed to a timer starts when the timer does. See `_silence`.
     """
 
+    ever_launched: bool = False
+    """Whether anybody ever launched this run.
+
+    The other way an expectation gets created, and the one the arming gate alone misses. `launch --no-timer` is a deliberate act with a deliberate consequence — execution.md §8.3 asks that an unsupervised run *look* unsupervised rather than looking like a healthy one — and it arms nothing, so on `ever_armed` alone it is indistinguishable from a workspace nobody has started. A launch is the moment somebody said *this run is meant to make progress*, which is exactly the expectation the item reports the breaking of.
+
+    Defaulted, because a `Supervision` assembled by hand in a test is making a claim about timers and none about launches.
+    """
+
 
 @dataclass(frozen=True)
 class Item:
@@ -414,9 +422,11 @@ def _supervision(result: "TendResult") -> list[Item]:
         return []
 
     if state.armed is None:
-        if not state.ever_armed:
+        if not (state.ever_armed or state.ever_launched):
             # never supervised is not the same as no longer supervised, and only
-            # the second one is news
+            # the second one is news. Either act creates the expectation: arming
+            # once says a timer was meant to be here, and launching at all says
+            # the run was meant to progress
             return []
         return [
             Item(

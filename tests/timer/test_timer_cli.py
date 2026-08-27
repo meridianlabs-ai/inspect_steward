@@ -13,14 +13,12 @@ be followed by asking whether it took.
 """
 
 import json
-import os
 import shutil
 from pathlib import Path
 
 import pytest
 from click.testing import CliRunner
 from inspect_steward._cli.main import steward
-from inspect_steward._timer.env import credentials
 from inspect_steward._workspace import (
     Claim,
     Workspace,
@@ -33,7 +31,7 @@ from inspect_steward._workspace import (
 
 from .._logs import SynthTask, write_log
 from ..schedule.test_tend import prepared
-from ._fake import FakeCrontab, fake_cron
+from ._fake import FakeCrontab, clear_credentials, fake_cron
 
 TASK = SynthTask("probe", samples=4)
 
@@ -50,17 +48,8 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Workspace:
 
 @pytest.fixture(autouse=True)
 def no_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Arm from a shell holding nothing worth losing.
-
-    The developer running these tests has real API keys exported, and the env
-    check is doing its job when it refuses to arm — but every case here is
-    about something else, so the ambient environment is cleared and the two
-    tests that *are* about the check set their own key. Scoped by the
-    production predicate rather than by a list, so a name the check learns to
-    recognise is a name this clears.
-    """
-    for name in credentials(dict(os.environ)):
-        monkeypatch.delenv(name, raising=False)
+    """Arm from a shell holding nothing worth losing (`_fake`)."""
+    clear_credentials(monkeypatch)
 
 
 @pytest.fixture(autouse=True)

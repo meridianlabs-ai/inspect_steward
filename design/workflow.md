@@ -122,6 +122,9 @@ launching would:
 |---|---|
 | purely additive | **the agent, unasked** — the human typed the instruction; asking whether they meant it is the interruption this design exists to remove |
 | anything that archives | **escalate, always** — a one-character change to a task arg reads identically to a deliberate removal, and quietly buys a re-run of everything |
+| anything that **relocates** | **escalate, always** — and this one produces no rows at all. Editing `log_dir` leaves every identifier untouched, so the table above is empty while the run's results are stranded in a directory the next tend no longer reads and the whole sweep runs again. It also stops the fleet: a worker's destination is fixed in its selection document at spawn, so everything running is already writing where nothing will look. It is the archiving case in a different costume, so it fails the same predicate |
+
+The third row is why the predicate is asked of the delta as a whole rather than counted off its rows. It was missed on the first pass at exactly the point that framing invites: a gate built as *are any rows archiving?* answers **no** to the most expensive edit in the table.
 
 Two consequences follow. **The timer detects drift but never applies it** — a scheduled tend keeps existing work moving; accepting *new instructions* means weighing whether a delta looks like a mistake, which is judgement and therefore the agent's ([execution.md](execution.md), *Driving and judging are separate roles that usually coincide*). So an edited definition sits as an observation until an agent collects it. And **whether the agent auto-applies additive changes at all is a `_steward.md` line**, defaulting to yes: it is a standing rule about granted autonomy, which is exactly what that file is for.
 
@@ -174,11 +177,15 @@ So `steward pause` means the first. The second exists as an **action a ruling ma
                              reads _steward.md ─────► this human's standing rules
                              steward launch --smoke ► 2 samples/task, 15m cap ► ●
                                   │                  (.steward/smoke/, local)
-                             steward launch  ───────► claim, manifest,
+                             steward launch  ───────► claim, delta, manifest,
+                                                      arm timer,
                                                       spawn first workers ──► ●●●
-                             schedules tend q10m
-                                  │
-       ┌──────────────────────────┤ steward tend ──► reconcile, spawn, reap ──► ●●●
+                                  │                          │
+                                  │                    ┌─────┴─────┐
+                                  │                    │   timer   │ q10m, the floor
+                                  │                    └─────┬─────┘
+       ┌──────────────────────────┤ steward tend ◄────────────┘
+       │                          │              reconcile, spawn, reap ────► ●●●
        │                          │      ...                                     │
        │  ◄── steward notify ─────┤ "47 samples hit the same rate limit"          │
        │                          │                                              │
@@ -449,9 +456,17 @@ The two then differ in what they are for, which is why they sit in different pla
 
 ## 7. `steward launch`
 
-Takes the claim, captures the manifest, writes the initial state, spawns the first workers, **returns**.
+Takes the claim, captures the manifest, computes the delta, gates anything that would archive, commits desired state, restores what the archive already holds, stops workers the commit orphaned, **arms a timer**, records the launch in the journal, tends once, **returns**.
 
-It must not block: the caller is an agent that has to go on and schedule tends, and a blocking start would trap it. `run` is the wrong word for that — it says *you* are doing the running, and invites the reader to expect a foreground process. `launch` says the opposite, and says it without a footnote: you set something in motion and it goes on without you.
+Nine steps, and none of them is new machinery — capture is §2.3's, the delta is §2.3's table, the archive is §2.2's, the timer is [execution.md](execution.md) §8.3's, the turn is §8's. What launch contributes is the **order**, and three of the orderings are load-bearing:
+
+- **The claim spans the whole of it**, capture included. Capture is minutes for a Hawk config, which is a long time to hold a lock built to be held for seconds — and the alternative is a scheduled tend firing mid-launch and spawning workers for tasks the commit is about to orphan. A tend that meets the held claim is refused, which is the ordinary path.
+- **The gate sits between capture and commit**, because there is nowhere else it could sit: `reconcile` archives orphans unconditionally once desired state says so, so consent is taken before the manifest lands or it is not taken at all. See §2.3.
+- **Arming happens before the first tend**, so a launch whose own turn fails still leaves the run supervised.
+
+It must not block: the caller is an agent that has to go on and do other things, and a blocking start would trap it. That is also why nothing here waits for a stopped worker to finish exiting — a cancelled worker finalizes its log at its own pace and a later turn observes it gone, exactly as every other exit is observed. `run` is the wrong word for all of this — it says *you* are doing the running, and invites the reader to expect a foreground process. `launch` says the opposite, and says it without a footnote: you set something in motion and it goes on without you.
+
+**It is also the only verb that reads the definition**, which is what makes it the amend path (§2.3) and the only place a restore can happen: restoring is a decision about desired state, and a converging loop that also un-archived would have two rules that can disagree about one file.
 
 It also completes a coherent verb family. **launch → tend → status** are all words that presuppose the thing has its own life; you launch a ship and then tend it. `run → tend` would have been two different metaphors bolted together. The verbs now teach the model that matters most: *the run is a live thing you look after, not a program you are executing.*
 

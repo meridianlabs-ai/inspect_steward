@@ -41,8 +41,44 @@ def archive_log(location: str, log_dir: str) -> str:
     Raises:
         OSError: If the move fails. Reported by the caller and left for the next turn to retry — a log that could not be archived is still a log, which is the direction this design fails in everywhere.
     """
+    return _move(location, archive_dir(log_dir), log_dir)
+
+
+def restore_log(location: str, log_dir: str) -> str:
+    """Move one log back out of the archive, into the run's directory.
+
+    The inverse, and what makes the archive a cache rather than only a graveyard: edit a task's args, launch, decide the edit was wrong, revert, launch again — the original identifier is back in the manifest and its log is sitting here, so satisfying it is a move rather than a re-run of a task that already ran (workflow.md §2.2).
+
+    **Only `launch` calls this, and only for an identifier the new manifest asks for.** A tend must not: `reconcile` archives orphans, and a converging loop that also un-archived would have two rules that can disagree about one file, which is a loop rather than a fixed point. Restoring is a decision about *desired state*, and desired state is committed at exactly one place.
+
+    Args:
+        location: The archived log, as `observe_logs` reported it from `archive_dir`.
+        log_dir: The run's log directory, which the log is coming back into.
+
+    Returns:
+        Where the log now is.
+
+    Raises:
+        OSError: If the move fails. The same direction as its inverse: a log that could not be restored is still a log, and the task it belongs to simply runs again.
+    """
+    return _move(location, log_dir, log_dir)
+
+
+def _move(location: str, destination: str, log_dir: str) -> str:
+    """Relocate one log, never over the top of another.
+
+    Args:
+        location: The log to move.
+        destination: The directory it is going to, created if absent.
+        log_dir: The run's log directory, which names the filesystem both ends live on. Both directions move between a directory and its own sibling, so one filesystem covers them.
+
+    Returns:
+        Where the log now is.
+
+    Raises:
+        OSError: If the move fails, or if the destination already holds `_MAX_COLLISIONS` logs of this name.
+    """
     fs = filesystem(log_dir)
-    destination = archive_dir(log_dir)
     fs.mkdir(destination, exist_ok=True)
 
     name = basename(location)

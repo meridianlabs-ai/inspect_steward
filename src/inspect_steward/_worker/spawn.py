@@ -26,6 +26,7 @@ from inspect_ai._eval.eval_set_selection import (
     EVAL_SET_SELECTION_VERSION,
     INSPECT_EVAL_SET_SELECTION,
     EvalSetSelection,
+    EvalSetSelectionOverrides,
     EvalSetSelectionTask,
 )
 from inspect_ai._eval.evalset import eval_set_id_for_log_dir
@@ -236,8 +237,13 @@ def worker_selection(
         tasks=[
             EvalSetSelectionTask(identifier=action.identifier, resume=action.resume)
         ],
-        log_dir=log_dir,
-        max_samples=action.max_samples,
+        # always present rather than conditional: `log_dir` is what puts a
+        # worker's logs where Steward is watching, so there is no Steward worker
+        # that wants the definition's directory
+        overrides=EvalSetSelectionOverrides(
+            log_dir=log_dir,
+            max_samples=action.max_samples,
+        ),
     )
 
 

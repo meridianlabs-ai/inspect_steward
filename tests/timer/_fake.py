@@ -9,6 +9,10 @@ thing, which is the only half of the exchange Steward is responsible for.
 *read the file, write the file*, so what it fakes is the file rather than the
 dispatcher — which is what lets a test arm and then ask whether it is armed
 without writing into the crontab of whoever is running the suite.
+
+`clear_credentials` is the other half of the arming environment, and is here for
+the same reason: it is a fact about the shell a test arms from rather than about
+any one command, and three test modules had grown their own copy of it.
 """
 
 import os
@@ -20,6 +24,7 @@ from importlib import import_module
 import pytest
 from inspect_steward._timer import Completed
 from inspect_steward._timer.cron import NO_CRONTAB
+from inspect_steward._timer.env import credentials
 
 
 @dataclass
@@ -112,6 +117,22 @@ def crontab_present(monkeypatch: pytest.MonkeyPatch) -> None:
         return "/usr/bin/crontab" if cmd == "crontab" else real(cmd, mode, path)
 
     monkeypatch.setattr("inspect_steward._timer.cron.shutil.which", which)
+
+
+def clear_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Arm from a shell holding nothing worth losing.
+
+    Whoever runs this suite has real API keys exported, and arming refusing is
+    the env check doing its job — but almost every test that arms is about
+    something else, and would fail on a developer's machine and pass in a bare
+    container. So the ambient environment is cleared, and the cases that *are*
+    about the check export their own key.
+
+    Scoped by the production predicate rather than by a list of names, so a
+    variable the check learns to recognise is a variable this clears.
+    """
+    for name in credentials(dict(os.environ)):
+        monkeypatch.delenv(name, raising=False)
 
 
 def fails(output: str = "no", code: int = 1) -> Completed:

@@ -5,7 +5,7 @@ from inspect_steward._cli.main import steward
 def test_cli_help_lists_commands() -> None:
     result = CliRunner().invoke(steward, ["--help"])
     assert result.exit_code == 0
-    for command in ("init", "runbook", "status", "tasks", "tend"):
+    for command in ("init", "launch", "runbook", "status", "tasks", "tend"):
         assert command in result.output
 
 

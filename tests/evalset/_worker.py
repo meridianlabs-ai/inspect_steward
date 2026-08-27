@@ -19,6 +19,7 @@ from inspect_ai._eval.eval_set_selection import (
     EVAL_SET_SELECTION_VERSION,
     INSPECT_EVAL_SET_SELECTION,
     EvalSetSelection,
+    EvalSetSelectionOverrides,
     EvalSetSelectionTask,
 )
 from inspect_ai.log import EvalLog, list_eval_logs, read_eval_log
@@ -70,8 +71,9 @@ def selection(
             )
             for identifier in identifiers
         ],
-        log_dir=str(log_dir),
-        max_samples=max_samples,
+        overrides=EvalSetSelectionOverrides(
+            log_dir=str(log_dir), max_samples=max_samples
+        ),
     )
 
 
@@ -99,7 +101,9 @@ def run_workers(
     # is too late for anything a frontend writes on the way there: a flow worker
     # drops flow.yaml and flow-requirements.txt into the *definition's* log
     # directory first. So a worker needs both channels, exactly as a read does.
-    log_dirs = {entry.log_dir for entry in selections}
+    log_dirs = {
+        entry.overrides.log_dir for entry in selections if entry.overrides is not None
+    }
     assert len(log_dirs) == 1, "workers in one call share a log directory"
     command = definition_command(
         definition,

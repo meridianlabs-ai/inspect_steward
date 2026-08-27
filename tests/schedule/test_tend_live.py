@@ -1,4 +1,4 @@
-"""The loop, closed once, on a real eval.
+"""The loop, closed once, on a real eval — started the way a person starts one.
 
 Everything else about the turn is settled in `test_tend.py` against synthesized
 state. What no synthesized state can show is that the four layers agree with
@@ -7,50 +7,88 @@ a worker writes a log, and observation matches the two. Each layer is otherwise
 tested against a fixture of the next one's shape, and a fixture is a belief
 about that shape rather than the shape itself.
 
+**Through `launch` rather than by hand.** This test used to perform launch's
+four steps itself — copy the definition, capture, commit, tend — which meant the
+composition a person actually runs was the one thing never exercised against a
+real eval. Going through the verb asserts the commit, the arming, and the
+journal entry for the same three launches, and it is the only place the *real*
+capture and the *real* delta meet each other.
+
 **Budget: three launches** (plan.md §10) — one capture and two workers, in one
-test. Two things the plan sketched are deliberately not here. The no-log stall
-is not repeated: `test_tend.py` runs that path with real processes, a real
-in-flight record, and the real guard, and paying an eval's startup for it would
-buy only the knowledge that `faulty_evalset.py`'s `pre:crash` lands no log,
-which `tests/worker/test_faults.py` already establishes. Drift against a real
-capture is not its own test either — it is one assertion below, because a
-capture is exactly what makes `drift is False` mean anything.
+test. The re-launch at the end costs a second capture and no workers, which is
+what keeps the claim *two captures of one unedited file agree about every
+identifier* inside this budget rather than in a test of its own.
+
+Two things the plan sketched are deliberately not here. The no-log stall is not
+repeated: `test_tend.py` runs that path with real processes, a real in-flight
+record, and the real guard, and paying an eval's startup for it would buy only
+the knowledge that `faulty_evalset.py`'s `pre:crash` lands no log, which
+`tests/worker/test_faults.py` already establishes. Drift against a real capture
+is not its own test either — it is one assertion below, because a capture is
+exactly what makes `drift is False` mean anything.
 """
 
 import shutil
 from pathlib import Path
 
+import pytest
 from inspect_ai.log import list_eval_logs
-from inspect_steward import read_eval_set
-from inspect_steward._evalset.manifest import write_manifest
-from inspect_steward._workspace import Workspace
+from inspect_steward._launch import Change, Launch, launch
+from inspect_steward._workspace import (
+    Workspace,
+    create_workspace,
+    read_journal,
+    read_launched,
+)
 
+from ..timer._fake import clear_credentials, fake_cron
 from .test_tend import settle, turn
 
 FIXTURES = Path(__file__).parents[1] / "evalset" / "fixtures"
 
 
-def test_a_run_converges_and_then_stays_converged(tmp_path: Path) -> None:
+def test_a_run_converges_and_then_stays_converged(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # the scheduler's system, faked at the seam all three backends go through:
+    # arming for real would load a launch agent — or a systemd timer — pointing
+    # at a pytest temp directory into the session running the suite
+    fake_cron(monkeypatch)
+    # and the credentials the arming shell holds, which a real launch checks
+    # against `.env` before it will arm anything
+    clear_credentials(monkeypatch)
+
+    create_workspace(tmp_path, git=False)
     workspace = Workspace.at(tmp_path)
-    workspace.root.mkdir(parents=True, exist_ok=True)
     definition = workspace.root / "evalset.py"
     shutil.copy(FIXTURES / "simple_evalset.py", definition)
-    manifest = read_eval_set(definition, cwd=workspace.root)
-    write_manifest(manifest, workspace.manifest)
 
-    started = turn(workspace)
+    started = launch(workspace, definition)
+    assert isinstance(started, Launch), f"refused by {started}"
     settle(workspace)
     finished = turn(workspace)
     again = turn(workspace)
 
+    # every task is new and nothing leaves logs/, so a first launch commits
+    # itself: this is the delta the agent is allowed to apply unasked
+    assert started.delta.first is True
+    assert started.delta.additive is True
+    assert len(started.delta.of(Change.ADD)) == 2
+    assert started.committed is True
+
     # capture and drift hash the same file the same way, which is a claim about
     # two modules agreeing and cannot be made against a synthesized manifest
-    assert started.drift is False
-    assert len(started.spawned) == len(manifest.tasks) == 2
+    assert started.turn is not None
+    assert started.turn.drift is False
+    assert len(started.turn.spawned) == len(started.manifest.tasks) == 2
+
+    # the two things a launch leaves behind that no tend would
+    assert started.armed is not None
+    assert read_launched(read_journal(workspace.journal).events) is not None
 
     # the identifiers capture wrote are the ones observation recovered from the
     # logs those workers landed -- the correlation the whole design rests on
-    assert sorted(finished.reaped) == sorted(started.spawned)
+    assert sorted(finished.reaped) == sorted(started.turn.spawned)
     assert finished.summary.states["complete"] == 2
     assert finished.spawned == []
 
@@ -58,4 +96,17 @@ def test_a_run_converges_and_then_stays_converged(tmp_path: Path) -> None:
     # through: the second tend does nothing, and so would the two hundredth
     assert (again.spawned, again.reaped, again.archived) == ([], [], [])
     assert again.summary.states["complete"] == 2
+    assert len(list_eval_logs(str(workspace.logs))) == 2
+
+    # so is a re-launch, which is the amend path's floor: a second capture of
+    # the unedited file agrees with the first about every identifier, so the
+    # delta is empty and nothing is proposed for the archive. A capture is two
+    # subprocesses apart from the first one, which is what makes this a claim
+    # about `task_identifier` rather than about a dictionary comparison
+    relaunched = launch(workspace, definition)
+    assert isinstance(relaunched, Launch)
+    assert (relaunched.delta.empty, relaunched.delta.first) == (True, False)
+    assert relaunched.committed is True
+    assert relaunched.turn is not None
+    assert (relaunched.turn.spawned, relaunched.turn.archived) == ([], [])
     assert len(list_eval_logs(str(workspace.logs))) == 2

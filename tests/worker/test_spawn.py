@@ -146,7 +146,8 @@ def test_a_worker_lands_the_log_its_identifier_predicted(
     # one selection and one output per worker, at a path the process table can
     # be searched for
     for worker in workers:
-        assert read_eval_set_selection(str(worker.selection)).log_dir == str(logs)
+        overrides = read_eval_set_selection(str(worker.selection)).overrides
+        assert overrides is not None and overrides.log_dir == str(logs)
         assert worker.output.exists()
 
 

@@ -130,7 +130,8 @@ allow-direct-references = true
 [tool.uv]
 managed = true
 
-# eval-set capture is on inspect_ai main but not yet released
+# eval-set capture and the version-3 selection overrides are both on inspect_ai
+# main and neither is released yet
 [tool.uv.sources]
 inspect-ai = { git = "https://github.com/UKGovernmentBEIS/inspect_ai", branch = "main" }
 

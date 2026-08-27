@@ -20,11 +20,22 @@ about the machinery that makes that true.
 ## `steward launch`
 
 `launch` is the only verb that reads your definition. It captures the manifest,
-reports what committing it would change, commits it as **desired state**, spawns
-the first workers, arms a timer, and returns.
+reports what committing it would change, commits it as **desired state**, arms a
+timer, spawns the first workers, and returns.
+
+Run from anywhere inside the workspace, with no argument, it finds the
+definition sitting there. Name one explicitly to launch a definition kept
+somewhere else.
 
 It deliberately does not block. The thing supervising the run is not the
 terminal you typed into — if it were, closing your laptop would end the sweep.
+Nothing here waits for a slow step either: a worker asked to stop finalizes its
+log at its own pace, and a later turn notices it finished.
+
+**If no timer can be armed, the launch fails.** A timer nobody armed is the
+failure the whole arrangement exists to prevent, so it cannot be a warning read
+once by somebody who is about to walk away. `--no-timer` is the explicit way to
+say you meant it (see below).
 
 Because `launch` is what commits desired state, it is also how you *change* a
 run: edit the definition, launch again. See [Amending a Run](amending.qmd).
@@ -178,6 +189,20 @@ A scheduler cannot report its own absence, so arming writes down what it
 installed, and any turn that finds no tend for two intervals reports the run as
 **unsupervised**. That catches a crontab somebody rewrote as readily as one
 Steward removed.
+
+`steward launch --no-timer` is the deliberate way to skip all of this, and it is
+legitimate: driving a short run by hand is a real thing to do. What it is not is
+silent. The launch records itself in the journal, and every `status` afterwards
+reports the run as unsupervised for as long as it stays that way — so a run
+nobody is tending *looks* like one, rather than looking exactly like a healthy
+one. `steward ack` accepts that once if hand-driving is the plan.
+
+On a re-launch it also **removes a timer that is already armed**, rather than
+just declining to arm a new one. `--no-timer` is a statement about the state you
+want the command to leave behind, and a launch that told you the run was
+unsupervised while the previous launch's timer went on scheduling work every ten
+minutes would be saying the opposite of what is true. If the timer cannot be
+removed, the launch fails and says so.
 
 ::: {.callout-note appearance="simple"}
 `steward timer status` is the one command that asks the scheduler directly.

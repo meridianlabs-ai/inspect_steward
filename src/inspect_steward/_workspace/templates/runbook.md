@@ -26,6 +26,15 @@ No situation makes any of these correct.
 - **Write `_steward.md`.** Propose; the human writes. Both halves of it.
 - **Move or delete a log.** Not even an empty cancelled one, and not into a
   folder named for discards. Resume matches logs where they are.
+- **Pass `steward launch --accept-archive` on your own judgement.** A launch
+  that would move results out of `logs/` prints what it would move and refuses.
+  Adding work is different: if the delta is purely additive, `launch` commits it
+  and you needed nobody's permission — the human asked for the work, and
+  checking whether they meant it is the interruption Steward exists to remove.
+  But a one-character change to a task argument reads exactly like a deliberate
+  removal, and only one of the two quietly buys a re-run of everything. So show
+  the human the delta and let them answer. **The refusal is the mechanism, not
+  an obstacle to it**: a flag reached for reflexively is the same as no gate.
 
 ## Trust the artifact, not the exit code
 

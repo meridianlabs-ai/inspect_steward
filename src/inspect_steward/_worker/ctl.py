@@ -181,6 +181,26 @@ def list_tasks(pids: Collection[int]) -> list[TaskRow] | Unavailable:
     ]
 
 
+def cancel_task(task_id: str, *, dry_run: bool = False) -> dict[str, Any] | Unavailable:
+    """Ask a running task to stop, keeping what it has already done.
+
+    The graceful half of `_worker.stop`: completed samples are kept, in-flight ones are interrupted, the log is finalized, and an eval set will not retry a cancelled task. **It returns once the cancel is accepted, not once the worker is gone** — finalizing a log is unbounded and nothing that holds a claim may wait on it.
+
+    `--action cancel` rather than `score` or `error`, because a sample stopped halfway through is not a result: scoring the work so far would put a number in the log that no complete sample produced, which is worse than a missing one for anybody reading the directory later.
+
+    Args:
+        task_id: The task, from `list_tasks`.
+        dry_run: Report what would be cancelled without doing it. What keeps `status` a genuine `tend --dry-run` if anything on that path ever cancels.
+
+    Returns:
+        The CLI's mutation envelope, or why the task could not be asked. `ABSENT` is the notable one: the process is there and is running no such task, which for a Steward worker means it is either pre-boundary or already leaving.
+    """
+    args = ["task", "cancel", task_id, "--json"]
+    if dry_run:
+        args.append("--dry-run")
+    return _ctl(*args)
+
+
 def task_config(
     task_id: str,
     *,

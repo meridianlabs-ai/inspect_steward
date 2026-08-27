@@ -59,6 +59,7 @@ from .._workspace import (
     ARMED,
     Ack,
     Armed,
+    Claim,
     DirectivesError,
     Held,
     Paused,
@@ -70,6 +71,7 @@ from .._workspace import (
     read_claim,
     read_directives,
     read_journal,
+    read_launched,
     read_pause,
     resolve_pool,
     steward_log,
@@ -176,6 +178,7 @@ def tend(
     max_workers: int | None = None,
     max_samples: int | None = None,
     break_stale: bool = True,
+    claim: Claim | None = None,
 ) -> TendResult | Refused:
     """Run one turn of the supervision loop.
 
@@ -184,9 +187,10 @@ def tend(
         max_workers: Worker ceiling for this turn, overriding `_steward.md`.
         max_samples: Sample concurrency for this turn, overriding the definition.
         break_stale: Kill a wedged claim holder and take the claim from it.
+        claim: A claim the caller already holds, to run this turn under instead of taking one. For `launch`, whose whole composition — capture, commit, arm, tend — is one span of single-writer work: a launch that released before its own first turn would be refused by it, or worse, would let a timer firing in the gap spawn workers for tasks the commit had just orphaned. Released by the caller, not here, because the caller's work is not over.
 
     Returns:
-        What the turn saw and did, or a `Refused` naming the holder that would not give up the claim.
+        What the turn saw and did, or a `Refused` naming the holder that would not give up the claim. Never `Refused` when `claim` is given — the claim is already in hand.
 
     Raises:
         TendError: The turn could not be run — no committed manifest, an unreadable log directory, or a `_steward.md` that cannot be parsed and no history to fall back on.
@@ -195,43 +199,57 @@ def tend(
     """
     manifest = _manifest(workspace)
 
+    if claim is not None:
+        return _tend(workspace, manifest, claim, max_workers, max_samples)
+
     outcome = acquire(workspace.claim, command="tend", break_stale=break_stale)
     if isinstance(outcome, Held):
         return Refused(held=outcome)
 
-    with outcome as claim:
-        # inside the claim, because resolving these can *write* — a degraded
-        # `_steward.md` says so in `steward.log` — and a refused turn has to be
-        # a genuine no-op. A timer firing every ten minutes against an agent's
-        # long-held claim would otherwise leave a line each time it fired
-        history = _history(workspace)
-        settings = _settings(
-            workspace,
-            history,
-            max_workers=max_workers,
-            max_samples=max_samples,
-            execute=True,
+    with outcome as held:
+        return _tend(workspace, manifest, held, max_workers, max_samples)
+
+
+def _tend(
+    workspace: Workspace,
+    manifest: Manifest,
+    claim: Claim,
+    max_workers: int | None,
+    max_samples: int | None,
+) -> TendResult:
+    """One turn, with the claim already in hand however it got there."""
+    # inside the claim, because resolving these can *write* — a degraded
+    # `_steward.md` says so in `steward.log` — and a refused turn has to be
+    # a genuine no-op. A timer firing every ten minutes against an agent's
+    # long-held claim would otherwise leave a line each time it fired
+    history = _history(workspace)
+    settings = _settings(
+        workspace,
+        history,
+        max_workers=max_workers,
+        max_samples=max_samples,
+        execute=True,
+    )
+    if claim.broke is not None:
+        # machinery rather than a fact about the eval set, so it goes to
+        # the operational log -- but it must be *somewhere*, because a
+        # deterministic wedge is a kill loop and the only evidence of one
+        # is a line per turn beside a `status.md` that never advances
+        steward_log(
+            workspace.log,
+            f"broke a wedged claim held by pid {claim.broke.pid} "
+            f"({claim.broke.command or 'unknown command'}, held since "
+            f"{claim.broke.since or 'an unrecorded time'})",
         )
-        if claim.broke is not None:
-            # machinery rather than a fact about the eval set, so it goes to
-            # the operational log -- but it must be *somewhere*, because a
-            # deterministic wedge is a kill loop and the only evidence of one
-            # is a line per turn beside a `status.md` that never advances
-            steward_log(
-                workspace.log,
-                f"broke a wedged claim held by pid {claim.broke.pid} "
-                f"({claim.broke.command or 'unknown command'}, held since "
-                f"{claim.broke.since or 'an unrecorded time'})",
-            )
-        return _turn(
-            workspace,
-            manifest,
-            settings,
-            history,
-            execute=True,
-            claim=None,
-            broke=claim.broke,
-        )
+    return _turn(
+        workspace,
+        manifest,
+        settings,
+        history,
+        execute=True,
+        claim=None,
+        broke=claim.broke,
+    )
 
 
 def status(
@@ -304,6 +322,9 @@ class _History:
     ever_armed: bool = False
     """Whether a timer was ever armed here. What distinguishes *never supervised* from *no longer supervised* (`items.Supervision`)."""
 
+    ever_launched: bool = False
+    """Whether anybody ever launched this run. The other half of the same distinction — see `items.Supervision.ever_launched`."""
+
     since_tend: float | None = None
     """Seconds since the most recent recorded turn, or `None` where there has not been one."""
 
@@ -340,6 +361,7 @@ def _history(workspace: Workspace) -> _History:
         paused=read_pause(events),
         armed=armed,
         ever_armed=any(event.type == ARMED for event in events),
+        ever_launched=read_launched(events) is not None,
         since_tend=since,
         since_armed=_elapsed(armed.ts) if armed is not None else None,
     )
@@ -452,6 +474,7 @@ def _turn(
         supervision=Supervision(
             armed=history.armed,
             ever_armed=history.ever_armed,
+            ever_launched=history.ever_launched,
             interval=settings.interval,
             since_tend=history.since_tend,
             since_armed=history.since_armed,

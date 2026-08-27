@@ -4,7 +4,7 @@ from typing import Any
 import pytest
 from click.testing import CliRunner
 from inspect_steward._cli.main import steward
-from inspect_steward._cli.tasks import _parse_args
+from inspect_steward._cli.tasks import parse_args
 from inspect_steward._evalset.manifest import Manifest
 
 FIXTURES = Path(__file__).parent / "fixtures"
@@ -39,8 +39,8 @@ def test_cli_tasks_json() -> None:
         ("max-samples=5", {"max_samples": 5}),
     ],
 )
-def test_cli_parse_args(arg: str, expected: dict[str, Any]) -> None:
-    assert _parse_args((arg,)) == expected
+def test_cliparse_args(arg: str, expected: dict[str, Any]) -> None:
+    assert parse_args((arg,)) == expected
 
 
 def test_cli_tasks_flow_args() -> None:
