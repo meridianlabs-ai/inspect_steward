@@ -75,6 +75,52 @@ def test_a_packed_selection_names_every_task_and_its_own_concurrency(
     assert read_eval_set_selection(str(path)) == built
 
 
+def test_a_selection_carries_the_facets_that_let_a_worker_skip_the_rest(
+    tmp_path: Path,
+) -> None:
+    """Steward's whole half of early pruning: two fields per task, from the manifest.
+
+    A worker resolves the entire eval set to find the tasks it was given, and
+    constructing a task loads its dataset — so without these it pays for every
+    dataset in the set. They are an optimization and nothing decides on them:
+    `identifier` still says what runs.
+
+    Written for **every** task, because inspect prunes only against a complete
+    set. A selection describing three of its four tasks would prune the fourth.
+    """
+    built = worker_selection(
+        action("id-a", "id-b"),
+        eval_set_id=EVAL_SET_ID,
+        log_dir="s3://bucket/logs",
+    )
+
+    assert [(t.registry_name, t.args_hash) for t in built.tasks] == [
+        ("task0", "hash0"),
+        ("task1", "hash1"),
+    ]
+    # and upstream reads it back, which is what enforces the version the facets
+    # arrived in -- they cannot be sent at a version that does not know them
+    path = tmp_path / "faceted.json"
+    path.write_text(built.model_dump_json(exclude_none=True))
+    assert read_eval_set_selection(str(path)) == built
+
+
+def test_an_orphan_carries_no_facets_rather_than_invented_ones() -> None:
+    """A task with no manifest row has no registry name to send, and must not guess.
+
+    Sending a wrong facet is worse than sending none: none disables pruning for
+    that worker, while a wrong one prunes the task it was meant to describe. The
+    absence is what `_spawn` produces for an orphan, whose row left the manifest.
+    """
+    built = worker_selection(
+        action("id-orphan", facets=False),
+        eval_set_id=EVAL_SET_ID,
+        log_dir="s3://bucket/logs",
+    )
+
+    assert [(t.registry_name, t.args_hash) for t in built.tasks] == [(None, None)]
+
+
 def test_packing_leaves_a_single_task_worker_byte_for_byte_as_it_was() -> None:
     """The default width must not move when a wider one becomes possible.
 

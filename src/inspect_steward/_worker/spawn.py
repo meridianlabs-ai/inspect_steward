@@ -233,7 +233,17 @@ def worker_selection(
         version=EVAL_SET_SELECTION_VERSION,
         eval_set_id=eval_set_id,
         tasks=[
-            EvalSetSelectionTask(identifier=task.identifier, resume=task.resume)
+            EvalSetSelectionTask(
+                identifier=task.identifier,
+                resume=task.resume,
+                # the pruning facets, which cost a worker nothing to receive
+                # and save it constructing every task in the eval set to find
+                # its own. Written for every task or for none: inspect prunes
+                # only against a complete set, since a selection describing
+                # some of its tasks would prune exactly the ones it left out
+                registry_name=task.registry_name,
+                args_hash=task.args_hash,
+            )
             for task in action.tasks
         ],
         # always present rather than conditional: `log_dir` is what puts a

@@ -168,6 +168,12 @@ class SpawnTask:
     reason: IncompleteReason | None
     """Why more work is needed (`None` when the task has never run)."""
 
+    registry_name: str | None = None
+    """The task's registered name, carried through to the selection so a worker can skip constructing the tasks it was not given. `None` for an orphan, which has no manifest row to read it from, and for an ad-hoc task, which has no registered name to have."""
+
+    args_hash: str | None = None
+    """The task's argument hash, paired with `registry_name`. From the manifest rather than recomputed: the whole point is that it agrees with what capture wrote."""
+
 
 @dataclass(frozen=True)
 class SpawnWorker:
@@ -271,6 +277,12 @@ class Summary:
 
     blocked: "Blocked | None"
     """Which bound is holding `queued` back — the one worth raising, not merely the one that is set. `None` when nothing is queued, and also when the queue is a pause rather than a limit."""
+
+    capture_rss: int | None
+    """Peak memory of the capture that read this definition, in bytes, or `None` where nothing measured it.
+
+    Carried so a reader can be told what the run's *width* costs without re-reading the manifest. A ceiling on a worker's startup rather than an estimate of it, since capture builds every task and a worker builds its own — see `_evalset/cost.py`.
+    """
 
     paused: bool
 
@@ -398,6 +410,7 @@ def reconcile(
             spawning=spawning,
             queued=len(queued),
             blocked=poured.blocked,
+            capture_rss=manifest.source.capture_rss,
             stalled=stalled,
             archiving=len(archiving),
             pool=pool,
@@ -604,12 +617,20 @@ def _spawn(observation: TaskObservation, inflight: InFlight) -> SpawnTask:
     A task with a prior log resumes it whatever went wrong — short, errored, cancelled, invalidated, or a worker that died mid-run. There is deliberately no branch on the reason: resume reuses exactly the samples that are worth keeping, so the reason is reporting material rather than an input to the decision.
     """
     current = observation.current
+    task = observation.task
     return SpawnTask(
         identifier=observation.identifier,
         key=observation.key,
         resume=current.location if current is not None else None,
         attempt=_attempt(observation, inflight),
         reason=observation.reason,
+        # from the manifest, never recomputed. These are what let a worker skip
+        # constructing tasks it was not given, and they only work if they equal
+        # what capture recorded -- a value derived here would be a second
+        # opinion about the same question, and a disagreement would silently
+        # prune the task it was meant to spare
+        registry_name=task.registry_name if task is not None else None,
+        args_hash=task.args_hash if task is not None else None,
     )
 
 
@@ -680,6 +701,7 @@ def _summarize(
     spawning: list[SpawnWorker],
     queued: int,
     blocked: "Blocked | None",
+    capture_rss: int | None,
     stalled: list[str],
     archiving: int,
     pool: Pool,
@@ -712,5 +734,6 @@ def _summarize(
         max_workers=pool.max_workers,
         max_tasks=pool.max_tasks,
         blocked=blocked,
+        capture_rss=capture_rss,
         paused=paused,
     )

@@ -9,9 +9,10 @@ import shutil
 
 import click
 
+from .._evalset.cost import fleet_width, projection
 from .._evalset.manifest import ManifestError
 from .._evalset.observe import TaskState
-from .._schedule import Blocked, ManifestVersionError
+from .._schedule import Blocked, ManifestVersionError, Summary
 from .._tend import (
     HEADINGS,
     Refused,
@@ -102,8 +103,27 @@ def echo_turn(result: TendResult, *, table: bool = True) -> None:
             waiting = "waiting"
         click.echo(f"{summary.queued} {waiting}")
 
+    # what the run's width costs, from the capture that read the definition.
+    # Silent when nothing measured it, which is every manifest committed before
+    # the measurement existed -- and silent again once inspect prunes tasks
+    # early, since the figure will have stopped describing a worker
+    if (line := _cost_line(summary)) is not None:
+        click.echo(line)
+
     for line in _attention(result):
         click.echo(line)
+
+
+def _cost_line(summary: Summary) -> str | None:
+    """The startup-memory bound for this run's shape, or `None` if unmeasured."""
+    return projection(
+        summary.capture_rss,
+        fleet_width(
+            summary.tasks,
+            max_workers=summary.max_workers,
+            max_tasks=summary.max_tasks,
+        ),
+    )
 
 
 def _key_width() -> int:

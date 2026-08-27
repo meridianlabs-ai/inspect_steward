@@ -55,10 +55,13 @@ def action(
     key: str = "task@model",
     resume: str | None = None,
     attempt: int = 1,
+    facets: bool = True,
 ) -> SpawnWorker:
     """A spawn decision, for the cases where reconcile would not produce one.
 
     Variadic so that a packed worker is written the same way as a plain one, with the extra identifiers simply appended.
+
+    `facets` off produces the shape `_spawn` gives an orphan — a task with no manifest row to read its registry name and args hash from.
     """
     return SpawnWorker(
         tasks=tuple(
@@ -68,6 +71,8 @@ def action(
                 resume=resume if index == 0 else None,
                 attempt=attempt,
                 reason=None,
+                registry_name=f"task{index}" if facets else None,
+                args_hash=f"hash{index}" if facets else None,
             )
             for index, identifier in enumerate(identifiers)
         ),

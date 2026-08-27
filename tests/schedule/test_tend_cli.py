@@ -13,6 +13,7 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner
 from inspect_steward._cli.main import steward
+from inspect_steward._evalset.manifest import write_manifest
 from inspect_steward._workspace import Claim, Workspace, acquire, create_workspace
 
 from .._logs import SynthTask, write_log
@@ -47,6 +48,62 @@ def test_status_says_what_the_next_tend_would_do(workspace: Workspace) -> None:
     assert "2 tasks: 1 complete, 1 missing" in output
     assert "next tend: 1 to spawn" in output
     assert not workspace.status.exists()
+
+
+def test_the_memory_projection_is_silent_when_nothing_measured_it(
+    workspace: Workspace,
+) -> None:
+    """Which is every manifest committed before the measurement existed.
+
+    A missing figure has to read as *unknown* rather than as zero, so the line is absent rather than rendered with a nought in it.
+    """
+    code, output = run("status")
+
+    assert code == 0, output
+    assert "startup memory" not in output
+
+
+def test_the_memory_projection_multiplies_the_measurement_by_the_width(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """What a wide run costs, at the moment somebody is choosing how wide to run.
+
+    Two tasks and no `max_workers` is two processes, so the fleet figure is twice the per-worker one. That multiplication is the one thing this line exists to do — an operator who has just read *1.0 GiB each* still has to perform it, and on a five-hundred-task sweep that is the whole point.
+    """
+    create_workspace(tmp_path, git=False)
+    workspace, manifest = prepared(tmp_path, [SynthTask("a"), SynthTask("b")])
+    measured = manifest.model_copy(
+        update={"source": manifest.source.model_copy(update={"capture_rss": 1 << 30})}
+    )
+    write_manifest(measured, workspace.manifest)
+    monkeypatch.chdir(workspace.root)
+
+    code, output = run("status")
+
+    assert code == 0, output
+    assert "at most 1.0 GiB per worker" in output
+    assert "2.0 GiB across 2 workers" in output
+
+
+def test_the_memory_projection_follows_the_width_the_operator_asked_for(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Packing is the lever this line exists to make visible.
+
+    The same two tasks in one process is one copy rather than two, which is exactly the trade `max_workers` buys — so the projection has to move when it is set, or it is describing a run nobody asked for.
+    """
+    create_workspace(tmp_path, git=False)
+    workspace, manifest = prepared(tmp_path, [SynthTask("a"), SynthTask("b")])
+    measured = manifest.model_copy(
+        update={"source": manifest.source.model_copy(update={"capture_rss": 1 << 30})}
+    )
+    write_manifest(measured, workspace.manifest)
+    monkeypatch.chdir(workspace.root)
+
+    code, output = run("status", "--max-workers", "1")
+
+    assert code == 0, output
+    assert "1.0 GiB across 1 worker," in output
 
 
 def test_tend_says_what_it_did(workspace: Workspace) -> None:

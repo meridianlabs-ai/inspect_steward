@@ -7,6 +7,7 @@ from typing import Any
 from inspect_ai._eval.eval_set_manifest import EvalSetCapture
 
 from .command import DefinitionCommand, definition_command, warn_if_venv_declared
+from .cost import CaptureCost, measure
 from .detect import DefinitionType, detect_definition_type
 from .display import compute_display_keys
 from .manifest import (
@@ -95,8 +96,13 @@ def read_eval_set(
             cwd=Path(cwd) if cwd is not None else None,
             log_dir=str(Path(tmp_dir) / "logs"),
         )
+        measured: list[CaptureCost] = []
         capture = _run_capture(
-            command, Path(tmp_dir) / "manifest.json", env=env, timeout=timeout
+            command,
+            Path(tmp_dir) / "manifest.json",
+            env=env,
+            timeout=timeout,
+            cost=measured,
         )
 
     keys = compute_display_keys(capture.tasks)
@@ -108,6 +114,7 @@ def read_eval_set(
             type=resolved_type,
             path=str(definition),
             content_hash=definition_hash(definition_path),
+            capture_rss=measured[0].peak_rss if measured else None,
             args=args or {},
         ),
         options=capture.options,
@@ -123,6 +130,7 @@ def _run_capture(
     manifest_path: Path,
     env: dict[str, str] | None,
     timeout: float | None,
+    cost: list[CaptureCost],
 ) -> EvalSetCapture:
     process_env = {
         **os.environ,
@@ -131,14 +139,31 @@ def _run_capture(
         INSPECT_EVAL_SET_CAPTURE: str(manifest_path),
         "INSPECT_DISPLAY": "plain",
     }
+    # `Popen` rather than `subprocess.run`, for the one thing `run` cannot give:
+    # a pid to watch while the definition executes. What is being watched is the
+    # ceiling on what a worker's startup costs (`cost.py`)
     try:
-        result = subprocess.run(
+        with subprocess.Popen(
             command.argv,
             cwd=command.cwd,
             env=process_env,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            timeout=timeout,
+        ) as process:
+            sampler = measure(process.pid)
+            try:
+                stdout, stderr = process.communicate(timeout=timeout)
+            except subprocess.TimeoutExpired:
+                # the definition is still running and holding the pipes; kill it
+                # before draining them, which is what `subprocess.run` does too
+                process.kill()
+                process.communicate()
+                raise
+            finally:
+                cost.append(CaptureCost(peak_rss=sampler.stop()))
+        result = subprocess.CompletedProcess(
+            command.argv, process.returncode, stdout, stderr
         )
     except subprocess.TimeoutExpired as ex:
         stderr = ex.stderr

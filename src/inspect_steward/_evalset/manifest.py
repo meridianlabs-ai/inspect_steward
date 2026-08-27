@@ -35,6 +35,14 @@ class ManifestSource(BaseModel):
     args: dict[str, Any]
     """Arguments passed to the definition (flow spec function args; empty otherwise)."""
 
+    capture_rss: int | None = None
+    """Peak resident memory of the capture process tree, in bytes, or `None` where nothing measured it.
+
+    A fact about *reading* this definition rather than about the eval set, which is why it lives here beside the hash and the path. It is carried because it also bounds running one: capture constructs every task in the set, where a worker constructs only its own, so this is the most a worker's startup can cost and the fleet's is it times the width (`_evalset/cost.py`).
+
+    `MANIFEST_VERSION` deliberately did not move for this. The version gate refuses a manifest whose schema the reader would have to guess at; a field added with a default whose absence means *not measured* is not one, and bumping would have made every committed manifest unreadable to say so.
+    """
+
 
 class ManifestTask(EvalSetCaptureTask):
     """A resolved task in an eval set manifest."""

@@ -130,10 +130,15 @@ allow-direct-references = true
 [tool.uv]
 managed = true
 
-# eval-set capture and the version-4 selection overrides are all on inspect_ai
-# main and none of them is released yet
+# TEMPORARY: a local checkout, because the version-5 selection facets
+# (`registry_name`, `args_hash`) and the early pruning that reads them are not
+# on inspect_ai main yet. Point this back at
+# `{ git = "https://github.com/UKGovernmentBEIS/inspect_ai", branch = "main" }`
+# once they merge — nothing else here depends on the checkout, and a launch
+# will refuse loudly against an older inspect rather than misbehave, since a v5
+# selection document fails its version gate.
 [tool.uv.sources]
-inspect-ai = { git = "https://github.com/UKGovernmentBEIS/inspect_ai", branch = "main" }
+inspect-ai = { path = "../../UKGovernmentBEIS/inspect_ai", editable = true }
 
 [tool.ruff]
 extend-exclude = ["docs"]

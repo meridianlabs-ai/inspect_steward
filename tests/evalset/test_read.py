@@ -1,8 +1,10 @@
 from pathlib import Path
+from typing import Any
 
 import pytest
 from inspect_ai._eval.evalset import TASK_IDENTIFIER_VERSION
 from inspect_steward import Manifest, ReadEvalSetError, read_eval_set
+from inspect_steward._evalset.manifest import MANIFEST_VERSION
 
 from ._hawk import requires_hawk
 
@@ -56,6 +58,47 @@ def test_read_eval_set_json_round_trip(tmp_path: Path) -> None:
     manifest = read_eval_set(FIXTURES / "simple_evalset.py", cwd=tmp_path)
     restored = Manifest.model_validate_json(manifest.model_dump_json())
     assert restored == manifest
+
+
+def test_a_capture_measures_what_reading_the_definition_cost(tmp_path: Path) -> None:
+    """The figure a wide run is judged against, taken while it is already being paid.
+
+    Capture constructs every task in the eval set and a worker constructs only
+    its own, so this bounds a worker's startup rather than estimating it —
+    measured, either way, rather than guessed at. Asserted as a range rather
+    than a number: the claim is *a real process was watched*, and a Python
+    interpreter that imported inspect_ai is comfortably inside it.
+    """
+    manifest = read_eval_set(FIXTURES / "simple_evalset.py", cwd=tmp_path)
+
+    assert manifest.source.capture_rss is not None
+    assert 10_000_000 < manifest.source.capture_rss < 20_000_000_000
+
+
+def test_a_manifest_written_before_the_measurement_still_reads() -> None:
+    """The reason `MANIFEST_VERSION` did not move for `capture_rss`.
+
+    Bumping would have made every committed manifest unreadable — a mid-run
+    re-capture to gain a field nothing requires. The version gate is for a
+    schema the reader would have to guess at, and a field whose absence means
+    *not measured* is not one.
+    """
+    document: dict[str, Any] = {
+        "version": MANIFEST_VERSION,
+        "identifier_version": TASK_IDENTIFIER_VERSION,
+        "source": {
+            "type": "evalset",
+            "path": "evalset.py",
+            "content_hash": "sha256:abc",
+            "args": {},
+        },
+        "options": {},
+        "tasks": [],
+    }
+
+    manifest = Manifest.model_validate(document)
+
+    assert manifest.source.capture_rss is None
 
 
 @pytest.mark.parametrize("fixture", ["flow_spec.py", "flow_spec.yaml"])

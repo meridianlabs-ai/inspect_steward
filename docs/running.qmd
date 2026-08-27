@@ -71,8 +71,8 @@ progress of work already running.
 
 ### One task, one process
 
-Steward spawns exactly one worker per task — always, not by default. Two
-reasons, and the first is the binding one:
+Steward spawns one worker per task unless you ask it not to. Two reasons, and
+the first is the binding one:
 
 -   **The GIL.** Evals are mostly I/O-bound, but the work that is *not* waiting
     — transcript construction, JSON serialization, `.eval` compression,
@@ -123,6 +123,31 @@ process, and the reason to pack only when startup cost is actually hurting you.
 Neither key is derived from your core count, deliberately. A worker is on the
 CPU in bursts and waiting on a model API in between, so ten processes on four
 cores is entirely ordinary.
+
+### What the fleet will cost to start
+
+`launch` and `status` print one line about memory:
+
+```
+startup memory: at most 0.3 GiB per worker, 6.5 GiB across 24 workers, of 64.0 GiB on this machine
+```
+
+The figure is measured rather than estimated. Reading your definition already
+builds every task in the eval set, so Steward records what that peaked at and
+multiplies it by the number of processes the run will eventually reach — not the
+number it started this turn, since you are deciding how wide to run rather than
+watching what it did so far.
+
+**It is a ceiling.** A worker loads only the datasets of the tasks it was
+selected to run, so on a large eval set its real startup is well under the
+per-worker figure — which is what the whole set costs. The bound is what holds
+when that optimization cannot apply, and it is the number worth knowing before
+you launch five hundred processes.
+
+Nothing refuses to launch on the strength of it, and a manifest that predates
+the measurement simply prints no line. Two caveats: inside a container the
+comparison is against the *host's* memory, so discount it; and this is startup
+only — samples in flight, transcripts, and sandboxes are on top of it.
 
 Steward spawns **task-major** — every model for the first task, then every model
 for the second — rather than in the order enumeration happens to produce, which
