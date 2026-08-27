@@ -17,6 +17,7 @@ from inspect_steward._schedule import (
     DEFAULT_MAX_SAMPLES,
     InFlight,
     Pool,
+    SpawnTask,
     SpawnWorker,
     reconcile,
 )
@@ -50,20 +51,27 @@ def fleet(
 
 
 def action(
-    identifier: str,
-    *,
+    *identifiers: str,
     key: str = "task@model",
     resume: str | None = None,
     attempt: int = 1,
 ) -> SpawnWorker:
-    """A spawn decision, for the cases where reconcile would not produce one."""
+    """A spawn decision, for the cases where reconcile would not produce one.
+
+    Variadic so that a packed worker is written the same way as a plain one, with the extra identifiers simply appended.
+    """
     return SpawnWorker(
-        identifier=identifier,
-        key=key,
-        resume=resume,
+        tasks=tuple(
+            SpawnTask(
+                identifier=identifier,
+                key=key if index == 0 else f"{key}-{index}",
+                resume=resume if index == 0 else None,
+                attempt=attempt,
+                reason=None,
+            )
+            for index, identifier in enumerate(identifiers)
+        ),
         max_samples=DEFAULT_MAX_SAMPLES,
-        attempt=attempt,
-        reason=None,
     )
 
 

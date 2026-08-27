@@ -31,6 +31,7 @@ from .._evalset.manifest import (
     read_manifest,
 )
 from .._evalset.observe import (
+    ObservedLogs,
     ObservedTasks,
     TaskState,
     observe_logs,
@@ -42,6 +43,7 @@ from .._schedule import (
     InFlight,
     Pool,
     ReapWorker,
+    SpawnTask,
     SpawnWorker,
     Summary,
     reconcile,
@@ -116,8 +118,8 @@ class TendResult:
     summary: Summary
     """Where the run stands."""
 
-    queued: list[SpawnWorker]
-    """Would have been spawned, but the pool is full."""
+    queued: list[SpawnTask]
+    """Would have been started, but the run's shape has no room for them yet."""
 
     drift: bool
     """The definition file no longer hashes to what the committed manifest recorded.
@@ -176,6 +178,7 @@ def tend(
     workspace: Workspace,
     *,
     max_workers: int | None = None,
+    max_tasks: int | None = None,
     max_samples: int | None = None,
     break_stale: bool = True,
     claim: Claim | None = None,
@@ -184,7 +187,8 @@ def tend(
 
     Args:
         workspace: The workspace to tend.
-        max_workers: Worker ceiling for this turn, overriding `_steward.md`.
+        max_workers: Worker processes for this turn, overriding `_steward.md`. `None` expresses no preference and defers to the file, which itself defaults to a process per task — it does not request that width, so a workspace that sets the key cannot be widened back to unbounded for one turn.
+        max_tasks: Tasks in flight at once for this turn, overriding `_steward.md`. `None` defers to the file in the same way.
         max_samples: Sample concurrency for this turn, overriding the definition.
         break_stale: Kill a wedged claim holder and take the claim from it.
         claim: A claim the caller already holds, to run this turn under instead of taking one. For `launch`, whose whole composition — capture, commit, arm, tend — is one span of single-writer work: a launch that released before its own first turn would be refused by it, or worse, would let a timer firing in the gap spawn workers for tasks the commit had just orphaned. Released by the caller, not here, because the caller's work is not over.
@@ -200,14 +204,14 @@ def tend(
     manifest = _manifest(workspace)
 
     if claim is not None:
-        return _tend(workspace, manifest, claim, max_workers, max_samples)
+        return _tend(workspace, manifest, claim, max_workers, max_tasks, max_samples)
 
     outcome = acquire(workspace.claim, command="tend", break_stale=break_stale)
     if isinstance(outcome, Held):
         return Refused(held=outcome)
 
     with outcome as held:
-        return _tend(workspace, manifest, held, max_workers, max_samples)
+        return _tend(workspace, manifest, held, max_workers, max_tasks, max_samples)
 
 
 def _tend(
@@ -215,6 +219,7 @@ def _tend(
     manifest: Manifest,
     claim: Claim,
     max_workers: int | None,
+    max_tasks: int | None,
     max_samples: int | None,
 ) -> TendResult:
     """One turn, with the claim already in hand however it got there."""
@@ -227,6 +232,7 @@ def _tend(
         workspace,
         history,
         max_workers=max_workers,
+        max_tasks=max_tasks,
         max_samples=max_samples,
         execute=True,
     )
@@ -256,6 +262,7 @@ def status(
     workspace: Workspace,
     *,
     max_workers: int | None = None,
+    max_tasks: int | None = None,
     max_samples: int | None = None,
 ) -> TendResult:
     """Report where the run stands, and what the next turn would do.
@@ -266,7 +273,8 @@ def status(
 
     Args:
         workspace: The workspace to report on.
-        max_workers: Worker ceiling to preview against.
+        max_workers: Worker processes to preview against.
+        max_tasks: Task concurrency to preview against.
         max_samples: Sample concurrency to preview against.
 
     Returns:
@@ -282,6 +290,7 @@ def status(
         workspace,
         history,
         max_workers=max_workers,
+        max_tasks=max_tasks,
         max_samples=max_samples,
         execute=False,
     )
@@ -382,16 +391,20 @@ def _elapsed(ts: str) -> float | None:
 
 
 def _pool(recorded: object) -> Pool | None:
-    """The settings an `observation` payload recorded, if it recorded usable ones."""
+    """The settings an `observation` payload recorded, if it recorded usable ones.
+
+    **`stall_after` is what says the payload is one.** It is the only setting with a default rather than an unbounded `None`, so it is the only one whose absence distinguishes *this turn recorded no settings* from *this turn recorded no limit* — a distinction that used to ride on `max_workers` and stopped being available the moment that key could legitimately be null.
+    """
     if not isinstance(recorded, dict):
         return None
     settings = cast(dict[str, Any], recorded)
-    if (workers := _positive(settings.get("max_workers"))) is None:
+    if (stall_after := _positive(settings.get("stall_after"))) is None:
         return None
     return Pool(
-        max_workers=workers,
+        max_workers=_positive(settings.get("max_workers")),
+        max_tasks=_positive(settings.get("max_tasks")),
         max_samples=_positive(settings.get("max_samples")),
-        stall_after=_positive(settings.get("stall_after")) or 1,
+        stall_after=stall_after,
     )
 
 
@@ -460,7 +473,7 @@ def _turn(
         pool=settings.pool,
         paused=history.paused is not None,
     )
-    progress = Progress(rows=task_progress(observed, _live(inflight)))
+    progress = Progress(rows=task_progress(observed, _live(inflight, logs)))
 
     result = TendResult(
         summary=decision.summary,
@@ -661,7 +674,7 @@ def _describe(action: Action) -> str:
         case ArchiveLog():
             return f"could not archive {action.location}"
         case SpawnWorker():
-            return f"could not spawn {action.key}"
+            return f"could not spawn {action.first.key}"
 
 
 def _fleet(workspace: Workspace, manifest: Manifest, log_dir: str) -> Fleet:
@@ -705,6 +718,7 @@ def _settings(
     history: _History,
     *,
     max_workers: int | None,
+    max_tasks: int | None,
     max_samples: int | None,
     execute: bool,
 ) -> _Settings:
@@ -721,6 +735,7 @@ def _settings(
             raise
         pool = Pool(
             max_workers=max_workers if max_workers is not None else last.max_workers,
+            max_tasks=max_tasks if max_tasks is not None else last.max_tasks,
             max_samples=max_samples if max_samples is not None else last.max_samples,
             stall_after=last.stall_after,
         )
@@ -743,7 +758,12 @@ def _settings(
         )
 
     return _Settings(
-        pool=resolve_pool(directives, max_workers=max_workers, max_samples=max_samples),
+        pool=resolve_pool(
+            directives,
+            max_workers=max_workers,
+            max_tasks=max_tasks,
+            max_samples=max_samples,
+        ),
         degraded=None,
         interval=directives.tend_interval,
     )
@@ -800,6 +820,7 @@ def _record(workspace: Workspace, result: TendResult, *, pool: Pool) -> None:
         # `_steward.md` will not parse
         settings={
             "max_workers": pool.max_workers,
+            "max_tasks": pool.max_tasks,
             "max_samples": pool.max_samples,
             "stall_after": pool.stall_after,
         },
@@ -827,17 +848,31 @@ def _write_status(workspace: Workspace, result: TendResult) -> None:
         steward_log(workspace.log, f"could not write {workspace.status.name}: {ex}")
 
 
-def _live(inflight: InFlight) -> LiveFleet:
+def _live(inflight: InFlight, logs: ObservedLogs) -> LiveFleet:
     """Ask the running workers how they are getting on.
 
     **Only the ones that are running, and only when some are.** The in-flight record already answers *is anything alive* for free, so a finished campaign — the common shape late on — pays nothing at all for the live columns. A worker that has not yet bound its control socket has no entry here either; it is in the window before its `eval_set()` boundary, where there is genuinely nothing to ask.
+
+    The observation comes along because a packed worker reports a row per task and names each one only by the log it is writing. That mapping is a by-product of a read this turn has already done, so correlation costs nothing beyond the dictionary; without it every row of a packed worker is unnameable, and each of its tasks reads `finished` while it is still running.
     """
     targets = [
-        LiveTarget(identifier=worker.identifier, pid=worker.pid, socket=worker.socket)
+        LiveTarget(identifiers=worker.identifiers, pid=worker.pid, socket=worker.socket)
         for worker in inflight.running
         if worker.socket is not None
     ]
-    return read_fleet(targets)
+    return read_fleet(targets, _locations(logs))
+
+
+def _locations(logs: ObservedLogs) -> dict[str, str]:
+    """Log location to task identifier, for naming a packed worker's rows.
+
+    Every attempt rather than the current one: a worker resuming a task writes to the log it was handed, which is the newest attempt but not necessarily the one `current` elects — that rule prefers the latest *success*, and a task being resumed has none.
+    """
+    return {
+        attempt.location: identifier
+        for identifier, attempts in logs.attempts.items()
+        for attempt in attempts
+    }
 
 
 def _definition(workspace: Workspace, manifest: Manifest) -> Path:

@@ -6,9 +6,9 @@
 
 ## 1. The process model
 
-### 1.1 One task, one process
+### 1.1 One task per process, by default
 
-A worker runs exactly one task. Not "one by default" — always.
+A worker runs one task unless the operator says otherwise. An earlier draft of this section said *always*, and the argument it gave for that is sound — it is just an argument for a default rather than for a prohibition.
 
 **The binding argument is the GIL, and it is easy to wave away incorrectly.** Evals are usually described as I/O-bound, and they mostly are: a sample waiting on a model API costs nothing but a slot. But the work that is *not* waiting is all Python bytecode — transcript construction for long agentic runs, JSON serialization, `.eval` zip compression on write, non-model scorers, sandbox subprocess management — and that work is serialized within a process however high `max_samples` goes. **One process saturates one core.** Raising sample concurrency past that point buys queueing, not throughput.
 
@@ -17,17 +17,21 @@ Two further properties come free and are worth naming because each was argued fo
 - **Failure isolation.** One task per process means one crash costs one task. [hawk.md](hawk.md) makes this the headline benefit of Steward over a single-runner-pod model, where an OOM restarts the world.
 - **Scheduling granularity.** The unit Steward spawns, reaps, retunes, and adjudicates is the unit the manifest enumerates. Nothing has to be mapped onto anything.
 
-This overturns a trade-off recorded in [workflow.md](workflow.md), which weighed "fewer, larger workers pay less per-worker startup cost" against finer granularity. That comparison was measuring the wrong quantities: startup cost is seconds, paid once, while the CPU ceiling is permanent. The trade was never as close as it looked.
+**What the prohibition got wrong is that all three of these are prices, and somebody else may be paying a larger one.** The GIL bounds a packed process's *burst* throughput; it costs nothing while its tasks are waiting on a model, which is most of the time. Failure isolation is real and is why the default is what it is. And granularity is preserved anyway — a packed worker still writes one log per task, so observation, adjudication, and resume are unchanged; only the process count moves. Set against that is a cost the prohibition could not address at all: a runtime charging an install and a secrets round trip *per process* (§1.2), where dividing the run is the expensive choice.
 
-### 1.2 No batching
+So the trade recorded in [workflow.md](workflow.md) — "fewer, larger workers pay less per-worker startup cost" against finer granularity — is real after all, and this section previously dismissed it by measuring the wrong quantities. Startup cost is seconds *per process*, which is minutes of a five-hundred-task sweep and unbounded when a frontend installs packages; the CPU ceiling is permanent but only binds on bursts. Neither dominates, which is why it is a knob.
 
-The selection document accepts a *list* of tasks so that one worker can host several — added for definitions whose import cost dominates, and for batches of very short tasks. Steward always writes exactly one entry, and the generality goes unused.
+### 1.2 Batching, opt-in
 
-It is not merely unnecessary but unmotivated. Batching existed to solve **slot idle**: with a capped pool and a ten-minute tend interval, a worker finishing at t=0 leaves its slot empty until the next tend, which hurts most when tasks are short.
+The selection document accepts a *list* of tasks so that one worker can host several. Steward writes one entry per task the pour gives that worker, which is one entry by default and the whole batch where the operator has asked for fewer processes than tasks.
 
-An earlier draft dismissed that outright, on the grounds that launching every task at once removes slots as a concept. **That was true only of a cores-derived ceiling on a large box**, and the ceiling is now a flat ten (§2.2) — so slots and slot idle both exist again. The dismissal has to be earned rather than assumed, and it is: the cost is `interval/2 ÷ mean task duration`, which for hours-long tasks against a ten-minute interval is a fraction of a percent, and the two levers that address it directly — a shorter interval, a higher ceiling — are knobs rather than mechanisms. Batching would buy the same thing while dragging in its own constraint: *batch only tasks sharing a model, or the process's initial limit is wrong for some of them*.
+**The motivation is startup cost, and it is the one thing the frontends cannot fix for us.** Flow's measured ~1.1s of pre-boundary work; Hawk's `uv pip install` and Secrets Manager round trip per invocation, unbounded on a cold environment or a config declaring `packages:`. Five hundred small tasks is around half an hour of pure startup, and no amount of upstream work removes it from a runtime whose per-process side effects are the point. Where that dominates, running the eval set whole and supervising the one process is the cheaper and the more honest arrangement.
 
-What remains is the startup cost itself, which batching would have amortized: Flow's measured ~1.1s of pre-boundary work, and Hawk's far worse `uv pip install` per invocation. Those are real, and they are now squarely the frontends' problem rather than something Steward can paper over by running fewer processes — which is the honest place for them, and the reason the upstream ask in [execution.md](execution.md) open question 1 matters more than it did.
+**Batching does not solve slot idle, and is not offered as a fix for it.** That was the original motivation and it does not survive: the cost is `interval/2 ÷ mean task duration`, a fraction of a percent for the hours-long tasks Steward is for, and the two levers that address it directly — a shorter interval, a higher `max_tasks` — are knobs rather than mechanisms.
+
+**One constraint the earlier draft named is now discharged rather than avoided.** *Batch only tasks sharing a model, or the process's initial limit is wrong for some of them* — this was true when `max_samples` was thought to be process-global. It is per **task** (§3.1), so a packed worker gives each of its tasks exactly the semaphore it would have had alone, and a batch may span models freely. The pour deals tasks round-robin across processes for an unrelated reason (§2.4).
+
+**What packing costs is stated rather than discovered.** A process that dies takes every task it was running mid-flight, so width trades crash isolation for startup cost, monotonically. It is not as bad as it sounds — tasks the process already finished have landed their logs, and the rest resume from wherever they got to, so the loss is partial progress rather than work — but at one process the exposure is the whole run, which is precisely what Steward exists to remove. Hence the default of one, and hence this being an escape hatch rather than a tuning knob.
 
 ### 1.3 No sharding
 
@@ -39,57 +43,74 @@ This closes [configuration.md](configuration.md) open question 6.
 
 ## 2. The worker pool
 
-### 2.1 Total concurrency is one budget spent twice
+### 2.1 Two knobs, and they are about different things
 
-Worker count and per-worker `max_samples` are not independent settings:
+A run has a shape, and it takes two numbers to say:
+
+| key | means | default |
+|---|---|---|
+| `max_tasks` | how many tasks may be in flight at once, fleet-wide | unbounded — all of them |
+| `max_workers` | how many worker **processes** those are divided into | unbounded — a process per task |
+
+**`max_tasks` is the load; `max_workers` is only the packing.** Total concurrent samples is `tasks in flight × max_samples` and nothing else — `max_samples` is per task (§3.1), so a process running four tasks is four times the load of one running one, whether that is four processes or one. Steward owns both factors of the product, which is what makes the fleet's load on a provider deterministic rather than emergent ([workflow.md](workflow.md), *What Steward actually has to solve*). `max_workers` moves neither factor. It buys back per-process startup and costs crash isolation, and that is the whole of what it does.
+
+An earlier draft wrote this identity as `workers × max_samples`, which was correct only while a worker was always one task. It is worth restating in the form that survives packing:
 
 ```
-total concurrent samples  =  workers × max_samples
+total concurrent samples  ≈  tasks in flight × max_samples
+local compute             ≈  (processes × process cost) + (concurrent samples × sample cost)
+throughput                ≈  concurrent samples on that model        [per rate-limit bucket]
 ```
 
-Steward owns both factors, which is what makes the fleet's load on a provider deterministic rather than emergent ([workflow.md](workflow.md), *What Steward actually has to solve*). The two spend differently, though, and the asymmetry decides how to split them:
+A process costs an interpreter and its imports, once — or, for a frontend that installs packages, considerably more (§1.2). A concurrent sample costs a sandbox container, memory, and a slot, continuously. **Process count is usually the cheap axis; sample concurrency is the expensive one** — which is what makes a process per task the right default, and `max_workers` the knob for the runtimes where the first clause is false.
+
+### 2.2 Launch everything, and let the operator bound it
+
+Every pending task starts immediately, in a process of its own. Both knobs are unbounded by default, so an unshaped run has no queue at all and no two tasks sharing an interpreter.
+
+**Neither default is derived from the hardware, and an earlier draft got that wrong twice.** Its first reasoning — *past core count another process buys no parallelism, because there is no core for it to run on* — misreads the workload. A worker is on the CPU in **bursts**: transcript construction, JSON serialization, `.eval` compression, non-model scoring. Between the bursts it is waiting on a model API and using no core at all. So ten workers on four cores is entirely ordinary; they rarely contend, and when they do it costs latency on a burst rather than throughput on the run.
+
+Its second answer was a flat ceiling of ten, borrowed from `eval_set()`'s own `max_tasks` default. That is a defensible number and it is still the one to reach for; what was wrong was shipping it as the default, because **a default limit is a limit nobody chose**. A ten-task sweep is not helped by it, a five-hundred-task sweep is throttled by it, and in neither case did the operator say anything. Unbounded is the honest starting point: Steward runs what the definition asked for, and the operator narrows it when the machine or the provider gives them a reason to.
+
+**The pour is four lines, and each knob is counted the same way — against what is already there.**
 
 ```
-local compute  ≈  (workers × process cost)  +  (concurrent samples × sample cost)
-throughput     ≈  concurrent samples on that model        [per rate-limit bucket]
+placeable = pending             if max_tasks   is None else max(0, max_tasks   - tasks in flight)
+batch     = pending[:placeable]
+processes = len(batch)          if max_workers is None else max(0, max_workers - processes alive)
+            (dealt round-robin, and never more processes than there are tasks to put in them)
 ```
 
-A process costs an interpreter and its imports, once. A concurrent sample costs a sandbox container, memory, and a slot, continuously. **Process count is the cheap axis; sample concurrency is the expensive one** — which is what makes launching many processes affordable in the first place.
+Reading either as "start up to N" on a later tend double-counts: eight tasks already in flight and five pending under `max_tasks: 10` places two, not five.
 
-### 2.2 Launch everything, up to a ceiling
+**They compose to four useful shapes**, and the two extremes are the ones worth naming:
 
-Every pending task gets a worker immediately, bounded only by a ceiling. What is left over queues.
+| `max_workers` | `max_tasks` | 500 pending | |
+|---|---|---|---|
+| — | — | 500 processes × 1 task | the default |
+| — | 10 | 10 processes × 1 task, 490 queued | the old ceiling, spelled properly |
+| 10 | — | 10 processes × 50 tasks | startup cost cut fifty-fold |
+| 1 | — | 1 process × 500 tasks | run it whole |
 
-The ceiling is **10 concurrent workers**, overridable by the user. The queue exists for what is left over, and is frequently empty.
+**`max_workers` alone queues nothing from a standing start**, which is the property that keeps the two knobs from being confused: given everything at once it changes how the work is packaged, not how much of it starts.
 
-**It is deliberately not derived from core count, and an earlier draft of this section got that wrong.** The reasoning it used — *past core count another process buys no parallelism, because there is no core for it to run on* — misreads the workload. A worker is on the CPU in **bursts**: transcript construction, JSON serialization, `.eval` compression, non-model scoring. Between the bursts it is waiting on a model API and using no core at all. So ten workers on four cores is entirely ordinary; they rarely contend, and when they do it costs latency on a burst rather than throughput on the run.
+**It does queue on a later tend, and an early draft of this section said otherwise.** A selection document is written once, at spawn, so a live process cannot be handed more work — and a task that becomes pending *after* its siblings were placed has nowhere to go while every allowed process is still alive. A task that errors mid-run while its process carries on with the rest is exactly that shape. So both knobs can hold a queue back, which is why **the pour reports which one did** rather than leaving a reader to infer it from whichever key is set: with `max_workers: 1` and `max_tasks: 10` and one process alive, nine task slots are free and raising `max_tasks` buys nothing. `pour` returns `blocked`, and every renderer names the bound that is actually binding.
 
-What one-process-per-task actually buys is **isolation of those bursts** (and of crashes), not core saturation. The ceiling is therefore a resource guard — memory, file descriptors, how much simultaneous spike a box should be asked to absorb — and a guard is a number a user tunes, not a formula derived from hardware.
+**A parked worker holds its slot.** A worker waiting on a human approval is alive and making no progress ([execution.md](execution.md), *The parked worker*), and its tasks count against `max_tasks` like any others. Excluding them would silently overrun the budget that number exists to bound — the sandbox is still up, the process is still resident, the model connections are still open — so the pour counts them as in flight, and `reconcile` must neither reap the worker nor schedule a replacement for its tasks. Packed, this bites harder: a parked process holds every task it was given, not one.
 
-**This is where the GIL argument stops.** §1.1 is right that *one process saturates at most one core*, and that is why several tasks must not share a process — their bursts would serialize behind one another. It does not follow that N processes need N cores, and treating it as though it did produced a ceiling that was simultaneously too small on a laptop and far too large on a big box.
+The consequence is intended rather than tolerated: enough parked workers slow a bounded fleet, and a budget's worth stops it. Nothing should proceed while decisions pile up unanswered, and a run that has stopped for want of a human is a clearer thing to be told about than one that quietly kept starting work nobody could approve. What makes it survivable is being *told* — a park is a notification, not a scheduling problem.
 
-`eval_set()` carries the precedent, and having rejected its number for the wrong reason it turns out to be the right one: `max_tasks` defaults to `max(len(models), 10)`. The **10 transfers**; the per-model clause does not, because spawn order already delivers the stratification it exists for (see below) without a second knob.
+**Slot idle exists only where somebody asked for it.** With `max_tasks` set, a task finishing at t=0 leaves its slot empty until the next tend, costing roughly `interval/2 ÷ mean task duration`. For the overnight sweeps Steward is for, where tasks run for hours against a ten-minute interval, that is a fraction of a percent. The levers if it ever matters: **shorten the tend interval, or raise `max_tasks`** — not batching, which addresses a different cost entirely (§1.2). Packing makes one case slightly worse and it is worth knowing: a process frees capacity only when *all* of its tasks finish, so refill is coarser than it is at the default width.
 
-Two consequences worth stating, because the number is now flat:
+### 2.3 Memory is assumed adequate, and the defaults now assume more of it
 
-- **The fleet's default load is bounded and predictable.** `workers × max_samples` is 10 × 40 = 400 concurrent samples, whatever the machine. Under the old rule a 64-core box would have asked for 2,560 — which is a lot of provider concurrency to arrive at by reading `/proc`.
-- **The user is expected to raise it.** 10 is a floor to start from, in the same sense 40 is for `max_samples`: modest enough to be safe unattended, and the obvious thing to crank once a run is behaving.
-
-**Written as one number it is the initial-launch case, and a tend is not always one.** The ceiling bounds *concurrent workers*, so once some are already running the spawn count is `min(ceiling − running, pending)`. Reading it as "spawn up to ten" on a later tend double-counts: eight already running and five pending means two spawns, not five.
-
-**A parked worker holds its slot.** A worker waiting on a human approval is alive and making no progress ([execution.md](execution.md), *The parked worker*), and it counts against the ceiling like any other. Excluding it would silently overrun the budget the ceiling exists to bound — the sandbox is still up, the process is still resident, the model connections are still open — so `min(ceiling − running, pending)` counts it as running, and `reconcile` must neither reap it nor schedule a replacement for its task.
-
-The consequence is intended rather than tolerated: enough parked workers slow the fleet, and a ceiling's worth stops it. Nothing should proceed while decisions pile up unanswered, and a run that has stopped for want of a human is a clearer thing to be told about than one that quietly kept starting work nobody could approve. What makes it survivable is being *told* — a park is a notification, not a scheduling problem.
-
-**A queue is now the common case rather than the exception, and one earlier argument leaned on the opposite.** A cores-derived ceiling on a big box exceeded most sweeps, which is what let §1.2 say that launching everything at once "removes slots as a concept". At ten it does not: a forty-task sweep queues thirty. So **slot idle is real again** — a worker finishing at t=0 leaves its slot empty until the next tend, costing roughly `interval/2 ÷ mean task duration` of the pool. For the overnight sweeps Steward is for, where tasks run for hours against a ten-minute interval, that is a fraction of a percent and not worth machinery. It is worth knowing which levers apply if it ever is: **shorten the tend interval, or raise the ceiling** — not batching, which stays ruled out on its own terms (§1.2).
-
-### 2.3 Memory is assumed adequate
-
-There is deliberately no memory term in the ceiling. Two reasons, and the second is the substantive one.
+There is deliberately no memory term in either knob. Two reasons, and the second is the substantive one.
 
 Nobody has measured per-worker memory, so any coefficient would be invented. More importantly, **the quantity it would describe is about to change shape.** Until Layer 2 pruning lands, every worker constructs every task in the eval set, datasets included — so per-worker memory scales with the whole manifest and grows each time someone adds a task. Once pruning lands it becomes roughly constant per worker. A memory formula written today would encode the un-pruned world and be wrong on the day the thing it was compensating for is fixed.
 
-So: assume memory is fine, and treat **Layer 2 pruning as a prerequisite for raising the ceiling on a large manifest** rather than as the optimization it is currently filed as ([execution.md](execution.md), *Changes required*, item 5). Verified absent from `inspect_ai` main as of `0db4111e`. A flat ceiling of 10 bounds the default exposure at ten copies of the manifest rather than one per core, which makes the risk smaller than it was — but it is the *manifest* that scales, so a five-hundred-task sweep still meets it, and it meets it sooner for anyone who cranks the ceiling. If that happens before pruning lands, the right response is a launch-time check against a measured figure — a guard, not a term in the default, so that it can be removed cleanly.
+**Unbounded defaults make this exposure larger, and the increase should be named rather than discovered.** A flat ceiling of ten bounded a run at ten copies of the un-pruned manifest. A process per task bounds it at one copy per task, so a five-hundred-task sweep asks for five hundred — and asks the provider for `500 × max_samples` concurrent samples while it is at it. Both are the operator's to narrow, and narrowing either is one key: `max_workers` cuts the copies, `max_tasks` cuts the provider load. What was previously a number Steward chose is now a number somebody has to choose, and on a large manifest they should.
+
+So: assume memory is fine, and treat **Layer 2 pruning as a prerequisite for a large manifest at the default shape** rather than as the optimization it is currently filed as ([execution.md](execution.md), *Changes required*, item 5). Verified absent from `inspect_ai` main as of `0db4111e`. If it becomes a real problem before pruning lands, the right response is a launch-time check against a measured figure — a guard, not a term in the defaults, so that it can be removed cleanly.
 
 ### 2.4 Spawn order transposes the crossing
 
@@ -110,7 +131,9 @@ spawned      mbpp@gpt5  mbpp@opus   gsm8k@gpt5  gsm8k@opus  swe@gpt5  swe@opus
 
 **No duration-based ordering.** Sorting the longest task definitions first would improve makespan — the long pole has to run regardless, and starting it first lets short tasks fill in around it rather than trailing after it — but it requires an estimate Steward does not have. `samples × epochs` is available and is the wrong granularity for precisely this comparison: a fifty-sample agentic task can outlast a five-thousand-sample multiple-choice task, so sorting by sample count across task definitions would be confidently backwards. Smoke deliberately does not time tasks, and prior-log durations would work but only on a repeat run. Better to leave the order the author wrote than to reorder it against a bad proxy.
 
-**This closes the debt the ceiling left open.** Declining `eval_set()`'s model floor meant nothing guaranteed a slot per model — but spawn order applies to the initial launch, not only to the queue, so a task-major spawn puts at least one task per model in flight whenever the ceiling is at least the model count. Steward gets from ordering what `eval_set()` gets from its floor, with no second mechanism.
+**This closes the debt the ceiling left open.** Declining `eval_set()`'s model floor meant nothing guaranteed a slot per model — but spawn order applies to the initial launch, not only to the queue, so a task-major spawn puts at least one task per model in flight whenever `max_tasks` is at least the model count. Steward gets from ordering what `eval_set()` gets from its floor, with no second mechanism.
+
+**Packing deals rather than slices, and this is why.** Once several tasks share a process, the pour has to decide which ones — and taking a contiguous run of the transposed order would hand one process every model of the same task. That is the first of the two failures above, reintroduced at process granularity: lose the process and the task is gone on every arm at once, which is exactly the uncomparable interruption the transposition exists to prevent. Dealing round-robin spreads each task's models across processes instead, at no cost, so the transposition survives packing rather than being undone by it. (Rate-limit spreading needs no help here — a packed process runs its tasks concurrently, so it is on all of its models at once whichever way they were cut.)
 
 **One limit, stated rather than guessed around.** Steward cannot know the user's comparison axis. A sweep may vary models, task args, or solvers, and the manifest looks much the same in each case. Spreading by *model* is justified independently by rate-limit buckets, so it holds regardless; that it also stratifies the most common comparison is a bonus rather than the premise. For an args sweep on a single model, the transposition is a no-op and the author's order simply stands.
 
@@ -126,7 +149,9 @@ This was the most consequential thing to get right, because the docs treated all
 | `max_connections` | process-global pool, adaptive | yes, but self-correcting |
 | `max_sandboxes` | process-global — *"sandbox concurrency is shared across the process's evals, not per-eval"* | **yes, with no feedback** |
 
-The first row is the surprise. Because `max_samples` is per *task*, a worker running one task gets precisely the semaphore that task would have had inside a single-process `eval_set()` run — so there is nothing to divide, and passing a definition's value through unchanged preserves its meaning exactly. What differs between Steward and `eval_set()` is *task* parallelism, which is the ceiling decision, made deliberately above.
+The first row is the surprise, and it is what makes packing cheap. Because `max_samples` is per *task*, a worker gets precisely the semaphore each of its tasks would have had inside a single-process `eval_set()` run — so there is nothing to divide, whether it holds one task or fifty, and passing a definition's value through unchanged preserves its meaning exactly. It also discharges the constraint §1.2 used to carry: a batch may span models freely, because no task's limit depends on what it is sharing a process with.
+
+What differs between Steward and `eval_set()` is *task* parallelism, and there Steward now writes the number rather than inheriting one. A worker's selection carries `max_tasks` equal to the size of its batch, unconditionally. That is not a preference: in selection mode `eval_set()` never reaches its own defaulting, so an unset value falls through to `eval()`'s rule — one task at a time for a single model, the model count for several — and a packed worker would run its batch sequentially with nobody having chosen that. The fleet-wide bound is `Pool.max_tasks` (§2.2); this is only that process's share of it.
 
 ### 3.2 `max_samples` — set explicitly, so it can be steered
 

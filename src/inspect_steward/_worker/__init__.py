@@ -41,7 +41,14 @@ from .spawn import (
     worker_selection,
     worker_stem,
 )
-from .stop import KILL_GRACE, TERM_GRACE, Stop, Stopped, stop_workers
+from .stop import (
+    KILL_GRACE,
+    TERM_GRACE,
+    Stop,
+    Stopped,
+    StopRequest,
+    stop_workers,
+)
 
 __all__ = [
     "ABSENT",
@@ -67,6 +74,7 @@ __all__ = [
     "ScannedWorker",
     "SpawnedWorker",
     "Stop",
+    "StopRequest",
     "Stopped",
     "TaskRow",
     "Unavailable",

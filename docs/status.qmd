@@ -87,6 +87,11 @@ Columns are present or absent for the whole table rather than per row, so a
 settled campaign renders four columns instead of eight. A task whose worker does
 not answer promptly is reported from its log rather than held up.
 
+`connections` is the model's pool, not the task's, and under packing that
+distinction becomes visible: a pool belongs to the process and to a model within
+it, so two tasks sharing a process and a model show the same numbers, because
+they are drawing on the same pool.
+
 `limit` shows the leading sample's progress toward whichever limit will stop it
 first. `score` is the task's headline metric — and because nothing in an eval log
 marks a metric as primary, Steward applies a convention and says which one it
@@ -190,5 +195,5 @@ ask for `md`.
 You can also preview against different settings without changing anything:
 
 ``` bash
-steward status --max-workers 24
+steward status --max-tasks 24
 ```

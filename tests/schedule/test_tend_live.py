@@ -32,7 +32,7 @@ import shutil
 from pathlib import Path
 
 import pytest
-from inspect_ai.log import list_eval_logs
+from inspect_ai.log import list_eval_logs, read_eval_log
 from inspect_steward._launch import Change, Launch, launch
 from inspect_steward._workspace import (
     Workspace,
@@ -45,6 +45,54 @@ from ..timer._fake import clear_credentials, fake_cron
 from .test_tend import settle, turn
 
 FIXTURES = Path(__file__).parents[1] / "evalset" / "fixtures"
+
+
+def test_a_packed_run_lands_every_log_from_one_process(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`max_workers: 1` — the whole eval set in one worker, which is the point.
+
+    The claim no synthesized state can make: that a selection naming several
+    tasks actually runs all of them, that they run *concurrently* rather than
+    falling through to `eval()`'s one-at-a-time default, and that the scan and
+    the reaper account for one process holding two tasks. The concurrency half
+    is what the `max_tasks` override buys and is the reason it is written.
+
+    **Budget: one launch, one worker** — cheaper than the default width, which
+    is the whole argument for the feature.
+    """
+    fake_cron(monkeypatch)
+    clear_credentials(monkeypatch)
+    create_workspace(tmp_path, git=False)
+    workspace = Workspace.at(tmp_path)
+    workspace.directives.write_text("---\nmax_workers: 1\n---\n", encoding="utf-8")
+    definition = workspace.root / "evalset.py"
+    shutil.copy(FIXTURES / "simple_evalset.py", definition)
+
+    started = launch(workspace, definition)
+    assert isinstance(started, Launch), f"refused by {started}"
+    assert started.turn is not None
+    # two tasks, one process: the startup cost the feature exists to cut
+    assert len(started.manifest.tasks) == 2
+    assert len(started.turn.spawned) == 1
+    assert started.turn.summary.workers == 0 and started.turn.summary.spawning == 2
+
+    settle(workspace)
+    finished = turn(workspace)
+
+    # both logs land, and the one worker is reaped once
+    landed = list_eval_logs(str(workspace.logs))
+    assert len(landed) == 2
+    assert finished.summary.states["complete"] == 2
+    assert len(finished.reaped) == 1
+
+    # and they ran together rather than one after the other. This is the whole
+    # reason the override is written: without it `eval_set()`'s own default is
+    # never applied in selection mode, and `eval()` falls back to one task at a
+    # time. The log is where that decision is recoverable after the fact
+    assert [read_eval_log(log.name).eval.config.max_tasks for log in landed] == [2, 2]
+    # and the run is converged, not merely quiet: nothing is left to spawn
+    assert finished.spawned == [] and finished.queued == []
 
 
 def test_a_run_converges_and_then_stays_converged(

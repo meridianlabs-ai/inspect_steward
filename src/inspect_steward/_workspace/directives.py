@@ -22,7 +22,7 @@ from typing import Any, cast
 import yaml
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
-from .._schedule import DEFAULT_MAX_WORKERS, DEFAULT_STALL_AFTER, Pool
+from .._schedule import DEFAULT_STALL_AFTER, Pool
 from .._util.duration import parse_duration
 
 DEFAULT_TEND_INTERVAL = 600
@@ -84,9 +84,17 @@ class Directives(BaseModel):
     """
 
     max_workers: int | None = Field(default=None, gt=0)
-    """Ceiling on concurrent workers, or `None` where the workspace expressed no preference.
+    """How many worker processes a run uses, or `None` for a process per task.
 
-    A standing property of the host and the workspace rather than a setpoint — "do not exceed 8 workers here" — which is what makes it the operator's envelope rather than something a tuning loop moves (workflow.md, *The envelope is policy; the tuning is the agent's job*).
+    A standing property of the host and the workspace rather than a setpoint — "do not run more than 8 processes here" — which is what makes it the operator's envelope rather than something a tuning loop moves (workflow.md, *The envelope is policy; the tuning is the agent's job*).
+
+    Fewer processes than tasks means packing several tasks into each, which buys back the per-process startup a frontend charges and costs crash isolation. It does not change how much runs at once: that is `max_tasks`.
+    """
+
+    max_tasks: int | None = Field(default=None, gt=0)
+    """How many tasks may be in flight at once, or `None` for all of them.
+
+    The fleet's concurrency, and with the definition's `max_samples` its whole load on a provider. Passes the same test `max_workers` does despite sharing a name with an `eval_set()` argument: a definition's `max_tasks` never reaches a Steward worker, because the selection document overrides it unconditionally with that worker's own share of this (`_worker.spawn.worker_selection`). There is nothing here for a definition to contradict.
     """
 
     stall_after: int | None = Field(default=None, gt=0)
@@ -178,37 +186,36 @@ def resolve_pool(
     directives: Directives,
     *,
     max_workers: int | None = None,
+    max_tasks: int | None = None,
     max_samples: int | None = None,
 ) -> Pool:
     """Resolve what the operator asked of the worker pool.
 
-    Two chains, and the difference between them is the rule made visible:
+    Three chains, and the differences between them are the rules made visible:
 
     | | |
     |---|---|
-    | `max_workers` | the CLI, then `_steward.md`, then the default |
+    | `max_workers` | the CLI, then `_steward.md`, then unbounded |
+    | `max_tasks` | the CLI, then `_steward.md`, then unbounded |
     | `stall_after` | `_steward.md`, then the default — there is no flag, because patience is a standing property rather than something to retype each turn |
     | `max_samples` | the CLI, then **the definition**, then the default — the file is not a source |
 
     The last chain continues inside `resolve_max_samples`, which is why `None` is passed straight through rather than filled in here: *no preference* yields to whatever the definition asked for, and a number is an instruction that does not.
 
+    The first two have no default to fall back to, which is not an omission: `None` is the answer, and it means *do not bound this*. So unlike `max_samples` there is nothing downstream still to resolve — a run nobody shaped runs everything, in a process each.
+
     Args:
         directives: What the workspace's front matter said.
-        max_workers: Ceiling from the command line, or `None`.
+        max_workers: Process count from the command line, or `None`.
+        max_tasks: Task concurrency from the command line, or `None`.
         max_samples: Sample concurrency from the command line, or `None`.
 
     Returns:
         What the operator asked for, for `reconcile`.
     """
-    # written lowest-precedence first, so the chain reads in the order it resolves
-    ceiling = DEFAULT_MAX_WORKERS
-    if directives.max_workers is not None:
-        ceiling = directives.max_workers
-    if max_workers is not None:
-        ceiling = max_workers
-
     return Pool(
-        max_workers=ceiling,
+        max_workers=max_workers if max_workers is not None else directives.max_workers,
+        max_tasks=max_tasks if max_tasks is not None else directives.max_tasks,
         max_samples=max_samples,
         stall_after=(
             directives.stall_after

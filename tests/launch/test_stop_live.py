@@ -81,9 +81,9 @@ def test_a_worker_whose_task_left_the_definition_is_cancelled_and_archived(
 
     assert isinstance(amended, Launch)
     assert amended.committed is True
-    assert [row.identifier for row in amended.delta.of(Change.REMOVED)] == [
-        held.identifier
-    ]
+    assert [row.identifier for row in amended.delta.of(Change.REMOVED)] == list(
+        held.identifiers
+    )
 
     # asked, not killed: cancelling is what lets the partial result land, and a
     # signal is the fallback for a worker with nobody to ask

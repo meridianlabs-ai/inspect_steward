@@ -13,6 +13,7 @@ What this function decides is mechanical continuity: which workers to spawn and 
 
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
+from enum import StrEnum
 from pathlib import Path
 from typing import Any
 
@@ -27,16 +28,8 @@ from .._evalset.observe import (
     TaskState,
 )
 
-DEFAULT_MAX_WORKERS = 10
-"""Starting ceiling on concurrent workers.
-
-Deliberately **not** derived from core count. A worker is on the CPU in bursts — transcript construction, serialization, compression, scoring — and waiting on a model API in between, so ten workers on four cores is ordinary rather than oversubscribed. What one process per task buys is isolation of those bursts, not core saturation, which makes the ceiling a resource guard rather than a parallelism budget: a number to tune, not a formula to derive (scheduling.md, *Launch everything, up to a ceiling*).
-
-Ten is where `eval_set()`'s own `max_tasks` default starts, and it is expected to be raised.
-"""
-
 DEFAULT_MAX_SAMPLES = 40
-"""Starting sample concurrency per worker.
+"""Starting sample concurrency per task.
 
 Deliberately modest, because the ratchet is asymmetric: raising a limit takes effect immediately, lowering one only stops new acquires and waits for in-flight samples to drain. Climbing from a low setpoint is cheap; descending from a high one is not (scheduling.md, *`max_samples` — set explicitly, so it can be steered*).
 """
@@ -59,14 +52,23 @@ class ManifestVersionError(Exception):
 class Pool:
     """What the operator asked of the worker pool.
 
-    Its two knobs are one budget spent twice — `workers × max_samples` is the fleet's total concurrent samples — and Steward owns both factors, which is what makes its load on a provider deterministic rather than emergent (scheduling.md, *Total concurrency is one budget spent twice*).
+    Two knobs that shape the run, and they are about different things. `max_tasks` is *how much runs at once* — the fleet's concurrency, and with `max_samples` its whole load on a provider. `max_workers` is *how many processes that is divided into*, which costs startup and buys crash isolation and changes nothing about how much is in flight. Both are unbounded by default, so a run with neither set puts every task in flight in a process of its own (scheduling.md, *The worker pool*).
     """
 
-    max_workers: int = DEFAULT_MAX_WORKERS
-    """Ceiling on concurrent workers. Steward's alone: a definition has nothing to say about it, since worker mode runs one task per process and `max_tasks` is moot."""
+    max_workers: int | None = None
+    """How many worker processes the run uses, or `None` for a process per task.
+
+    Steward's alone: fanning an eval set across processes is Steward's invention, and no `eval_set()` argument reaches it.
+    """
+
+    max_tasks: int | None = None
+    """How many tasks may be in flight at once across the whole fleet, or `None` for all of them.
+
+    Distinct from the `max_tasks` Steward writes into a worker's selection, which is that one process's share of this. A definition's own `max_tasks` never reaches a worker, because the selection override is written unconditionally — so this key contradicts nothing the definition can say.
+    """
 
     max_samples: int | None = None
-    """Sample concurrency per worker, or `None` for no operator preference.
+    """Sample concurrency per task, or `None` for no operator preference.
 
     `None` rather than the default itself, because the two are not the same claim: *no preference* yields to whatever the definition asked for, and a number is an instruction that does not. See `resolve_max_samples`.
     """
@@ -74,7 +76,7 @@ class Pool:
     stall_after: int = DEFAULT_STALL_AFTER
     """Consecutive attempts that may finish nothing new before a task stops being respawned.
 
-    Steward's alone for the same reason `max_workers` is: respawning a task is Steward's invention, so there is no `eval_set()` argument this could contradict. See `_stalled`.
+    Steward's alone for the same reason the two above are: respawning a task is Steward's invention, so there is no `eval_set()` argument this could contradict. See `_stalled`.
     """
 
 
@@ -88,7 +90,9 @@ class RunningWorker:
     worker: str
     """Worker stem — the name of its selection document and its output file, and what the record keys on."""
 
-    identifier: str
+    identifiers: tuple[str, ...]
+    """Every task this process is running. One of them at the default width; the whole batch where the run has been packed into fewer processes."""
+
     pid: int
     host: str
 
@@ -107,7 +111,7 @@ class DepartedWorker:
     """
 
     worker: str
-    identifier: str
+    identifiers: tuple[str, ...]
     host: str
     pid: int | None = None
     """`None` for a worker that never launched."""
@@ -133,14 +137,21 @@ class InFlight:
 
     @property
     def running_identifiers(self) -> set[str]:
-        return {worker.identifier for worker in self.running}
+        return {
+            identifier for worker in self.running for identifier in worker.identifiers
+        }
+
+    @property
+    def running_tasks(self) -> int:
+        """Tasks in flight, which is what `Pool.max_tasks` bounds. Not the same as `len(running)` once a process holds several."""
+        return sum(len(worker.identifiers) for worker in self.running)
 
 
 @dataclass(frozen=True)
-class SpawnWorker:
-    """Run this task.
+class SpawnTask:
+    """One task's spawn decision.
 
-    Everything a selection document needs, decided but not yet written.
+    Per task rather than per worker, because every field here is a fact about the task: which log it resumes, how many times it has been tried, why it needs work. A worker holding several of them holds several of each.
     """
 
     identifier: str
@@ -151,13 +162,34 @@ class SpawnWorker:
     resume: str | None
     """Location of a prior log to resume, or `None` to start fresh. Completed, non-errored, non-invalidated samples are reused, so a resume of a five-hundred-sample task with forty-seven errors runs forty-seven samples."""
 
-    max_samples: int
-
     attempt: int
     """1-based, counting every attempt Steward knows about — the logs already in the directory and, for a worker that died before landing one, the in-flight record's spent attempts. It names the worker, so it has to advance on every spawn even when nothing was left behind."""
 
     reason: IncompleteReason | None
     """Why more work is needed (`None` when the task has never run)."""
+
+
+@dataclass(frozen=True)
+class SpawnWorker:
+    """Run these tasks, in one process.
+
+    Everything a selection document needs, decided but not yet written. One task at the default width; a share of the run where `Pool.max_workers` has packed it into fewer processes.
+    """
+
+    tasks: tuple[SpawnTask, ...]
+    """What this process runs, all of it concurrently. Never empty."""
+
+    max_samples: int
+    """Sample concurrency, applied per task rather than divided among them — inspect's semaphore is per task, so a definition's value passes through unchanged however many tasks a worker holds (scheduling.md, *The three knobs have different scopes*)."""
+
+    @property
+    def first(self) -> SpawnTask:
+        """The task this worker is named after. Its whole content at the default width."""
+        return self.tasks[0]
+
+    @property
+    def identifiers(self) -> tuple[str, ...]:
+        return tuple(task.identifier for task in self.tasks)
 
 
 @dataclass(frozen=True)
@@ -203,7 +235,17 @@ class Summary:
     """Counts by `IncompleteReason`, over incomplete tasks only."""
 
     running: int
+    """Tasks in flight, not processes. The two differ once a run is packed, and this is the one `max_tasks` bounds."""
+
+    workers: int
+    """Processes alive. Equal to `running` at the default width."""
+
     spawning: int
+    """Tasks starting this turn."""
+
+    spawning_workers: int
+    """Processes starting this turn."""
+
     queued: int
 
     stalled: list[str]
@@ -221,8 +263,45 @@ class Summary:
     unreadable: int
     """Files in the log directory that could not be read as logs."""
 
-    max_workers: int
+    max_workers: int | None
+    """Process count the operator asked for, or `None` for a process per task."""
+
+    max_tasks: int | None
+    """Tasks the operator will allow in flight, or `None` for all of them."""
+
+    blocked: "Blocked | None"
+    """Which bound is holding `queued` back — the one worth raising, not merely the one that is set. `None` when nothing is queued, and also when the queue is a pause rather than a limit."""
+
     paused: bool
+
+
+class Blocked(StrEnum):
+    """Which of the two bounds is holding the queue back.
+
+    Named rather than derived from the settings, because *configured* and *binding* are different questions: a run with both keys set is often short of one and nowhere near the other, and pointing its operator at the wrong one costs them a turn to find out.
+    """
+
+    MAX_TASKS = "max_tasks"
+    """The fleet is at its task ceiling. Raising it starts more work."""
+
+    MAX_WORKERS = "max_workers"
+    """Every process the run is allowed is already alive. Raising `max_tasks` changes nothing until one exits or `max_workers` goes up."""
+
+
+@dataclass(frozen=True)
+class Poured:
+    """How the pending work divided, and what stopped the rest from starting."""
+
+    workers: list[tuple[SpawnTask, ...]] = field(
+        default_factory=list[tuple[SpawnTask, ...]]
+    )
+    """One tuple per process to spawn."""
+
+    queued: list[SpawnTask] = field(default_factory=list[SpawnTask])
+    """Tasks that could not start this turn, in spawn order."""
+
+    blocked: "Blocked | None" = None
+    """What is holding `queued` back, or `None` when nothing is queued."""
 
 
 @dataclass(frozen=True)
@@ -232,8 +311,11 @@ class Reconciliation:
     actions: list[Action]
     """To execute in order. A `status` computes these and throws them away."""
 
-    queued: list[SpawnWorker]
-    """Would spawn, but the pool is full. The same decision deferred, which is what lets an authorized re-run jump the queue by sorting rather than by a second code path (scheduling.md, *Approved re-runs go first*)."""
+    queued: list[SpawnTask]
+    """Would spawn, but the run's shape has no room. The same decision deferred, which is what lets an authorized re-run jump the queue by sorting rather than by a second code path (scheduling.md, *Approved re-runs go first*).
+
+    Tasks rather than workers, because which process a task ends up in is decided by the pour at the moment it is placed — a queued task has no worker yet.
+    """
 
     summary: Summary
 
@@ -252,7 +334,7 @@ def reconcile(
         manifest: Desired state, captured from the definition.
         inflight: Workers this host launched, resolved into live and departed.
         observed: The log directory read against `manifest`.
-        pool: Worker ceiling and default sample concurrency.
+        pool: The run's shape — how many tasks may be in flight, how many processes to divide them into, and the default sample concurrency.
         paused: Stop scheduling new work. Workers already running finish normally — this is what almost everyone means by pausing a run, and it needs no control channel at all (workflow.md, *What `pause` actually pauses*).
 
     Returns:
@@ -273,7 +355,7 @@ def reconcile(
     running = inflight.running_identifiers
     max_samples = resolve_max_samples(manifest, pool)
 
-    pending: list[SpawnWorker] = []
+    pending: list[SpawnTask] = []
     stalled: list[str] = []
     for observation in _spawn_order(observed.tasks):
         if observation.identifier in running:
@@ -281,14 +363,22 @@ def reconcile(
         if _stalled(observation, inflight, pool.stall_after):
             stalled.append(observation.identifier)
         else:
-            pending.append(_spawn(observation, inflight, max_samples))
+            pending.append(_spawn(observation, inflight))
 
-    slots = (
-        0
+    poured = (
+        Poured(queued=pending)
         if paused
-        else max(0, min(pool.max_workers - len(inflight.running), len(pending)))
+        else pour(
+            pending,
+            pool=pool,
+            tasks_running=inflight.running_tasks,
+            workers_running=len(inflight.running),
+        )
     )
-    spawning, queued = pending[:slots], pending[slots:]
+    queued = poured.queued
+    spawning = [
+        SpawnWorker(tasks=batch, max_samples=max_samples) for batch in poured.workers
+    ]
 
     # a paused run makes no changes to itself, and a move is a change. Reaping
     # is not: it records what already happened, which stays true either way
@@ -304,13 +394,77 @@ def reconcile(
         summary=_summarize(
             observed,
             running=running,
-            spawning=len(spawning),
+            workers=len(inflight.running),
+            spawning=spawning,
             queued=len(queued),
+            blocked=poured.blocked,
             stalled=stalled,
             archiving=len(archiving),
             pool=pool,
             paused=paused,
         ),
+    )
+
+
+def pour(
+    pending: list[SpawnTask],
+    *,
+    pool: Pool,
+    tasks_running: int,
+    workers_running: int,
+) -> Poured:
+    """Divide the tasks that can start now among the processes that will run them.
+
+    Two independent bounds, and reading them as one is the mistake this shape exists to prevent. `max_tasks` decides **how much starts** — it is the fleet's concurrency and, with `max_samples`, its whole load on a provider. `max_workers` decides **how few processes that is divided into** — it costs nothing in concurrency and buys back the per-process startup a frontend charges, which for a Hawk config is an install and a secrets round trip per worker. Either unset is unbounded, so a run with neither puts every pending task in flight in a process of its own.
+
+    **Dealt round-robin rather than sliced.** `_spawn_order` transposes the enumeration to task-major, so consecutive entries are the same task across models; handing a process a contiguous run of them would put every model of one task in one process, and that process dying would cost the task on every arm at once — the uncomparable interruption that ordering exists to prevent. Dealing spreads each task's models across processes instead.
+
+    **Which bound held is decided here rather than inferred from the settings**, because the two are not the same question and only this function knows the answer. A run with both keys set can be short of processes while well under `max_tasks`, and telling its operator to raise `max_tasks` would send them to a number that changes nothing.
+
+    Args:
+        pending: Tasks needing work, in spawn order.
+        pool: The run's shape.
+        tasks_running: Tasks already in flight, which `max_tasks` counts against.
+        workers_running: Processes already alive, which `max_workers` counts against.
+
+    Returns:
+        One tuple of tasks per process to spawn, the tasks left waiting, and what they are waiting on.
+    """
+    placeable = (
+        len(pending)
+        if pool.max_tasks is None
+        else max(0, pool.max_tasks - tasks_running)
+    )
+    batch, queued = pending[:placeable], pending[placeable:]
+    if not batch:
+        # nothing may start: either `max_tasks` is spent, or there was nothing
+        # pending to begin with, which is a queue of zero and no bound at all
+        return Poured(queued=queued, blocked=Blocked.MAX_TASKS if queued else None)
+
+    slots = (
+        len(batch)
+        if pool.max_workers is None
+        else max(0, pool.max_workers - workers_running)
+    )
+    processes = min(slots, len(batch))
+    if processes == 0:
+        # every process the run is allowed is already alive. Note that its
+        # tasks go back on the queue rather than joining a live worker: a
+        # selection document is written once, at spawn, and a running worker
+        # cannot be given more work.
+        #
+        # `max_workers` is named even where `max_tasks` also truncated, and
+        # that is the useful answer rather than the complete one: raising
+        # `max_tasks` while no process can be started buys nothing
+        return Poured(queued=pending, blocked=Blocked.MAX_WORKERS)
+
+    dealt: list[list[SpawnTask]] = [[] for _ in range(processes)]
+    for index, task in enumerate(batch):
+        dealt[index % processes].append(task)
+    return Poured(
+        workers=[tuple(tasks) for tasks in dealt],
+        queued=queued,
+        blocked=Blocked.MAX_TASKS if queued else None,
     )
 
 
@@ -444,19 +598,16 @@ def _spawn_order(tasks: list[TaskObservation]) -> list[TaskObservation]:
     return sorted(pending, key=group)
 
 
-def _spawn(
-    observation: TaskObservation, inflight: InFlight, max_samples: int
-) -> SpawnWorker:
+def _spawn(observation: TaskObservation, inflight: InFlight) -> SpawnTask:
     """One task's spawn decision.
 
     A task with a prior log resumes it whatever went wrong — short, errored, cancelled, invalidated, or a worker that died mid-run. There is deliberately no branch on the reason: resume reuses exactly the samples that are worth keeping, so the reason is reporting material rather than an input to the decision.
     """
     current = observation.current
-    return SpawnWorker(
+    return SpawnTask(
         identifier=observation.identifier,
         key=observation.key,
         resume=current.location if current is not None else None,
-        max_samples=max_samples,
         attempt=_attempt(observation, inflight),
         reason=observation.reason,
     )
@@ -525,8 +676,10 @@ def _summarize(
     observed: ObservedTasks,
     *,
     running: set[str],
-    spawning: int,
+    workers: int,
+    spawning: list[SpawnWorker],
     queued: int,
+    blocked: "Blocked | None",
     stalled: list[str],
     archiving: int,
     pool: Pool,
@@ -547,7 +700,9 @@ def _summarize(
         states=states,
         reasons=reasons,
         running=len(running),
-        spawning=spawning,
+        workers=workers,
+        spawning=sum(len(worker.tasks) for worker in spawning),
+        spawning_workers=len(spawning),
         queued=queued,
         stalled=stalled,
         orphans=orphans,
@@ -555,5 +710,7 @@ def _summarize(
         archiving=archiving,
         unreadable=len(observed.unreadable),
         max_workers=pool.max_workers,
+        max_tasks=pool.max_tasks,
+        blocked=blocked,
         paused=paused,
     )

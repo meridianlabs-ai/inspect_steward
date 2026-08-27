@@ -15,17 +15,17 @@ Matching on the path is what makes the pid safe to use rather than what replaces
 See execution.md, *Detachment and the in-flight record*.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, replace
 from pathlib import Path
 from socket import gethostname
-from typing import Any
+from typing import Any, cast
 
 import psutil
 from inspect_ai._control.discovery import list_discovered_servers
 from inspect_ai._eval.eval_set_selection import INSPECT_EVAL_SET_SELECTION
 
-from .._schedule import DepartedWorker, InFlight, RunningWorker
+from .._schedule import DepartedWorker, InFlight, RunningWorker, SpawnTask
 from .._util.jsonl import Event, append_event, read_events
 from .._util.process import process_table
 
@@ -42,9 +42,11 @@ STEWARD_WORKER = "STEWARD_WORKER"
 """Environment variable naming a worker's stem. Steward's own, alongside inspect's selection marker."""
 
 STEWARD_TASK = "STEWARD_TASK"
-"""Environment variable naming the task identifier a worker is running.
+"""Environment variable naming the task identifiers a worker is running, one per line.
 
-Here rather than read from the selection document, so that the scan answers *what is this* from the same place it answers *is it alive*. The document would do — it names the identifier and the worker was launched with its path — but reading it makes identity depend on a file, and `.steward/` is a directory the design tells people they may delete."""
+Here rather than read from the selection document, so that the scan answers *what is this* from the same place it answers *is it alive*. The document would do — it names them and the worker was launched with its path — but reading it makes identity depend on a file, and `.steward/` is a directory the design tells people they may delete.
+
+A list rather than a second variable for the packed case: a worker running one task exports exactly the value it did before packing existed, so there is one variable to read and no way for a reader to consult the wrong one."""
 
 
 @dataclass(frozen=True)
@@ -61,8 +63,8 @@ class ScannedWorker:
     worker: str | None = None
     """File stem, from the environment. `None` for a marked process Steward did not spawn."""
 
-    identifier: str | None = None
-    """Task identifier, from the environment. `None` for a marked process Steward did not spawn."""
+    identifiers: tuple[str, ...] = ()
+    """Task identifiers, from the environment. Empty for a marked process Steward did not spawn."""
 
 
 WorkerScan = Callable[[Path], list[ScannedWorker]]
@@ -73,9 +75,7 @@ def record_intent(
     record: Path,
     *,
     worker: str,
-    identifier: str,
-    key: str,
-    attempt: int,
+    tasks: Sequence[SpawnTask],
     selection: Path,
     argv: list[str],
     cwd: str,
@@ -88,9 +88,7 @@ def record_intent(
     Args:
         record: Path to `inflight.jsonl`.
         worker: Worker stem.
-        identifier: Task identifier.
-        key: Display key.
-        attempt: 1-based attempt number.
+        tasks: What this worker will run. Each carries its own identifier, key, and attempt number, because all three are facts about the task rather than the process.
         selection: Path to the worker's selection document.
         argv: The command being run.
         cwd: Working directory for the command.
@@ -100,9 +98,10 @@ def record_intent(
         record,
         INTENT,
         worker=worker,
-        identifier=identifier,
-        key=key,
-        attempt=attempt,
+        tasks=[
+            dict(identifier=task.identifier, key=task.key, attempt=task.attempt)
+            for task in tasks
+        ],
         selection=str(selection),
         argv=argv,
         cwd=cwd,
@@ -175,15 +174,17 @@ def resolve_inflight(
         if entry.exited:
             # already reaped, so there is nothing to report -- but it was an
             # attempt, and recording it is the only trace a worker that died
-            # before landing a log leaves anywhere
-            spent.setdefault(entry.identifier, []).append(entry.started)
+            # before landing a log leaves anywhere. One per task it held: a
+            # packed worker that died spent an attempt on every one of them
+            for identifier in entry.identifiers:
+                spent.setdefault(identifier, []).append(entry.started)
             continue
         found = _worker_process(matched, entry.pid)
         if found is not None:
             running.append(
                 RunningWorker(
                     worker=entry.worker,
-                    identifier=entry.identifier,
+                    identifiers=entry.identifiers,
                     pid=found.pid,
                     host=host,
                     socket=sockets.get(found.pid),
@@ -193,23 +194,24 @@ def resolve_inflight(
             departed.append(
                 DepartedWorker(
                     worker=entry.worker,
-                    identifier=entry.identifier,
+                    identifiers=entry.identifiers,
                     host=host,
                     pid=entry.pid,
                 )
             )
-            spent.setdefault(entry.identifier, []).append(entry.started)
+            for identifier in entry.identifiers:
+                spent.setdefault(identifier, []).append(entry.started)
 
     # whatever the scan found that the record does not account for. This is the
     # lost-record path and it needs no branch of its own: a worker carries its
     # own identity in its environment, so the scan alone is sufficient
     for selection, matched in live.items():
         found = _worker_process(matched, None)
-        if found is not None and found.identifier is not None:
+        if found is not None and found.identifiers:
             running.append(
                 RunningWorker(
                     worker=found.worker or selection.stem,
-                    identifier=found.identifier,
+                    identifiers=found.identifiers,
                     pid=found.pid,
                     host=host,
                     socket=sockets.get(found.pid),
@@ -261,7 +263,7 @@ def scan_processes(workers_dir: Path) -> list[ScannedWorker]:
                     pid=found.pid,
                     selection=path,
                     worker=found.environ.get(STEWARD_WORKER),
-                    identifier=found.environ.get(STEWARD_TASK),
+                    identifiers=_identifiers(found.environ.get(STEWARD_TASK)),
                 ),
             )
     return [found for ppid, found in matched.values() if ppid not in matched]
@@ -272,7 +274,7 @@ class _Recorded:
     """One worker's state, folded out of the record."""
 
     worker: str
-    identifier: str
+    identifiers: tuple[str, ...]
     host: str
     started: str
     """When its `intent` was written, which is the closest thing the record has to when the attempt began. Kept because an attempt that landed no log can only be placed in a task's history by its time."""
@@ -294,12 +296,12 @@ def _fold(events: list[Event]) -> dict[str, _Recorded]:
         if not isinstance(worker, str):
             continue
         if event.type == INTENT:
-            identifier = payload.get("identifier")
-            if not isinstance(identifier, str):
+            identifiers = _recorded_identifiers(payload.get("tasks"))
+            if not identifiers:
                 continue
             workers[worker] = _Recorded(
                 worker=worker,
-                identifier=identifier,
+                identifiers=identifiers,
                 host=_str(payload.get("host")),
                 started=event.ts,
                 selection=_path(payload.get("selection")),
@@ -313,6 +315,28 @@ def _fold(events: list[Event]) -> dict[str, _Recorded]:
         elif event.type == EXITED:
             workers[worker] = replace(current, exited=True)
     return workers
+
+
+def _identifiers(value: str | None) -> tuple[str, ...]:
+    """Split `STEWARD_TASK` into the tasks a worker is running, one per line."""
+    return tuple(line for line in (value or "").splitlines() if line)
+
+
+def _recorded_identifiers(value: Any) -> tuple[str, ...]:
+    """The identifiers an `intent` names, skipping anything malformed.
+
+    Lenient in the same way the rest of this fold is: the record is machine-written and rebuildable, so a line that cannot be read is dropped rather than raised on. An `intent` left with no readable task is discarded by the caller, which is the same answer it already gave to one naming no task at all.
+    """
+    if not isinstance(value, list):
+        return ()
+    identifiers: list[str] = []
+    for task in cast(list[Any], value):
+        if not isinstance(task, dict):
+            continue
+        identifier = cast(dict[str, Any], task).get("identifier")
+        if isinstance(identifier, str) and identifier:
+            identifiers.append(identifier)
+    return tuple(identifiers)
 
 
 def _append(record: Path, type: str, **fields: Any) -> None:

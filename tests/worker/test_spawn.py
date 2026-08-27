@@ -8,6 +8,7 @@ detachment, a shared directory, resume, and a death before the boundary — pay.
 
 import os
 import sys
+from hashlib import sha256
 from pathlib import Path
 
 import pytest
@@ -46,6 +47,58 @@ def test_the_selection_document_is_one_inspect_accepts(tmp_path: Path) -> None:
     path = tmp_path / "selection.json"
     path.write_text(built.model_dump_json(exclude_none=True))
     assert read_eval_set_selection(str(path)) == built
+
+
+def test_a_packed_selection_names_every_task_and_its_own_concurrency(
+    tmp_path: Path,
+) -> None:
+    """Several tasks in one process, and the one override that makes them run.
+
+    `max_tasks` is written because leaving it out is not neutral: `eval_set()`
+    fills its own default in below the selection branch, so an unset one falls
+    through to `eval()`'s rule — one task at a time for a single model — and the
+    batch would run sequentially with nobody having chosen that.
+    """
+    built = worker_selection(
+        action("id-a", "id-b", "id-c"),
+        eval_set_id=EVAL_SET_ID,
+        log_dir="s3://bucket/logs",
+    )
+
+    assert [task.identifier for task in built.tasks] == ["id-a", "id-b", "id-c"]
+    assert built.overrides is not None
+    assert built.overrides.max_tasks == 3
+    # and upstream's own reader accepts it, which is what the version and the
+    # override sanity rules are enforced by
+    path = tmp_path / "packed.json"
+    path.write_text(built.model_dump_json(exclude_none=True))
+    assert read_eval_set_selection(str(path)) == built
+
+
+def test_packing_leaves_a_single_task_worker_byte_for_byte_as_it_was() -> None:
+    """The default width must not move when a wider one becomes possible.
+
+    The stem names a live worker's selection document and the entry the record
+    folds on, and `STEWARD_TASK` is what the process-table scan reads to name a
+    worker whose `.steward/` has been deleted. Both now carry a list — so the
+    guard worth having is that a list of one is spelled exactly as one was.
+    """
+    one = action("only-me", key="k")
+
+    assert worker_stem(one) == f"k_{sha256(b'only-me').hexdigest()[:8]}_1"
+    assert "\n".join(one.identifiers) == "only-me"
+
+
+def test_a_packed_stem_says_how_many_and_distinguishes_the_batch() -> None:
+    # named after its first task and countable at a glance, but keyed on all of
+    # them: two batches sharing a first task are different workers
+    packed = worker_stem(action("a", "b", key="k"))
+
+    assert packed.startswith("k-plus1_")
+    assert packed != worker_stem(action("a", "c", key="k"))
+    assert packed != worker_stem(action("a", key="k"))
+    # order is not identity: the same batch dealt differently is the same batch
+    assert packed == worker_stem(action("b", "a", key="k"))
 
 
 def test_a_worker_stem_separates_what_a_display_key_would_merge() -> None:

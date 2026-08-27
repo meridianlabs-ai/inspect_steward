@@ -11,7 +11,7 @@ import click
 
 from .._evalset.manifest import ManifestError
 from .._evalset.observe import TaskState
-from .._schedule import ManifestVersionError
+from .._schedule import Blocked, ManifestVersionError
 from .._tend import (
     HEADINGS,
     Refused,
@@ -86,13 +86,20 @@ def echo_turn(result: TendResult, *, table: bool = True) -> None:
         click.echo(f"{summary.running} running · next tend: {would or 'nothing to do'}")
     if summary.queued:
         # a paused run queues everything, and saying it waits on a slot would
-        # name the ceiling as the reason when the reason is the pause -- which
-        # is the one thing a reader might go and change
-        waiting = (
-            "waiting on a resume"
-            if summary.paused
-            else f"waiting on a slot (ceiling {summary.max_workers})"
-        )
+        # name the limit as the reason when the reason is the pause -- which
+        # is the one thing a reader might go and change. Otherwise the limit
+        # named is the one `reconcile` found binding rather than the one that
+        # happens to be set: a run short of processes but well under its task
+        # ceiling is waiting on `max_workers`, and sending its operator to
+        # `max_tasks` would send them to a number that changes nothing
+        if summary.paused:
+            waiting = "waiting on a resume"
+        elif summary.blocked is Blocked.MAX_WORKERS:
+            waiting = f"waiting on a worker (max_workers {summary.max_workers})"
+        elif summary.blocked is Blocked.MAX_TASKS:
+            waiting = f"waiting on a slot (max_tasks {summary.max_tasks})"
+        else:
+            waiting = "waiting"
         click.echo(f"{summary.queued} {waiting}")
 
     for line in _attention(result):

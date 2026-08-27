@@ -23,6 +23,7 @@ from pathlib import Path
 import pytest
 from inspect_steward._worker import (
     LiveConnections,
+    LiveFleet,
     LiveSamples,
     LiveTarget,
     LiveUsage,
@@ -47,21 +48,21 @@ def sockets() -> Generator[Path]:
 
 Routes = dict[str, object]
 
-TASKS: list[object] = [
-    {
-        "eval_id": "E1",
-        "task_id": "T1",
-        "total_tokens": 4096,
-        "samples": {
-            "total": 123,
-            "completed": 5,
-            "errored": 2,
-            "cancelled": 0,
-            "in_flight": 57,
-            "queued": 61,
-        },
-    }
-]
+TASK: dict[str, object] = {
+    "eval_id": "E1",
+    "task_id": "T1",
+    "total_tokens": 4096,
+    "samples": {
+        "total": 123,
+        "completed": 5,
+        "errored": 2,
+        "cancelled": 0,
+        "in_flight": 57,
+        "queued": 61,
+    },
+}
+
+TASKS: list[object] = [TASK]
 
 SAMPLES: dict[str, object] = {
     "samples": [
@@ -85,6 +86,12 @@ WORKER: Routes = {"/tasks": TASKS, "/config": CONFIG, "/evals/E1/samples": SAMPL
 
 FINISHED: Routes = {**WORKER, "/tasks": []}
 """A worker whose eval ended between the scan that found its socket and the read."""
+
+NO_PACKING: dict[str, str] = {}
+"""No log locations to correlate, which is every worker holding one task.
+
+Spelled out at each call rather than defaulted, because it is exactly what a packed worker must not be given by accident: a correlation map that is missing rather than empty costs every row its identity and reports a running task as finished.
+"""
 
 
 @contextmanager
@@ -146,7 +153,7 @@ def worker(
     thread.start()
     assert listening.wait(timeout=5), "server never bound"
     try:
-        yield LiveTarget(identifier="task-1", pid=1, socket=socket)
+        yield LiveTarget(identifiers=("task-1",), pid=1, socket=socket)
     finally:
         loop.call_soon_threadsafe(stopping.set)
         thread.join(timeout=5)
@@ -160,7 +167,7 @@ def test_a_worker_reports_the_counts_its_log_has_not_caught_up_to(
     sockets: Path,
 ) -> None:
     with worker(sockets / "w.sock") as target:
-        fleet = read_fleet([target])
+        fleet = read_fleet([target], NO_PACKING)
 
     (task,) = fleet.tasks.values()
     assert task.unavailable is None
@@ -176,7 +183,7 @@ def test_usage_is_the_leading_sample_rather_than_the_mean(sockets: Path) -> None
     # decides -- a mean hides one sample about to be cut off behind ninety that
     # have just started
     with worker(sockets / "w.sock") as target:
-        (task,) = read_fleet([target]).tasks.values()
+        (task,) = read_fleet([target], NO_PACKING).tasks.values()
 
     assert task.usage.turns == 8
     assert task.usage.messages == 40
@@ -190,7 +197,7 @@ def test_connection_pools_are_summed_across_a_task_s_controllers(
     # pool is their total
     roles = dict(WORKER, **{"/config": {"adaptive": [{"in_use": 4, "limit": 10}] * 3}})
     with worker(sockets / "w.sock", roles) as target:
-        (task,) = read_fleet([target]).tasks.values()
+        (task,) = read_fleet([target], NO_PACKING).tasks.values()
 
     assert (task.connections.in_use, task.connections.limit) == (12, 30)
 
@@ -204,7 +211,7 @@ def test_a_worker_that_does_not_answer_promptly_is_busy_rather_than_gone(
     # the control server shares the eval's event loop, so no answer within the
     # budget is the fleet doing its job -- the row renders from its log
     with worker(sockets / "w.sock", stall=True) as target:
-        (task,) = read_fleet([target], timeout=0.25).tasks.values()
+        (task,) = read_fleet([target], NO_PACKING, timeout=0.25).tasks.values()
 
     assert task.unavailable == "busy"
 
@@ -219,7 +226,8 @@ def test_one_busy_worker_does_not_cost_the_others_their_columns(
         worker(sockets / "fast.sock") as fast,
     ):
         fleet = read_fleet(
-            [slow, LiveTarget(identifier="task-2", pid=2, socket=fast.socket)],
+            [slow, LiveTarget(identifiers=("task-2",), pid=2, socket=fast.socket)],
+            NO_PACKING,
             timeout=0.25,
         )
 
@@ -230,9 +238,9 @@ def test_one_busy_worker_does_not_cost_the_others_their_columns(
 
 
 def test_a_socket_nothing_is_listening_on_is_gone(sockets: Path) -> None:
-    target = LiveTarget(identifier="task-1", pid=1, socket=sockets / "nobody.sock")
+    target = LiveTarget(identifiers=("task-1",), pid=1, socket=sockets / "nobody.sock")
 
-    (task,) = read_fleet([target]).tasks.values()
+    (task,) = read_fleet([target], NO_PACKING).tasks.values()
 
     assert task.unavailable == "gone"
 
@@ -241,9 +249,119 @@ def test_a_worker_whose_eval_finished_mid_read_says_so(sockets: Path) -> None:
     # the process is still up but has nothing to report: it finished between
     # the scan that found its socket and the read -- reaping is the next turn's
     with worker(sockets / "w.sock", FINISHED) as target:
-        (task,) = read_fleet([target]).tasks.values()
+        (task,) = read_fleet([target], NO_PACKING).tasks.values()
 
     assert task.unavailable == "finished"
+
+
+# --- a process holding several tasks ------------------------------------
+
+TWO_MODELS: dict[str, object] = {
+    "adaptive": [
+        {"name": "openai/gpt-4", "in_use": 3, "limit": 10},
+        {"name": "anthropic/claude", "in_use": 7, "limit": 20},
+    ]
+}
+"""Controllers are process-global and one per model, so a packed batch spanning two models has both."""
+
+PACKED_ROWS: list[object] = [
+    {**TASK, "log_location": "logs/one.eval", "model": "openai/gpt-4"},
+    {
+        **TASK,
+        "eval_id": "E2",
+        "task_id": "T2",
+        "log_location": "logs/two.eval",
+        "total_tokens": 8192,
+        "model": "anthropic/claude",
+    },
+]
+
+PACKED: Routes = {
+    "/tasks": PACKED_ROWS,
+    "/config": TWO_MODELS,
+    "/evals/E1/samples": SAMPLES,
+    "/evals/E2/samples": SAMPLES,
+}
+"""Two tasks in one process, each writing its own log — the whole run under `max_workers: 1`."""
+
+CORRELATION = {"logs/one.eval": "task-1", "logs/two.eval": "task-2"}
+
+
+def read_packed(socket: Path, locations: dict[str, str]) -> LiveFleet:
+    """Read a worker holding both tasks."""
+    target = LiveTarget(identifiers=("task-1", "task-2"), pid=1, socket=socket)
+    return read_fleet([target], locations)
+
+
+def test_each_task_of_a_packed_worker_is_named_by_the_log_it_is_writing(
+    sockets: Path,
+) -> None:
+    """The join is the log location, which is the only field the control channel and Steward's observation both hold."""
+    with worker(sockets / "w.sock", PACKED) as target:
+        fleet = read_packed(target.socket, CORRELATION)
+
+    assert sorted(fleet.tasks) == ["task-1", "task-2"]
+    assert fleet.tasks["task-1"].total_tokens == 4096
+    assert fleet.tasks["task-2"].total_tokens == 8192
+    assert fleet.unavailable == []
+
+
+def test_a_packed_worker_read_without_the_correlation_reports_nothing(
+    sockets: Path,
+) -> None:
+    """The failure the required argument exists to make impossible.
+
+    Asserted rather than left implicit because the wrong answer here is a quiet one: every row is dropped, both tasks read `finished`, and a run busy generating looks converged. If `locations` is ever made optional again, this is the test that says what that costs.
+    """
+    with worker(sockets / "w.sock", PACKED) as target:
+        fleet = read_packed(target.socket, {})
+
+    assert [task.unavailable for task in fleet.unavailable] == ["finished"] * 2
+
+
+def test_one_uncorrelated_row_costs_its_own_task_and_no_other(
+    sockets: Path,
+) -> None:
+    """A task whose log has not appeared yet — the pre-boundary window, where there is nothing to report about it anyway."""
+    with worker(sockets / "w.sock", PACKED) as target:
+        fleet = read_packed(target.socket, {"logs/one.eval": "task-1"})
+
+    assert fleet.tasks["task-1"].unavailable is None
+    assert fleet.tasks["task-2"].unavailable == "finished"
+
+
+def test_a_packed_row_reports_its_own_model_s_pool_and_not_the_process_s(
+    sockets: Path,
+) -> None:
+    """Controllers are process-global, so the unfiltered sum is not a fact about any one task.
+
+    Both tasks would otherwise read 10/30 — every model in the process, added together, in every row. Each row's own controller is the number that means something about it.
+    """
+    with worker(sockets / "w.sock", PACKED) as target:
+        fleet = read_packed(target.socket, CORRELATION)
+
+    assert (
+        fleet.tasks["task-1"].connections.in_use,
+        fleet.tasks["task-1"].connections.limit,
+    ) == (3, 10)
+    assert (
+        fleet.tasks["task-2"].connections.in_use,
+        fleet.tasks["task-2"].connections.limit,
+    ) == (7, 20)
+
+
+def test_a_worker_holding_one_task_still_sums_every_controller(
+    sockets: Path,
+) -> None:
+    """The default width needs no narrowing and must not get one.
+
+    One task *is* the whole process, extra controllers included: a task with model roles has one per role, and their total is what its pool actually is. Narrowing by the row's own model would silently drop the roles.
+    """
+    single: Routes = {**PACKED, "/tasks": [PACKED_ROWS[0]], "/config": TWO_MODELS}
+    with worker(sockets / "w.sock", single) as target:
+        (task,) = read_fleet([target], NO_PACKING).tasks.values()
+
+    assert (task.connections.in_use, task.connections.limit) == (10, 30)
 
 
 # --- payloads this version has not seen ---------------------------------
@@ -302,7 +420,7 @@ def test_a_shape_this_version_has_not_seen_costs_columns_not_the_row(
     # status command that dies on an upstream field rename is worth less than
     # one that reports what it could read
     with worker(sockets / "w.sock", routes) as target:
-        fleet = read_fleet([target])
+        fleet = read_fleet([target], NO_PACKING)
 
     (task,) = fleet.tasks.values()
     assert task.identifier == "task-1"

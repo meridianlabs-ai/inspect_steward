@@ -25,7 +25,13 @@ from inspect_ai._eval.eval_set_selection import INSPECT_EVAL_SET_SELECTION
 from inspect_ai.log import list_eval_logs
 from inspect_steward import read_eval_set
 from inspect_steward._evalset.observe import observe_logs, observe_tasks
-from inspect_steward._schedule import Pool, ReapWorker, SpawnWorker, reconcile
+from inspect_steward._schedule import (
+    Pool,
+    ReapWorker,
+    SpawnTask,
+    SpawnWorker,
+    reconcile,
+)
 from inspect_steward._util.jsonl import read_events, utc_now
 from inspect_steward._worker import (
     INTENT,
@@ -68,9 +74,15 @@ def intent(stem: str, *, host: str = HERE) -> Write:
             record_intent(
                 record,
                 worker=stem,
-                identifier=f"id-{stem}",
-                key=stem,
-                attempt=1,
+                tasks=[
+                    SpawnTask(
+                        identifier=f"id-{stem}",
+                        key=stem,
+                        resume=None,
+                        attempt=1,
+                        reason=None,
+                    )
+                ],
                 selection=selection_path(workers_dir, stem),
                 argv=["python", "-c", "pass"],
                 cwd=str(workers_dir),
@@ -84,7 +96,7 @@ def intent(stem: str, *, host: str = HERE) -> Write:
                     "type": INTENT,
                     "host": host,
                     "worker": stem,
-                    "identifier": f"id-{stem}",
+                    "tasks": [{"identifier": f"id-{stem}", "key": stem, "attempt": 1}],
                     "selection": str(selection_path(workers_dir, stem)),
                 },
             )
@@ -147,7 +159,7 @@ def alive_scan(workers_dir: Path, stems: list[str]) -> WorkerScan:
             pid=pid_of(stem),
             selection=selection_path(workers_dir, stem),
             worker=stem,
-            identifier=f"id-{stem}",
+            identifiers=(f"id-{stem}",),
         )
         for stem in stems
     ]
@@ -268,8 +280,8 @@ def test_the_record_and_the_table_resolve_together(case: Case, tmp_path: Path) -
     )
     # every worker carries the identifier of the task it is running, whichever
     # of the two sources supplied it
-    assert {worker.identifier for worker in resolved.running} == {
-        f"id-{stem}" for stem in case.running
+    assert {worker.identifiers for worker in resolved.running} == {
+        (f"id-{stem}",) for stem in case.running
     }
     assert {
         worker.worker: worker.pid
@@ -294,8 +306,54 @@ def test_a_spawn_that_never_starts_leaves_an_intent_and_nothing_else(
     resolved = resolve_inflight(
         workers.inflight, workers.workers_dir, scan=lambda _: []
     )
-    assert [worker.identifier for worker in resolved.departed] == ["id-never-started"]
+    assert [worker.identifiers for worker in resolved.departed] == [
+        ("id-never-started",)
+    ]
     assert resolved.departed[0].pid is None
+
+
+def test_a_packed_worker_accounts_for_every_task_it_held(tmp_path: Path) -> None:
+    """One process, several tasks, and a departure that spends an attempt on each.
+
+    The stall guard reads `spent` per identifier, so a packed worker that dies
+    having landed nothing must count against all of its tasks — crediting only
+    the one it was named after would let the others be respawned forever with
+    no evidence accumulating against them.
+    """
+    workers = fleet(FIXTURES / "simple_evalset.py", tmp_path, cwd=tmp_path / "nowhere")
+
+    with pytest.raises(OSError):
+        workers.spawn(action("id-a", "id-b", "id-c"))
+
+    resolved = resolve_inflight(
+        workers.inflight, workers.workers_dir, scan=lambda _: []
+    )
+    assert [worker.identifiers for worker in resolved.departed] == [
+        ("id-a", "id-b", "id-c")
+    ]
+    assert sorted(resolved.spent) == ["id-a", "id-b", "id-c"]
+    assert all(len(attempts) == 1 for attempts in resolved.spent.values())
+
+
+def test_a_packed_worker_suppresses_a_respawn_of_every_task_it_holds(
+    tmp_path: Path,
+) -> None:
+    # `running_identifiers` is what stops a task being spawned twice, and a
+    # packed process holds several -- so the union is what it has to report
+    scanned = ScannedWorker(
+        pid=4242,
+        selection=selection_path(tmp_path / "workers", "w"),
+        worker="w",
+        identifiers=("id-a", "id-b"),
+    )
+    resolved = resolve_inflight(
+        tmp_path / "inflight.jsonl", tmp_path / "workers", scan=lambda _: [scanned]
+    )
+
+    assert resolved.running_identifiers == {"id-a", "id-b"}
+    # and one process, not two, against the worker bound
+    assert len(resolved.running) == 1
+    assert resolved.running_tasks == 2
 
 
 # --- live workers -------------------------------------------------------
@@ -328,7 +386,7 @@ def test_a_worker_before_its_eval_is_visible_only_to_the_scan(
         held.reached()
         resolved = resolve_inflight(workers.inflight, workers.workers_dir)
 
-        assert [item.identifier for item in resolved.running] == [task.identifier]
+        assert [item.identifiers for item in resolved.running] == [(task.identifier,)]
         assert resolved.running[0].pid == worker.pid
         assert resolved.departed == []
         # the window, asserted at both sources that cannot see it
@@ -344,7 +402,7 @@ def test_a_worker_before_its_eval_is_visible_only_to_the_scan(
         # and losing the record does not change the answer, because a worker
         # carries the task it is running in its own environment
         lost = resolve_inflight(tmp_path / "gone.jsonl", workers.workers_dir)
-        assert [item.identifier for item in lost.running] == [task.identifier]
+        assert [item.identifiers for item in lost.running] == [(task.identifier,)]
 
         # the window closes observably: once the eval starts, the worker binds
         # a control socket, which is what everything after this step talks to
@@ -407,13 +465,13 @@ def test_a_worker_killed_before_its_log_lands_is_run_again(
 
     assert plan.actions[0] == ReapWorker(resolved.departed[0])
     # nothing landed, so the second attempt starts fresh rather than resuming
-    assert [item.identifier for item in spawns] == [task.identifier]
-    assert spawns[0].resume is None
+    assert [item.identifiers for item in spawns] == [(task.identifier,)]
+    assert spawns[0].first.resume is None
     # and it is numbered 2, on the record's word alone. This asserted 1 until
     # step 13, which is the bug rather than the intent: the number names the
     # worker, so a second attempt calling itself the first writes over the
     # first's in-flight entry -- and then the record cannot say this happened
-    assert spawns[0].attempt == 2
+    assert spawns[0].first.attempt == 2
 
 
 def test_the_scan_answers_for_this_workspace_only(tmp_path: Path) -> None:

@@ -9,7 +9,13 @@ from .turn import TURN_ERRORS, echo_turn, find_workspace, turn_json
     "--max-workers",
     type=click.IntRange(min=1),
     default=None,
-    help="Ceiling to preview against (overrides _steward.md).",
+    help="Worker processes to preview against (overrides _steward.md).",
+)
+@click.option(
+    "--max-tasks",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Tasks in flight to preview against (overrides _steward.md).",
 )
 @click.option(
     "--max-samples",
@@ -33,6 +39,7 @@ from .turn import TURN_ERRORS, echo_turn, find_workspace, turn_json
 )
 def status_command(
     max_workers: int | None,
+    max_tasks: int | None,
     max_samples: int | None,
     output_format: str,
     output_json: bool,
@@ -43,7 +50,12 @@ def status_command(
     """
     workspace = find_workspace()
     try:
-        result = status(workspace, max_workers=max_workers, max_samples=max_samples)
+        result = status(
+            workspace,
+            max_workers=max_workers,
+            max_tasks=max_tasks,
+            max_samples=max_samples,
+        )
     except TURN_ERRORS as ex:
         raise click.ClickException(str(ex)) from ex
 

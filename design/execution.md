@@ -31,7 +31,7 @@ Per-task log directories were the first answer (and are what configuration.md or
 
 ## 3. Worker model
 
-A worker is one process running one task:
+A worker is one process running one task, which is the default rather than the only shape ([scheduling.md](scheduling.md), *Batching, opt-in*):
 
 ```
 steward
@@ -72,11 +72,11 @@ Selection is the execution counterpart to capture. Both are environment-variable
 | `INSPECT_EVAL_SET_CAPTURE` | Path to write a manifest. `eval_set()` resolves tasks, writes the manifest, and exits the process without running anything. |
 | `INSPECT_EVAL_SET_SELECTION` | Path to a selection document. `eval_set()` resolves tasks, runs only the selected ones through `eval()`, and skips all eval-set orchestration. |
 
-The selection document (`inspect_ai._eval.eval_set_selection`, schema version 3):
+The selection document (`inspect_ai._eval.eval_set_selection`, schema version 4):
 
 ```jsonc
 {
-  "version": 3,
+  "version": 4,
   "eval_set_id": "swe-sweep-2026-08",   // Steward-assigned; stamped into every log
   "tasks": [
     {
@@ -88,22 +88,25 @@ The selection document (`inspect_ai._eval.eval_set_selection`, schema version 3)
     "log_dir": "s3://…/logs",
     "max_samples": 12,
     "limit": 5,
-    "max_sandboxes": 8
+    "max_sandboxes": 8,
+    "max_tasks": 1                      // except this one — see below
   }
 }
 ```
 
-**Three fields are the protocol; the rest are knobs, and they live in a container.** `version`, `eval_set_id`, and `tasks` are what a selection *is*. Everything else adjusts how one worker is operated, and at version 3 there are four of them — enough that leaving them beside the protocol fields reads as one flat bag of unrelated things. `overrides` is a `extra="forbid"` sub-model like its parent, so a misspelled key is still refused rather than dropped.
+**Three fields are the protocol; the rest are knobs, and they live in a container.** `version`, `eval_set_id`, and `tasks` are what a selection *is*. Everything else adjusts how one worker is operated, and at version 4 there are five of them — enough that leaving them beside the protocol fields reads as one flat bag of unrelated things. `overrides` is a `extra="forbid"` sub-model like its parent, so a misspelled key is still refused rather than dropped.
 
 The container does not save a schema version per field, and the design should not pretend otherwise: `extra="forbid"` already refuses an unknown key, and the version bump exists to turn that refusal into *"upgrade inspect-ai"* rather than *"unknown field"* — which is worth having either way. What it fixes is a category error, not a cost.
 
 **The rule for what may go in:** an override may change **how a worker is operated** — where its output goes, how fast it runs, how much of its dataset it runs, what surfaces it exposes — but never *what is evaluated*. The operative test is mechanical: nothing in the container participates in `task_identifier()`, so overriding it cannot desynchronize a worker from the capture manifest. That is why `limit` qualifies (the identifier hashes a task's execution limits, not its dataset slice) and `time_limit` does not.
 
+**`max_tasks` is the one override whose absence is not neutral, and Steward writes it always.** Every other field left unset keeps what the definition passed. This one does not: `eval_set()` fills its own `max_tasks` default in *below* the selection branch, so a worker that is not told falls through to `eval()`'s rule instead — one task at a time for a single model, the model count for several. A worker given five tasks and nothing else would run them one after another, having inherited a decision nobody made. Steward writes the size of the batch, unconditionally, for the same reason it always writes `log_dir`.
+
 **The `log_dir` override reaches the boundary, and not one step earlier.** Anything a frontend writes on its way to `eval_set()` lands wherever the *definition* said — verified: a flow worker given only the override drops `flow.yaml` and `flow-requirements.txt` into the definition's log directory before the selection is ever read. So a worker needs both channels, exactly as a read does: the frontend's own `--log-dir` for the pre-boundary half and the selection override for the eval itself. This is the same pre-boundary seam as open question 1 and Hawk's installation problem, in its smallest form.
 
 **And the two channels deliberately carry different directories.** An earlier draft had the frontend channel carry the run's log directory too, on the grounds that a frontend's artifacts are wanted there. They are not: the work behind them is once-per-*run* and every worker repeats it, so pointing N workers at one directory means N concurrent writes to the same two paths and N scans of a directory that grows all run. Each worker therefore gets a scratch directory of its own (`.steward/workers/<stem>/`), and the run's log directory is reached only through the selection. Reads already did this; workers now do the same thing for the same reason.
 
-`tasks` is a list rather than a single entry so a worker could host several when that is cheaper than several processes. Steward never does: [scheduling.md](scheduling.md) settles on exactly one task per process, so the list is permanently length 1 and the generality goes unused.
+`tasks` is a list rather than a single entry so a worker can host several when that is cheaper than several processes. Steward writes one entry by default and the whole batch where `max_workers` has asked for fewer processes than there are tasks ([scheduling.md](scheduling.md), *Batching, opt-in*). The `max_tasks` override rides with it, always, naming the size of that batch: in selection mode `eval_set()` never reaches its own defaulting, so an unset value would fall through to `eval()`'s rule — one task at a time for a single model — and a packed worker would run its batch sequentially with nobody having chosen that.
 
 An identifier that matches no resolved task is a hard error naming the likely cause — the definition changed since it was enumerated. An identifier that matches *more* than one resolved task is also an error: outside selection mode, `validate_eval_set_prerequisites` enforces identifier uniqueness across the eval set, and worker mode skips that check, so it makes the same guarantee locally for the tasks it is asked to run.
 
@@ -880,7 +883,9 @@ The fix is not machinery. **A separate key for the supervisor** removes it entir
 
    No override participates in `task_identifier()`, so redirecting a worker cannot desynchronize it from the capture manifest. That is the operative test, and the rule it enforces is stated in *The selection protocol*: an override may change how a worker is **operated** — where its output goes, how fast it runs, how much of its dataset it runs, what surfaces it exposes — never what is evaluated.
 
-   Still unreached, and judged not worth a channel of their own: `log_level` (CLI-only) and `display` (`INSPECT_DISPLAY` is read generally, so it already works). `ctl_server` needs nothing — it defaults to enabled. `max_tasks` is moot in worker mode, where a worker runs one task. `acp_server` is wanted too and is deliberately **not** an override: it is forced by worker mode, for the reason item 11 gives.
+   **`max_tasks` joined the container at version 4** (item 13), which is the one override whose absence is not neutral. Everything else left unset keeps what the definition passed; `max_tasks` does not, because `eval_set()` fills its own default in *below* the selection branch — so an unset one falls through to `eval()`'s rule instead, one task at a time for a single model and the model count for several. A worker handed a batch would run it sequentially with nobody having chosen that. Steward therefore writes it unconditionally, as it does `log_dir`.
+
+   Still unreached, and judged not worth a channel of their own: `log_level` (CLI-only) and `display` (`INSPECT_DISPLAY` is read generally, so it already works). `ctl_server` needs nothing — it defaults to enabled. `acp_server` is wanted too and is deliberately **not** an override: it is forced by worker mode, for the reason item 11 gives.
 
    Hard-coding the error-handling options keeps this surface purely *operational*: nothing that can be overridden changes what an eval means. Had `fail_on_error` gone here, the channel would have needed two tiers to keep semantic overrides visible.
 
@@ -938,6 +943,10 @@ Two further items came out of asking what a *detached* worker can and cannot do:
 
     **Not Steward-specific, which is the test these items are held to.** Anything building a leaderboard across an eval set hits it identically, Flow and Hawk included. It is also the reason there is no `headline_metric` key in `_steward.md`: one workspace-wide answer to a question each task answers differently is exactly the contradicting-second-file failure that file's rule exists to prevent ([workflow.md](workflow.md), *A config file may not say anything the definition can*). Until it lands, Steward applies a convention and states which one — nothing blocks, and the cost of being wrong is a column showing the less interesting of two numbers.
 
+15. **A `max_tasks` override in the selection document** — *landed*, at schema version 4. The one field a runner giving a worker several tasks cannot do without, and the only override whose absence is not neutral: `eval_set()` fills `max_tasks` in below the selection branch, so a worker that is not told falls through to `eval()`'s own rule — one task at a time for a single model, the model count for several — and runs its batch sequentially with nobody having chosen that. It passes the container's admission test cleanly, since task concurrency participates in no part of `task_identifier()`.
+
+    The bump is on the container rather than on the field. `_FIELD_MIN_VERSION` gates `overrides` as a whole and nothing tracks which version each override arrived in, which is a limitation worth stating rather than papering over: a document declaring version 3 and setting `max_tasks` is accepted here and refused as an unknown field by an inspect that predates it. Steward always declares the installed version, so it cannot write one — and recording per-field versions inside the container would buy nothing that the unknown-field error does not already say.
+
 ## 13. Open questions
 
 1. **Flow's pre-boundary work.** Everything Flow does before reaching `eval_set()` is out of worker mode's reach, and every flow worker repeats all of it. Verified against a four-task spec with four concurrent workers: the run works correctly (four logs, correct identifiers, no eval-set metadata written), but each worker independently
@@ -993,7 +1002,7 @@ Two further items came out of asking what a *detached* worker can and cannot do:
 
    Until it exists, `options["scanners"]` in the manifest lets Steward refuse a scanning definition at enumeration time with a clear explanation rather than failing every worker.
 
-10. **The tend interval.** *The question changed twice and is now much smaller.* It is no longer "who guarantees the cadence" — a timer does (*Drivers, one core*). Slot idle is back, since the worker ceiling is a flat ten rather than a core count and anything larger queues, but it is small for hours-long tasks and the interval is only one of the two levers on it ([scheduling.md](scheduling.md), *Launch everything, up to a ceiling*). What remains is a straightforward tradeoff with no measurements behind it: a shorter interval reaps dead workers sooner, spawns queued work sooner, and drains scans sooner; a longer one writes less to the journal and gives an arriving agent less to read. Ten minutes is still a guess. Note the context argument weakened considerably — most tends are now read by nobody at the time they run, so their cost is storage and an arriving agent's catch-up rather than sixty full reads a night.
+10. **The tend interval.** *The question changed twice and is now much smaller.* It is no longer "who guarantees the cadence" — a timer does (*Drivers, one core*). Slot idle exists only where an operator set `max_tasks`, since both shape knobs are unbounded by default and an unshaped run never queues; where it does exist it is small for hours-long tasks, and the interval is only one of the two levers on it ([scheduling.md](scheduling.md), *Launch everything, and let the operator bound it*). What remains is a straightforward tradeoff with no measurements behind it: a shorter interval reaps dead workers sooner, spawns queued work sooner, and drains scans sooner; a longer one writes less to the journal and gives an arriving agent less to read. Ten minutes is still a guess. Note the context argument weakened considerably — most tends are now read by nobody at the time they run, so their cost is storage and an arriving agent's catch-up rather than sixty full reads a night.
 
 11. **Eval-set-scoped hooks fire nowhere.** Selection mode returns at `evalset.py:648`; `emit_eval_set_start` and `emit_eval_set_end` are at `:899` and `:937`. A worker never reaches them, correctly — it is not running an eval set. But Steward does not emit them either, so any hook registered at eval-set scope is silently dropped, while the same hook's run- and sample-scoped handlers keep firing. Found concretely in Hawk, where it costs two metrics and, more seriously, arms nothing for a stuck-eval watchdog ([hawk.md](hawk.md)); it applies to any platform that registers at that scope. Either Steward emits the pair around the run it owns — the honest reading, since it *is* the eval set — or Inspect grows a way for an external runner to, which is the same shape as the shared directory operations above. Whichever, the current state is a silent gap rather than a decision.
 

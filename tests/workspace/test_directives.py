@@ -6,7 +6,7 @@ Three claims, and they are the whole point of the file: the front matter is read
 from pathlib import Path
 
 import pytest
-from inspect_steward._schedule import DEFAULT_MAX_WORKERS, DEFAULT_STALL_AFTER
+from inspect_steward._schedule import DEFAULT_STALL_AFTER
 from inspect_steward._workspace import (
     DEFAULT_TEND_INTERVAL,
     REFUSED,
@@ -119,8 +119,8 @@ def test_every_key_that_belongs_elsewhere_says_where(key: str, tmp_path: Path) -
     assert REFUSED[key] in str(caught.value)
 
 
-CEILING: list[tuple[str, int | None, int | None, int]] = [
-    ("nobody expressed one", None, None, DEFAULT_MAX_WORKERS),
+CEILING: list[tuple[str, int | None, int | None, int | None]] = [
+    ("nobody expressed one", None, None, None),
     ("the workspace did", None, 8, 8),
     ("the command line did", 3, None, 3),
     ("the command line outranks the workspace", 3, 8, 3),
@@ -132,11 +132,33 @@ CEILING: list[tuple[str, int | None, int | None, int]] = [
     [(cli, file, expected) for _, cli, file, expected in CEILING],
     ids=[case for case, _, _, _ in CEILING],
 )
-def test_the_worker_ceiling_resolves_most_specific_first(
-    cli: int | None, file: int | None, expected: int
+def test_the_worker_count_resolves_most_specific_first(
+    cli: int | None, file: int | None, expected: int | None
 ) -> None:
     pool = resolve_pool(Directives(max_workers=file), max_workers=cli)
     assert pool.max_workers == expected
+
+
+@pytest.mark.parametrize(
+    ("cli", "file", "expected"),
+    [(cli, file, expected) for _, cli, file, expected in CEILING],
+    ids=[case for case, _, _, _ in CEILING],
+)
+def test_task_concurrency_resolves_the_same_way(
+    cli: int | None, file: int | None, expected: int | None
+) -> None:
+    # the same chain as `max_workers`, and unbounded where nobody said
+    # otherwise -- `None` is the answer rather than the absence of one
+    pool = resolve_pool(Directives(max_tasks=file), max_tasks=cli)
+    assert pool.max_tasks == expected
+
+
+def test_the_two_shape_knobs_are_independent() -> None:
+    # they bound different things -- how much runs, and how few processes it
+    # runs in -- so setting one must not imply anything about the other
+    pool = resolve_pool(Directives(max_workers=2))
+
+    assert (pool.max_workers, pool.max_tasks) == (2, None)
 
 
 PATIENCE: list[tuple[str, str, int]] = [

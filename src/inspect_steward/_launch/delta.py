@@ -137,9 +137,11 @@ class Delta:
     def stopping(self) -> list[str]:
         """Workers that would have to be stopped, by stem.
 
-        **Two reasons, deduplicated.** A worker is stopped because its task is leaving the manifest, or because the directory it is writing to is — and one worker can be both. Signalling the same pid twice would be at best wasted and at worst aimed at whatever inherited the number, so the union is taken here rather than left to the caller.
+        **Two reasons, deduplicated.** A worker is stopped because a task of its is leaving the manifest, or because the directory it is writing to is — and one worker can be both. Signalling the same pid twice would be at best wasted and at worst aimed at whatever inherited the number, so the union is taken here rather than left to the caller.
 
         Archiving rows first, in row order, then the rest of the fleet in the order the scan reported it.
+
+        A stem rather than a stem and a task list: which of a packed worker's tasks are actually going is `wholesale` and `leaving` together, and resolving that needs the worker's own identifiers, which live in the in-flight record rather than in a delta.
         """
         stems = [row.worker for row in self.archiving if row.worker is not None]
         seen = set(stems)
@@ -149,6 +151,22 @@ class Delta:
             if worker not in seen and not seen.add(worker)
         )
         return stems
+
+    @property
+    def leaving(self) -> set[str]:
+        """Identifiers whose logs would be archived, and so whose workers have nothing left to do.
+
+        What a *partial* stop is computed from: intersected with what a worker is actually running, it says which of its tasks to cancel and which to leave alone.
+        """
+        return {row.identifier for row in self.archiving}
+
+    @property
+    def wholesale(self) -> set[str]:
+        """Workers to stop outright whatever they are running, by stem.
+
+        Relocation only. It is not about any task — the directory moved out from under all of them — so there is no subset to compute and every task the worker holds is going.
+        """
+        return set(self.relocated.workers) if self.relocated else set()
 
     @property
     def empty(self) -> bool:
@@ -190,8 +208,14 @@ def compute_delta(
     wanted = {task.identifier: task for task in new.tasks}
     committed = {task.identifier: task for task in (old.tasks if old else [])}
     # a row names *a* worker running its task, which is all a row can say; the
-    # fleet-wide question is answered from the sequence itself
-    by_task = {worker.identifier: worker.worker for worker in running}
+    # fleet-wide question is answered from the sequence itself. One worker can
+    # appear against several rows once a run is packed, which is the case
+    # `Delta.stopping` deduplicates
+    by_task = {
+        identifier: worker.worker
+        for worker in running
+        for identifier in worker.identifiers
+    }
 
     changes = [
         *_added(wanted, committed, by_task),

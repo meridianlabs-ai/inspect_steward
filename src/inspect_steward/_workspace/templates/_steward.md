@@ -7,7 +7,8 @@
 #
 # Uncomment what you want. Anything left commented out uses Steward's default.
 
-# max_workers: 8      # never run more than this many worker processes at once
+# max_tasks: 24       # never run more than this many tasks at once, fleet-wide
+# max_workers: 8      # pack those tasks into this many worker processes
 ---
 
 # _steward.md
@@ -48,11 +49,12 @@ decision you have already made, not making its own.
 
 ## Concurrency envelope
 
-The hard ceiling is `max_workers` in the front matter above — Steward enforces
-that one itself. This section is for the room an agent may move in beneath it,
-which takes judgement rather than a number.
+The hard ceiling is `max_tasks` in the front matter above — Steward enforces
+that one itself, and unset it means every task runs at once. This section is for
+the room an agent may move in beneath it, which takes judgement rather than a
+number.
 
-<!-- e.g. "max_samples up to 40 per worker, and back off on the first sign of
+<!-- e.g. "max_samples up to 40 per task, and back off on the first sign of
      provider throttling rather than riding the limit." -->
 
 ## Notes for whoever reads this next

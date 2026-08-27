@@ -75,8 +75,8 @@ def test_a_worker_survives_its_state_directory_being_deleted(
 
         # the worker is still there, and still says what it is running
         inflight = resolve_inflight(workers.inflight, workers.workers_dir)
-        assert [item.identifier for item in inflight.running] == [
-            manifest.tasks[0].identifier
+        assert [item.identifiers for item in inflight.running] == [
+            (manifest.tasks[0].identifier,)
         ]
         assert inflight.running[0].pid == worker.pid
         assert spawns(next_actions(workers, manifest)) == []
@@ -114,8 +114,8 @@ def test_a_starting_worker_loses_the_document_it_has_not_read_yet(
     # and now that it is gone, exactly one respawn -- from nothing, since the
     # dead worker left no log to resume
     scheduled = spawns(next_actions(workers, manifest))
-    assert [item.identifier for item in scheduled] == [identifier]
-    assert scheduled[0].resume is None
+    assert [item.identifiers for item in scheduled] == [(identifier,)]
+    assert scheduled[0].first.resume is None
 
 
 def test_a_worker_killed_after_its_log_lands_is_not_run_again(
@@ -137,8 +137,8 @@ def test_a_worker_killed_after_its_log_lands_is_not_run_again(
     assert spawns(actions) == []
     # gone, and reported gone, which is what lets its slot be reused
     assert [
-        item.worker.identifier for item in actions if isinstance(item, ReapWorker)
-    ] == [manifest.tasks[0].identifier]
+        item.worker.identifiers for item in actions if isinstance(item, ReapWorker)
+    ] == [(manifest.tasks[0].identifier,)]
 
 
 def test_the_fault_is_not_armed_during_capture(

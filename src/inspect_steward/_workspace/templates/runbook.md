@@ -87,9 +87,9 @@ directly.
 
 ## Tuning inside the envelope
 
-*Not yet written.* `_steward.md` sets bounds — `max_workers` in the front
-matter is the hard ceiling Steward enforces, and the prose says what room you
-have beneath it. The signal is rate limits rather than saturation.
+*Not yet written.* `_steward.md` sets bounds — `max_tasks` in the front matter
+is the hard ceiling Steward enforces, and the prose says what room you have
+beneath it. The signal is rate limits rather than saturation.
 
 ## When to notify
 

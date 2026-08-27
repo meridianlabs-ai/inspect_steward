@@ -51,11 +51,11 @@ class SpawnedWorker:
     worker: str
     """File stem, and the key everything else uses to name this worker: the selection document, the output file, and every line of the in-flight record."""
 
-    identifier: str
-    """Task identifier this worker was spawned for."""
+    identifiers: tuple[str, ...]
+    """Task identifiers this worker was spawned for. One at the default width."""
 
     key: str
-    """Display key from the manifest."""
+    """Display key from the manifest, for the task this worker is named after."""
 
     pid: int
     """Process id."""
@@ -108,10 +108,10 @@ class Fleet:
     """Arguments for the definition (flow spec function args only)."""
 
     def spawn(self, action: SpawnWorker) -> SpawnedWorker:
-        """Spawn a detached worker to run one task.
+        """Spawn a detached worker to run a share of the eval set.
 
         Args:
-            action: The task to run, as `reconcile` decided it.
+            action: The tasks to run, as `reconcile` decided them.
 
         Returns:
             The spawned worker.
@@ -133,7 +133,7 @@ class Fleet:
             )
 
         self.workers_dir.mkdir(parents=True, exist_ok=True)
-        attempt, stem = self._name(action)
+        stem = self._name(action)
 
         # the frontend channel gets this worker's own scratch directory, never
         # the run's: what a definition writes on its way to `eval_set()` is
@@ -166,9 +166,7 @@ class Fleet:
         record_intent(
             self.inflight,
             worker=stem,
-            identifier=action.identifier,
-            key=action.key,
-            attempt=attempt,
+            tasks=action.tasks,
             selection=selection,
             argv=command.argv,
             cwd=command.cwd,
@@ -182,7 +180,7 @@ class Fleet:
                     command,
                     selection,
                     worker=stem,
-                    identifier=action.identifier,
+                    identifiers=action.identifiers,
                 ),
                 stdin=subprocess.DEVNULL,
                 stdout=stream,
@@ -193,8 +191,8 @@ class Fleet:
 
         return SpawnedWorker(
             worker=stem,
-            identifier=action.identifier,
-            key=action.key,
+            identifiers=action.identifiers,
+            key=action.first.key,
             pid=process.pid,
             selection=selection,
             output=output,
@@ -203,17 +201,17 @@ class Fleet:
             process=process,
         )
 
-    def _name(self, action: SpawnWorker) -> tuple[int, str]:
-        """This attempt's number and stem, with the number free to advance.
+    def _name(self, action: SpawnWorker) -> str:
+        """This worker's stem, with its attempt number free to advance.
 
-        `SpawnWorker.attempt` counts what the *decision layer* could see — the logs in the directory and the in-flight record — and both of those can be lost, since `.steward/` is a directory the design tells people they may delete. Two landed logs and a discarded record would number the next attempt 3 when 3 has already been used, and the stem is not merely a label: it names the selection document a live worker is reading and the entry the record folds on, so a collision loses one of the two attempts entirely.
+        `SpawnTask.attempt` counts what the *decision layer* could see — the logs in the directory and the in-flight record — and both of those can be lost, since `.steward/` is a directory the design tells people they may delete. Two landed logs and a discarded record would number the next attempt 3 when 3 has already been used, and the stem is not merely a label: it names the selection document a live worker is reading and the entry the record folds on, so a collision loses one of the two attempts entirely.
 
         The directory it is about to write into is the one witness that outlives the record, so the number is advanced past whatever is already there. Ordinarily nothing is, and this costs one `exists()`.
         """
-        attempt = action.attempt
+        attempt = max(task.attempt for task in action.tasks)
         while (self.workers_dir / f"{worker_stem(action, attempt)}.json").exists():
             attempt += 1
-        return attempt, worker_stem(action, attempt)
+        return worker_stem(action, attempt)
 
 
 def worker_selection(
@@ -224,7 +222,7 @@ def worker_selection(
     There is no upstream writer — the models are a wire format external runners build — so the version is declared from the installed inspect. That cannot skew: a worker is this interpreter.
 
     Args:
-        action: The task to run.
+        action: The tasks to run.
         eval_set_id: Eval set id to stamp into the worker's logs.
         log_dir: Log directory for the worker.
 
@@ -235,7 +233,8 @@ def worker_selection(
         version=EVAL_SET_SELECTION_VERSION,
         eval_set_id=eval_set_id,
         tasks=[
-            EvalSetSelectionTask(identifier=action.identifier, resume=action.resume)
+            EvalSetSelectionTask(identifier=task.identifier, resume=task.resume)
+            for task in action.tasks
         ],
         # always present rather than conditional: `log_dir` is what puts a
         # worker's logs where Steward is watching, so there is no Steward worker
@@ -243,6 +242,15 @@ def worker_selection(
         overrides=EvalSetSelectionOverrides(
             log_dir=log_dir,
             max_samples=action.max_samples,
+            # likewise unconditional, and for a sharper reason: every other
+            # override left unset falls back to what the definition passed, but
+            # `eval_set()` fills `max_tasks` in below the selection branch, so
+            # an unset one falls through to `eval()`'s rule instead -- one task
+            # at a time for a single model, the model count for several. A
+            # packed worker would run its batch sequentially with nobody having
+            # chosen that. The whole batch, because how much runs at once is
+            # bounded fleet-wide by the pour, not here
+            max_tasks=len(action.tasks),
         ),
     )
 
@@ -252,16 +260,27 @@ def worker_stem(action: SpawnWorker, attempt: int | None = None) -> str:
 
     Readable first (the display key), unique second: the identifier hash is what keeps two tasks whose keys sanitize to the same string — or truncate to it — from writing over each other, and the attempt keeps a retry's evidence beside the attempt it replaced.
 
+    A packed worker is named after its first task and says how many more it holds. The digest covers **every** identifier it was given, sorted, so two batches sharing a first task are still distinguishable — and because the digest of a one-element join is the digest of that element, a worker at the default width gets exactly the stem it did before packing existed.
+
     Args:
-        action: The task to run.
+        action: The tasks to run.
         attempt: Attempt number to use in place of the action's, for a caller that has had to advance past a stem already taken (`Fleet._name`).
 
     Returns:
         The stem, with no extension.
     """
-    digest = hashlib.sha256(action.identifier.encode()).hexdigest()[:8]
-    key = safe_filename(action.key, max_length=MAX_KEY_LENGTH)
-    return f"{key}_{digest}_{attempt if attempt is not None else action.attempt}"
+    joined = "\n".join(sorted(action.identifiers))
+    digest = hashlib.sha256(joined.encode()).hexdigest()[:8]
+    name = action.first.key
+    if len(action.tasks) > 1:
+        # a hyphen rather than a `+`, which `safe_filename` rewrites to the
+        # underscore the stem already uses as its field separator
+        name = f"{name}-plus{len(action.tasks) - 1}"
+    key = safe_filename(name, max_length=MAX_KEY_LENGTH)
+    number = (
+        attempt if attempt is not None else max(task.attempt for task in action.tasks)
+    )
+    return f"{key}_{digest}_{number}"
 
 
 def resolve_eval_set_id(log_dir: str, eval_set_id: str | None = None) -> str:
@@ -283,11 +302,17 @@ def resolve_eval_set_id(log_dir: str, eval_set_id: str | None = None) -> str:
 
 
 def _worker_env(
-    command: DefinitionCommand, selection: Path, *, worker: str, identifier: str
+    command: DefinitionCommand,
+    selection: Path,
+    *,
+    worker: str,
+    identifiers: tuple[str, ...],
 ) -> dict[str, str]:
     """Environment for a worker: the ambient one, plus worker mode, plus who it is.
 
     The selection path is inspect's marker and is what scopes a process to this workspace. `STEWARD_WORKER` and `STEWARD_TASK` are Steward's own, and they are what a scan reads instead of opening the selection document — so a worker stays identifiable after `.steward/` is deleted out from under it (`inflight.py`).
+
+    `STEWARD_TASK` holds one identifier per line rather than gaining a plural sibling. A worker at the default width therefore exports exactly the value it always did, so the scan needs no branch and no version of it can be confused about which variable to read.
 
     `INSPECT_EVAL_SET_CAPTURE` is removed rather than left alone. Capture and selection are mutually exclusive, so an exported capture path — from a shell where someone was reading a definition by hand — would turn every worker into a startup error.
     """
@@ -296,7 +321,7 @@ def _worker_env(
         **command.env,
         INSPECT_EVAL_SET_SELECTION: str(selection),
         STEWARD_WORKER: worker,
-        STEWARD_TASK: identifier,
+        STEWARD_TASK: "\n".join(identifiers),
         # no terminal to draw on, and the output file is read by people and by
         # grep rather than by a renderer
         "INSPECT_DISPLAY": "plain",

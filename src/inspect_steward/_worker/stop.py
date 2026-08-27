@@ -18,7 +18,7 @@ That is harmless for the one caller there is today, because a launch only stops 
 import os
 import signal
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum
 
@@ -26,7 +26,7 @@ import psutil
 
 from .._schedule import RunningWorker
 from .._util.process import UNREADABLE
-from .ctl import Unavailable, cancel_task, list_tasks
+from .ctl import TaskRow, Unavailable, cancel_task, list_tasks
 from .inflight import STEWARD_WORKER
 
 TERM_GRACE = 5.0
@@ -56,6 +56,9 @@ class Stopped(StrEnum):
     SURVIVED = "survived"
     """Still running after everything. Reported so the caller can say so — nothing here retries, because a process that outlived `SIGKILL` is wedged in the kernel and no amount of asking again changes that."""
 
+    LEFT = "left"
+    """Still running, deliberately. Some of this process's tasks are wanted and the ones that are not could not be told apart from them, so nothing was stopped — see `_stop`."""
+
 
 @dataclass(frozen=True)
 class Stop:
@@ -64,7 +67,9 @@ class Stop:
     worker: str
     """Worker stem."""
 
-    identifier: str
+    identifiers: tuple[str, ...]
+    """The tasks this was about. Every task the worker holds where the whole process was stopped; the subset that was cancelled where it was not."""
+
     outcome: Stopped
 
     detail: str = ""
@@ -72,40 +77,96 @@ class Stop:
 
     @property
     def graceful(self) -> bool:
-        """Whether this worker's results survived. `GONE` counts: nothing was taken from it."""
+        """Whether the tasks are stopping and their results survived.
+
+        `GONE` counts, because nothing was taken from a worker that had already finished. `LEFT` does not, and that is the whole distinction: it took nothing because it did nothing, so the tasks the caller asked to stop are still running and the caller has to say so. Reporting it as graceful would tell an operator their archived task was dealt with while it goes on writing into `logs/`.
+        """
         return self.outcome in (Stopped.CANCELLED, Stopped.GONE)
 
 
-def stop_workers(workers: Sequence[RunningWorker]) -> list[Stop]:
-    """Stop every one of these workers, preferring to ask over to signal.
+@dataclass(frozen=True)
+class StopRequest:
+    """A worker, and which of its tasks are to be stopped."""
+
+    worker: RunningWorker
+
+    identifiers: tuple[str, ...]
+    """The tasks to stop. Equal to the worker's own list where the whole process goes, and a subset where a packed worker is holding work that is still wanted."""
+
+    @property
+    def whole(self) -> bool:
+        """Whether stopping this leaves the process nothing to do, and so may end it outright."""
+        return set(self.identifiers) >= set(self.worker.identifiers)
+
+
+def stop_workers(
+    requests: Sequence[StopRequest], *, locations: Mapping[str, str] | None = None
+) -> list[Stop]:
+    """Stop the named tasks, preferring to ask over to signal.
 
     The task listing is read **once** for the whole set, which is the property that made `inspect ctl` the right client for mutations in the first place: it spans every live process in a single invocation, so stopping a fleet of ten costs one ~1.3s read rather than ten (`ctl.py`).
+
+    **A process is only ended when nothing wanted is left in it.** At the default width a worker holds one task, so stopping that task and stopping the process are the same act and this is invisible. Once a run is packed they come apart: a task that leaves the manifest may be sharing a process with several that did not, and signalling it would destroy hours of work nobody asked to lose. So a partial stop cancels its tasks individually and lets the process carry on, and only a whole one may escalate to a signal.
 
     **No `reason` parameter, unlike a retune.** `ctl task cancel` takes none, and it needs none: a retune leaves a changed number that only a reason explains, where a cancel leaves a finalized log that says it was cancelled. Why it was cancelled belongs in the caller's own record, which is where the caller already writes it.
 
     Args:
-        workers: The workers to stop, as `resolve_inflight` reported them running.
+        requests: What to stop, as `resolve_inflight` reported the workers running.
+        locations: Log location to task identifier, from the caller's observation of the log directory. Only consulted for a partial stop, which is the one case that has to tell a process's tasks apart; the control channel names the log a task is writing, and this is what turns that into an identifier Steward knows.
 
     Returns:
-        One entry per worker, in the order given. Never raises: a worker that could not be stopped is a fact to report, and one failure must not leave the rest of the set running.
+        One entry per request, in the order given. Never raises: a worker that could not be stopped is a fact to report, and one failure must not leave the rest of the set running.
     """
-    if not workers:
+    if not requests:
         return []
 
-    listing = list_tasks([worker.pid for worker in workers])
-    tasks: dict[int, str] = (
-        {}
-        if isinstance(listing, Unavailable)
-        else {row.pid: row.task_id for row in listing}
-    )
+    listing = list_tasks([request.worker.pid for request in requests])
+    rows: dict[int, list[TaskRow]] = {}
+    if not isinstance(listing, Unavailable):
+        for row in listing:
+            rows.setdefault(row.pid, []).append(row)
     unreadable = listing.detail if isinstance(listing, Unavailable) else ""
 
-    return [_stop(worker, tasks.get(worker.pid), unreadable) for worker in workers]
+    return [
+        _stop(request, rows.get(request.worker.pid, []), unreadable, locations or {})
+        for request in requests
+    ]
 
 
-def _stop(worker: RunningWorker, task_id: str | None, unreadable: str) -> Stop:
-    """Stop one worker, asking first and signalling only if there is nobody to ask."""
-    if task_id is None:
+def _stop(
+    request: StopRequest,
+    rows: list[TaskRow],
+    unreadable: str,
+    locations: Mapping[str, str],
+) -> Stop:
+    """Stop one worker's share, asking first and signalling only if there is nobody to ask."""
+    worker = request.worker
+    if not request.whole:
+        # a packed worker holding work that is still wanted. Its tasks have to
+        # be told apart, and the log each one is writing is what does it -- so
+        # a row Steward cannot place is a row it must not cancel, because the
+        # cost of guessing wrong is cancelling a task somebody still wants
+        wanted = set(request.identifiers)
+        matched = [
+            row
+            for row in rows
+            if row.log_location and locations.get(row.log_location) in wanted
+        ]
+        if len(matched) != len(wanted):
+            return Stop(
+                worker=worker.worker,
+                identifiers=request.identifiers,
+                outcome=Stopped.LEFT,
+                detail=unreadable
+                or (
+                    f"only {len(matched)} of {len(wanted)} tasks could be matched "
+                    f"to what the control channel reported, and the rest of this "
+                    f"process is still wanted"
+                ),
+            )
+        return _cancel(request, matched)
+
+    if not rows:
         # either the fleet listing failed outright, or it succeeded and this
         # process is not running a task -- pre-boundary, or already on its way
         # out. Neither has a task to cancel
@@ -115,13 +176,28 @@ def _stop(worker: RunningWorker, task_id: str | None, unreadable: str) -> Stop:
             or "the control channel reported no task running in this process",
         )
 
-    outcome = cancel_task(task_id)
-    if isinstance(outcome, Unavailable):
-        return _signal(worker, f"the cancel was not accepted ({outcome.detail})")
+    return _cancel(request, rows)
+
+
+def _cancel(request: StopRequest, rows: list[TaskRow]) -> Stop:
+    """Ask for every one of these tasks, escalating only where the whole process is going."""
+    refused = [
+        outcome.detail
+        for row in rows
+        if isinstance(outcome := cancel_task(row.task_id), Unavailable)
+    ]
+    if refused and request.whole:
+        return _signal(
+            request.worker, f"the cancel was not accepted ({'; '.join(refused)})"
+        )
     return Stop(
-        worker=worker.worker,
-        identifier=worker.identifier,
-        outcome=Stopped.CANCELLED,
+        worker=request.worker.worker,
+        identifiers=request.identifiers,
+        # a refused cancel on a partial stop is not escalated: the process is
+        # still running work somebody wants, and there is no signal that ends
+        # one task of it
+        outcome=Stopped.LEFT if refused else Stopped.CANCELLED,
+        detail=f"the cancel was not accepted ({'; '.join(refused)})" if refused else "",
     )
 
 
@@ -134,7 +210,7 @@ def _signal(worker: RunningWorker, detail: str) -> Stop:
         if not _is_worker(worker):
             return Stop(
                 worker=worker.worker,
-                identifier=worker.identifier,
+                identifiers=worker.identifiers,
                 outcome=Stopped.GONE,
                 detail=detail,
             )
@@ -147,14 +223,14 @@ def _signal(worker: RunningWorker, detail: str) -> Stop:
         if _departed(worker, grace):
             return Stop(
                 worker=worker.worker,
-                identifier=worker.identifier,
+                identifiers=worker.identifiers,
                 outcome=outcome,
                 detail=detail,
             )
 
     return Stop(
         worker=worker.worker,
-        identifier=worker.identifier,
+        identifiers=worker.identifiers,
         outcome=Stopped.SURVIVED,
         detail=f"{detail}; pid {worker.pid} outlived SIGKILL",
     )

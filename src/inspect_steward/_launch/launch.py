@@ -41,7 +41,7 @@ from .._timer import (
     unavailable_credentials,
 )
 from .._util.duration import DurationError
-from .._worker import Stop, resolve_inflight, stop_workers
+from .._worker import Stop, StopRequest, resolve_inflight, stop_workers
 from .._workspace import (
     LAUNCHED,
     Claim,
@@ -113,6 +113,7 @@ def launch(
     env_check: bool = True,
     store: str | None = None,
     max_workers: int | None = None,
+    max_tasks: int | None = None,
     max_samples: int | None = None,
     break_stale: bool = True,
 ) -> Launch | Held:
@@ -127,7 +128,8 @@ def launch(
         timer: Arm a timer. `False` launches unsupervised and records that it did.
         env_check: Refuse to arm when a scheduled tend would not inherit this shell's credentials. Checked **before** the capture, so a Hawk config does not spend five minutes resolving packages on the way to a refusal.
         store: Log store for this run — a path, `auto`, or `none` — overriding `INSPECT_STEWARD_STORE`. **Recorded and otherwise inert**: nothing reads a store until publication exists (step 33), and the only validation available before then is that the value is not empty.
-        max_workers: Worker ceiling for the first turn.
+        max_workers: Worker processes for the first turn, overriding `_steward.md`. `None` expresses no preference and defers to the file, which itself defaults to a process per task — it does not request that width.
+        max_tasks: Tasks in flight at once for the first turn, overriding `_steward.md`. `None` defers to the file in the same way.
         max_samples: Sample concurrency for the first turn.
         break_stale: Kill a wedged claim holder and take the claim from it.
 
@@ -177,6 +179,7 @@ def launch(
             interval=interval,
             store=resolved,
             max_workers=max_workers,
+            max_tasks=max_tasks,
             max_samples=max_samples,
         )
 
@@ -193,6 +196,7 @@ def _launch(
     interval: int,
     store: str | None,
     max_workers: int | None,
+    max_tasks: int | None,
     max_samples: int | None,
 ) -> Launch:
     """The launch itself, with the claim in hand for the whole of it."""
@@ -215,10 +219,11 @@ def _launch(
     previous = _log_dir(workspace, committed) if committed is not None else log_dir
 
     inflight = resolve_inflight(workspace.inflight, workspace.workers)
+    logs = _observe(log_dir)
     delta = compute_delta(
         manifest,
         committed,
-        logs=_observe(log_dir),
+        logs=logs,
         archived=_observe(archive_dir(log_dir)),
         running=inflight.running,
         stranded=_observe(previous) if previous != log_dir else None,
@@ -238,7 +243,7 @@ def _launch(
 
     failures: list[str] = []
     restored = _restore(workspace, delta, log_dir, failures)
-    stopped = _stop(workspace, delta, inflight.running, failures)
+    stopped = _stop(workspace, delta, inflight.running, logs, failures)
 
     armed, disarmed, refused = _supervise(workspace, interval, timer=timer)
 
@@ -258,6 +263,7 @@ def _launch(
     turn = tend(
         workspace,
         max_workers=max_workers,
+        max_tasks=max_tasks,
         max_samples=max_samples,
         claim=claim,
     )
@@ -393,15 +399,35 @@ def _stop(
     workspace: Workspace,
     delta: Delta,
     running: list[RunningWorker],
+    logs: ObservedLogs,
     failures: list[str],
 ) -> list[Stop]:
-    """Stop every worker the commit just made pointless.
+    """Stop the work the commit just made pointless.
 
     Two reasons, and `Delta.stopping` has already unioned them. **Its task left the manifest**: `reconcile` deliberately leaves an orphan's logs alone while something is still running it, so a worker left up here writes into `logs/` for hours against a definition nothing agrees with, and its logs are archived only once it stops of its own accord. **Or the log directory left underneath it**: a worker's destination is fixed in its selection document at spawn, so after a relocation the whole fleet is writing where nothing will look, and each task runs again from nothing once its worker exits.
+
+    **What is stopped is tasks, not necessarily processes.** The two coincide at the default width and come apart once a run is packed: a worker holding one archived task and four live ones must lose the one and keep the four. Relocation is the exception and needs no subset — the directory moved out from under everything in the process.
     """
     wanted = set(delta.stopping)
-    targets = [worker for worker in running if worker.worker in wanted]
-    stopped = stop_workers(targets)
+    wholesale = delta.wholesale
+    leaving = delta.leaving
+    targets = [
+        StopRequest(
+            worker=worker,
+            identifiers=(
+                worker.identifiers
+                if worker.worker in wholesale
+                else tuple(
+                    identifier
+                    for identifier in worker.identifiers
+                    if identifier in leaving
+                )
+            ),
+        )
+        for worker in running
+        if worker.worker in wanted
+    ]
+    stopped = stop_workers(targets, locations=_locations(logs))
 
     for stop in stopped:
         if not stop.graceful:
@@ -410,6 +436,18 @@ def _stop(
             )
             steward_log(workspace.log, failures[-1])
     return stopped
+
+
+def _locations(logs: ObservedLogs) -> dict[str, str]:
+    """Log location to task identifier, which is how a control-channel row is named.
+
+    A running task's log is created when it starts, so the observation this launch already read names every task the fleet is working on. The pre-boundary window is the exception, and a worker in it has no row to match either.
+    """
+    return {
+        attempt.location: identifier
+        for identifier, attempts in logs.attempts.items()
+        for attempt in attempts
+    }
 
 
 def _supervise(

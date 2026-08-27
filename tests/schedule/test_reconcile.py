@@ -23,7 +23,6 @@ from inspect_steward._evalset.observe import (
 )
 from inspect_steward._schedule import (
     DEFAULT_MAX_SAMPLES,
-    DEFAULT_MAX_WORKERS,
     DEFAULT_STALL_AFTER,
     ArchiveLog,
     DepartedWorker,
@@ -33,6 +32,7 @@ from inspect_steward._schedule import (
     ReapWorker,
     Reconciliation,
     RunningWorker,
+    SpawnTask,
     SpawnWorker,
     reconcile,
 )
@@ -56,12 +56,16 @@ def live(identifier: str, *, pid: int = 4242) -> RunningWorker:
     reads neither, and a test that supplied them would be asserting they are
     carried rather than that they matter.
     """
-    return RunningWorker(worker=f"w{pid}", identifier=identifier, pid=pid, host="here")
+    return RunningWorker(
+        worker=f"w{pid}", identifiers=(identifier,), pid=pid, host="here"
+    )
 
 
 def dead(identifier: str, *, pid: int | None = 99) -> DepartedWorker:
     """A worker the record accounts for that is no longer running."""
-    return DepartedWorker(worker=f"w{pid}", identifier=identifier, pid=pid, host="here")
+    return DepartedWorker(
+        worker=f"w{pid}", identifiers=(identifier,), pid=pid, host="here"
+    )
 
 
 def spawns(result: Reconciliation) -> list[SpawnWorker]:
@@ -72,8 +76,18 @@ def archives(result: Reconciliation) -> list[ArchiveLog]:
     return [action for action in result.actions if isinstance(action, ArchiveLog)]
 
 
-def keys(workers: list[SpawnWorker]) -> list[str]:
-    return [worker.key for worker in workers]
+def planned(result: Reconciliation) -> list[SpawnTask]:
+    """Every task this turn would start, flattened out of the processes hosting them.
+
+    What most of these tests are actually about: which tasks run, in what order,
+    resuming what. How they are divided into processes is the pour's business
+    and is tested against `pour` directly.
+    """
+    return [task for worker in spawns(result) for task in worker.tasks]
+
+
+def keys(tasks: list[SpawnTask]) -> list[str]:
+    return [task.key for task in tasks]
 
 
 def attempts(log_dir: Path, task: SynthTask, finished: list[int]) -> None:
@@ -142,7 +156,7 @@ def test_one_task(
 
     assert len(spawns(result)) == (1 if spawned else 0)
     if spawned:
-        worker = spawns(result)[0]
+        worker = planned(result)[0]
         assert worker.identifier == TASK.identifier
         assert worker.reason == reason
         # a task that has run before resumes it; one that has not starts fresh
@@ -168,8 +182,8 @@ def test_a_crashed_worker_is_indistinguishable_in_the_log_directory(
     )
 
     assert len(spawns(crashed)) == 1
-    assert spawns(crashed)[0].reason == IncompleteReason.STARTED
-    assert spawns(crashed)[0].resume is not None
+    assert planned(crashed)[0].reason == IncompleteReason.STARTED
+    assert planned(crashed)[0].resume is not None
     assert spawns(alive) == []
     assert alive.summary.running == 1
 
@@ -183,7 +197,7 @@ def test_an_orphan_is_reported_and_not_spawned(tmp_path: Path) -> None:
         manifest, InFlight(), observe_tasks(manifest, observe_logs(tmp_path)), pool=POOL
     )
 
-    assert keys(spawns(result)) == [manifest.tasks[0].key]
+    assert keys(planned(result)) == [manifest.tasks[0].key]
     assert result.summary.orphans == [removed.identifier]
     assert result.summary.states[TaskState.ORPHANED.value] == 1
     # the manifest's own task count excludes them
@@ -204,7 +218,7 @@ def test_spawn_order_transposes_the_crossing() -> None:
 
     # both authored orders survive; only the nesting flips, so each task
     # completes on every model before the next task starts
-    assert keys(spawns(result)) == [
+    assert keys(planned(result)) == [
         "sweep[default]@mockllm/model (difficulty=easy)",
         "sweep[default]@mockllm/model2 (difficulty=easy)",
         "sweep[default]@mockllm/model (difficulty=hard)",
@@ -218,7 +232,7 @@ def test_the_transposition_is_a_no_op_for_a_single_model_sweep() -> None:
 
     result = reconcile(manifest, InFlight(), nothing_run(manifest), pool=Pool(16))
 
-    assert [worker.identifier for worker in spawns(result)] == [
+    assert [task.identifier for task in planned(result)] == [
         task.identifier for task in tasks
     ]
 
@@ -234,13 +248,15 @@ def test_one_task_per_model_goes_out_first() -> None:
     result = reconcile(manifest, InFlight(), nothing_run(manifest), pool=Pool(3))
 
     model_of = {task.identifier: task.model for task in manifest.tasks}
-    assert {model_of[worker.identifier] for worker in spawns(result)} == set(models)
+    assert {model_of[task.identifier] for task in planned(result)} == set(models)
 
 
-def test_the_ceiling_splits_pending_into_actions_and_a_queue() -> None:
+def test_max_tasks_splits_pending_into_actions_and_a_queue() -> None:
     manifest = synth_manifest([SynthTask("t", args={"n": n}) for n in range(10)])
 
-    result = reconcile(manifest, InFlight(), nothing_run(manifest), pool=Pool(4))
+    result = reconcile(
+        manifest, InFlight(), nothing_run(manifest), pool=Pool(max_tasks=4)
+    )
 
     assert len(spawns(result)) == 4
     assert len(result.queued) == 6
@@ -249,7 +265,9 @@ def test_the_ceiling_splits_pending_into_actions_and_a_queue() -> None:
     assert result.summary.spawning == 4 and result.summary.queued == 6
 
 
-def test_below_the_ceiling_there_is_no_queue() -> None:
+def test_fewer_processes_than_tasks_is_a_queue_only_when_max_tasks_says_so() -> None:
+    # `max_workers` alone never queues anything: it says how many processes the
+    # run uses, and everything pending is poured into them
     manifest = synth_manifest([SynthTask("t", args={"n": n}) for n in range(3)])
 
     result = reconcile(manifest, InFlight(), nothing_run(manifest), pool=Pool(8))
@@ -258,33 +276,55 @@ def test_below_the_ceiling_there_is_no_queue() -> None:
     assert result.queued == []
 
 
-def test_running_workers_take_slots_from_the_ceiling() -> None:
-    # the ceiling is on total workers, not on this turn's spawns: eight running
-    # and five pending under a ceiling of ten spawns two, not five
+def test_running_tasks_count_against_max_tasks() -> None:
+    # the bound is on tasks in flight, not on this turn's spawns: eight running
+    # and five pending under a limit of ten places two, not five
     manifest = synth_manifest([SynthTask("t", args={"n": n}) for n in range(13)])
     eight = [
         live(task.identifier, pid=1000 + n) for n, task in enumerate(manifest.tasks[:8])
     ]
 
     result = reconcile(
-        manifest, InFlight(running=eight), nothing_run(manifest), pool=Pool()
+        manifest,
+        InFlight(running=eight),
+        nothing_run(manifest),
+        pool=Pool(max_tasks=10),
     )
 
-    assert len(spawns(result)) == 2
+    assert sum(len(spawn.tasks) for spawn in spawns(result)) == 2
     assert len(result.queued) == 3
 
 
-def test_the_default_ceiling_owes_nothing_to_the_hardware() -> None:
-    # a worker is on the CPU in bursts and waiting on a model in between, so
-    # the ceiling is a resource guard the user tunes, not a core count
+def test_running_workers_count_against_max_workers() -> None:
+    # and the process bound is counted the same way, one turn at a time: eight
+    # processes alive under a limit of ten leaves room for two more, which the
+    # five pending tasks are poured into rather than queueing behind
+    manifest = synth_manifest([SynthTask("t", args={"n": n}) for n in range(13)])
+    eight = [
+        live(task.identifier, pid=1000 + n) for n, task in enumerate(manifest.tasks[:8])
+    ]
+
+    result = reconcile(
+        manifest,
+        InFlight(running=eight),
+        nothing_run(manifest),
+        pool=Pool(max_workers=10),
+    )
+
+    assert [len(spawn.tasks) for spawn in spawns(result)] == [3, 2]
+    assert result.queued == []
+
+
+def test_an_unshaped_run_puts_every_task_in_a_process_of_its_own() -> None:
+    # both knobs unbounded is the default, and it is the widest possible shape:
+    # nothing waits and nothing shares a process
     manifest = synth_manifest([SynthTask("t", args={"n": n}) for n in range(30)])
 
-    default = reconcile(manifest, InFlight(), nothing_run(manifest), pool=Pool())
-    cranked = reconcile(manifest, InFlight(), nothing_run(manifest), pool=Pool(30))
+    result = reconcile(manifest, InFlight(), nothing_run(manifest), pool=Pool())
 
-    assert DEFAULT_MAX_WORKERS == 10
-    assert len(spawns(default)) == 10 and len(default.queued) == 20
-    assert len(spawns(cranked)) == 30 and cranked.queued == []
+    assert len(spawns(result)) == 30
+    assert all(len(spawn.tasks) == 1 for spawn in spawns(result))
+    assert result.queued == []
 
 
 def test_convergence_and_idempotence() -> None:
@@ -298,9 +338,7 @@ def test_convergence_and_idempotence() -> None:
 
     # once the spawns have happened, the next call has nothing to do
     launched = InFlight(
-        running=[
-            live(worker.identifier, pid=n) for n, worker in enumerate(spawns(first))
-        ]
+        running=[live(task.identifier, pid=n) for n, task in enumerate(planned(first))]
     )
     settled = reconcile(manifest, launched, observed, pool=POOL)
 
@@ -420,7 +458,7 @@ def test_the_attempt_number_counts_every_try_steward_knows_about(
         pool=Pool(max_workers=8, stall_after=99),
     )
 
-    assert spawns(result)[0].attempt == expected
+    assert planned(result)[0].attempt == expected
 
 
 def test_a_manifest_from_a_different_inspect_is_refused() -> None:
@@ -699,7 +737,7 @@ def test_a_stalled_task_frees_the_slot_it_was_holding(tmp_path: Path) -> None:
 
     # the stuck task is first in the manifest, so without the guard it would
     # take the only slot every turn and the healthy one would never run
-    assert keys(spawns(result)) == [manifest.tasks[1].key]
+    assert keys(planned(result)) == [manifest.tasks[1].key]
 
 
 def test_every_attempt_of_an_orphan_is_archived(tmp_path: Path) -> None:

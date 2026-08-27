@@ -43,7 +43,9 @@ def empty() -> ObservedLogs:
 
 def running(task: SynthTask, worker: str) -> RunningWorker:
     """A worker alive on this task. The pid is never signalled from here — the delta is pure — so it only has to be a number."""
-    return RunningWorker(worker=worker, identifier=task.identifier, pid=1, host="here")
+    return RunningWorker(
+        worker=worker, identifiers=(task.identifier,), pid=1, host="here"
+    )
 
 
 @pytest.mark.parametrize(
@@ -377,6 +379,61 @@ def test_a_relocation_stops_every_live_worker(tmp_path: Path) -> None:
     assert delta.relocated is not None
     assert delta.relocated.workers == ("addition_aaa_1", "echo_bbb_1")
     assert delta.stopping == ["addition_aaa_1", "echo_bbb_1"]
+
+
+def test_a_packed_worker_loses_only_the_task_that_left(tmp_path: Path) -> None:
+    """Stopping the process would cost the tasks nobody asked to stop.
+
+    At the default width a task leaving the manifest and its process ending are
+    the same act. Packed they come apart, and the delta has to say which of the
+    two a caller is being told about — `leaving` is the subset, `wholesale` the
+    processes that go regardless.
+    """
+    logs = tmp_path / "logs"
+    write_log(logs, ECHO)
+    packed = RunningWorker(
+        worker="batch_abc_1",
+        identifiers=(ADDITION.identifier, ECHO.identifier),
+        pid=1,
+        host="here",
+    )
+
+    delta = compute_delta(
+        synth_manifest([ADDITION]),
+        synth_manifest([ADDITION, ECHO]),
+        logs=observe_logs(str(logs)),
+        archived=empty(),
+        running=[packed],
+    )
+
+    # the process is named, because something about it has to change
+    assert delta.stopping == ["batch_abc_1"]
+    # but only the departed task is going, so the survivor keeps running
+    assert delta.leaving == {ECHO.identifier}
+    assert delta.wholesale == set()
+
+
+def test_a_relocation_takes_a_packed_worker_whole(tmp_path: Path) -> None:
+    # the directory moved out from under everything in the process, so there is
+    # no subset to compute and nothing in it is worth keeping where it is
+    packed = RunningWorker(
+        worker="batch_abc_1",
+        identifiers=(ADDITION.identifier, ECHO.identifier),
+        pid=1,
+        host="here",
+    )
+
+    delta = compute_delta(
+        synth_manifest([ADDITION, ECHO]),
+        synth_manifest([ADDITION, ECHO]),
+        logs=ObservedLogs(log_dir=str(tmp_path / "logs2")),
+        archived=empty(),
+        running=[packed],
+        stranded=ObservedLogs(log_dir=str(tmp_path / "logs")),
+    )
+
+    assert delta.wholesale == {"batch_abc_1"}
+    assert delta.leaving == set()
 
 
 def test_a_worker_named_by_both_a_relocation_and_an_archive_row_is_stopped_once(

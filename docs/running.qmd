@@ -86,29 +86,51 @@ shell closing, or the machine you launched from going to sleep.
 
 ### How many run at once
 
-The ceiling is **10 concurrent workers** by default, and you are expected to
-raise it once a run is behaving:
+By default, all of them — every task starts immediately, in a process of its
+own. Two keys narrow that, and they do different things:
 
 ``` yaml
 ---
-max_workers: 24
+max_tasks: 24      # how many tasks may run at once
+max_workers: 8     # how many processes those are divided into
 ---
 ```
 
-in [`_steward.md`](directives.qmd), or `--max-workers` for one turn. It is a
-resource guard — memory, file descriptors, how much simultaneous spike a box
-should be asked to absorb — rather than a parallelism budget, which is why it is
-a flat number rather than something derived from your core count. Ten workers on
-four cores is entirely ordinary: a worker is on the CPU in bursts and waiting on
-a model API in between.
+in [`_steward.md`](directives.qmd), or `--max-tasks` / `--max-workers` for one
+turn. A flag overrides the file for that turn only; omitting it defers to the
+file rather than clearing it, so a workspace that sets either key cannot be
+widened back to unbounded from the command line — edit the file for that.
 
-Anything past the ceiling queues. Steward spawns **task-major** — every model
-for the first task, then every model for the second — rather than in the order
-enumeration happens to produce, which is model-major. That matters for a reason
-that only shows up when a run is interrupted: stop a model-major sweep halfway
-and one model is complete and the other untouched, so the arms cannot be
-compared at all. Task-major means a halted run is still a comparison. It also
-spreads load across several rate-limit buckets instead of hammering one.
+**`max_tasks` is the one that controls load.** Total concurrent samples is
+`tasks running × max_samples`, so this is what you reach for when a provider
+starts rate-limiting you or the box starts swapping. Anything past it queues and
+starts as earlier tasks finish.
+
+**`max_workers` only changes the packaging.** Fewer processes than tasks means
+each process runs several, which never changes how much is in flight — it buys
+back the startup cost a process pays. That is a second or two for a plain
+script, but for a frontend that installs packages or resolves secrets on every
+invocation it is the dominant cost of a large sweep, and five hundred small
+tasks can be half an hour of pure startup. `max_workers: 1` runs the whole eval
+set in one process.
+
+What you give up by packing is crash isolation: a process that dies takes
+whatever its tasks had not finished. Tasks it already completed have landed
+their logs, and the rest resume from where they got to, so the loss is partial
+progress rather than work — but it is the reason the default is one task per
+process, and the reason to pack only when startup cost is actually hurting you.
+
+Neither key is derived from your core count, deliberately. A worker is on the
+CPU in bursts and waiting on a model API in between, so ten processes on four
+cores is entirely ordinary.
+
+Steward spawns **task-major** — every model for the first task, then every model
+for the second — rather than in the order enumeration happens to produce, which
+is model-major. That matters for a reason that only shows up when a run is
+interrupted: stop a model-major sweep halfway and one model is complete and the
+other untouched, so the arms cannot be compared at all. Task-major means a
+halted run is still a comparison. It also spreads load across several rate-limit
+buckets instead of hammering one.
 
 ### Errors are counted, not fixed
 

@@ -465,6 +465,7 @@ def test_the_observation_carries_the_settings_a_later_turn_reads_back(
     (recorded,) = observations(workspace)
     assert recorded["settings"] == {
         "max_workers": 4,
+        "max_tasks": None,
         "max_samples": 7,
         "stall_after": 2,
     }

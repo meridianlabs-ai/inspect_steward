@@ -105,13 +105,19 @@ _LABELS = {
     "--max-workers",
     type=click.IntRange(min=1),
     default=None,
-    help="Ceiling on concurrent workers for the first turn (overrides _steward.md).",
+    help="Worker processes for the first turn, or unset for a process per task (overrides _steward.md).",
+)
+@click.option(
+    "--max-tasks",
+    type=click.IntRange(min=1),
+    default=None,
+    help="Tasks in flight at once for the first turn (overrides _steward.md).",
 )
 @click.option(
     "--max-samples",
     type=click.IntRange(min=1),
     default=None,
-    help="Sample concurrency per worker for the first turn (overrides the definition).",
+    help="Sample concurrency per task for the first turn (overrides the definition).",
 )
 @click.option(
     "--no-break-claim",
@@ -136,6 +142,7 @@ def launch_command(
     env_check: bool,
     store: str | None,
     max_workers: int | None,
+    max_tasks: int | None,
     max_samples: int | None,
     no_break_claim: bool,
     output_json: bool,
@@ -169,6 +176,7 @@ def launch_command(
             env_check=env_check,
             store=store,
             max_workers=max_workers,
+            max_tasks=max_tasks,
             max_samples=max_samples,
             break_stale=not no_break_claim,
         )

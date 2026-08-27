@@ -12,6 +12,7 @@ The one artifact that reaches a human who is not in a session. On a machine with
 from typing import TYPE_CHECKING
 
 from .._evalset.observe import TaskState
+from .._schedule import Summary
 from .._util.jsonl import utc_now
 from .items import HEADINGS, by_owner, verdict_line
 from .progress import short_keys
@@ -57,9 +58,8 @@ def status_markdown(result: "TendResult", *, header: bool = True) -> str:
 
     counts = [
         f"{summary.tasks} tasks",
-        f"{summary.running} running",
+        f"{summary.running} running{_shape(summary)}",
         f"{summary.queued} queued",
-        f"ceiling {summary.max_workers}",
     ]
     if result.executed:
         counts.insert(2, f"{len(result.spawned)} spawned this turn")
@@ -69,6 +69,20 @@ def status_markdown(result: "TendResult", *, header: bool = True) -> str:
     lines.extend(_progress(result))
     lines.extend(_items(result))
     return "\n".join(lines)
+
+
+def _shape(summary: Summary) -> str:
+    """How the running tasks are divided, and against what the operator allowed.
+
+    Silent where nothing is set and nothing is packed, which is the default run — the shape is then *everything, one process each* and saying so on every line would be noise. A limit or a packed process is a fact about why the number is what it is, and appears.
+    """
+    parts: list[str] = []
+    if summary.max_tasks is not None:
+        parts.append(f"of {summary.max_tasks}")
+    if summary.workers != summary.running or summary.max_workers is not None:
+        allowed = "" if summary.max_workers is None else f"/{summary.max_workers}"
+        parts.append(f"in {summary.workers}{allowed} workers")
+    return f" ({', '.join(parts)})" if parts else ""
 
 
 def _qualified(result: "TendResult") -> str:
