@@ -65,6 +65,8 @@ The sequence matters more than the list, and one ordering choice is worth statin
 10. **The timer**, and then **`launch`** — in that order, because launch is *capture, commit, arm, tend* and therefore a composition of the two items before it rather than a peer of either.
 11. **Worker startup at scale** — the identity facets that let inspect prune unselected tasks before constructing them, and the measured memory projection a wide run is judged by. Landed with upstream item 5.
 
+**Gate passed** — a fifteen-task sweep runs a process per task, survives a `kill -9` of one worker, preserves the crashed worker's partial log, escalates a task that stops making progress, and converges. Each worker constructed its own task and not the other fourteen, which is early pruning demonstrated through Steward rather than upstream ([plan.md](plan.md), *Gate M2*).
+
 What M2 deliberately lacks: it does not notice anything. Tasks run, logs land, a human reads `status`. Errors are visible as counts, not as anomalies with a lifecycle.
 
 ### 3.2 M3 — walk away

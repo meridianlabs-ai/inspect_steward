@@ -103,10 +103,11 @@ def echo_turn(result: TendResult, *, table: bool = True) -> None:
             waiting = "waiting"
         click.echo(f"{summary.queued} {waiting}")
 
-    # what the run's width costs, from the capture that read the definition.
-    # Silent when nothing measured it, which is every manifest committed before
-    # the measurement existed -- and silent again once inspect prunes tasks
-    # early, since the figure will have stopped describing a worker
+    # what the run's width can cost to start, from the capture that read the
+    # definition. A ceiling rather than an estimate, since capture builds every
+    # task and a worker builds its own. Silent when nothing measured it, which
+    # is every manifest committed before the measurement existed. The only
+    # place this is printed -- `launch` echoes a turn like every other verb
     if (line := _cost_line(summary)) is not None:
         click.echo(line)
 

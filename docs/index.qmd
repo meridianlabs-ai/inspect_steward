@@ -21,8 +21,10 @@ tbl-colwidths: [30,70]
   .overview-hero .overview-diagram {
     float: none;
     order: 99;
+    width: 100%;
     margin: 0.5rem auto 0;
   }
+  .overview-hero .overview-diagram img { width: 100%; }
 }
 </style>
 ```
@@ -40,7 +42,7 @@ Inspect Steward is a system for automated execution and supervision of long-runn
 
 - Slack notifications to keep operators apprised of status and pending decisions.
 
-- Works with a standard Eval Set, as well as with runners like [Inspect Flow](https://meridianlabs-ai.github.io/inspect_flow/) and [Inspect Hawk](https://hawk.metr.org).
+- Works with a standard [Eval Set](https://inspect.aisi.org.uk/eval-sets.html), as well as with runners like [Inspect Flow](https://meridianlabs-ai.github.io/inspect_flow/) and [Inspect Hawk](https://hawk.metr.org).
 ::::
 
 

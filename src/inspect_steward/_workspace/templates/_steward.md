@@ -7,6 +7,7 @@
 #
 # Uncomment what you want. Anything left commented out uses Steward's default.
 
+# tend_interval: 10m  # how often a scheduled tend runs (always with a unit)
 # max_tasks: 24       # never run more than this many tasks at once, fleet-wide
 # max_workers: 8      # pack those tasks into this many worker processes
 ---

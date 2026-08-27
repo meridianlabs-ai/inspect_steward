@@ -12,7 +12,6 @@ from typing import NoReturn
 
 import click
 
-from .._evalset.cost import fleet_width, projection
 from .._evalset.detect import DefinitionType
 from .._launch import Change, Delta, Launch, LaunchError, launch
 from .._util.duration import format_duration
@@ -239,12 +238,9 @@ def _echo_launch(result: Launch, root: Path) -> None:
             f"— that work does not run again"
         )
 
-    # what this run's width will cost, measured rather than guessed at: capture
-    # just constructed every task in the eval set, which is the same startup
-    # work each worker does. Reported at the launch because that is where the
-    # width is chosen, and silent when nothing measured it
-    if (line := _cost_line(result)) is not None:
-        click.echo(line)
+    # the startup-memory bound is not printed here: `echo_turn` below prints it
+    # for every verb, and a launch always has a turn to echo, so a line of its
+    # own only ever duplicated that one (found by running the M2 gate)
     for stop in result.stopped:
         click.echo(f"stopped worker {stop.worker} ({stop.outcome.value})")
     for failure in result.failures:
@@ -253,24 +249,6 @@ def _echo_launch(result: Launch, root: Path) -> None:
     if result.turn is not None:
         click.echo("")
         echo_turn(result.turn)
-
-
-def _cost_line(result: Launch) -> str | None:
-    """What a fleet of this shape can cost to start, or `None` if unmeasured.
-
-    The width is the run's eventual peak rather than what the first turn spawns: an operator reading this is deciding how wide to run, and *three processes so far* answers a different question from *five hundred by morning*.
-    """
-    if result.turn is None:
-        return None
-    summary = result.turn.summary
-    return projection(
-        summary.capture_rss,
-        fleet_width(
-            len(result.manifest.tasks),
-            max_workers=summary.max_workers,
-            max_tasks=summary.max_tasks,
-        ),
-    )
 
 
 def delta_lines(delta: Delta, *, root: Path | None = None) -> list[str]:

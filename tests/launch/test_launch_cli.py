@@ -135,6 +135,32 @@ def test_a_launch_arms_a_timer_and_writes_itself_down(
     assert event["definition"] == DEFINITION
 
 
+def test_the_startup_memory_bound_is_printed_once(
+    workspace: Workspace, capture: FakeCapture
+) -> None:
+    """A launch echoes a turn like every other verb, so it must not say this itself.
+
+    Found by running the M2 gate rather than by a test: `launch` printed the
+    line and then echoed a turn that printed it again, identically, because
+    both derive the width from the same manifest task count. Pinned as a count
+    rather than as a presence, since presence is what was already true.
+    """
+    measured = capture.manifest.model_copy(
+        update={
+            "source": capture.manifest.source.model_copy(
+                update={"capture_rss": 1 << 30}
+            )
+        }
+    )
+    capture.manifest = measured
+    write_manifest(measured, workspace.manifest)
+
+    result = run()
+
+    assert result.exit_code == 0, result.output
+    assert result.output.count("startup memory:") == 1
+
+
 def test_an_additive_delta_is_committed_without_being_asked(
     workspace: Workspace, capture: FakeCapture
 ) -> None:
