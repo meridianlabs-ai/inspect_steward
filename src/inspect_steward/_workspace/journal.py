@@ -10,6 +10,7 @@ State is derived from this file rather than stored beside it (workflow.md, *Stat
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
+from typing import cast
 
 from .._util.jsonl import (
     DamagedLine,
@@ -26,6 +27,7 @@ __all__ = [
     "COLLECTED",
     "DISARMED",
     "LAUNCHED",
+    "OBSERVATION",
     "PAUSED",
     "RAISED",
     "RESUMED",
@@ -51,6 +53,16 @@ __all__ = [
     "summarize",
     "utc_now",
 ]
+
+OBSERVATION = "observation"
+"""Journal event: what one turn saw, and the settings it saw it under.
+
+Written by every executed turn (`_tend.turn`), whether or not anything happened, because an agent reads the run as a **time series** and its own memory does not survive a session boundary — there are several of those in a night. If the series is not written down it does not exist, and the 6am agent inherits a list of open items with no idea which are getting worse (workflow.md, *The journal records observations, not only decisions*).
+
+It is also what makes degrading `_steward.md` possible: the settings in force are recorded here, so a turn that cannot parse the file has somewhere to read the last good ones from.
+
+Named here with the other event types rather than beside its writer because two folds read it: the next turn diffs its `items` to find what appeared and what resolved, and `read_raised` uses the same list to expire a hand-off whose item is gone. It is the only record of a condition having *stopped* being true.
+"""
 
 ACKNOWLEDGED = "acknowledged"
 """Journal event: somebody looked at an item and accepted it.
@@ -270,18 +282,41 @@ def read_acks(events: list[JournalEvent]) -> dict[str, Ack]:
 
 
 def read_raised(events: list[JournalEvent]) -> dict[str, Raised]:
-    """Fold a journal down to what the agent has handed to its owner.
+    """Fold a journal down to what the agent has handed to its owner, and has not handed off twice.
 
-    Keyed on the **item id** for the same reason `read_acks` is, and it buys the same property: a stall raised at attempt 2 does not raise the one at attempt 3, because the attempt count is in the id. So re-entry needs no expiry rule — a condition that materially changes arrives as new work, and one that does not stays quiet.
+    Keyed on the **item id** for the same reason `read_acks` is, and for most kinds that is the whole story: a stall raised at attempt 2 does not raise the one at attempt 3, because the attempt count is in the id.
+
+    **A hand-off expires when a turn observes the item gone**, which the ids alone cannot express. Not every id encodes an instance — a park is keyed on its task, deliberately, so that one item stays stable while several samples in it wait rather than churning as each is answered. Without expiry that stability becomes silence: the first park is raised, somebody answers it, a second approval arrives in the same task hours later, and the id it re-uses is still marked handed-off, so `collect` sets aside a decision nobody has been told about. An observation records the ids that were open when it was written, so an id absent from one is a condition that ended — and a hand-off refers to *the episode it was made about*, which is over.
+
+    An acknowledgment deliberately does **not** expire this way. The two acts differ in what they are about: raising says *I told somebody about this*, which stops being true of a condition that has been and gone, while acking says *this is accepted*, which stays true of the thing that was accepted however many times it recurs.
+
+    The expiry is only as fine as the tend cadence, which is worth stating rather than hiding: a condition that appeared and cleared entirely between two turns was never observed to resolve, so a hand-off made inside that window survives it. What that costs is one un-repeated hand-off in the case where somebody is plainly present and answering.
 
     Args:
         events: Events in file order, as `read_journal` returns them.
 
     Returns:
-        The most recent hand-off per item id.
+        The most recent hand-off per item id still open since it was made.
     """
     raised: dict[str, Raised] = {}
     for event in events:
+        if event.type == OBSERVATION:
+            open_ids = event.payload.get("items")
+            # a payload with no item list is a turn this version cannot read
+            # the open set from, not a turn that saw nothing -- expiring on it
+            # would clear every hand-off in the file
+            if isinstance(open_ids, list):
+                still_open = {
+                    entry
+                    for entry in cast(list[object], open_ids)
+                    if isinstance(entry, str)
+                }
+                raised = {
+                    identifier: hand_off
+                    for identifier, hand_off in raised.items()
+                    if identifier in still_open
+                }
+            continue
         if event.type != RAISED:
             continue
         identifier = event.payload.get("id")

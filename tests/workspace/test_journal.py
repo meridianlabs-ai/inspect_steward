@@ -17,6 +17,7 @@ from inspect_steward._workspace import (
     ARMED,
     COLLECTED,
     DISARMED,
+    OBSERVATION,
     PAUSED,
     RAISED,
     RESUMED,
@@ -320,6 +321,49 @@ def test_raising_folds_per_item_and_keeps_its_note(tmp_path: Path) -> None:
     # optional where an ack's reason is required: handing a decision off does
     # not owe the account that disposing of one does
     assert raised["stalled:t:2"].note == ""
+
+
+def test_a_hand_off_expires_once_a_turn_sees_the_item_gone(tmp_path: Path) -> None:
+    # a park is keyed on its task, so a second approval hours later re-uses the
+    # id of the one already answered. Without expiry the agent's queue would
+    # set aside a decision nobody has been told about
+    journal = tmp_path / "journal.jsonl"
+    append_event(journal, OBSERVATION, items=["parked:alpha"])
+    append_event(journal, RAISED, id="parked:alpha", note="asked in #evals")
+    append_event(journal, OBSERVATION, items=["parked:alpha"])
+
+    events = read_journal(journal).events
+    assert set(read_raised(events)) == {"parked:alpha"}, "still parked, still raised"
+
+    # answered: the item is gone from what the turn saw
+    append_event(journal, OBSERVATION, items=[])
+    # ...and a fresh park in the same task arrives at the same id
+    append_event(journal, OBSERVATION, items=["parked:alpha"])
+
+    assert read_raised(read_journal(journal).events) == {}
+
+
+def test_an_observation_that_lists_nothing_expires_nothing(tmp_path: Path) -> None:
+    # an older turn, or one this version cannot read the open set from, is not
+    # a turn that saw no items -- treating it as one would clear the file
+    journal = tmp_path / "journal.jsonl"
+    append_event(journal, RAISED, id="drift:abc")
+    append_event(journal, OBSERVATION, running=2)
+
+    assert set(read_raised(read_journal(journal).events)) == {"drift:abc"}
+
+
+def test_an_acknowledgment_outlives_the_condition_it_disposed_of(
+    tmp_path: Path,
+) -> None:
+    # the asymmetry with raising, and the reason for it: *I told somebody* stops
+    # being true of a condition that has been and gone, where *this is accepted*
+    # stays true of the thing that was accepted
+    journal = tmp_path / "journal.jsonl"
+    append_event(journal, ACKNOWLEDGED, id="drift:abc", by="human", reason="on purpose")
+    append_event(journal, OBSERVATION, items=[])
+
+    assert set(read_acks(read_journal(journal).events)) == {"drift:abc"}
 
 
 Fold = Callable[[list[JournalEvent]], object]

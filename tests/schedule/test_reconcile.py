@@ -740,6 +740,44 @@ def test_a_stalled_task_frees_the_slot_it_was_holding(tmp_path: Path) -> None:
     assert keys(planned(result)) == [manifest.tasks[1].key]
 
 
+def test_a_worker_waiting_on_a_person_is_neither_reaped_nor_replaced(
+    tmp_path: Path,
+) -> None:
+    """A parked worker holds its slot, and that is the intended behaviour.
+
+    Its process is alive, so it lands in `running`, occupies a slot and
+    suppresses a respawn; the stall guard is consulted only for a task that
+    needs spawning, which a running one does not. Nothing here knows what a
+    park *is* — which is the point, and why this is worth pinning: a refactor
+    that taught the guard to look at how long a running task has been quiet
+    would kill the one worker somebody is on their way to answer.
+
+    The consequence is load-bearing rather than incidental: enough parked
+    workers stall a fleet, and at the ceiling they stop it, which is exactly
+    what the verdict reports.
+    """
+    healthy, waiting = SynthTask("healthy"), SynthTask("waiting")
+    manifest = synth_manifest([waiting, healthy])
+    # the log a parked worker leaves: an attempt that started and got nowhere,
+    # several times over -- enough to trip the guard if anything asked it
+    attempts(tmp_path, waiting, [4, 4, 4])
+    holding = live(manifest.tasks[0].identifier)
+
+    result = reconcile(
+        manifest,
+        InFlight(running=[holding]),
+        observe_tasks(manifest, observe_logs(tmp_path)),
+        pool=Pool(max_workers=1),
+    )
+
+    assert result.actions == []
+    assert result.summary.running == 1
+    assert result.summary.stalled == []
+    # and the slot it is holding is genuinely held: the healthy task waits
+    assert keys(planned(result)) == []
+    assert keys(result.queued) == [manifest.tasks[1].key]
+
+
 def test_every_attempt_of_an_orphan_is_archived(tmp_path: Path) -> None:
     """All of them, not only the current one.
 

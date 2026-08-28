@@ -209,9 +209,9 @@ def _progress(result: "TendResult") -> list[str]:
         notes.append(f"All tasks ran against `{short.model}`.")
     if scored:
         named = {row.headline_name for row in rows if row.headline_name is not None}
-        # the convention has to be legible, because nothing in a log marks a
-        # metric as primary and a reader who cannot see which one was picked
-        # cannot tell a convention from a guess (roadmap.md §5, item 14)
+        # which metric it is has to be legible whether the task declared one or
+        # fell back to the first of the first score: a bare number in a column
+        # is not self-describing, and two tasks can land on different metrics
         notes.append(f"Score is {' / '.join(sorted(named))}.")
     if notes:
         lines += ["", " ".join(notes)]
@@ -251,7 +251,7 @@ def _items(result: "TendResult", *, for_agent: bool = False) -> list[str]:
     for owner, group in by_owner(shown):
         lines.extend([f"### {HEADINGS[owner]}", ""])
         for item in group:
-            trailer = f"`{item.id}`" if item.acknowledgeable else "_transient_"
+            trailer = f"`{item.id}`" if item.addressable else "_transient_"
             if item.action is not None:
                 trailer = f"`{item.action}` · {trailer}"
             if item.raised:

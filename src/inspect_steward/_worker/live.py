@@ -62,6 +62,27 @@ class LiveConnections:
 
 
 @dataclass(frozen=True)
+class LiveParked:
+    """Samples in this task waiting on a person, and what they are waiting for.
+
+    A detached worker has no terminal, so an approval or an `ask_user` question routes to the ACP server the worker binds and waits there — indefinitely, holding its slot, its sandbox and its model connections. Nothing else Steward reads says this: the sample is `running`, its transcript shows a pending tool call, and it will still show one tomorrow morning.
+    """
+
+    approvals: int = 0
+    questions: int = 0
+
+    functions: tuple[str, ...] = ()
+    """The tool functions awaiting approval, sorted and deduplicated.
+
+    The **name only**. A request's arguments and an `ask_user` prompt are model-generated text, and Steward's summary is relayed verbatim by an agent that then acts on it; a function name is structural, so it is the part that can be repeated without carrying a model's words into an instruction.
+    """
+
+    @property
+    def total(self) -> int:
+        return self.approvals + self.questions
+
+
+@dataclass(frozen=True)
 class LiveTask:
     """What one worker says about itself right now."""
 
@@ -71,6 +92,7 @@ class LiveTask:
     samples: LiveSamples = field(default_factory=LiveSamples)
     usage: LiveUsage = field(default_factory=LiveUsage)
     connections: LiveConnections = field(default_factory=LiveConnections)
+    parked: LiveParked = field(default_factory=LiveParked)
     total_tokens: int = 0
 
     refusals: int = 0
@@ -220,6 +242,7 @@ async def _read(
                 task_id=_text(row.get("task_id")),
                 samples=_samples(row.get("samples")),
                 usage=_usage(samples.get(_text(row.get("eval_id")))),
+                parked=_parked(samples.get(_text(row.get("eval_id")))),
                 connections=_connections(config, _model(row, target)),
                 total_tokens=_number(row.get("total_tokens")),
                 refusals=_number(row.get("refusals")),
@@ -284,22 +307,53 @@ def _samples(payload: object) -> LiveSamples:
     )
 
 
-def _usage(payload: object) -> LiveUsage:
-    """The leading running sample's counts against each per-sample budget."""
+def _running_samples(payload: object) -> list[dict[str, object]]:
+    """The running sample rows in one eval's `/samples` payload.
+
+    Walked twice — once for limit usage, once for parked samples — off a payload `_read` already fetches, so the park costs no request of its own.
+    """
     if not isinstance(payload, dict):
-        return LiveUsage()
+        return []
     rows = cast(dict[str, object], payload).get("samples")
     if not isinstance(rows, list):
-        return LiveUsage()
+        return []
+    samples = [
+        cast(dict[str, object], entry)
+        for entry in cast(list[object], rows)
+        if isinstance(entry, dict)
+    ]
+    return [sample for sample in samples if sample.get("status") == "running"]
 
-    turns = messages = tokens = 0
-    seconds = 0.0
-    for entry in cast(list[object], rows):
+
+def _parked(payload: object) -> LiveParked:
+    """Samples parked on a human decision, from each running row's `activity`.
+
+    A pending interaction leads inspect's activity classification precisely so this reading is possible: an approval is awaited *before* its tool call is recorded, so a parked sample has no pending event of any kind and would otherwise be reported as one that has simply gone quiet.
+    """
+    approvals = questions = 0
+    functions: set[str] = set()
+    for sample in _running_samples(payload):
+        entry = sample.get("activity")
         if not isinstance(entry, dict):
             continue
-        sample = cast(dict[str, object], entry)
-        if sample.get("status") != "running":
-            continue
+        activity = cast(dict[str, object], entry)
+        kind = _text(activity.get("type"))
+        if kind == "approval":
+            approvals += 1
+            if function := _text(activity.get("detail")):
+                functions.add(function)
+        elif kind == "question":
+            questions += 1
+    return LiveParked(
+        approvals=approvals, questions=questions, functions=tuple(sorted(functions))
+    )
+
+
+def _usage(payload: object) -> LiveUsage:
+    """The leading running sample's counts against each per-sample budget."""
+    turns = messages = tokens = 0
+    seconds = 0.0
+    for sample in _running_samples(payload):
         turns = max(turns, _number(sample.get("turn_count")))
         messages = max(messages, _number(sample.get("message_count")))
         tokens = max(tokens, _number(sample.get("total_tokens")))

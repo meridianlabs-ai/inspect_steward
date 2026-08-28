@@ -207,6 +207,87 @@ def test_connection_pools_are_summed_across_a_task_s_controllers(
     assert (task.connections.in_use, task.connections.limit) == (12, 30)
 
 
+# --- samples waiting on a person ----------------------------------------
+
+
+def parked_samples(*activities: dict[str, object] | None) -> Routes:
+    """A worker whose running samples carry these `activity` objects."""
+    rows: list[object] = [
+        {"status": "running", "turn_count": 1, "activity": activity}
+        for activity in activities
+    ]
+    return dict(WORKER, **{"/evals/E1/samples": {"samples": rows}})
+
+
+def approval(function: str) -> dict[str, object]:
+    return {"type": "approval", "count": 1, "detail": function, "started_at": 1.0}
+
+
+QUESTION: dict[str, object] = {
+    "type": "question",
+    "count": 1,
+    "detail": "",
+    "started_at": 1.0,
+}
+
+TOOL: dict[str, object] = {
+    "type": "tool",
+    "count": 1,
+    "detail": "bash",
+    "started_at": 1.0,
+}
+"""An ordinary in-flight tool call, which a park would be indistinguishable from if inspect did not classify the pending interaction ahead of it."""
+
+
+def test_samples_waiting_on_a_person_are_counted_and_named(sockets: Path) -> None:
+    # the tool function is the only part of a request that gets repeated: the
+    # arguments and an `ask_user` prompt are model-generated text, and this
+    # summary is relayed verbatim by an agent that then acts on it
+    routes = parked_samples(approval("bash"), approval("python"), QUESTION, TOOL)
+    with worker(sockets / "w.sock", routes) as target:
+        (task,) = read_fleet([target], NO_PACKING).tasks.values()
+
+    assert (task.parked.approvals, task.parked.questions) == (2, 1)
+    assert task.parked.total == 3
+    assert task.parked.functions == ("bash", "python")
+
+
+def test_a_worker_with_nothing_waiting_reports_no_park(sockets: Path) -> None:
+    # the ordinary case, and the one that must not drift: a tool call is work,
+    # and reporting it as a park would put a decision in front of somebody who
+    # has none to make
+    with worker(sockets / "w.sock", parked_samples(TOOL, None)) as target:
+        (task,) = read_fleet([target], NO_PACKING).tasks.values()
+
+    assert task.parked.total == 0
+    assert task.parked.functions == ()
+
+
+def test_two_samples_parked_on_the_same_tool_name_it_once(sockets: Path) -> None:
+    # the functions are what a person reads, so they are deduplicated; the
+    # counts are what says how many decisions are owed
+    routes = parked_samples(approval("bash"), approval("bash"))
+    with worker(sockets / "w.sock", routes) as target:
+        (task,) = read_fleet([target], NO_PACKING).tasks.values()
+
+    assert task.parked.approvals == 2
+    assert task.parked.functions == ("bash",)
+
+
+def test_a_worker_running_an_inspect_without_the_signal_reports_no_park(
+    sockets: Path,
+) -> None:
+    # `activity` predates the approval/question classification, so a row from an
+    # older worker carries a tool call where a park is. Nothing can be done
+    # about that from here; what matters is that it costs the park and not the
+    # read
+    with worker(sockets / "w.sock") as target:
+        (task,) = read_fleet([target], NO_PACKING).tasks.values()
+
+    assert task.parked.total == 0
+    assert task.samples.in_flight == 57
+
+
 # --- and when it does not -----------------------------------------------
 
 

@@ -10,7 +10,7 @@ pip install "inspect-steward[flow]"
 ```
 
 An [Inspect Flow](https://github.com/meridianlabs-ai/inspect_flow) spec is a
-[definition](definitions.qmd) like any other, because `flow run` is itself a
+[definition](index.qmd#quick-tour) like any other, because `flow run` is itself a
 program culminating in one `eval_set()` call. So Steward drives **Flow's own
 CLI** rather than reaching into its internals, and intercepts at the boundary.
 
@@ -67,8 +67,7 @@ and start over into a directory nobody is watching.
 
 Steward does not write another tool's global state to correct it. **Under
 Steward, the resume path is `steward launch` against the workspace** — which is
-also the amend path, and the only one you need. See [Amending a
-Run](amending.qmd).
+also the amend path, and the only one you need.
 :::
 
 ## Scanners

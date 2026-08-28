@@ -62,15 +62,15 @@ def raise_command(item: str, note: str, output_json: bool) -> None:
     # end: nothing will ever bring it back, and the agent has silenced its own
     # outstanding work by declaring itself finished with it (agent.md §2.2).
     #
-    # The `acknowledgeable` half is the gate `ack` uses, for the same reason: a
-    # kind with no lifecycle has nothing to hand off. `action_failed` recurs with
-    # the same id every turn it happens, so raising one would silence a live
-    # recurrence rather than a settled decision.
-    open_items = [
-        entry
-        for entry in result.items
-        if entry.acknowledgeable and entry.owner is Owner.HUMAN
-    ]
+    # Ownership alone, and *not* `acknowledgeable` as well. That half was
+    # standing in for this one: it was there to keep `action_failed` out, and
+    # `action_failed` is the agent's, so the owner gate already excludes it.
+    # Keeping it stopped mattering once a kind was both human-owned and
+    # unacknowledgeable -- a park, which cannot be acked because only answering
+    # clears it, and would then have been unraisable too, sitting in the agent's
+    # queue at every collection all night. Which is the precise failure `raise`
+    # exists to prevent.
+    open_items = [entry for entry in result.items if entry.owner is Owner.HUMAN]
     target = match_item(open_items, item)
     if target is None:
         raise click.ClickException(_nothing_matched(workspace.journal, item, result))
@@ -119,6 +119,8 @@ def _nothing_matched(journal: Path, item: str, result: TendResult) -> str:
     """Why there was nothing to raise, distinguishing the three reasons.
 
     The same shape as `ack`'s, and deliberately not shared with it: *already raised* and *already acknowledged* are different facts about an item and the message is the whole value of the function.
+
+    Three rather than four now that the gate is ownership alone: every human-owned item is raisable, so *matched but not offered* can only mean the agent's own.
     """
     raised = read_raised(_events(journal))
 
@@ -146,11 +148,5 @@ def _nothing_matched(journal: Path, item: str, result: TendResult) -> str:
             + "\n".join(f"  {entry.id} — {entry.summary}" for entry in agent_owned)
             + "\n\ninvestigate it, then `steward ack --by agent --reason ...` to "
             "record what you found"
-        )
-    if named:
-        return (
-            f"'{item}' is a single-turn fact rather than a standing condition, so "
-            f"there is nobody to hand it to — the next turn either finds it again "
-            f"or does not"
         )
     return f"no open item matches '{item}' — `steward status` lists them with their ids"

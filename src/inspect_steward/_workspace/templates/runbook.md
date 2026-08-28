@@ -114,6 +114,14 @@ who owns the item — `collect` prints that beside each one.
   brought it back to you. If you are stuck on an agent-owned item, that is a
   question to ask in the conversation, not a hand-off to record.
 
+**A parked worker is the one item that refuses an ack.** A sample stopped on a
+tool approval or an `ask_user` is waiting for authority over what the eval does,
+which is the human's alone — and it holds its slot, its sandbox and its model
+connections the whole time. So `ack` refuses it whatever reason you give. Raise
+it, pass on the attach command the item carries (`inspect acp --server
+<socket>`, which reaches that worker directly), and leave it open: it clears
+when somebody answers it, and nothing else clears it.
+
 An item comes back if the condition **changes**, because its id encodes the
 instance rather than the condition: a task that stalls again at attempt 3 has a
 different id from the one that stalled at attempt 2, so it arrives as new work,

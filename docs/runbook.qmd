@@ -1,10 +1,32 @@
 ---
-title: The Agent Runbook
-llms-description: "The operating instructions Steward ships to the agent supervising a run, reproduced here so a human can see the bounds their agent works under."
+title: Agent Runbook
+llms-description: "What a coding agent supervising a Steward run decides, what it may never do, and the operating instructions Steward ships to it, reproduced verbatim."
 ---
 
-This is the runbook an agent reads, reproduced verbatim from the copy that ships
-with the package — the same text `steward runbook` prints. It is here so that
-you can see what your agent has been told; you never need to run it yourself.
+## Overview
+
+Steward is built to be operated by a coding agent: almost every verb is one an agent runs, while yours are `init`, `signoff`, editing the definition and `_steward.md`, and asking questions in prose. The agent's operating instructions ship with the package — `steward runbook` prints them — so an agent can never follow last year's instructions against this year's CLI. Your workspace's `AGENTS.md` tells the agent to read them; you never need to run the command yourself.
+
+The agent supplies judgement within bounds: it diagnoses errors, tunes concurrency, investigates findings, and writes up what happened — acting on its own where your [eval policy](index.qmd#eval-policy) pre-authorizes it, and bringing you a question where it does not.
+
+## What it may never do
+
+These are settled and binding, and the runbook states them flatly. No situation makes any of them correct:
+
+-   **`steward signoff`.** It is a human attestation that the results are accepted. An agent running it is the one thing that would make the whole record meaningless.
+-   **Edit the definition.** It is your statement of what is being measured. The agent reads it, runs it, and raises anything that looks wrong as a *question*.
+-   **Write `_steward.md`.** It proposes; you write. Both halves.
+-   **Move or delete a log.** Not even an empty cancelled one. Resume matches logs where they are.
+-   **Answer a tool approval or an `ask_user`.** A worker stopped for a human decision is asking whether the eval may *do* something, and answering is authority over what is being measured. The agent surfaces it — as a blocked item carrying the command that attaches you to that worker — and waits. Steward refuses to let the item be acknowledged: only an answer clears it.
+
+::: {.callout-note appearance="simple"}
+None of these is enforced by access control, and Steward does not pretend otherwise. `signoff` records who signed; the runbook says plainly that the agent never signs. A forged signature is visible rather than prevented — the same bargain a commit author line makes.
+:::
+
+## The runbook
+
+What follows is the runbook itself, reproduced verbatim from the copy that ships with the package — the same text `steward runbook` prints — so you can see exactly what your agent has been told.
+
+---
 
 {{< include ../src/inspect_steward/_workspace/templates/runbook.md >}}

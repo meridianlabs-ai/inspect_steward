@@ -1,0 +1,67 @@
+---
+title: Concurrency
+llms-description: "How Steward schedules tasks across processes, the three knobs that control fleet width and provider load, who owns each one, and how to override them for a single run."
+---
+
+## Overview
+
+Concurrency under Steward has three dimensions, and they are controlled by three different knobs with three different owners:
+
+| Dimension | Knob | Owner |
+|----|----|----|
+| How many tasks run at once | `max_tasks` | `_steward.md` |
+| How many processes those tasks are divided into | `max_workers` | `_steward.md` |
+| How many samples run at once within a task | `max_samples` | your definition |
+
+By default all tasks run at once, each in its own process, with sample concurrency taken from your definition. This page explains what each knob actually does, why they are split the way they are, and how to override them.
+
+## One process per task
+
+Steward runs each task in its own worker process rather than running the eval set in one process. This buys two things:
+
+- **Fault isolation.** An OOM or a segfault costs one task rather than the run.
+- **Real CPU parallelism.** A task's Python work — transcript construction, JSON serialization, `.eval` compression, non-model scorers — serializes behind the GIL in a single process. Across processes it runs in parallel.
+
+The cost is per-process startup: every worker imports your definition and its dependencies before it can run. For plain `eval_set()` definitions this is seconds; execution frameworks can charge more (see [Inspect Flow](flow.qmd) and [Inspect Hawk](hawk.qmd) for what each costs).
+
+## `max_tasks` — how much runs at once
+
+`max_tasks` caps how many tasks are in flight across the whole fleet. Unset, every task runs at once. Set, tasks queue in the order your definition declares them, and each completed task frees a slot for the next.
+
+Note that `eval_set()` also has a `max_tasks` argument, but under Steward it never takes effect: each worker is handed its own share of the run, so the definition's value has nothing to control. Task concurrency belongs to the fleet, which is why this knob lives in `_steward.md` rather than being refused like other `eval_set()` options.
+
+## `max_workers` — how many processes
+
+`max_workers` divides the in-flight tasks into fewer processes than one each, packing several tasks into each worker. It changes *nothing* about how much runs at once — that is `max_tasks` — only how many processes carry it.
+
+Packing trades away fault isolation to buy back startup cost. It is worth reaching for when per-process startup is expensive (an execution framework that builds a venv per process, a definition with heavy imports) and not otherwise. Unset, every task gets its own process.
+
+## `max_samples` — load within a task
+
+Sample concurrency is a property of the eval — its author knows the workload — so `max_samples` belongs in your definition and `_steward.md` refuses it by name. Set it explicitly: an explicit value is one Steward can honor precisely rather than leaving inspect to adapt on its own.
+
+When a worker is spawned, its sample concurrency resolves from three sources, most specific first:
+
+| Source | Meaning |
+|----|----|
+| `steward tend --max-samples` | an operator typed a number for this run, so nothing outranks it |
+| the definition's `max_samples` | the eval author's preference, honored as written |
+| Steward's default of `40` | nobody expressed a preference |
+
+## Provider load
+
+A fleet's demand on a model provider is the product of the knobs above: `max_tasks` tasks, each running `max_samples` samples, is `max_tasks × max_samples` concurrent generate calls against whatever providers the tasks use.
+
+This is worth computing before a large run, because N independent processes cannot discover a safe level on their own: each worker adapting to provider throttling finds headroom the others have not claimed yet, and the fleet overshoots and gets throttled together. Under Steward the total is a number you chose. A policy for managing provider load dynamically — per-model ceilings, backing off under throttling — is planned but not yet built.
+
+## Overriding for a single run
+
+Every knob has a one-run CLI override that outranks the standing configuration without touching any file:
+
+```bash
+steward tend --max-tasks 4        # fleet width, this turn
+steward tend --max-workers 2      # process packing, this turn
+steward tend --max-samples 20     # per-task sample concurrency, this turn
+```
+
+Standing values belong in `_steward.md` front matter (`max_tasks`, `max_workers`) or your definition (`max_samples`); the CLI is for the run where conditions differ.

@@ -14,16 +14,10 @@ inspect-docs:
       href: index.qmd
     - text: Using Steward
       contents:
-        - href: definitions.qmd
-        - href: running.qmd
-        - href: status.qmd
-        - href: amending.qmd
         - href: workspace.qmd
-        - href: directives.qmd
-        - href: agents.qmd
         - href: runbook.qmd
-    - text: Platforms
-      contents:
+        - href: concurrency.qmd
+        - href: errors.qmd
         - href: flow.qmd
         - href: hawk.qmd
   sidebar: unified

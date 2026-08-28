@@ -1,8 +1,8 @@
 """The one list a turn produces, and the verdict over it.
 
-Everything a turn wants to *say* beyond counts is an **item**: a stalled task, a definition that drifted, a file that would not read, later a parked worker or an open anomaly. Before this there were two hand-maintained lists of the same conditions — one in the CLI, one in `status.md` — which had already drifted apart in what they reported. One list, rendered twice, cannot.
+Everything a turn wants to *say* beyond counts is an **item**: a stalled task, a definition that drifted, a file that would not read, a worker parked on a human decision, later an open anomaly. Before this there were two hand-maintained lists of the same conditions — one in the CLI, one in `status.md` — which had already drifted apart in what they reported. One list, rendered twice, cannot.
 
-**One list with an owner, not two lists.** The obvious split is *what a human must answer* against *what an agent should work on*, and it hard-codes a routing decision that is not Steward's to make: one workspace may let the agent rule on a class the next one reserves for a person. So `owner` is a field and the projections are a filter over it. It is a function of **(kind, state, policy)** and recomputed every turn, so changing the rules re-routes items that already exist. One kind will be fixed by design and policy may not widen it — a parked worker is always the human's, because nobody else may answer (agent.md, *What the agent may do without asking*).
+**One list with an owner, not two lists.** The obvious split is *what a human must answer* against *what an agent should work on*, and it hard-codes a routing decision that is not Steward's to make: one workspace may let the agent rule on a class the next one reserves for a person. So `owner` is a field and the projections are a filter over it. It is a function of **(kind, state, policy)** and recomputed every turn, so changing the rules re-routes items that already exist. One kind is fixed by design and policy may not move it — a parked worker is always the human's, because nobody else may answer (agent.md, *What the agent may do without asking*). See `FIXED_OWNER`.
 
 **An item points at its subject; it does not contain it.** An anomaly carries nine fields of its own (workflow.md, *Anomalies are structured state*), and an envelope that absorbed them would be rewritten by every step that fills it. So `subject` is a task identifier, a pid, or a class key, and whoever owns that thing owns its shape.
 
@@ -21,6 +21,7 @@ from typing import TYPE_CHECKING
 from .._evalset.observe import ObservedTasks, TaskObservation, TaskState
 from .._schedule import InFlight, attempts_made
 from .._util.duration import format_duration
+from .._worker import LiveParked, acp_sockets, attach_command
 from .._workspace import Armed
 
 if TYPE_CHECKING:
@@ -45,7 +46,10 @@ class Level(IntEnum):
     INFO = 0
     ATTENTION = 1
     BLOCKING = 2
-    """Nothing progresses on this subject until someone answers. No kind produces one yet — the parked worker is the first, and it arrives with step 20."""
+    """Nothing progresses on this subject until someone answers. `parked` is the only kind that produces one.
+
+    **Precedence, not the verdict.** It says this item is in the way of *its own subject*, which is what puts it at the top of its owner's section; whether the *run* is stopped is arithmetic over the fleet and is computed separately (see `verdict`). A rule that painted a run red whenever any one thing was blocked would make red mean nothing.
+    """
 
 
 class Verdict(StrEnum):
@@ -73,6 +77,7 @@ ACTION_FAILED = "action_failed"
 UNSUPERVISED = "unsupervised"
 TIMER_DRIFT = "timer_drift"
 SIGNOFF_READY = "signoff_ready"
+PARKED = "parked"
 
 OWNERS = {
     STALLED: Owner.HUMAN,
@@ -84,13 +89,22 @@ OWNERS = {
     UNSUPERVISED: Owner.HUMAN,
     TIMER_DRIFT: Owner.HUMAN,
     SIGNOFF_READY: Owner.HUMAN,
+    PARKED: Owner.HUMAN,
 }
 """Default owner per kind. Policy may move some of these once `_steward.md` can say so (step 23); a kind absent from the table is the agent's, since an unrouted item is an investigation rather than a question."""
 
-UNACKNOWLEDGEABLE = frozenset({ACTION_FAILED})
+FIXED_OWNER = frozenset({PARKED})
+"""Kinds whose owner policy may not move.
+
+One entry, and it is the reason the module docstring says `owner` is a function of *(kind, state, policy)* with an exception. A park is a request for a human decision about what an eval measures, and the agent may never answer one (agent.md §6) — so a `_steward.md` that routed it to the agent would not be expressing a preference, it would be asking Steward to answer an approval on a person's behalf.
+"""
+
+UNACKNOWLEDGEABLE = frozenset({ACTION_FAILED, PARKED})
 """Kinds that cannot be disposed of, because they have no lifecycle to dispose.
 
 An action that failed is a single-turn fact: the next turn either hits it again or does not. Letting it be acknowledged would give it a persistence it does not have, and would silence a recurrence that happens to reuse the same words.
+
+A park is the opposite case and lands in the same set: it has a lifecycle, but the *only* thing that ends it is somebody answering. Acknowledging one would silence a worker still holding its slot, its sandbox and its model connections — which is the exact inverse of what an acknowledgment means everywhere else here, where it says *this is real and I have accepted it*. What the agent can do with a park is `raise` it, which is a claim about telling somebody rather than about the item being over.
 """
 
 
@@ -167,6 +181,14 @@ class Item:
     def acknowledgeable(self) -> bool:
         return self.kind not in UNACKNOWLEDGEABLE
 
+    @property
+    def addressable(self) -> bool:
+        """Whether any command takes this item's id, which is what makes printing it useful.
+
+        Not the same question as `acknowledgeable`, and they came apart with the park: `ack` refuses one because only answering clears it, while `raise` takes it, so its id has to be on screen. What is left over — unacknowledgeable *and* the agent's own — is `action_failed`, which nothing addresses because it is a single-turn fact, and whose id is a line number a reader should not be offered.
+        """
+        return self.acknowledgeable or self.owner is Owner.HUMAN
+
 
 def tend_items(
     result: "TendResult",
@@ -192,6 +214,7 @@ def tend_items(
     lookup = {task.identifier: task for task in observed.tasks}
     items = [
         *_stalled(result, lookup, inflight),
+        *_parked(result, lookup),
         *_drift(result),
         *_degraded(result),
         *_orphans(result, lookup),
@@ -212,11 +235,19 @@ def tend_items(
 
 
 def verdict(
-    items: list[Item], *, paused: bool, running: int, spawning: int, unfinished: int
+    items: list[Item],
+    *,
+    paused: bool,
+    running: int,
+    spawning: int,
+    unfinished: int,
+    parked: int = 0,
 ) -> Verdict:
     """Where the run stands.
 
-    Five states, in the order they override each other. **Paused** wins outright: a run nobody is advancing is not making a claim about its own health. **Stopped** is the one that is *not* `max(level)` over the items — a run can contain nothing blocking and still be going nowhere, which is exactly what a fleet of stalled tasks is. So it is computed from the run rather than from the list: work left, nothing running, and nothing about to start.
+    Five states, in the order they override each other. **Paused** wins outright: a run nobody is advancing is not making a claim about its own health. **Stopped** is the one that is *not* `max(level)` over the items — a run can contain nothing blocking and still be going nowhere, which is exactly what a fleet of stalled tasks is. So it is computed from the run rather than from the list: work left, and nothing *effectively* running or about to start.
+
+    **A park subtracts from `running` rather than deciding the verdict.** `Level.BLOCKING` says an item is in the way of its own subject, which is a statement about ordering; the verdict is a statement about the run, and one blocked worker among twenty is a run that is working with a decision inside it. Twenty of twenty is the same arithmetic reaching zero — which is the sense in which enough parked workers stall a fleet and, at the ceiling, stop it.
 
     **`unfinished` is what keeps a completed run from reading as a stuck one.** A sweep that finished every task and left one unreadable file has nothing running and nothing to spawn, and it is not stopped — it is done, with a caveat. Only a run with work remaining can be stuck.
 
@@ -228,6 +259,7 @@ def verdict(
         running: Live workers.
         spawning: Workers this turn would start.
         unfinished: Manifest tasks not yet complete.
+        parked: In-flight tasks with *nothing left running* — every one of their live samples is waiting on a person. A task with one park among fifty working samples is still progressing and does not count here, though it still produces an item. Defaulted, because a caller assembling a verdict by hand is making no claim about parks.
 
     Returns:
         The run's verdict.
@@ -236,9 +268,7 @@ def verdict(
         return Verdict.PAUSED
     if not items:
         return Verdict.CLEAR
-    if any(item.level >= Level.BLOCKING for item in items):
-        return Verdict.STOPPED
-    if unfinished and running == 0 and spawning == 0:
+    if unfinished and running - parked <= 0 and spawning == 0:
         return Verdict.STOPPED
     # a finished run whose only open decision is that nobody has accepted it is
     # not a warning. ⚠️ over a sweep that did exactly what was asked of it is how
@@ -330,6 +360,68 @@ def _stalled(
             )
         )
     return items
+
+
+def _parked(result: "TendResult", lookup: dict[str, TaskObservation]) -> list[Item]:
+    """A worker waiting on a person, and the command that reaches it.
+
+    **The one condition where walking away does not work.** Everything else Steward reports is either progressing or over; a parked sample is neither, and it holds its slot, its sandbox and its model connections while it waits. So it is the first kind to carry `Level.BLOCKING`, which orders it above everything else in its owner's section.
+
+    **`Level.BLOCKING` is precedence and not the verdict.** One park among twenty running tasks is a run that is working with a decision inside it; only a fleet where nothing *can* move is 🛑. See `verdict`.
+
+    **The tool function and nothing else.** A request's arguments and an `ask_user` prompt are model-generated text, and this line is relayed verbatim by an agent that then acts on it. A function name is structural; the rest is the eval's own output, and a summary is not the place to launder it into an instruction.
+    """
+    rows = [row for row in result.progress.rows if row.parked.total]
+    if not rows:
+        return []
+    sockets = acp_sockets()
+
+    items: list[Item] = []
+    for row in rows:
+        parked = row.parked
+        socket = sockets.get(row.pid)
+        items.append(
+            Item(
+                # keyed on the task alone: stable for as long as anything in it
+                # is waiting, and gone once somebody has answered -- which is
+                # exactly the edge a notification fires on (step 24). Not keyed
+                # on the count or the functions, which would churn through a
+                # resolve and an appear each time one of several parks cleared
+                id=f"{PARKED}:{_named(lookup.get(row.identifier), row.identifier)}",
+                kind=PARKED,
+                owner=OWNERS[PARKED],
+                level=Level.BLOCKING,
+                subject=row.identifier,
+                summary=f"{row.key} {_waiting(parked)} — nothing in it will "
+                f"progress until somebody answers, and it is holding a worker "
+                f"while it waits",
+                action=attach_command(socket) if socket is not None else None,
+            )
+        )
+    return items
+
+
+def _waiting(parked: LiveParked) -> str:
+    """What a task is waiting for, as a predicate.
+
+    Singular where there is one thing to name, because *1 sample waiting on 1 approval* is a count where a sentence would do. Plural once there are several, where the counts are the information.
+    """
+    if parked.total == 1:
+        if parked.questions:
+            return "is waiting on an answer to a question"
+        if parked.functions:
+            return f"is waiting on an approval for {parked.functions[0]}"
+        return "is waiting on an approval"
+    parts: list[str] = []
+    if parked.approvals:
+        plural = "" if parked.approvals == 1 else "s"
+        functions = f" ({', '.join(parked.functions)})" if parked.functions else ""
+        parts.append(f"{parked.approvals} approval{plural}{functions}")
+    if parked.questions:
+        parts.append(
+            f"{parked.questions} question{'' if parked.questions == 1 else 's'}"
+        )
+    return f"has {parked.total} samples waiting on a person — {' and '.join(parts)}"
 
 
 def _drift(result: "TendResult") -> list[Item]:

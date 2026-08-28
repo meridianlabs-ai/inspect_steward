@@ -13,6 +13,7 @@ run with a caveat and a stuck run with the same caveat must not read alike.
 """
 
 import json
+import os
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
@@ -31,6 +32,7 @@ from inspect_steward._tend.items import (
     ACTION_FAILED,
     DEGRADED,
     DRIFT,
+    PARKED,
     SIGNOFF_READY,
     STALLED,
     TIMER_DRIFT,
@@ -38,6 +40,7 @@ from inspect_steward._tend.items import (
     UNSUPERVISED,
     Item,
 )
+from inspect_steward._worker import LiveFleet, LiveParked, LiveSamples, LiveTask
 from inspect_steward._workspace import (
     ACKNOWLEDGED,
     ARMED,
@@ -46,8 +49,11 @@ from inspect_steward._workspace import (
     append_event,
 )
 
+from .._acp import Publish, publish
 from .._logs import DEFINITION, SynthTask, write_log
 from .test_tend import prepared, turn
+
+__all__ = ["publish"]
 
 TASK = SynthTask("probe", samples=4)
 
@@ -150,15 +156,16 @@ def test_an_action_that_could_not_be_carried_out_is_the_agent_s(
     assert "_transient_" in workspace.status.read_text(encoding="utf-8")
 
 
-def test_a_blocked_item_stops_a_run_that_is_otherwise_working(
-    tmp_path: Path,
-) -> None:
-    # no kind produces `BLOCKING` until the parked worker arrives with step 20,
-    # so the level is exercised where it is consumed rather than where it will
-    # one day be produced
+def test_a_blocked_item_does_not_by_itself_stop_a_working_run() -> None:
+    """`BLOCKING` orders an item; it does not decide the run.
+
+    One parked worker among eight is a run that is working with a decision
+    inside it, and painting that red is how a reader learns to discount red.
+    What stops a run is arithmetic over the fleet — see the table below.
+    """
     blocked = Item(
         id="parked:1",
-        kind="parked",
+        kind=PARKED,
         owner=Owner.HUMAN,
         level=Level.BLOCKING,
         subject="1",
@@ -166,9 +173,193 @@ def test_a_blocked_item_stops_a_run_that_is_otherwise_working(
     )
 
     assert (
-        verdict([blocked], paused=False, running=8, spawning=0, unfinished=4)
-        is Verdict.STOPPED
+        verdict([blocked], paused=False, running=8, spawning=0, unfinished=4, parked=1)
+        is Verdict.ATTENTION
     )
+
+
+# --- a worker waiting on a person ---------------------------------------
+#
+# The one condition in this file that cannot be synthesized in the workspace: a
+# park lives on a running worker's socket, and there is no directory to put one
+# in. So these substitute the fleet read — the single function whose whole job
+# is *ask the running workers how they are getting on* — and let the real turn
+# do everything else, items and verdict and the file it writes. The read itself
+# is covered against a real socket in `tests/worker/test_live.py`, and the whole
+# chain including the routing in the launch tests.
+
+
+def parked_run(
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    parked: LiveParked,
+    *,
+    in_flight: int = 1,
+) -> Workspace:
+    """A run whose one worker is waiting on a person.
+
+    The log is written so the task is settled and the turn spawns nothing; the
+    fleet then reports it as running, which is what a resumed worker looks like
+    to a turn that has not caught up with its log.
+    """
+    workspace, manifest = prepared(root, [TASK])
+    write_log(workspace.logs, TASK)
+    fleet = LiveFleet(
+        tasks={
+            manifest.tasks[0].identifier: LiveTask(
+                pid=os.getpid(),
+                identifier=manifest.tasks[0].identifier,
+                samples=LiveSamples(total=4, completed=0, in_flight=in_flight),
+                parked=parked,
+            )
+        }
+    )
+
+    def read(inflight: object, logs: object) -> LiveFleet:
+        return fleet
+
+    monkeypatch.setattr("inspect_steward._tend.turn._live", read)
+    return workspace
+
+
+def test_a_parked_worker_is_the_human_s_and_nobody_else_may_answer(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Blocking, human-owned, and unacknowledgeable — each for its own reason.
+
+    Answering an approval is authority over what the eval measures, so it is
+    the one kind policy may not re-route. And it is the one human-owned kind
+    that cannot be acked: only answering clears it, so an acknowledgment would
+    silence a worker still holding its slot.
+    """
+    workspace = parked_run(
+        tmp_path, monkeypatch, LiveParked(approvals=1, functions=("bash",))
+    )
+    item = items(workspace)[PARKED]
+
+    assert item.owner is Owner.HUMAN
+    assert item.level is Level.BLOCKING
+    assert not item.acknowledgeable
+    # ...but its id is still on screen, because `steward raise` takes it. The
+    # two questions came apart here for the first time
+    assert item.addressable
+    assert item.id.startswith("parked:probe:")
+    # and the whole line reaches the document a person reads
+    assert item.summary in workspace.status.read_text(encoding="utf-8")
+
+
+def test_a_park_names_the_tool_and_not_the_request(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # the arguments and an `ask_user` prompt are model-generated text, and this
+    # line is relayed verbatim by an agent that then acts on it
+    workspace = parked_run(
+        tmp_path, monkeypatch, LiveParked(approvals=1, functions=("bash",))
+    )
+    item = items(workspace)[PARKED]
+
+    assert "is waiting on an approval for bash" in item.summary
+    # named in full, as every item names its task: it travels alone
+    assert "probe" in item.summary
+
+
+PARKS: list[tuple[str, LiveParked, str]] = [
+    (
+        "one approval",
+        LiveParked(approvals=1, functions=("bash",)),
+        "an approval for bash",
+    ),
+    ("one question", LiveParked(questions=1), "an answer to a question"),
+    (
+        "several",
+        LiveParked(approvals=2, questions=1, functions=("bash", "python")),
+        "3 samples waiting on a person — 2 approvals (bash, python) and 1 question",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("parked", "expected"),
+    [case[1:] for case in PARKS],
+    ids=[case[0] for case in PARKS],
+)
+def test_a_park_says_what_is_being_waited_for(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, parked: LiveParked, expected: str
+) -> None:
+    workspace = parked_run(tmp_path, monkeypatch, parked, in_flight=parked.total)
+    assert expected in items(workspace)[PARKED].summary
+
+
+def test_a_park_keeps_its_id_while_the_same_task_is_waiting(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The id is the notification edge: present while parked, gone once answered.
+
+    Keyed on the task alone rather than on the count or the functions, so that
+    answering one of three parks does not resolve the item and re-raise it as a
+    different one — which is the churn step 24's appeared/resolved diff would
+    have reported as a fresh decision each time.
+    """
+    workspace = parked_run(
+        tmp_path, monkeypatch, LiveParked(approvals=2, questions=1, functions=("a",))
+    )
+    three = items(workspace)[PARKED]
+
+    parked_run(tmp_path, monkeypatch, LiveParked(approvals=1, functions=("b",)))
+    one = items(workspace)[PARKED]
+
+    parked_run(tmp_path, monkeypatch, LiveParked())
+    answered = turn(workspace)
+
+    assert three.id == one.id
+    # gone once somebody answered, and the turn that first misses it says so —
+    # which is the edge a notification fires on (step 24)
+    assert PARKED not in {item.kind for item in answered.items}
+    assert three.id in answered.resolved
+
+
+def test_a_park_carries_the_command_that_reaches_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, publish: Publish
+) -> None:
+    """The action is an address, not an instruction to answer.
+
+    Steward detects the wait and hands over the socket; inspect's own client
+    does the talking, because answering an approval is authority over what the
+    eval measures and the agent may never take it (agent.md §6).
+    """
+    socket = tmp_path / "w.sock"
+    publish(os.getpid(), socket)
+    workspace = parked_run(tmp_path, monkeypatch, LiveParked(approvals=1))
+
+    assert items(workspace)[PARKED].action == f"inspect acp --server {socket}"
+
+
+def test_a_park_on_a_worker_with_no_acp_server_still_reports_the_wait(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # the bind degrades rather than failing the eval, so a worker can be parked
+    # with no address to offer. What that costs is the command, not the item —
+    # somebody still owes an answer and still has to be told
+    workspace = parked_run(tmp_path, monkeypatch, LiveParked(approvals=1))
+    item = items(workspace)[PARKED]
+
+    assert item.action is None
+    assert "waiting on an approval" in item.summary
+
+
+def test_a_park_sorts_above_the_other_decisions_a_person_owes(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # `BLOCKING` is precedence, and this is what it buys: the thing costing a
+    # worker right now comes before the thing that can wait (agent.md §4.1)
+    workspace = parked_run(tmp_path, monkeypatch, LiveParked(approvals=1))
+    (workspace.root / DEFINITION).write_bytes(b"# edited\n")
+
+    given = turn(workspace).items
+    human = [item.kind for item in given if item.owner is Owner.HUMAN]
+
+    assert human[0] == PARKED
+    assert DRIFT in human
 
 
 def test_accepting_results_survives_an_edit_that_produces_no_new_results(
@@ -319,20 +510,64 @@ def test_a_stall_that_gets_worse_is_a_new_item(tmp_path: Path) -> None:
 
 # --- the verdict --------------------------------------------------------
 
-VERDICTS: list[tuple[str, list[Level], bool, int, int, int, Verdict]] = [
-    ("nothing open", [], False, 2, 0, 1, Verdict.CLEAR),
-    ("paused beats everything", [Level.BLOCKING], True, 0, 0, 3, Verdict.PAUSED),
-    ("paused beats a clear run", [], True, 2, 0, 1, Verdict.PAUSED),
-    ("work continues around it", [Level.ATTENTION], False, 4, 0, 2, Verdict.ATTENTION),
-    ("something blocks", [Level.BLOCKING], False, 4, 0, 2, Verdict.STOPPED),
-    ("nothing left to run it", [Level.ATTENTION], False, 0, 0, 1, Verdict.STOPPED),
-    ("a slot will free up", [Level.ATTENTION], False, 0, 1, 1, Verdict.ATTENTION),
-    ("finished, with a caveat", [Level.ATTENTION], False, 0, 0, 0, Verdict.ATTENTION),
+VERDICTS: list[tuple[str, list[Level], bool, int, int, int, int, Verdict]] = [
+    ("nothing open", [], False, 2, 0, 1, 0, Verdict.CLEAR),
+    ("paused beats everything", [Level.BLOCKING], True, 0, 0, 3, 0, Verdict.PAUSED),
+    ("paused beats a clear run", [], True, 2, 0, 1, 0, Verdict.PAUSED),
+    (
+        "work continues around it",
+        [Level.ATTENTION],
+        False,
+        4,
+        0,
+        2,
+        0,
+        Verdict.ATTENTION,
+    ),
+    ("nothing left to run it", [Level.ATTENTION], False, 0, 0, 1, 0, Verdict.STOPPED),
+    ("a slot will free up", [Level.ATTENTION], False, 0, 1, 1, 0, Verdict.ATTENTION),
+    (
+        "finished, with a caveat",
+        [Level.ATTENTION],
+        False,
+        0,
+        0,
+        0,
+        0,
+        Verdict.ATTENTION,
+    ),
+    # a park subtracts from what is effectively running. One of twenty is a run
+    # working around a decision; twenty of twenty is the same arithmetic
+    # reaching zero, which is what "at the ceiling they stop it" means
+    ("one park of twenty", [Level.BLOCKING], False, 20, 0, 20, 1, Verdict.ATTENTION),
+    ("twenty parks of twenty", [Level.BLOCKING], False, 20, 0, 20, 20, Verdict.STOPPED),
+    (
+        "every worker parked, but one is starting",
+        [Level.BLOCKING],
+        False,
+        20,
+        1,
+        20,
+        20,
+        Verdict.ATTENTION,
+    ),
+    # ...and a fleet where everything is parked has still *finished* if there is
+    # no work left, which is the same guard `unfinished` gives every other case
+    (
+        "parked with nothing left to do",
+        [Level.ATTENTION],
+        False,
+        2,
+        0,
+        0,
+        2,
+        Verdict.ATTENTION,
+    ),
 ]
 
 
 @pytest.mark.parametrize(
-    ("levels", "paused", "running", "spawning", "unfinished", "expected"),
+    ("levels", "paused", "running", "spawning", "unfinished", "parked", "expected"),
     [case[1:] for case in VERDICTS],
     ids=[case[0] for case in VERDICTS],
 )
@@ -342,6 +577,7 @@ def test_the_verdict_describes_the_run_rather_than_its_worst_item(
     running: int,
     spawning: int,
     unfinished: int,
+    parked: int,
     expected: Verdict,
 ) -> None:
     given = [
@@ -363,6 +599,7 @@ def test_the_verdict_describes_the_run_rather_than_its_worst_item(
             running=running,
             spawning=spawning,
             unfinished=unfinished,
+            parked=parked,
         )
         is expected
     )

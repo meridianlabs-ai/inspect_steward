@@ -1,3 +1,4 @@
+from .acp import acp_sockets, attach_command
 from .ctl import (
     ABSENT,
     AUTHOR,
@@ -27,6 +28,7 @@ from .inflight import (
 from .live import (
     LiveConnections,
     LiveFleet,
+    LiveParked,
     LiveSamples,
     LiveTarget,
     LiveTask,
@@ -67,6 +69,7 @@ __all__ = [
     "Knob",
     "LiveConnections",
     "LiveFleet",
+    "LiveParked",
     "LiveSamples",
     "LiveTarget",
     "LiveTask",
@@ -81,6 +84,8 @@ __all__ = [
     "TaskRow",
     "Unavailable",
     "WorkerScan",
+    "acp_sockets",
+    "attach_command",
     "list_tasks",
     "cancel_task",
     "process_usage",

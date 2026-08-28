@@ -39,6 +39,7 @@ from inspect_ai.log import (
     EvalScore,
     EvalSpec,
     EvalStats,
+    HeadlineMetric,
     write_eval_log,
 )
 from inspect_steward._evalset.display import compute_display_keys
@@ -192,6 +193,7 @@ def write_log(
     created: str = CREATED,
     format: LogFormat = "json",
     scores: dict[str, dict[str, float]] | None = None,
+    headline: HeadlineMetric | None = None,
 ) -> Path:
     """Write one log for a task.
 
@@ -207,6 +209,7 @@ def write_log(
         created: `eval.created`, which orders attempts and names the file.
         format: `json` for a document, `eval` for a real zip.
         scores: Scorer name to metric name to value, e.g. `{"exact": {"accuracy": 0.75}}`.
+        headline: Which of `scores` the task declared as its headline, as scoring resolves it onto `results.headline`. `None` leaves the log undeclared, where a reader falls back to the first metric of the first score.
 
     Returns:
         Path the log was written to.
@@ -231,6 +234,7 @@ def write_log(
                 )
                 for name, metrics in (scores or {}).items()
             ],
+            headline=headline,
         )
 
     log = EvalLog(

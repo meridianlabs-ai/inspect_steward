@@ -174,7 +174,7 @@ def _attention(result: TendResult) -> list[str]:
         lines.append(f"{HEADINGS[owner]}:")
         for item in group:
             lines.append(f"  ! {item.summary}")
-            trailer = item.id if item.acknowledgeable else "(transient)"
+            trailer = item.id if item.addressable else "(transient)"
             if item.action is not None:
                 trailer = f"{trailer} · {item.action}"
             if item.raised:

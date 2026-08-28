@@ -25,7 +25,9 @@ import pytest
 from click.testing import CliRunner
 from inspect_steward._cli.items import match_item
 from inspect_steward._cli.main import steward
+from inspect_steward._evalset.manifest import read_manifest
 from inspect_steward._tend.items import Item, Level, Owner
+from inspect_steward._worker import LiveFleet, LiveParked, LiveSamples, LiveTask
 from inspect_steward._workspace import (
     Workspace,
     create_workspace,
@@ -325,3 +327,70 @@ def test_an_agent_owned_item_cannot_be_raised(workspace: Workspace) -> None:
     collected, _ = sections(run("collect"))
     assert "broken.eval" in collected
     assert "broken.eval" in run("status", "--format", "md")
+
+
+# --- a park: raisable, never acknowledgeable ----------------------------
+
+
+@pytest.fixture
+def parked(workspace: Workspace, monkeypatch: pytest.MonkeyPatch) -> Workspace:
+    """The same workspace, with its one worker waiting on an approval.
+
+    A park lives on a running worker's socket, so the fleet read is what gets
+    substituted — see the note in `test_items.py`. Everything downstream of it,
+    including both commands under test, is the real thing.
+    """
+    manifest = read_manifest(workspace.manifest)
+    fleet = LiveFleet(
+        tasks={
+            manifest.tasks[0].identifier: LiveTask(
+                pid=os.getpid(),
+                identifier=manifest.tasks[0].identifier,
+                samples=LiveSamples(total=4, completed=0, in_flight=1),
+                parked=LiveParked(approvals=1, functions=("bash",)),
+            )
+        }
+    )
+
+    def read(inflight: object, logs: object) -> LiveFleet:
+        return fleet
+
+    monkeypatch.setattr("inspect_steward._tend.turn._live", read)
+    return workspace
+
+
+def test_a_park_can_be_raised_even_though_it_cannot_be_acknowledged(
+    parked: Workspace,
+) -> None:
+    """The gate is ownership alone, and this pair is why.
+
+    Under the old gate — acknowledgeable *and* human-owned — a park could be
+    neither acked nor raised, so it sat in the agent's queue at every
+    collection all night, which is the exact failure `raise` exists to prevent.
+    """
+    collected, _ = sections(run("collect"))
+    assert "waiting on an approval for bash" in collected
+
+    assert "raised parked:" in run("raise", "parked", "--note", "texted them")
+
+    # out of the agent's queue and still in the person's, because a person
+    # still owes an answer
+    after, _ = sections(run("collect"))
+    assert "waiting on an approval" not in after
+    assert "1 raised" in after
+    assert "waiting on an approval" in run("status", "--format", "md")
+
+
+def test_a_park_cannot_be_acknowledged_and_the_refusal_says_why(
+    parked: Workspace,
+) -> None:
+    # the other unacknowledgeable kind is a single-turn fact; a park is the most
+    # standing condition there is, and telling somebody the wrong one is worse
+    # than saying nothing
+    result = CliRunner().invoke(
+        steward, ["ack", "parked", "--reason", "somebody is on it"]
+    )
+
+    assert result.exit_code != 0
+    assert "only answering it clears it" in result.output
+    assert "steward raise" in result.output

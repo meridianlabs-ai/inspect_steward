@@ -1,5 +1,5 @@
 ---
-title: Hawk
+title: Inspect Hawk
 llms-description: "Running a Hawk eval set config under Steward: installation and its Python 3.13 floor, how Hawk's own runner is driven, what fan-out costs, and the caveats specific to running Hawk locally."
 ---
 
@@ -10,7 +10,7 @@ pip install "inspect-steward[hawk]"
 ```
 
 A [Hawk](https://github.com/METR/hawk) eval set config is a
-[definition](definitions.qmd) like any other, because `hawk local eval-set` is
+[definition](index.qmd#quick-tour) like any other, because `hawk local eval-set` is
 itself a program culminating in one `eval_set()` call. So Steward drives **Hawk's
 own CLI** rather than parsing configs itself.
 

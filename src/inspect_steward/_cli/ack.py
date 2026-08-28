@@ -15,7 +15,7 @@ from pathlib import Path
 
 import click
 
-from .._tend import TendResult, status
+from .._tend import PARKED, TendResult, status
 from .._workspace import ACKNOWLEDGED, append_event, read_acks, read_journal
 from .items import match_item
 from .turn import TURN_ERRORS, find_workspace
@@ -107,7 +107,18 @@ def _nothing_matched(journal: Path, item: str, result: TendResult) -> str:
             f"  {ack.id} — by {ack.by} at {ack.ts}: {ack.reason}" for ack in already
         )
 
-    if any(entry.id.startswith(item) for entry in result.items):
+    named = [entry for entry in result.items if entry.id.startswith(item)]
+    # the two kinds that cannot be acknowledged are unacknowledgeable for
+    # opposite reasons, and telling somebody the wrong one is worse than saying
+    # nothing: a park is the most standing condition there is
+    if any(entry.kind == PARKED for entry in named):
+        return (
+            f"'{item}' is a worker waiting on a person, and only answering it "
+            f"clears it — acknowledging one would silence a worker that is still "
+            f"holding its slot. Attach with the command `steward status` prints "
+            f"beside it; `steward raise` records that you have told somebody"
+        )
+    if named:
         return (
             f"'{item}' is a single-turn fact rather than a standing condition, so "
             f"there is nothing to acknowledge — the next turn either finds it again "

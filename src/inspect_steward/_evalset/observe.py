@@ -25,6 +25,7 @@ from inspect_ai._eval.evalset import task_identifier
 from inspect_ai.log import (
     EvalLog,
     EvalLogInfo,
+    headline_metric,
     list_eval_logs_async,
     read_eval_log_async,
 )
@@ -89,13 +90,13 @@ class LogAttempt:
     """
 
     headline: float | None = None
-    """The one number worth putting in a table, **chosen by convention rather than by declaration**.
+    """The one number worth putting in a table, **as the task declared it**.
 
-    Nothing in a log marks a metric as primary, so every reader that renders a task × model table invents a rule and no two agree — which is why *say in the log which metric is the headline* is an upstream ask (roadmap.md §5, item 14). Until it lands the convention here is the first metric of the first score, which is the order Inspect's own view presents them in, and `headline_name` says which one it picked so a reader is never guessing. The cost of being wrong is a column showing the less interesting of two numbers.
+    This used to be a Steward convention — the first metric of the first score — because nothing in a log marked a metric as primary and every reader rendering a task × model table invented its own rule. Inspect answers it now: a task declares `headline_metric`, scoring resolves it onto `EvalResults.headline`, and `inspect_ai.log.headline_metric` reads whichever of the two a given log carries. So Steward reads the declaration where there is one and gets the old convention where there is not, which is exactly the fallback the resolver applies. `headline_name` still says which metric it landed on, because a number in a column is not self-describing either way.
     """
 
     headline_name: str | None = None
-    """Which metric `headline` is, as `<score>/<metric>`. Present so the convention is legible rather than implied."""
+    """Which metric `headline` is, as `<score>/<metric>`."""
 
     limits: dict[str, int] = field(default_factory=dict[str, int])
     """The per-sample budgets this log ran under, from `eval.config` — `turns`, `messages`, `tokens`, `time`, `working`, `cost`, whichever were set.
@@ -447,17 +448,14 @@ def _attempt(info: EvalLogInfo, header: EvalLog) -> LogAttempt:
 
 
 def _headline(header: EvalLog) -> tuple[float | None, str | None]:
-    """The interim convention: the first metric of the first score.
+    """The metric the task declared, or the first metric of the first score.
 
-    Which is the order Inspect's own view presents them in, so two readers following it agree. The name is returned alongside because a convention nobody can see is indistinguishable from a guess.
+    Both come from `headline_metric`, which reads the headline resolved at scoring time, falls back to the task's declaration for a log written before that existed, and falls back again to the convention when nothing was declared. Steward applies no rule of its own: two readers of one log agreeing is the whole point of the field, and a second opinion here would be the disagreement it was added to end.
     """
-    results = header.results
-    if results is None:
+    resolved = headline_metric(header)
+    if resolved is None:
         return None, None
-    for score in results.scores:
-        for metric in score.metrics.values():
-            return float(metric.value), f"{score.name}/{metric.name}"
-    return None, None
+    return float(resolved.metric.value), f"{resolved.score.name}/{resolved.name}"
 
 
 LIMITS = {

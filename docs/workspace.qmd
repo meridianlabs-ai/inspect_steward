@@ -1,25 +1,18 @@
 ---
-title: The Workspace
-llms-description: "What a Steward workspace contains, which files are authored and which are generated, what is durable and what is safe to delete, the journal, and how init handles version control."
+title: Workspace
+llms-description: "What a Steward workspace contains, which files are durable and which are safe to delete, the journal, and how init handles version control."
 ---
 
 ## Overview
 
-``` bash
-steward init my-sweep
-```
-
-The deliverable of `init` is a **directory** — one that you and an agent
-co-inhabit, and that a third party can pick up cold. That framing does real
-work: it means everything important has to be written down rather than held in
-somebody's session.
+The deliverable of `steward init` is a **workspace** — a directory that you and an agent co-inhabit, and that a third party can pick up cold. Everything important is written down in it rather than held in somebody's session:
 
 ``` text
 my-sweep/
   AGENTS.md           # authored  — bootstrap: "you are tending a run; read the runbook"
   CLAUDE.md           # authored  — symlink to AGENTS.md
-  _steward.md         # authored  — your standing rules
-  evalset.py          # authored  — your definition (or flow.yaml / hawk.yaml)
+  _steward.md         # authored  — your eval policy
+  evalset.py          # authored  — your definition (or flow.py / hawk.yaml)
   .env                # authored  — credentials, if you keep them here
 
   journal.jsonl       # DURABLE   — append-only record; the source of truth
@@ -27,144 +20,41 @@ my-sweep/
   steward.log         # generated — whether Steward's own machinery worked
   timer.log           # generated — what a scheduled tend printed before Steward could log
 
-  logs/               # DURABLE   — the flat log directory: the CURRENT definition's results
+  logs/               # DURABLE   — the flat log directory: the current definition's results
   logs-archive/       # DURABLE   — superseded, removed, and failed logs; never deleted
 
   .steward/           # DISPOSABLE — claim, manifest, in-flight record, caches
 ```
 
-`init` **only ever creates.** Everything authored in a workspace is somebody's
-work, so a second run reports each path as created or kept rather than restoring
-a pristine copy over it. `.gitignore` is the single exception and gains missing
-entries idempotently, because those entries are Steward's rather than yours.
+`init` **only ever creates** — a second run reports each path as created or kept rather than restoring a pristine copy over your work. It is safe to run in a directory that already has a definition.
 
-## Four categories, and only one is safe to delete
+## What is safe to delete
 
-The obvious split — human-readable at the top, machine-owned in `.steward/` —
-conflates *who writes a file* with *whether it can be recovered*. The categories
-that matter are:
+The categories that matter are about whether a file can be recovered, not who wrote it:
 
-| category | files | if you delete it |
+| Category | Files | If you delete it |
 |----|----|----|
 | **authored** | `_steward.md`, `AGENTS.md`, the definition | your own work is gone |
 | **durable machine state** | `journal.jsonl`, `logs/`, `logs-archive/` | the audit trail, or the results, are gone |
 | **authored by the agent** | `scanning.md`, `analysis.md` *(not yet implemented)* | the investigation is gone, and re-runs from scratch |
-| **disposable** | everything in `.steward/`, `status.md`, `steward.log`, `timer.log` | rebuilt on the next turn, or simply gone with no loss |
+| **disposable** | everything in `.steward/`, `status.md`, `steward.log`, `timer.log` | rebuilt on the next turn, or gone with no loss |
 
-Note that gitignored is **not** the same category as disposable. `logs/` and
-`logs-archive/` are ignored by git because `.eval` files are large outputs shared
-through a log store rather than through source control — they are still durable.
-Only `.steward/` is safe to remove.
+Gitignored is **not** the same as disposable: `logs/` and `logs-archive/` are ignored by git because `.eval` files are large outputs shared through a log store rather than source control — they are still durable. Only `.steward/` is safe to remove, and even that only when nothing is running: a worker that has not yet reached `eval_set()` dies with its instructions, and deleting the claim file under a running tend lets a second tend run concurrently.
 
 ## The journal
 
-`journal.jsonl` is the append-only record of what was observed and what was
-decided. It is the one file in the directory that **nothing else can
-reconstruct**, which is why it sits at the top level beside the authored files
-rather than in `.steward/`.
+`journal.jsonl` is the append-only record of the run: what was observed, what was done, who decided what, and why. It is the source of truth that everything else is derived from — `status.md` is a rendering of it, and `.steward/` is a cache of it. It is plain JSON lines, so `jq -r '.type' journal.jsonl` works with no Steward installed.
 
-It is also what marks a directory as a workspace, and it is the only file that
-could. `.steward/` is disposable so its absence proves nothing; a definition can
-sit in any directory; `_steward.md` is optional. So `init` opens the journal with
-a real `initialized` event, and the account of what happened starts where the
-workspace does.
+## The three log files
 
-Every event shares a UTC timestamp and a type. Today a turn appends what it
-observed — task states, whether the definition has drifted, the verdict, the
-open item ids, and the concurrency settings in force — and `steward ack` appends
-an acknowledgment. More event types arrive with the features that produce them.
+The rule dividing them is one question: is this a fact about **the eval set**, or about **Steward**?
 
-Two properties are deliberate:
+- `status.md` answers the first — where the run stands, rewritten by every tend.
+- `steward.log` answers the second — a tend that crashed, a spawn that failed. Bounded and disposable.
+- `timer.log` catches what a scheduled tend printed before Steward could log anything at all — a Python that would not start, a workspace that moved. It sits at the workspace root rather than in `.steward/` because schedulers open it before running anything, and none of them creates a missing parent directory.
 
--   **Damage costs one line, never the file.** A torn write from a crash loses
-    the last event; everything before it reads normally.
--   **An unrecognised event type is data, not an error.** A workspace outlives
-    the Steward that wrote it, so a reader yields an unknown type as a generic
-    event rather than refusing the file.
-
-There is no rendered `journal.md` and no `steward journal` command. Append-only
-JSONL diffs cleanly in git — every commit is pure additions — and
-`jq -r '.type' journal.jsonl` serves a reader with no Steward installed.
-
-### `status.md` vs `steward.log`
-
-Two generated files, and the rule dividing them is one question:
-
-> Is this a fact about **the eval set**, or about **Steward**?
-
-`status.md` and the journal answer the first. A tend that crashed, a spawn that
-failed, an unreadable `_steward.md` — those are facts about the runner, and they
-go to `steward.log`, which is bounded and disposable.
-
-The split answers something neither could alone: *"no tend for four hours"* is
-computable from the journal's silence, and *why* is in `steward.log`. Had they
-shared a file, a run whose tends were crashing would look like a run with
-nothing to report.
-
-`timer.log` is the third one, and it exists because there is a window in which
-Steward cannot write to the other two: whatever a scheduled tend printed before
-it got far enough to log anything of its own — a Python that would not start, a
-workspace that had moved. It sits at the workspace root rather than in
-`.steward/` deliberately. Every scheduler opens that path *before* running
-anything, and none of them creates a missing parent directory, so a `timer.log`
-under `.steward/` would turn a directory documented as safe to delete into one
-whose deletion silently stops supervision forever.
-
-## Losing `.steward/`
-
-It mostly fails in the safe direction, and it is worth knowing exactly how much:
-
--   The manifest is re-captured from the definition by the next `launch`.
--   In-flight records are rebuilt by sweeping the process table.
--   **Running workers survive.** Each carries its own identity in its
-    environment, so the next turn still sees them and schedules nothing over
-    them.
--   What is actually lost is provenance and a re-capture.
-
-Two cases are not safe, and they take the same rule:
-
--   **A worker mid-startup dies.** Before it reaches `eval_set()` it has not yet
-    read its instructions, so deleting them kills it. That is the right outcome
-    — a dead worker is respawned once, from nothing — and what is lost is a few
-    seconds of imports.
--   **Deleting the claim file by hand is worse than useless.** The lock lives in
-    the kernel, attached to the inode, so unlinking the file leaves the holder
-    holding it and lets the next tend create a fresh file, lock *that*, and run
-    concurrently. Nothing can detect that from the new file's side.
-
-> **So: delete `.steward/` when nothing is running, not as a reflex.**
-
-There is deliberately no `steward unclaim`. The usual reason to want one does not
-arise: the claim is held only for the seconds a turn runs, a tend that died
-released it on the way out whether it meant to or not, and one that is wedged is
-killed by the turn that finds it.
+The split means *"no tend for four hours"* is computable from the journal's silence, while *why* is in `steward.log` — a run whose tends were crashing does not look like a run with nothing to report.
 
 ## Version control
 
-`init` runs `git init` **if, and only if, there is no repository already**.
-Detection walks up from the directory, because a workspace created inside an
-existing project — `evals/sweep-2026-08/` in a monorepo — belongs to that
-repository, and initialising a nested one there is a footgun rather than a
-convenience. It announces what it did, and `--no-git` is there for people who
-mean it.
-
-Either way it writes a **local** `.gitignore` listing `.steward/`, `logs/`, and
-`logs-archive/`. Scoping the rules to a nested file means Steward never edits
-one it does not own — your parent project's ignore rules stay untouched.
-
-A missing git is an ordinary condition rather than an error. Some runs happen on
-machines with no git and no network, where an object store is the only channel
-out.
-
-::: {.callout-note appearance="simple"}
-Committing an append-only journal gives a second, independent record of when
-each decision was made — git's own metadata — and any edit to a past entry shows
-up in review as a *modification* rather than an append. It does not make the
-record tamper-proof, but it makes tampering visible in ordinary review.
-:::
-
-One caveat if you ever read log provenance: a workspace that `init` made its own
-repository has Steward writing `journal.jsonl` and `status.md` into that tree as
-it runs, so every log is marked as coming from a dirty tree. That flag means "a
-run touched this tree", not "the source was edited", and it should not be built
-on.
+`init` runs `git init` if, and only if, there is no repository already — a workspace created inside an existing project belongs to that repository. It writes a scoped `.gitignore` covering `logs/`, `logs-archive/`, `.env`, `.steward/`, and the machinery logs, so what remains tracked is what you authored plus the journal. `--no-git` skips repository creation entirely.

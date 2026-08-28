@@ -14,12 +14,14 @@ import os
 from pathlib import Path
 
 import pytest
+from inspect_ai.log import HeadlineMetric
 from inspect_steward._evalset.observe import TaskState, observe_logs, observe_tasks
 from inspect_steward._tend import Progress, progress_table, task_progress
 from inspect_steward._tend.progress import LIVE_ONLY, live_totals
 from inspect_steward._worker import (
     LiveConnections,
     LiveFleet,
+    LiveParked,
     LiveSamples,
     LiveTask,
     LiveUsage,
@@ -46,6 +48,7 @@ def live(
     turns: int = 0,
     messages: int = 0,
     connections: tuple[int, int | None] = (0, None),
+    parked: LiveParked | None = None,
     unavailable: str | None = None,
 ) -> LiveFleet:
     in_use, limit = connections
@@ -59,6 +62,7 @@ def live(
                 ),
                 usage=LiveUsage(turns=turns, messages=messages),
                 connections=LiveConnections(in_use=in_use, limit=limit),
+                parked=parked or LiveParked(),
                 unavailable=unavailable,
             )
         }
@@ -114,6 +118,23 @@ def test_a_worker_that_did_not_answer_falls_back_to_the_log(tmp_path: Path) -> N
     assert row.live is False
     assert row.unavailable == "busy"
     assert row.budget is None
+    # and no park either -- silence is not the absence of a decision, it is the
+    # absence of an answer, and reporting one either way would be a claim the
+    # reading did not make
+    assert row.parked.total == 0
+
+
+def test_a_row_carries_the_samples_its_worker_is_waiting_on(tmp_path: Path) -> None:
+    # not a column: a park is a decision somebody owes, so it leaves here as an
+    # item. The row is how it gets out of the fleet read, and the pid is how the
+    # item finds the socket a person answers on
+    write_log(tmp_path, TASK, status="started", total=10, completed=2)
+    parked = LiveParked(approvals=1, functions=("bash",))
+
+    (row,) = rows(tmp_path, [TASK], live(TASK, in_flight=1, parked=parked)).rows
+
+    assert row.parked == parked
+    assert row.pid == 1
 
 
 BUDGETS: list[tuple[str, dict[str, int], int, int, str]] = [
@@ -174,15 +195,32 @@ def test_a_settled_task_shows_no_budget_at_all(tmp_path: Path) -> None:
 
 
 def test_the_headline_metric_says_which_metric_it_is(tmp_path: Path) -> None:
-    # nothing in a log marks a metric as primary, so the column is a convention
-    # and a reader who cannot see which one was picked cannot tell it from a
-    # guess (roadmap.md §5, item 14)
+    # a bare number in a score column is not self-describing, and two tasks in
+    # one table can land on different metrics
     write_log(tmp_path, TASK, scores={"exact": {"accuracy": 0.75}})
 
     (row,) = rows(tmp_path, [TASK], LiveFleet()).rows
 
     assert row.headline == 0.75
     assert row.headline_name == "exact/accuracy"
+
+
+def test_a_declared_headline_beats_the_first_score(tmp_path: Path) -> None:
+    # the column used to be Steward's own convention -- first metric of the
+    # first score -- because nothing in a log marked one as primary. A task can
+    # say now, and saying so has to win, or two readers of one log still
+    # disagree about what it scored
+    write_log(
+        tmp_path,
+        TASK,
+        scores={"exact": {"accuracy": 0.75}, "judge": {"mean": 0.42}},
+        headline=HeadlineMetric(scorer="judge", score="judge", metric="mean"),
+    )
+
+    (row,) = rows(tmp_path, [TASK], LiveFleet()).rows
+
+    assert row.headline == 0.42
+    assert row.headline_name == "judge/mean"
 
 
 def test_totals_are_samples_rather_than_tasks(tmp_path: Path) -> None:

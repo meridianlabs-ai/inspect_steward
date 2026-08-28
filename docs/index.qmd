@@ -63,19 +63,11 @@ This will scaffold up a Steward workspace with an `evalset.py` and `AGENTS.md` f
 
 ```{.python filename="evalset.py"}
 from inspect_ai import eval_set
-from inspect_harbor import (
-    cais_swebenchpro, datacurve_deep_swe
-)
+from inspect_harbor import cais_swebenchpro, datacurve_deep_swe
 
 eval_set(
-    tasks=[
-        cais_swebenchpro(), 
-        datacurve_deep_swe()
-    ],
-    model=[
-        "openai/gpt-5.6-sol",
-        "anthropic/claude-opus-5"
-    ],
+    tasks=[cais_swebenchpro(),  datacurve_deep_swe()],
+    model=["openai/gpt-5.6-sol", "anthropic/claude-opus-5"],
     log_dir="logs/swe-evals"
 )
 ```
@@ -83,7 +75,7 @@ eval_set(
 Steward can manage any evalution defined with a script that ends in a call to `eval_set()` or alternatively a `flow.py` from [Flow](https://meridianlabs-ai.github.io/inspect_flow/) or a `hawk.yaml` from [Hawk](https://hawk.metr.org).
 
 
-Next, launch your coding agent from this directory and tell it to run the evaluation (you should typically run from a [tmux](https://github.com/tmux/tmux/wiki) detached terminal so the agent is persistent):
+Next, launch your coding agent from the workspace and tell it to run the evaluation (you should typically run from a [tmux](https://github.com/tmux/tmux/wiki) detached terminal so the agent is persistent):
 
 ```bash
 $ claude
@@ -155,7 +147,7 @@ The agent will notify you when any of these conditions exist and will help you r
 
 ## Eval Policy
 
-Steward writes a `_steward.md` file to your evaluation directory which can be used to tune the behavior of the monitor and agent. The top part of the file has YAML configuration, and the body of the file contains free form prose that the agent consults when making decisions. For example:
+Steward writes a `_steward.md` file to your workspace which can be used to tune the behavior of the monitor and agent. The top part of the file has YAML configuration, and the body of the file contains free form prose that the agent consults when making decisions. For example:
 
 ```{.markdown filename="_steward.md"}
 ---
@@ -175,7 +167,7 @@ usually scores well), investigate the transcripts before proposing
 a re-run.
 ```
 
-### Execution
+#### Concurrency
 
 |  |  |
 |----|----|
@@ -183,26 +175,30 @@ a re-run.
 | `max_workers` | How many processes tasks are divided into (default: one per task, for maximum fault isolation). |
 | `tend_interval` | How often the background monitor checks the run (default: `10m`). |
 
-### Errors
-
-|  |  |
-|----|----|
-| `stall_after` | How many failed attempts before Steward stops re-launching a task and reports it instead (default: 2). |
-
-By default, Steward automatically retries samples 3 times (`retry_on_error=3`). Modify your eval set configuration directly to change this default.
-
-Note that Steward always runs tasks to completion (`continue_on_fail` is forced on). If you want a run to stop when error rates climb, express that as a policy rule instead (e.g. the 10% example above).
-
-### Model Concurrency
-
 A fleet's demand on a provider is `max_tasks` × `max_samples`. The second
 factor belongs to your definition: set `max_samples` explicitly and Steward
 honors it (when unset, tasks run at 40; `steward tend --max-samples` overrides
 it for a single run). Policy for managing provider load dynamically — per-model
 ceilings, backing off under throttling — will be added here.
 
+See the [Concurrency](concurrency.qmd) article for more details on scheduling and execution policy.
+
+#### Errors
+
+|  |  |
+|----|----|
+| `stall_after` | How many failed attempts before Steward stops re-launching a task and reports it instead (default: 2). |
+
+By default, Steward automatically retries samples 3 times (`retry_on_error=3`). Modify your eval set configuration directly to change this default. Note that Steward always runs tasks to completion (`continue_on_fail` is forced on). If you want a run to stop when error rates climb, express that as a policy rule instead (e.g. the 10% example above).
+
+See the [Error Handling](errors.qmd) article for more details on error handling and recovery.
+
 
 ## Learning More
 
+- [Concurrency](concurrency.qmd) — how tasks are scheduled across processes, and how a fleet's load on model providers is controlled.
+- [Error Handling](errors.qmd) — the two error tiers, what is retried automatically, and who decides what happens after.
+- [The Workspace](workspace.qmd) — what is in the workspace, what is durable, and what you may safely delete.
+- [The Agent Runbook](runbook.qmd) — what an agent supervising your run may do, and the operating instructions Steward ships to it.
 
-Platform-specific notes are in [Inspect Flow](flow.qmd) and [Hawk](hawk.qmd), and the complete CLI and Python API are in the [Reference](reference/index.qmd).
+Platform-specific notes are in [Inspect Flow](flow.qmd) and [Inspect Hawk](hawk.qmd), and the complete CLI and Python API are in the [Reference](reference/index.qmd).

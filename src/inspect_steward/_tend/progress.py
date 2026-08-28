@@ -19,7 +19,7 @@ from .._evalset.observe import (
     TaskState,
 )
 from .._util.size import format_bytes
-from .._worker import LiveFleet, LiveTask, ProcessUsage, process_usage
+from .._worker import LiveFleet, LiveParked, LiveTask, ProcessUsage, process_usage
 
 SUFFIX = {
     "turns": "t",
@@ -76,13 +76,25 @@ class TaskProgress:
 
     headline: float | None = None
     headline_name: str | None = None
-    """The metric in the score column, and which metric it is. Chosen by convention — see `LogAttempt.headline`."""
+    """The metric in the score column, and which metric it is. Declared by the task where it says — see `LogAttempt.headline`."""
 
     budget: Budget | None = None
     """The per-sample limit worth showing, and its usage. `None` when the task declared none, or when nothing is running to have used any."""
 
     connections: tuple[int, int | None] | None = None
     """Model connections in use and the pool's ceiling, for a running task."""
+
+    parked: LiveParked = field(default_factory=LiveParked)
+    """Samples of this task waiting on a person. Empty for anything not running.
+
+    Not a column — a park is a *decision somebody owes*, so it becomes an item rather than a number in a table, and the row is only how it gets here. Carried per task rather than per worker because that is what a person recognises: a packed worker holding two parked tasks is two decisions.
+    """
+
+    pid: int = 0
+    """The worker running this task, or `0` where none is.
+
+    Here for the park and nothing else: an ACP socket is discovered by pid, so this is what turns *somebody is waiting* into an address they can be answered at.
+    """
 
     live: bool = False
     """Whether a worker answered for this row. When false the numbers are the log's last word rather than the present tense."""
@@ -226,6 +238,8 @@ def _row(task: TaskObservation, live: LiveTask | None) -> TaskProgress:
             if answered and live is not None
             else None
         ),
+        parked=live.parked if answered and live is not None else LiveParked(),
+        pid=live.pid if live is not None else 0,
         live=answered,
         unavailable=live.unavailable if live is not None else None,
     )

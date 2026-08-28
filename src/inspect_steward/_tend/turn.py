@@ -60,6 +60,7 @@ from .._worker import (
 )
 from .._workspace import (
     ARMED,
+    OBSERVATION,
     Ack,
     Armed,
     Claim,
@@ -88,14 +89,6 @@ from .history import Happened, happened
 from .items import Item, Supervision, Verdict, tend_items, verdict
 from .progress import Progress, live_totals, task_progress
 from .render import status_markdown
-
-OBSERVATION = "observation"
-"""Journal event: what one turn saw, and the settings it saw it under.
-
-Written by every executed turn, whether or not anything happened, because an agent reads the run as a **time series** and its own memory does not survive a session boundary — there are several of those in a night. If the series is not written down it does not exist, and the 6am agent inherits a list of open items with no idea which are getting worse (workflow.md, *The journal records observations, not only decisions*).
-
-It is also what makes degrading `_steward.md` possible: the settings in force are recorded here, so a turn that cannot parse the file has somewhere to read the last good ones from.
-"""
 
 ACTION = "action"
 """Journal event: something Steward did, and how it turned out."""
@@ -656,6 +649,14 @@ def _projected(
             unfinished=sum(
                 result.summary.states.get(state.value, 0)
                 for state in (TaskState.MISSING, TaskState.INCOMPLETE)
+            ),
+            # tasks with nothing left running, which is what makes a park
+            # subtract from progress rather than merely accompany it. A task
+            # with one sample parked among fifty working is still progressing
+            parked=sum(
+                1
+                for row in result.progress.rows
+                if row.parked.total and row.parked.total >= row.running
             ),
         ),
         appeared=sorted(current - history.previous),
