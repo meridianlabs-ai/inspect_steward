@@ -164,13 +164,23 @@ convention = "google"
 [tool.pytest.ini_options]
 pythonpath = ["src"]
 testpaths = ["tests"]
-addopts = "-n auto"
+# `not network` by default, and the reason is isolation rather than speed:
+# hawk's CLI runs `uv pip install` into the *running interpreter*, which
+# uninstalls this project's editable inspect-ai and rewrites the package tree
+# from hawk's own git pin. Two consequences, both observed. Concurrently, a
+# sibling xdist worker importing inspect_ai mid-rewrite dies with a bare
+# ModuleNotFoundError nowhere near its own subject. Afterwards, the venv is
+# left pointing at hawk's snapshot, so every later run -- and every `steward`
+# invocation -- silently tests a different inspect than the checkout.
+# Opt in with `pytest -m network -n0`, and `uv sync` when it is done.
+addopts = "-n auto -m 'not network'"
 markers = [
     # Requires network and the `uv` binary. Hawk's CLI runs `uv pip install`
     # into the running interpreter on every invocation, resolving inspect-ai
-    # from a pinned git commit, so a hawk definition cannot be read offline.
-    # Exclude with: pytest -m "not network"
-    "network: needs network access and an external tool on PATH",
+    # from a pinned git commit, so a hawk definition cannot be read offline
+    # -- and cannot be read without replacing what is installed. Deselected by
+    # default (see addopts above).
+    "network: needs network access, an external tool on PATH, and sole use of the environment",
 ]
 
 [tool.pyright]
