@@ -68,3 +68,23 @@ def test_runbook_carries_the_bounds() -> None:
         "Trust the artifact, not the exit code",
     ):
         assert bound in result.output
+
+
+def test_the_rename_refusal_reaches_the_operator_as_a_message(tmp_path: Path) -> None:
+    """The one migration everybody has to do must not arrive as a traceback.
+
+    `create_workspace` refuses deliberately here — before writing anything — so
+    the CLI has to translate it. Catching only `OSError` let the expected
+    refusal escape as an unhandled exception.
+    """
+    (tmp_path / "_steward.md").write_text(
+        "---\nmax_workers: 2\n---\n", encoding="utf-8"
+    )
+
+    result = CliRunner().invoke(steward, ["init", str(tmp_path)])
+
+    assert result.exit_code == 1
+    assert "_steward.md" in result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+    # and nothing was written, which is what makes the refusal recoverable
+    assert not (tmp_path / "_steward.yaml").exists()
