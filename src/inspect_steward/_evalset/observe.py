@@ -180,6 +180,8 @@ class ObservedLogs:
         """The attempt that counts for an identifier.
 
         The latest *successful* attempt wins, falling back to the newest attempt when none succeeded. Deliberately not upstream's rule, which takes the newest by file mtime whatever its status: mtime is rewritten by restoring a log from the archive, and a re-run that errored should not displace a good result (execution.md, *Multiple logs per task*).
+
+        **Recency is the whole rule here, because nothing else is available.** A directory read without a manifest — `logs-archive/`, or an orphan's attempts — has no question to compare a log against. Where there *is* a manifest, `_current` asks the better one first and falls back to this.
         """
         attempts = self.attempts.get(identifier)
         if not attempts:
@@ -420,7 +422,7 @@ def _observe_task(
     manifest: Manifest, task: ManifestTask, logs: ObservedLogs
 ) -> TaskObservation:
     required = task.samples * task.epochs
-    current = logs.current(task.identifier)
+    current = _current(manifest, task, logs)
     if current is None:
         return TaskObservation(
             identifier=task.identifier,
@@ -443,8 +445,52 @@ def _observe_task(
         task=task,
         reason=reason,
         current=current,
-        superseded=logs.superseded(task.identifier),
+        superseded=[
+            attempt
+            for attempt in logs.attempts.get(task.identifier, [])
+            if attempt is not current
+        ],
         required_samples=required,
+    )
+
+
+def _current(
+    manifest: Manifest, task: ManifestTask, logs: ObservedLogs
+) -> LogAttempt | None:
+    """The attempt that answers for a task, once the question being asked is known.
+
+    `ObservedLogs.current` cannot ask this — it serves directories with no manifest to compare against, so its rule is the newest successful attempt and nothing else. That rule holds until a run's shape moves and moves back: slice A, then B, then A again, where the newest success answers B and the one before it answers A. Taking the newest then re-runs work that is sitting in the directory, and for a redirect it re-runs it from nothing.
+
+    So the shape picks which attempt is the run's answer, and everything else — short, errored, invalidated — decides what to do with the one it picked. Where no attempt matches, the manifest-free rule stands: whichever log is going to be resumed is better chosen by *newest successful* than by nothing.
+    """
+    return next(
+        (
+            attempt
+            for attempt in logs.attempts.get(task.identifier, [])
+            if attempt.status == "success" and answers_shape(manifest, task, attempt)
+        ),
+        logs.current(task.identifier),
+    )
+
+
+def answers_shape(manifest: Manifest, task: ManifestTask, attempt: LogAttempt) -> bool:
+    """Whether an attempt was produced under the shape the run is now asking for.
+
+    Both halves of shape: which samples were run (`_reshaped`) and what the run talked to (`_redirected`).
+
+    Public because `launch` asks the same question of two directories a tend does not — of `logs-archive/`, before calling a restored log a reason the work does not run again, and of `logs/`, before counting a task among those a reshape costs. Asking it there rather than re-deriving it is what keeps the launch's preview and the tend's verdict the same answer.
+
+    Args:
+        manifest: Desired state, whose overrides and options say what shape is being asked for.
+        task: The manifest row this attempt is paired with.
+        attempt: The log to judge.
+
+    Returns:
+        Whether the attempt's samples are answers to the question now being asked.
+    """
+    return (
+        _redirected(manifest, attempt) is None
+        and _reshaped(manifest, task, attempt) is None
     )
 
 

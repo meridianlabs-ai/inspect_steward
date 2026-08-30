@@ -522,6 +522,67 @@ def test_a_redirect_outranks_a_reason_that_would_resume(tmp_path: Path) -> None:
     assert only.reason is IncompleteReason.REDIRECTED
 
 
+def test_a_shape_returned_to_is_answered_by_the_attempt_that_answered_it(
+    tmp_path: Path,
+) -> None:
+    """Slice A, then B, then A again — and A's result never left the directory.
+
+    The newest successful attempt answers B, so taking it re-runs three samples
+    that are sitting one file away. The rule is right where it was written, for
+    a directory with no manifest to compare against; here there is one, and it
+    says which attempt is the answer.
+    """
+    task = SynthTask("probe", samples=3)
+    write_log(tmp_path, task, total=3, selection={"limit": (0, 3)}, created=EARLIER)
+    write_log(tmp_path, task, total=3, selection={"limit": (3, 6)}, created=LATER)
+
+    (only,) = observe_tasks(
+        synth_manifest([task], limit=(0, 3)), observe_logs(tmp_path)
+    ).tasks
+
+    assert only.state is TaskState.COMPLETE
+    assert only.reason is None
+    assert only.current is not None and only.current.created == EARLIER
+    assert [attempt.created for attempt in only.superseded] == [LATER]
+
+
+def test_a_gateway_returned_to_is_answered_the_same_way(tmp_path: Path) -> None:
+    # and it matters more here than for a slice: a redirected task is spawned
+    # without its prior log, so re-running it is the whole task from nothing
+    task = SynthTask("probe", samples=3)
+    write_log(
+        tmp_path, task, total=3, model_base_url="https://a.example/v1", created=EARLIER
+    )
+    write_log(
+        tmp_path, task, total=3, model_base_url="https://b.example/v1", created=LATER
+    )
+    manifest = synth_manifest([task]).model_copy(
+        update={"overrides": EvalSetOverrides(model_base_url="https://a.example/v1")}
+    )
+
+    (only,) = observe_tasks(manifest, observe_logs(tmp_path)).tasks
+
+    assert only.reason is None
+    assert only.current is not None and only.current.created == EARLIER
+
+
+def test_where_no_attempt_answers_the_newest_successful_one_still_does(
+    tmp_path: Path,
+) -> None:
+    # the fallback, and it is the rule that was always here: some log has to be
+    # the one resumed, and *newest successful* chooses better than nothing
+    task = SynthTask("probe", samples=3)
+    write_log(tmp_path, task, total=3, selection={"limit": (0, 3)}, created=EARLIER)
+    write_log(tmp_path, task, total=3, selection={"limit": (3, 6)}, created=LATER)
+
+    (only,) = observe_tasks(
+        synth_manifest([task], limit=(6, 9)), observe_logs(tmp_path)
+    ).tasks
+
+    assert only.reason is IncompleteReason.RESHAPED
+    assert only.current is not None and only.current.created == LATER
+
+
 def test_a_changed_slice_is_still_reshaped_rather_than_redirected(
     tmp_path: Path,
 ) -> None:

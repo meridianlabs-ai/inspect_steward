@@ -328,6 +328,16 @@ def delta_lines(delta: Delta, *, root: Path | None = None) -> list[str]:
                 f"    {_plural(slice.affected, 'task')} with results would run "
                 f"again, and the results they have would be superseded"
             )
+        if slice.workers:
+            # the fleet costs the same here as it does under a relocation and
+            # has to be said in the same place: this preview is what somebody
+            # reads while deciding whether to accept an archiving change, and a
+            # launch that also stops every worker should not disclose it
+            # afterwards
+            lines.append(
+                f"    {_plural(len(slice.workers), 'worker')} running the old "
+                f"one would be stopped"
+            )
     for change, (verb, reason) in _LABELS.items():
         rows = delta.of(change)
         if not rows:

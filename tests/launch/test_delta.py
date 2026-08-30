@@ -18,6 +18,7 @@ through `launch` itself.
 """
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 from inspect_ai._eval.eval_set_overrides import EvalSetOverrides
@@ -36,6 +37,9 @@ ADDITION_SCALED = SynthTask("addition", args={"scale": 2}, samples=10)
 """`addition` with an argument. Same file, name, and model; new identifier — an edit rather than a deletion, which is exactly the pair the gate cannot tell apart on identity alone."""
 
 OTHER_MODEL = SynthTask("addition", model="mockllm/other", samples=10)
+
+EARLIER = "2026-08-23T18:00:00+00:00"
+LATER = "2026-08-23T20:00:00+00:00"
 
 
 def empty() -> ObservedLogs:
@@ -537,6 +541,101 @@ def test_a_changed_gateway_is_reported_and_stops_the_fleet(tmp_path: Path) -> No
     assert delta.reshaped.fields == ("model_base_url",)
     assert delta.reshaped.affected == 1
     assert delta.stopping == ["add_abc_1"]
+
+
+RESTORABLE: list[
+    tuple[str, dict[str, Any], dict[str, Any], EvalSetOverrides | None, bool]
+] = [
+    (
+        "the slice it was produced under",
+        {"selection": {"limit": (5, 10)}},
+        {"limit": (5, 10)},
+        None,
+        True,
+    ),
+    (
+        "a slice nobody is asking for any more",
+        {"selection": {"limit": (0, 5)}},
+        {"limit": (5, 10)},
+        None,
+        False,
+    ),
+    (
+        "a gateway the run has left",
+        {"model_base_url": "https://old.example/v1"},
+        {},
+        EvalSetOverrides(model_base_url="https://new.example/v1"),
+        False,
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("ran", "wanted", "overrides", "restored"),
+    [
+        (ran, wanted, overrides, restored)
+        for _, ran, wanted, overrides, restored in RESTORABLE
+    ],
+    ids=[case for case, _, _, _, _ in RESTORABLE],
+)
+def test_an_archived_log_is_restored_only_where_it_answers_the_question(
+    tmp_path: Path,
+    ran: dict[str, Any],
+    wanted: dict[str, Any],
+    overrides: EvalSetOverrides | None,
+    restored: bool,
+) -> None:
+    """A restore says *that work does not run again*, which is a claim about the log.
+
+    The identifier is what finds it and is not what makes the sentence true: a
+    reshape compares the last two manifests, where an archived attempt can be
+    from any era before them. Restoring one produced under a slice or a gateway
+    the run has since left moves a log into `logs/` and re-runs the task at the
+    next tend anyway — from nothing, where it was redirected.
+    """
+    archive = tmp_path / "logs-archive"
+    write_log(archive, ADDITION, **ran)
+    manifest = synth_manifest([ADDITION], **wanted)
+    if overrides is not None:
+        manifest = manifest.model_copy(update={"overrides": overrides})
+
+    delta = compute_delta(
+        manifest,
+        manifest,
+        logs=empty(),
+        archived=observe_logs(str(archive)),
+        running=[],
+    )
+
+    assert bool(delta.of(Change.RESTORE)) is restored
+
+
+def test_a_task_an_older_attempt_answers_is_not_counted_as_running_again(
+    tmp_path: Path,
+) -> None:
+    """The count is what the reader acts on, so it has to be what the tend will do.
+
+    Reverting to a slice this workspace has already run leaves the attempt that
+    answers it in `logs/`, where `observe` finds it and calls the task
+    complete. Counting it here would promise a re-run that never happens, in
+    the same sentence that is otherwise telling somebody the truth about a
+    reshape.
+    """
+    logs = tmp_path / "logs"
+    write_log(logs, ADDITION, selection={"limit": (0, 5)}, created=EARLIER)
+    write_log(logs, ADDITION, selection={"limit": (5, 10)}, created=LATER)
+
+    delta = compute_delta(
+        synth_manifest([ADDITION], limit=(0, 5)),
+        synth_manifest([ADDITION], limit=(5, 10)),
+        logs=observe_logs(str(logs)),
+        archived=empty(),
+        running=[],
+    )
+
+    assert delta.reshaped is not None
+    assert delta.reshaped.fields == ("limit",)
+    assert delta.reshaped.affected == 0
 
 
 def test_an_unchanged_gateway_is_nothing_to_change(tmp_path: Path) -> None:

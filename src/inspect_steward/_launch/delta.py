@@ -26,7 +26,7 @@ from .._evalset.manifest import (
     Manifest,
     ManifestTask,
 )
-from .._evalset.observe import ObservedLogs
+from .._evalset.observe import ObservedLogs, answers_shape
 from .._schedule import RunningWorker
 
 
@@ -91,7 +91,10 @@ class Reshaped:
     """Which shaping fields differ — the slice first, then what the run talks to."""
 
     affected: int
-    """Tasks holding results that would be run again."""
+    """Tasks holding results that would be run again.
+
+    Not simply *tasks holding results*: a task that already has an attempt from an earlier era answering the shape being returned to — slice A, then B, then A again — is settled by that attempt rather than re-run, which is the same arithmetic `observe` does when it decides which attempt counts. Counting it here would promise a re-run the next tend does not perform.
+    """
 
     workers: tuple[str, ...] = ()
     """Every worker alive when this was computed, by stem.
@@ -259,7 +262,7 @@ def compute_delta(
     changes = [
         *_added(wanted, committed, by_task),
         *_extended(wanted, committed),
-        *_restorable(wanted, logs, archived),
+        *_restorable(new, wanted, logs, archived),
         *_archived(wanted, committed, logs, by_task),
     ]
     changes.sort(key=lambda row: (_ORDER[row.change], row.key))
@@ -305,7 +308,12 @@ def _reshaped(
         return None
     return Reshaped(
         fields=changed,
-        affected=sum(1 for identifier in wanted if logs.attempts.get(identifier)),
+        affected=sum(
+            1
+            for identifier, task in wanted.items()
+            if (attempts := logs.attempts.get(identifier))
+            and not any(answers_shape(new, task, attempt) for attempt in attempts)
+        ),
         workers=tuple(worker.worker for worker in running),
     )
 
@@ -397,6 +405,7 @@ def _extended(
 
 
 def _restorable(
+    new: Manifest,
     wanted: Mapping[str, ManifestTask],
     logs: ObservedLogs,
     archived: ObservedLogs,
@@ -406,18 +415,30 @@ def _restorable(
     **The question is about the new manifest and the two directories, and not at all about the old manifest.** A task committed before can still have its logs in the archive — a launch archived them and no tend has re-run it yet, or somebody reverted twice — and that is exactly the case where a restore saves the most. So membership in the old manifest is not consulted.
 
     **What is consulted is `logs/`.** A task already holding an attempt in the run's own directory is satisfied, and pulling a second copy back from the archive would add an attempt nobody asked for — which `observe_logs` would then have to arbitrate between, for no gain. The archive is a fallback for results the directory does not have.
+
+    **And the shape, which is what makes the row's sentence true.** An archived attempt is a result from some earlier era of this workspace, and nothing about being asked for by identifier says it was produced under the slice, sandbox and gateway the run is now asking for — the two manifests a reshape compares are the last two, where the archive can be from any of them. Restoring one that answers a different question would move a log into `logs/` and say *that work does not run again* about work the very next tend re-runs, from nothing where it was redirected. So only the attempts that answer are moved, and a task with none stays where it is: a cache entry for a different question is a miss.
     """
-    return [
-        TaskChange(
-            change=Change.RESTORE,
-            identifier=identifier,
-            key=task.key,
-            samples=task.samples * task.epochs,
-            logs=tuple(attempt.location for attempt in archived.attempts[identifier]),
+    rows: list[TaskChange] = []
+    for identifier, task in wanted.items():
+        if logs.attempts.get(identifier):
+            continue
+        answering = tuple(
+            attempt.location
+            for attempt in archived.attempts.get(identifier, [])
+            if answers_shape(new, task, attempt)
         )
-        for identifier, task in wanted.items()
-        if archived.attempts.get(identifier) and not logs.attempts.get(identifier)
-    ]
+        if not answering:
+            continue
+        rows.append(
+            TaskChange(
+                change=Change.RESTORE,
+                identifier=identifier,
+                key=task.key,
+                samples=task.samples * task.epochs,
+                logs=answering,
+            )
+        )
+    return rows
 
 
 def _archived(
@@ -456,6 +477,7 @@ __all__ = [
     "Change",
     "Delta",
     "Relocation",
+    "Reshaped",
     "TaskChange",
     "compute_delta",
 ]

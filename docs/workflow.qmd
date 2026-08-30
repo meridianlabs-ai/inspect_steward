@@ -98,7 +98,7 @@ The split means *"no tend for four hours"* is computable from the journal's sile
 3. **Compute the delta** between that manifest and the committed one.
 4. **Gate on it** — refuse to commit anything that would move results out of `logs/` unless you said otherwise.
 5. **Commit** the manifest as desired state.
-6. **Restore** logs the archive already holds for identifiers the new manifest asks for. A move rather than a re-run.
+6. **Restore** logs the archive already holds for identifiers the new manifest asks for. A move rather than a re-run — where the archived log answers the question being asked: one produced under a slice or a gateway the run has since left is left where it is, since restoring it would move a log into `logs/` and re-run the task anyway.
 7. **Stop** workers running tasks the new manifest no longer names, and **arm the timer**.
 8. **Tend once**, which is what actually spawns the first workers.
 
@@ -114,7 +114,7 @@ Adding work is what you just asked for; removing work from `logs/` could equally
 | **extend** | Same identifier, more work than before — raised epochs, a grown dataset. Nothing already in `logs/` stops counting. | yes |
 | **removed** | Gone from the definition, with nothing of its name and model left. | **archives** |
 | **superseded** | Gone, but a task of the same name and model is still there under a different configuration — what an edit displaced. | **archives** |
-| **restore** | Asked for, and a log for it is sitting in the archive. | yes |
+| **restore** | Asked for, and a log for it is sitting in the archive that answers the shape the run is now asking for. | yes |
 
 A **relocation** is the sixth thing and is not a row, because it is not about a task: moving the definition's `log_dir` leaves every identifier untouched while putting the run's results in a directory the next tend no longer reads. Nothing is archived, nothing is deleted, and the whole sweep runs again — the archiving case in a different costume, and gated the same way. It also costs the fleet, because a worker's destination is fixed in its selection document when it spawns: every worker still running is producing a log for a directory the run has stopped reading, so stopping them is part of what a relocation *is*.
 

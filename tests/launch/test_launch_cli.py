@@ -22,9 +22,11 @@ from pathlib import Path
 
 import pytest
 from click.testing import CliRunner, Result
+from inspect_steward._cli.launch import delta_lines
 from inspect_steward._cli.main import steward
 from inspect_steward._cli.options import PASSTHROUGH
 from inspect_steward._evalset.manifest import Manifest, read_manifest, write_manifest
+from inspect_steward._launch import Delta, Reshaped
 from inspect_steward._workspace import (
     ALIASED,
     LAUNCHED,
@@ -318,6 +320,26 @@ def test_the_archive_gate_refuses_and_accept_archive_proceeds(
     assert accepted.exit_code == 0, accepted.output
     assert committed(workspace).tasks[0].identifier == SCALED.identifier
     assert [path.name for path in workspace.logs_archive.iterdir()] != []
+
+
+def test_the_refused_preview_names_the_fleet_a_reshape_would_stop() -> None:
+    """The preview is what the operator decides `--accept-archive` with.
+
+    A reshape is reported rather than gated, but it arrives beside changes that
+    *are* gated — and stopping every worker in the fleet is a cost of accepting
+    them together. A relocation has always said how many it stops; reshaping
+    stops them for the same reason and said nothing, so the one sentence the
+    reader gets was missing the larger half of what it would do.
+    """
+    lines = delta_lines(
+        Delta(reshaped=Reshaped(fields=("limit",), affected=2, workers=("a_1", "b_1")))
+    )
+
+    assert any("the samples change: limit" in line for line in lines)
+    assert any("2 tasks with results would run again" in line for line in lines)
+    assert any(
+        "2 workers running the old one would be stopped" in line for line in lines
+    )
 
 
 def test_launching_without_a_timer_reports_the_run_as_unsupervised(
