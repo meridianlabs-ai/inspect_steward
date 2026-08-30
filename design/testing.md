@@ -129,8 +129,8 @@ These are nondeterministic and cost money, so they belong on a different cadence
 
 Stated so nobody mistakes a green suite for coverage of these:
 
-- **Real rate limits and real adaptive-connection behaviour.** `mockllm` never returns a 429, so the growth signal the tuner reads is untested end to end. A provider stub that emits rate limits on a schedule would close part of it and is not free.
-- **Real sandbox exhaustion.** The `max_sandboxes` division protects a host that a test suite must not actually take down. The arithmetic is unit-testable; the consequence of getting it wrong is not.
+- **Real rate limits and real adaptive-connection behaviour.** `mockllm` never returns a 429, which splits the tuning loop's coverage down the middle — and the covered half is the one this line originally wrote off. The *growth* path needs the **absence** of pushback, which `mockllm` provides for free, plus a saturated limiter, which one launch manufactures by parking samples on `approver: human` approvals so they hold the sample semaphore without finishing (`test_ramp_live.py`: launch, saturate, watch the first step land and read it back live). The *cut* path — the storm, the ceiling clamp, the step down — needs pushback and stays table-level only in `test_tuning.py`. A provider stub that emits rate limits on a schedule would close the rest and is not free.
+- **Real sandbox exhaustion.** The `max_sandboxes` sum-cap protects a host that a test suite must not actually take down. The arithmetic is unit-testable; the consequence of getting it wrong is not.
 - **Duration.** Multi-day runs, credential expiry as it actually occurs, log directories with thousands of logs. Long-run behaviour can be *simulated* at layer 1 by synthesizing the end state, which catches scaling bugs in `reconcile` but not accumulation bugs elsewhere.
 - **The upstream surface.** Steward depends on capture, selection, the control channel, and identifier stability. Layer 2 catches a break at upgrade time, which is the right place, but only for the paths a test exercises.
 

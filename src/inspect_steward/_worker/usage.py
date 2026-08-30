@@ -11,7 +11,7 @@ Nothing here raises. A process that exited between being listed and being read c
 
 import time
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 
 import psutil
 
@@ -32,6 +32,12 @@ class ProcessUsage:
     An average over each process's whole life rather than an instantaneous rate — see the module docstring. `1.0` is one core saturated since startup; a fleet of eight workers waiting on a model averages well under one between them.
     """
 
+    seconds: dict[int, float] = field(default_factory=dict[int, float])
+    """Cumulative CPU seconds per pid, over each process's whole life.
+
+    The raw material for a *windowed* measure, which this module cannot compute and the tend loop can: a turn records these beside its observation, and the next turn's delta over the inter-tend interval is a real utilization figure — reactive where `cores` is a lifetime average, and still stateless here (workflow.md, the tuning loop's CPU gate).
+    """
+
 
 def process_usage(pids: Iterable[int]) -> ProcessUsage:
     """Read memory and CPU for a set of processes.
@@ -45,6 +51,7 @@ def process_usage(pids: Iterable[int]) -> ProcessUsage:
     processes = 0
     rss = 0
     cores = 0.0
+    seconds: dict[int, float] = {}
     now = time.time()
 
     for pid in sorted(set(pids)):
@@ -64,7 +71,8 @@ def process_usage(pids: Iterable[int]) -> ProcessUsage:
 
         processes += 1
         rss += resident
+        seconds[pid] = times.user + times.system
         if (elapsed := now - started) > 0:
-            cores += (times.user + times.system) / elapsed
+            cores += seconds[pid] / elapsed
 
-    return ProcessUsage(processes=processes, rss=rss, cores=cores)
+    return ProcessUsage(processes=processes, rss=rss, cores=cores, seconds=seconds)

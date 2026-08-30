@@ -205,6 +205,7 @@ def task_config(
     task_id: str,
     *,
     max_samples: int | None = None,
+    max_connections: int | None = None,
     reason: str | None = None,
     dry_run: bool = False,
 ) -> ConfigView | Unavailable:
@@ -215,6 +216,7 @@ def task_config(
     Args:
         task_id: The task, from `list_tasks`.
         max_samples: New sample-concurrency setpoint, or `None` to read.
+        max_connections: New scaling ceiling for the adaptive connection controllers, or `None` to leave it. Process-scoped — the task only selects the process — and asymmetric by mechanism: lowering it clamps live connection concurrency at once, which is the tuning loop's fast half on overshoot, while raising it only lets the controllers climb on later clean rounds.
         reason: Why. Required alongside a change, because it is what annotates the record inspect writes into the eval log — an unattended retune with no reason is one nobody can review later.
         dry_run: Report the change without applying it. What keeps `status` a genuine `tend --dry-run` once anything here has an effect.
 
@@ -225,15 +227,18 @@ def task_config(
         ValueError: If a change is requested with no reason. A programming error rather than a runtime condition, so it raises where `Unavailable` would hide it.
     """
     args = ["config", task_id, "--json"]
-    if max_samples is not None:
+    if max_samples is not None or max_connections is not None:
         if not reason:
             raise ValueError(
                 "A `reason` is required to change a worker's configuration: it is "
                 "recorded in the eval log alongside the change, and is what makes "
                 "an unattended retune reviewable."
             )
-        args += ["--max-samples", str(max_samples), "--author", AUTHOR]
-        args += ["--reason", reason]
+        if max_samples is not None:
+            args += ["--max-samples", str(max_samples)]
+        if max_connections is not None:
+            args += ["--max-connections", str(max_connections)]
+        args += ["--author", AUTHOR, "--reason", reason]
     if dry_run:
         args.append("--dry-run")
 

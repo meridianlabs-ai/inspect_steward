@@ -21,7 +21,7 @@ They cannot drift, because they are the same code path with one flag. That is wo
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from .._evalset.archive import archive_log
 from .._evalset.cache import read_attempt_cache, write_attempt_cache
@@ -48,28 +48,34 @@ from .._schedule import (
     SpawnWorker,
     Summary,
     reconcile,
+    resolve_samples_ramp,
 )
 from .._worker import (
     Fleet,
     LiveFleet,
     LiveTarget,
+    Unavailable,
     read_fleet,
     record_exited,
     resolve_eval_set_id,
     resolve_inflight,
+    task_config,
 )
 from .._workspace import (
+    ACTION,
     ARMED,
     OBSERVATION,
     Ack,
     Armed,
     Claim,
     Collected,
+    Directives,
     DirectivesError,
     Held,
     JournalEvent,
     Paused,
     Raised,
+    RampHold,
     Workspace,
     acquire,
     append_event,
@@ -82,6 +88,7 @@ from .._workspace import (
     read_launched,
     read_pause,
     read_raised,
+    read_ramp_holds,
     resolve_pool,
     steward_log,
 )
@@ -89,9 +96,17 @@ from .history import Happened, happened
 from .items import Item, Supervision, Verdict, tend_items, verdict
 from .progress import Progress, live_totals, task_progress
 from .render import status_markdown
-
-ACTION = "action"
-"""Journal event: something Steward did, and how it turned out."""
+from .tuning import (
+    Baseline,
+    Move,
+    TaskSignals,
+    TuningPlan,
+    observation_payload,
+    plan_tuning,
+    read_baseline,
+    read_ramp_record,
+    signals,
+)
 
 
 class TendError(Exception):
@@ -198,6 +213,12 @@ class TendResult:
     """One row per task: samples done, in flight, and queued, the budget the leading sample is closest to spending, and the headline metric.
 
     Where `summary` counts what Steward is doing, this is what the *run* is doing — the question anybody opening a status view actually has. Sample counts and the live columns come from different places (the log header and the worker's own socket), which is why it is assembled here rather than inside `reconcile`.
+    """
+
+    tuning: TuningPlan = field(default_factory=TuningPlan)
+    """What this turn's window supports retuning, and the account of why.
+
+    Computed for both dispositions and executed by one, exactly like the actions: a `status` shows the step a clean window has earned without taking it, which is the preview contract everything else here honours.
     """
 
 
@@ -379,6 +400,18 @@ class _History:
     since_armed: float | None = None
     """Seconds since the timer in force was armed, or `None` where none is."""
 
+    baseline: Baseline = field(default_factory=Baseline)
+    """The previous turn's tuning record — the window's left edge (`_tend.tuning`)."""
+
+    ramp_holds: dict[str, RampHold] = field(default_factory=dict[str, "RampHold"])
+    """The holds on the tuning loop, keyed by identifier with `""` for the fleet's."""
+
+    ramp_levels: dict[str, int] = field(default_factory=dict[str, int])
+    """Where the ramp has climbed each task, for respawns to start from."""
+
+    last_step: dict[str, float] = field(default_factory=dict[str, float])
+    """When each task's setpoint last moved, for the spacing gate."""
+
 
 def _history(workspace: Workspace) -> _History:
     """Read the journal once, answering everything a turn asks of it."""
@@ -388,6 +421,7 @@ def _history(workspace: Workspace) -> _History:
         return _History(pool=None, previous=frozenset(), acknowledged={})
 
     armed = read_armed(events)
+    ramp_levels, last_step = read_ramp_record(events)
     pool: Pool | None = None
     previous: frozenset[str] | None = None
     since: float | None = None
@@ -415,6 +449,10 @@ def _history(workspace: Workspace) -> _History:
         ever_launched=read_launched(events) is not None,
         since_tend=since,
         since_armed=_elapsed(armed.ts) if armed is not None else None,
+        baseline=read_baseline(events),
+        ramp_holds=read_ramp_holds(events),
+        ramp_levels=ramp_levels,
+        last_step=last_step,
     )
 
 
@@ -446,8 +484,30 @@ def _pool(recorded: object) -> Pool | None:
         max_workers=_positive(settings.get("max_workers")),
         max_tasks=_positive(settings.get("max_tasks")),
         max_samples=_positive(settings.get("max_samples")),
+        samples_ramp=_ramp(settings.get("samples_ramp")),
         stall_after=stall_after,
     )
+
+
+def _ramp(recorded: object) -> tuple[int, int] | Literal[False] | None:
+    """The `samples_ramp` a settings payload recorded, if it recorded a usable one.
+
+    Part of the degrade path, for the same reason the rest of the payload is: an operator who disabled ramping and then broke `_steward.md` with an edit must not have a fleet start climbing on Steward's default — that is exactly the *further into a provider than anyone chose* the fallback exists to prevent.
+    """
+    if recorded is False:
+        return False
+    if isinstance(recorded, list):
+        entries = cast(list[object], recorded)
+        if (
+            len(entries) == 2
+            and all(
+                isinstance(entry, int) and not isinstance(entry, bool)
+                for entry in entries
+            )
+            and 0 < cast(int, entries[0]) <= cast(int, entries[1])
+        ):
+            return (cast(int, entries[0]), cast(int, entries[1]))
+    return None
 
 
 def _strings(value: object) -> list[str]:
@@ -514,6 +574,7 @@ def _turn(
         observed,
         pool=settings.pool,
         paused=history.paused is not None,
+        levels=history.ramp_levels,
     )
     # one read of the running fleet, feeding both the table's live columns and
     # the block under it -- a second read would be a second set of numbers, and
@@ -528,6 +589,24 @@ def _turn(
         # machine memory right now and neither appears in `fleet` as answered
         live=live_totals(fleet, [worker.pid for worker in inflight.running]),
     )
+    answered = _signals(observed, fleet)
+    plan = plan_tuning(
+        answered,
+        ramp=resolve_samples_ramp(manifest, settings.pool),
+        budget=_positive(manifest.options.get("max_sandboxes")),
+        baseline=history.baseline,
+        holds=history.ramp_holds,
+        last_step=history.last_step,
+        cpu=progress.live.usage.seconds if progress.live is not None else {},
+        now=datetime.now(timezone.utc).timestamp(),
+        absent=inflight.running_identifiers - {task.identifier for task in answered},
+    )
+    if history.paused is not None:
+        # a paused run makes no changes to itself, and a retune is a change --
+        # but the record survives, so the window is continuous across a pause
+        # rather than the first turn after a resume measuring against a
+        # baseline from before it
+        plan = replace(plan, moves=[], proposals=[], lines=[])
 
     result = TendResult(
         summary=decision.summary,
@@ -549,11 +628,13 @@ def _turn(
         ),
         executed=execute,
         progress=progress,
+        tuning=plan,
     )
     if not execute:
         return _projected(result, observed, inflight, history)
 
     acted = _act(workspace, manifest, log_dir, decision.actions, observed)
+    applied = _retune(workspace, plan, acted)
     if acted.journalled:
         # the projection below reports *what has been done to this run*, and
         # this turn has just done something to it -- so the read that fed it is
@@ -595,9 +676,77 @@ def _turn(
     }
     write_attempt_cache(workspace.observed, cache.keep({*logs.locations} - moved))
 
-    _record(workspace, result, pool=settings.pool)
+    _record(
+        workspace, result, pool=settings.pool, tuning=observation_payload(plan, applied)
+    )
     _write_status(workspace, result)
     return result
+
+
+def _signals(observed: ObservedTasks, fleet: LiveFleet) -> list[TaskSignals]:
+    """The tuning policy's per-task inputs, in table order.
+
+    Only the rows a worker answered for, because everything the policy gates on is a live reading — a task whose worker is busy simply contributes no window this turn, which the gates read as *not known to be clean* and wait out.
+    """
+    rows: list[TaskSignals] = []
+    for task in observed.tasks:
+        live = fleet.tasks.get(task.identifier)
+        if live is None or live.unavailable is not None or not live.task_id:
+            continue
+        rows.append(signals(task.key, live))
+    return rows
+
+
+def _retune(workspace: Workspace, plan: TuningPlan, acted: "_Acted") -> list[Move]:
+    """Carry out the tuning moves, and journal each one that lands.
+
+    The same posture as `_act`: one failing retune does not fail the turn or the moves after it, and the journal entry is written **after** the control channel accepts the change — an entry describing a retune that never happened would poison the very fold that decides what a respawn starts at.
+    """
+    applied: list[Move] = []
+    for move in plan.moves:
+        outcome = task_config(
+            move.task_id,
+            max_samples=move.to if move.knob == "max_samples" else None,
+            max_connections=move.to if move.knob == "max_connections" else None,
+            reason=move.reason,
+        )
+        described = f"retune {move.key} ({move.knob} {move.at}→{move.to})"
+        if isinstance(outcome, Unavailable):
+            failure = f"could not {described}: {outcome.kind}: {outcome.detail}"
+            acted.failures.append(failure)
+            steward_log(workspace.log, failure)
+            continue
+        if not outcome.applied:
+            warned = "; ".join(outcome.warnings) or "the change was not applied"
+            failure = f"could not {described}: {warned}"
+            acted.failures.append(failure)
+            steward_log(workspace.log, failure)
+            continue
+        if (outcome.persisted or {}).get(move.knob) is False:
+            # the retune is live and stays live -- undoing a change that worked
+            # because its receipt did not get filed would be the wrong repair.
+            # But one of the three records the ramp promises is missing, and an
+            # unattended retune nobody can find afterwards is the thing that
+            # provenance exists to prevent, so it is reported rather than
+            # inferred later from a gap
+            acted.failures.append(
+                f"{described} took effect but was not recorded in the eval log; "
+                f"the journal has it and the log will not"
+            )
+        append_event(
+            workspace.journal,
+            ACTION,
+            action="ramp",
+            knob=move.knob,
+            identifier=move.identifier,
+            task=move.key,
+            at=move.at,
+            to=move.to,
+            reason=move.reason,
+        )
+        acted.journalled = True
+        applied.append(move)
+    return applied
 
 
 def _reread(workspace: Workspace, previous: list[JournalEvent]) -> list[JournalEvent]:
@@ -899,6 +1048,8 @@ def _settings(
     A human may edit `_steward.md` at 10pm with a fleet up, and a typo in it must not stop the fleet converging — that is exactly the unattended failure the timer exists to prevent. So a file that will not parse falls back to the settings the last turn recorded, and says so loudly enough that nobody mistakes the run for one following the file.
 
     **Falling back needs somewhere to fall back to.** With no `observation` in the journal there is no last known good, and running on Steward's own defaults would silently discard whatever the operator wrote — the one outcome worse than stopping. So the first turn after a bad edit refuses, and every turn after a good one degrades.
+
+    **`--max-samples` is the one flag that outlives its turn**, which `_pin` argues.
     """
     try:
         directives = read_directives(workspace.directives)
@@ -909,6 +1060,7 @@ def _settings(
             max_workers=max_workers if max_workers is not None else last.max_workers,
             max_tasks=max_tasks if max_tasks is not None else last.max_tasks,
             max_samples=max_samples if max_samples is not None else last.max_samples,
+            samples_ramp=last.samples_ramp,
             stall_after=last.stall_after,
         )
         if execute:
@@ -934,11 +1086,33 @@ def _settings(
             directives,
             max_workers=max_workers,
             max_tasks=max_tasks,
-            max_samples=max_samples,
+            max_samples=_pin(max_samples, directives, history),
         ),
         degraded=None,
         interval=directives.tend_interval,
     )
+
+
+def _pin(given: int | None, directives: Directives, history: _History) -> int | None:
+    """The sample-concurrency pin in force, which may have been set on an earlier turn.
+
+    `--max-workers` and `--max-tasks` are settings for one turn and leave no residue: each turn recomputes the fleet from scratch, so a flag that lapses simply stops applying. `--max-samples` is not like that. It decides a *regime* rather than a quantity — a value pins the setpoint and switches the ramp off entirely (`resolve_samples_ramp`) — and that regime persists in the workers it spawned. A pin that lapsed after one turn would leave the next tend reading a level nobody was ramping, climbing it, and spawning the queue at the ramp's floor instead: the operator's number overridden twice, by a default they never chose, while nobody was watching.
+
+    So the pin is recorded like everything else a turn ran under, and read back here. **The way out is `_steward.md`**, and only a range: writing `samples_ramp: [x, y]` says *ramp this run* in the file that holds standing wishes, which is the one instruction that could mean nothing else. `samples_ramp: false` does not release it — that agrees with the pin rather than contradicting it, and would only substitute Steward's floor for the operator's number.
+
+    Args:
+        given: What this invocation's `--max-samples` said, or `None`.
+        directives: The parsed front matter, for the release.
+        history: The journal, for what an earlier turn recorded.
+
+    Returns:
+        The pinned setpoint, or `None` to leave the chain to the definition and the ramp.
+    """
+    if given is not None:
+        return given
+    if isinstance(directives.samples_ramp, tuple):
+        return None
+    return history.pool.max_samples if history.pool is not None else None
 
 
 def _stamp(path: Path) -> str | None:
@@ -961,12 +1135,19 @@ def _positive(value: Any) -> int | None:
     )
 
 
-def _record(workspace: Workspace, result: TendResult, *, pool: Pool) -> None:
+def _record(
+    workspace: Workspace,
+    result: TendResult,
+    *,
+    pool: Pool,
+    tuning: dict[str, Any],
+) -> None:
     """Append this turn's observation to the journal.
 
     After the actions rather than before, so it records what happened rather than what was intended. A turn interrupted between the two loses its observation and repeats no work: the next turn re-reads the same directory and reaches the same place.
     """
     summary = result.summary
+    ramp = pool.samples_ramp
     append_event(
         workspace.journal,
         OBSERVATION,
@@ -994,8 +1175,11 @@ def _record(workspace: Workspace, result: TendResult, *, pool: Pool) -> None:
             "max_workers": pool.max_workers,
             "max_tasks": pool.max_tasks,
             "max_samples": pool.max_samples,
+            "samples_ramp": list(ramp) if isinstance(ramp, tuple) else ramp,
             "stall_after": pool.stall_after,
         },
+        # what the next turn's window measures against (`_tend.tuning.Baseline`)
+        tuning=tuning,
     )
 
 

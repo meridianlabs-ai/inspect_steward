@@ -28,7 +28,7 @@ from .turn import (
     "--max-samples",
     type=click.IntRange(min=1),
     default=None,
-    help="Sample concurrency per task for this turn (overrides the definition).",
+    help="Sample concurrency per task, pinned for the run (overrides the definition, and disables the ramp).",
 )
 @click.option(
     "--no-break-claim",

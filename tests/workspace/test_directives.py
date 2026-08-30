@@ -251,3 +251,56 @@ def test_an_interval_is_stored_as_seconds(tmp_path: Path) -> None:
     directives = read_directives(written(tmp_path, "---\ntend_interval: 2h\n---\n"))
 
     assert directives.tend_interval == 7200
+
+
+# --- the ramp envelope -----------------------------------------------------
+
+RAMP: list[tuple[str, str, tuple[int, int] | bool | None]] = [
+    ("a range", "---\nsamples_ramp: [60, 300]\n---\n", (60, 300)),
+    ("a one-step range", "---\nsamples_ramp: [50, 50]\n---\n", (50, 50)),
+    ("switched off", "---\nsamples_ramp: false\n---\n", False),
+    # YAML 1.1 reads `off` as a boolean, and refusing what it delivers would
+    # refuse a perfectly natural spelling of the same instruction
+    ("off, as YAML reads it", "---\nsamples_ramp: off\n---\n", False),
+    ("unset", "---\nmax_workers: 2\n---\n", None),
+]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [(text, expected) for _, text, expected in RAMP],
+    ids=[case for case, _, _ in RAMP],
+)
+def test_the_ramp_envelope_parses(
+    text: str, expected: tuple[int, int] | bool | None, tmp_path: Path
+) -> None:
+    assert read_directives(written(tmp_path, text)).samples_ramp == expected
+
+
+NOT_A_RANGE: list[tuple[str, str, str]] = [
+    ("true says nothing about how far", "---\nsamples_ramp: true\n---\n", "how far"),
+    ("one number is not a range", "---\nsamples_ramp: [40]\n---\n", "two ordered"),
+    ("an inverted range", "---\nsamples_ramp: [200, 40]\n---\n", "ordered"),
+    ("a zero floor", "---\nsamples_ramp: [0, 40]\n---\n", "positive"),
+    ("words", "---\nsamples_ramp: fast\n---\n", "range"),
+]
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [(text, message) for _, text, message in NOT_A_RANGE],
+    ids=[case for case, _, _ in NOT_A_RANGE],
+)
+def test_a_meaningless_ramp_is_refused(text: str, message: str, tmp_path: Path) -> None:
+    with pytest.raises(DirectivesError, match=message):
+        read_directives(written(tmp_path, text))
+
+
+def test_the_ramp_reaches_the_pool_and_defaults_to_none(tmp_path: Path) -> None:
+    # `None` rather than the default range, so `resolve_samples_ramp` keeps the
+    # *no preference* / *this range* distinction the max_samples chain also draws
+    envelope = read_directives(written(tmp_path, "---\nsamples_ramp: [60, 300]\n---\n"))
+
+    assert resolve_pool(envelope).samples_ramp == (60, 300)
+    assert resolve_pool(Directives()).samples_ramp is None
+    assert resolve_pool(Directives(samples_ramp=False)).samples_ramp is False

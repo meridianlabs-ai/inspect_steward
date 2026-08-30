@@ -11,11 +11,12 @@ It is **pure** — no clock, no filesystem, no processes; it reads recorded inst
 What this function decides is mechanical continuity: which workers to spawn and in what order, which departed workers need recording. What a run *means* — whether an error class is systemic, whether an arm is worth continuing — is not here and is not Steward's (execution.md, *What the supervisor decides, and what it escalates*).
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from inspect_ai._eval.evalset import TASK_IDENTIFIER_VERSION
 
@@ -32,6 +33,14 @@ DEFAULT_MAX_SAMPLES = 40
 """Starting sample concurrency per task.
 
 Deliberately modest, because the ratchet is asymmetric: raising a limit takes effect immediately, lowering one only stops new acquires and waits for in-flight samples to drain. Climbing from a low setpoint is cheap; descending from a high one is not (scheduling.md, *`max_samples` — set explicitly, so it can be steered*).
+
+Also the default ramp's floor, and the two agree by construction: a run that starts at 40 and never earns a step is exactly the run this constant always described.
+"""
+
+DEFAULT_SAMPLES_RAMP = (DEFAULT_MAX_SAMPLES, 200)
+"""The range the tuning loop explores when nobody pinned a setpoint or wrote a range.
+
+On by default, which withdraws an earlier position deliberately (scheduling.md, *The signal is mechanical*): a run left alone at 40 all night compounds its undershoot for exactly the hours Steward exists to cover, and every step up is gated on measured absence of pushback where staying low is gated on nothing. The ceiling is a bound on discovery, not a promise of load — a run that never earns a step never leaves the floor.
 """
 
 DEFAULT_STALL_AFTER = 2
@@ -71,6 +80,12 @@ class Pool:
     """Sample concurrency per task, or `None` for no operator preference.
 
     `None` rather than the default itself, because the two are not the same claim: *no preference* yields to whatever the definition asked for, and a number is an instruction that does not. See `resolve_max_samples`.
+    """
+
+    samples_ramp: tuple[int, int] | Literal[False] | None = None
+    """The range the tuning loop may explore, `False` to disable it, or `None` for the default.
+
+    From `_steward.md`, and consulted only when nothing pinned a setpoint: an explicit `max_samples` — this pool's or the definition's — switches the whole policy off, which is what keeps the key from ever contradicting a definition. See `resolve_samples_ramp`.
     """
 
     stall_after: int = DEFAULT_STALL_AFTER
@@ -339,6 +354,7 @@ def reconcile(
     *,
     pool: Pool,
     paused: bool = False,
+    levels: Mapping[str, int] | None = None,
 ) -> Reconciliation:
     """Decide what to do next.
 
@@ -348,6 +364,7 @@ def reconcile(
         observed: The log directory read against `manifest`.
         pool: The run's shape — how many tasks may be in flight, how many processes to divide them into, and the default sample concurrency.
         paused: Stop scheduling new work. Workers already running finish normally — this is what almost everyone means by pausing a run, and it needs no control channel at all (workflow.md, *What `pause` actually pauses*).
+        levels: Where the tuning loop has already climbed each task's sample concurrency, by identifier. A respawn spawns at its task's level rather than restarting at the floor — the climb was earned against measured headroom, and a worker crash does not unmeasure it. Consulted only while a ramp is active, so a pinned run cannot be moved by stale levels.
 
     Returns:
         Actions to execute, tasks waiting on a slot, and a summary.
@@ -388,8 +405,15 @@ def reconcile(
         )
     )
     queued = poured.queued
+    ramp = resolve_samples_ramp(manifest, pool)
     spawning = [
-        SpawnWorker(tasks=batch, max_samples=max_samples) for batch in poured.workers
+        SpawnWorker(
+            tasks=batch,
+            max_samples=_spawn_level(
+                batch, max_samples, levels if ramp and levels else {}, ramp
+            ),
+        )
+        for batch in poured.workers
     ]
 
     # a paused run makes no changes to itself, and a move is a change. Reaping
@@ -661,17 +685,18 @@ def _attempt(observation: TaskObservation, inflight: InFlight) -> int:
 
 
 def resolve_max_samples(manifest: Manifest, pool: Pool) -> int:
-    """Sample concurrency for a worker: three sources, most specific first.
+    """Sample concurrency for a worker: four sources, most specific first.
 
     | | |
     |---|---|
     | the **operator's** `Pool.max_samples` | somebody typed a number for this run, so nothing outranks it |
     | the **definition's** `max_samples` | how many samples a task should run at once is a property of the eval, and its author knows the workload |
-    | `DEFAULT_MAX_SAMPLES` | nobody expressed a preference |
+    | the **ramp's floor** | a range was written, or the default one applies — the floor is where every task starts |
+    | `DEFAULT_MAX_SAMPLES` | ramping was switched off and nobody said what to pin instead |
 
     The distinction between the first two is why `Pool.max_samples` is optional rather than pre-filled with the default. Collapsing them gets it wrong in one direction or the other — Steward's own fallback silently outranking a definition, or an explicit operator instruction silently losing to one — and neither is visible from the resulting number.
 
-    Whichever wins is written into the selection explicitly. That is a starting point rather than a ceiling: step 21's tuning loop changes where a worker ends up, not where it begins.
+    Whichever wins is written into the selection explicitly. Under the first two rows it is a setpoint; under the last two it is a starting point, and the tuning loop changes where a worker ends up rather than where it begins. Which regime applies is `resolve_samples_ramp`'s answer, and the two functions agree by construction: a ramp exists exactly when neither of the pinning rows fired.
 
     Args:
         manifest: Captured desired state.
@@ -686,11 +711,58 @@ def resolve_max_samples(manifest: Manifest, pool: Pool) -> int:
     # options is free-form and deserialized, so a manifest written by another
     # version can carry anything here; a definition that set nothing carries None
     requested: Any = manifest.options.get("max_samples")
-    return (
-        requested
-        if isinstance(requested, int) and requested > 0
-        else DEFAULT_MAX_SAMPLES
-    )
+    if isinstance(requested, int) and requested > 0:
+        return requested
+
+    ramp = resolve_samples_ramp(manifest, pool)
+    return ramp[0] if ramp is not None else DEFAULT_MAX_SAMPLES
+
+
+def resolve_samples_ramp(manifest: Manifest, pool: Pool) -> tuple[int, int] | None:
+    """The range the tuning loop may explore, or `None` where the setpoint is pinned.
+
+    An explicit `max_samples` anywhere — the command line or the definition — pins the value and switches the policy off entirely, which is what lets `samples_ramp` live in `_steward.md` without ever contradicting a definition: the key governs only Steward's own exploration, and the moment anybody expresses a setpoint there is nothing left for it to govern. An author who wants a custom start *and* a ramp writes the start as the range's floor.
+
+    When pinned, the signal still runs — a persistently clean, saturated window against a pinned setpoint becomes a `tuning_proposal` item rather than a move, because the pin is somebody's and only they may move it (`_tend.tuning`).
+
+    Args:
+        manifest: Captured desired state.
+        pool: What the operator asked for.
+
+    Returns:
+        The (floor, ceiling) to explore, or `None` where nothing may be moved.
+    """
+    if pool.max_samples is not None:
+        return None
+    requested: Any = manifest.options.get("max_samples")
+    if isinstance(requested, int) and requested > 0:
+        return None
+    if pool.samples_ramp is False:
+        return None
+    if isinstance(pool.samples_ramp, tuple):
+        return pool.samples_ramp
+    return DEFAULT_SAMPLES_RAMP
+
+
+def _spawn_level(
+    batch: tuple[SpawnTask, ...],
+    start: int,
+    levels: Mapping[str, int],
+    ramp: tuple[int, int] | None,
+) -> int:
+    """Where this worker's sample concurrency begins.
+
+    The resolved start, or the level the tuning loop already climbed its tasks to — a respawn picks up where the climb left off rather than re-earning it twenty samples at a time. The minimum over a packed batch, because a selection carries one value applied per task: a fresh task must not inherit a sibling's climb, and an under-started climbed task costs one tend before the loop re-raises it, where the other direction would overshoot a level nothing measured.
+
+    **A recorded level is clamped into the range in force now**, because the range can be edited between the climb and the respawn. A run that reached 200 under `[40, 300]` and is then narrowed to `[40, 100]` must come back at 100: the journal says what was authorized then, and `_steward.md` says what is authorized now, and a spawn answers to the second. Only the replay is clamped — `start` is already the resolved floor.
+    """
+    recorded = [levels[task.identifier] for task in batch if task.identifier in levels]
+    if ramp is not None:
+        floor, ceiling = ramp
+        recorded = [min(max(level, floor), ceiling) for level in recorded]
+    if len(recorded) < len(batch):
+        recorded.append(start)
+    return max(min(recorded), 1)
 
 
 def _summarize(

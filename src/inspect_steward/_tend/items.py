@@ -78,6 +78,7 @@ UNSUPERVISED = "unsupervised"
 TIMER_DRIFT = "timer_drift"
 SIGNOFF_READY = "signoff_ready"
 PARKED = "parked"
+TUNING_PROPOSAL = "tuning_proposal"
 
 OWNERS = {
     STALLED: Owner.HUMAN,
@@ -90,6 +91,7 @@ OWNERS = {
     TIMER_DRIFT: Owner.HUMAN,
     SIGNOFF_READY: Owner.HUMAN,
     PARKED: Owner.HUMAN,
+    TUNING_PROPOSAL: Owner.HUMAN,
 }
 """Default owner per kind. Policy may move some of these once `_steward.md` can say so (step 23); a kind absent from the table is the agent's, since an unrouted item is an investigation rather than a question."""
 
@@ -215,6 +217,7 @@ def tend_items(
     items = [
         *_stalled(result, lookup, inflight),
         *_parked(result, lookup),
+        *_tuning(result),
         *_drift(result),
         *_degraded(result),
         *_orphans(result, lookup),
@@ -422,6 +425,40 @@ def _waiting(parked: LiveParked) -> str:
             f"{parked.questions} question{'' if parked.questions == 1 else 's'}"
         )
     return f"has {parked.total} samples waiting on a person — {' and '.join(parts)}"
+
+
+def _tuning(result: "TendResult") -> list[Item]:
+    """Capacity tend has no authority to take, put in front of the one who could grant it.
+
+    Two conditions with one shape (`_tend.tuning.Proposal`): a pinned setpoint holding a clean, saturated window, and a ramp at its ceiling with pushback still absent. Both mean the binding constraint is a number a person chose, so the owner is the human — and the agent's part is to relay it (`raise`) and to record the ruling for them (`ack`): "seen, happy at 60" is an acknowledgment, and the next level up would be a different item.
+
+    The id carries the level, which is what makes an acknowledgment mean something narrow: capacity at 60 accepted is not capacity at 80 accepted, and a task the human authorizes higher produces a fresh item the first time it holds a clean window at its new bound.
+    """
+    items: list[Item] = []
+    for proposal in result.tuning.proposals:
+        if proposal.pinned:
+            summary = (
+                f"{proposal.key} has held a clean, saturated window at its pinned "
+                f"max_samples of {proposal.level} for two tends — the provider is "
+                f"showing headroom, and moving a pinned setpoint is yours to decide"
+            )
+        else:
+            summary = (
+                f"{proposal.key} reached the top of its ramp ({proposal.level}) "
+                f"with pushback still absent — the envelope is the binding "
+                f"constraint; raise `samples_ramp` in _steward.md to authorize more"
+            )
+        items.append(
+            Item(
+                id=f"{TUNING_PROPOSAL}:{_digest(proposal.identifier)}:{proposal.level}",
+                kind=TUNING_PROPOSAL,
+                owner=OWNERS[TUNING_PROPOSAL],
+                level=Level.INFO,
+                subject=proposal.identifier,
+                summary=summary,
+            )
+        )
+    return items
 
 
 def _drift(result: "TendResult") -> list[Item]:

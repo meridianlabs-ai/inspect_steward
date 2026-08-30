@@ -20,6 +20,8 @@ from inspect_steward._workspace import (
     OBSERVATION,
     PAUSED,
     RAISED,
+    RAMP_HELD,
+    RAMP_RESUMED,
     RESUMED,
     JournalEvent,
     append_event,
@@ -30,6 +32,7 @@ from inspect_steward._workspace import (
     read_journal,
     read_pause,
     read_raised,
+    read_ramp_holds,
     summarize,
 )
 
@@ -514,3 +517,30 @@ def test_an_arming_this_version_cannot_use_is_data_rather_than_damage(
     write_lines(journal, event_line(ARMED, **payload))
 
     assert read_armed(read_journal(journal).events) is None
+
+
+def test_holds_compose_by_scope(tmp_path: Path) -> None:
+    # a fleet hold and a per-task hold are different decisions with different
+    # reasons, so releasing one must leave the other standing
+    journal = tmp_path / "journal.jsonl"
+    append_event(journal, RAMP_HELD, by="agent", reason="errors rising")
+    append_event(
+        journal, RAMP_HELD, by="human", reason="watch this arm", identifier="t1"
+    )
+    append_event(journal, RAMP_RESUMED, identifier="t1")
+
+    holds = read_ramp_holds(read_journal(journal).events)
+
+    assert set(holds) == {""}
+    assert holds[""].by == "agent" and holds[""].reason == "errors rising"
+
+
+def test_a_bare_resume_releases_everything(tmp_path: Path) -> None:
+    # *ramp freely again*, not *ramp except where I have forgotten I said
+    # otherwise*
+    journal = tmp_path / "journal.jsonl"
+    append_event(journal, RAMP_HELD, by="agent", reason="x")
+    append_event(journal, RAMP_HELD, by="agent", reason="y", identifier="t1")
+    append_event(journal, RAMP_RESUMED)
+
+    assert read_ramp_holds(read_journal(journal).events) == {}

@@ -89,6 +89,7 @@ def status_markdown(
     lines.extend(["", " · ".join(counts), ""])
     lines.extend(_progress(result))
     lines.extend(_live(result))
+    lines.extend(_tuning(result))
     lines.extend(_happened(result, since=since))
     return "\n".join(lines)
 
@@ -112,6 +113,21 @@ def _live(result: "TendResult") -> list[str]:
     # silent where nothing measured it, which is every manifest committed before
     # the measurement existed -- and a reader should see nothing rather than a zero
     return [bound[0].upper() + bound[1:], ""] if bound is not None else []
+
+
+def _tuning(result: "TendResult") -> list[str]:
+    """The tuning loop's account of the window, when a ramp is configured.
+
+    One source for these lines (`TuningPlan.lines`), for the reason `Live.figures` is: the terminal and this document must not disagree about what a window supported. On a `status` the moves shown are a preview — the next tend takes them if the window holds — which is the same tense every other number in a status already speaks.
+    """
+    lines = result.tuning.lines
+    if not lines:
+        return []
+    out = [f"**Tuning** · {lines[0]}", ""]
+    if len(lines) > 1:
+        out.extend(f"- {line}" for line in lines[1:])
+        out.append("")
+    return out
 
 
 def _shape(summary: Summary) -> str:

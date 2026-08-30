@@ -20,20 +20,31 @@ from typing import cast
 
 from .._workspace import (
     ACKNOWLEDGED,
+    ACTION,
     ARMED,
     DISARMED,
     LAUNCHED,
     PAUSED,
     RAISED,
+    RAMP_HELD,
+    RAMP_RESUMED,
     RESUMED,
     JournalEvent,
 )
 
-ACTION = "action"
-"""Journal event: something Steward did, and how it turned out. Defined in `turn.py`; named here to avoid importing a module that imports this one."""
-
 _ADMITTED = frozenset(
-    {ACKNOWLEDGED, RAISED, ACTION, PAUSED, RESUMED, ARMED, DISARMED, LAUNCHED}
+    {
+        ACKNOWLEDGED,
+        RAISED,
+        ACTION,
+        PAUSED,
+        RESUMED,
+        RAMP_HELD,
+        RAMP_RESUMED,
+        ARMED,
+        DISARMED,
+        LAUNCHED,
+    }
 )
 """Event types this section reports.
 
@@ -115,6 +126,15 @@ def _describe(event: JournalEvent) -> str:
         return f"paused by {by}" + (f" — {reason}" if reason else "")
     if event.type == RESUMED:
         return "resumed"
+    if event.type == RAMP_HELD:
+        by = _text(payload, "by") or "somebody"
+        task = _text(payload, "task") or _text(payload, "identifier")
+        what = f"the ramp on {task}" if task else "the ramp"
+        reason = _text(payload, "reason")
+        return f"{what} held by {by}" + (f" — {reason}" if reason else "")
+    if event.type == RAMP_RESUMED:
+        task = _text(payload, "task") or _text(payload, "identifier")
+        return f"the ramp on {task} resumed" if task else "the ramp resumed"
     if event.type == ARMED:
         scheduler = _text(payload, "scheduler") or "a scheduler"
         interval = payload.get("interval")
@@ -146,7 +166,24 @@ def _action(payload: dict[str, object]) -> str:
         # putting it in front costs, and picking an article per word is a rule
         # the next reason has to remember
         return f"archived a log — {reason}" + (f": {location}" if location else "")
+    if action == "ramp":
+        return _ramp(payload)
     return action or ""
+
+
+def _ramp(payload: dict[str, object]) -> str:
+    """One line for a retune the tuning loop made.
+
+    This is the notification your plan's agent reads: an attending agent's next collection shows these lines as new, which is what tells it a level moved and that the tuning block is worth a look. The knob is named in the reader's terms — sample concurrency against the connection ceiling — because `max_samples` in a history line is jargon where *ramped* is a verb.
+    """
+    task = _text(payload, "task") or _text(payload, "identifier") or "a task"
+    at, to = payload.get("at"), payload.get("to")
+    move = f" {at}→{to}" if isinstance(at, int) and isinstance(to, int) else ""
+    reason = _text(payload, "reason")
+    tail = f" — {reason}" if reason else ""
+    if _text(payload, "knob") == "max_connections":
+        return f"retuned the connection ceiling on {task}{move}{tail}"
+    return f"ramped {task}{move}{tail}"
 
 
 def _reap(payload: dict[str, object]) -> str:

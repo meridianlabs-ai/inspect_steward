@@ -103,6 +103,44 @@ class Directives(BaseModel):
     Passes the same test `max_workers` does: respawning a task is Steward's invention, and no `eval_set()` argument reaches it, so there is nothing here for a definition to contradict. How much patience a project's failures deserve is genuinely a standing property of the project — a flaky sandbox fleet earns more of it than a deterministic scorer bug does (`_schedule.reconcile._stalled`).
     """
 
+    samples_ramp: tuple[int, int] | bool | None = Field(default=None)
+    """The range the tuning loop may explore sample concurrency over, `false` to disable it, or `None` for the default range.
+
+    Written as a two-element list — `samples_ramp: [40, 300]` — or `false`. The default, with the key absent, is a ramp over `DEFAULT_SAMPLES_RAMP`; the floor is where every task starts, and the ceiling is how far tend may climb it while pushback stays absent (scheduling.md, *Growing `max_samples`*).
+
+    Passes the admission test despite living next to a refused `max_samples`, because it never contradicts a definition: an explicit `max_samples` anywhere — the CLI or the definition — pins the setpoint and switches this policy off entirely, so the key governs only Steward's own exploration. An author who wants a custom start *and* a ramp expresses the start as the floor.
+    """
+
+    @field_validator("samples_ramp", mode="before")
+    @classmethod
+    def _ramp(cls, value: object) -> object:
+        """A range is two ordered positive integers, and anything else is refused with its meaning.
+
+        `mode="before"` because YAML can only produce a list and strict validation will not coerce one into a tuple — and because the refusals here can say more than a type error can: `true` is meaningless where `false` is not, and a one-element or inverted range is a mistake worth naming.
+        """
+        if value is None or value is False:
+            return value
+        if value is True:
+            raise ValueError(
+                "should be a range like [40, 300], or `false` to disable ramping — "
+                "`true` says nothing about how far"
+            )
+        if isinstance(value, list):
+            entries = cast(list[object], value)
+            if (
+                len(entries) == 2
+                and all(
+                    isinstance(entry, int) and not isinstance(entry, bool)
+                    for entry in entries
+                )
+                and 0 < cast(int, entries[0]) <= cast(int, entries[1])
+            ):
+                return (entries[0], entries[1])
+        raise ValueError(
+            f"should be a range of two ordered positive integers, like [40, 300], "
+            f"or `false` — not {value!r}"
+        )
+
     tend_interval: int | None = Field(default=None, gt=0)
     """Seconds between scheduled tends, or `None` for the default.
 
@@ -199,8 +237,9 @@ def resolve_pool(
     | `max_tasks` | the CLI, then `_steward.md`, then unbounded |
     | `stall_after` | `_steward.md`, then the default — there is no flag, because patience is a standing property rather than something to retype each turn |
     | `max_samples` | the CLI, then **the definition**, then the default — the file is not a source |
+    | `samples_ramp` | `_steward.md`, then the default range — no flag, because an envelope is a standing property of the workspace, and the CLI's `--max-samples` is how one run opts out of it |
 
-    The last chain continues inside `resolve_max_samples`, which is why `None` is passed straight through rather than filled in here: *no preference* yields to whatever the definition asked for, and a number is an instruction that does not.
+    The `max_samples` chain continues inside `resolve_max_samples`, which is why `None` is passed straight through rather than filled in here: *no preference* yields to whatever the definition asked for, and a number is an instruction that does not.
 
     The first two have no default to fall back to, which is not an omission: `None` is the answer, and it means *do not bound this*. So unlike `max_samples` there is nothing downstream still to resolve — a run nobody shaped runs everything, in a process each.
 
@@ -213,10 +252,15 @@ def resolve_pool(
     Returns:
         What the operator asked for, for `reconcile`.
     """
+    ramp = directives.samples_ramp
     return Pool(
         max_workers=max_workers if max_workers is not None else directives.max_workers,
         max_tasks=max_tasks if max_tasks is not None else directives.max_tasks,
         max_samples=max_samples,
+        # `True` cannot arrive -- the field validator refuses it -- but the model
+        # types the field as `bool` for pydantic's sake, and `Pool`'s narrower
+        # `Literal[False]` is the honest type downstream
+        samples_ramp=ramp if isinstance(ramp, tuple) or ramp is False else None,
         stall_after=(
             directives.stall_after
             if directives.stall_after is not None

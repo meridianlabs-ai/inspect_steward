@@ -23,6 +23,7 @@ from inspect_steward._evalset.observe import (
 )
 from inspect_steward._schedule import (
     DEFAULT_MAX_SAMPLES,
+    DEFAULT_SAMPLES_RAMP,
     DEFAULT_STALL_AFTER,
     ArchiveLog,
     DepartedWorker,
@@ -35,6 +36,7 @@ from inspect_steward._schedule import (
     SpawnTask,
     SpawnWorker,
     reconcile,
+    resolve_samples_ramp,
 )
 
 from .._logs import SynthTask, synth_manifest, write_log
@@ -889,3 +891,125 @@ def test_the_summary_counts_what_a_status_line_needs(tmp_path: Path) -> None:
     assert result.summary.spawning == 2
     assert result.summary.unreadable == 0
     assert result.summary.max_workers == 8
+
+
+# --- the ramp: on by default, pinned by anyone explicit -------------------
+
+
+@pytest.mark.parametrize(
+    ("options", "pool", "expected"),
+    [
+        # nobody said anything: the default range, whose floor is the start
+        pytest.param({}, POOL, DEFAULT_SAMPLES_RAMP, id="on_by_default"),
+        # an explicit max_samples anywhere pins the setpoint and switches the
+        # policy off entirely -- which is what keeps `samples_ramp` from ever
+        # contradicting a definition
+        pytest.param({"max_samples": 60}, POOL, None, id="the_definition_pins"),
+        pytest.param({}, Pool(max_samples=12), None, id="the_operator_pins"),
+        pytest.param({}, Pool(samples_ramp=False), None, id="switched_off"),
+        pytest.param({}, Pool(samples_ramp=(60, 300)), (60, 300), id="a_written_range"),
+        pytest.param(
+            {"max_samples": 60},
+            Pool(samples_ramp=(60, 300)),
+            None,
+            id="a_pin_beats_a_range",
+        ),
+    ],
+)
+def test_samples_ramp(
+    options: dict[str, Any], pool: Pool, expected: tuple[int, int] | None
+) -> None:
+    manifest = synth_manifest([TASK], **options)
+
+    assert resolve_samples_ramp(manifest, pool) == expected
+
+
+def test_the_ramp_floor_is_where_a_task_starts() -> None:
+    manifest = synth_manifest([TASK])
+
+    result = reconcile(
+        manifest, InFlight(), nothing_run(manifest), pool=Pool(samples_ramp=(60, 300))
+    )
+
+    assert spawns(result)[0].max_samples == 60
+
+
+def test_ramping_off_pins_the_default() -> None:
+    manifest = synth_manifest([TASK])
+
+    result = reconcile(
+        manifest, InFlight(), nothing_run(manifest), pool=Pool(samples_ramp=False)
+    )
+
+    assert spawns(result)[0].max_samples == DEFAULT_MAX_SAMPLES
+
+
+def test_a_respawn_starts_where_the_climb_left_off() -> None:
+    # the climb was earned against measured headroom, and a worker crash does
+    # not unmeasure it
+    manifest = synth_manifest([TASK])
+    identifier = manifest.tasks[0].identifier
+
+    result = reconcile(
+        manifest,
+        InFlight(),
+        nothing_run(manifest),
+        pool=POOL,
+        levels={identifier: 120},
+    )
+
+    assert spawns(result)[0].max_samples == 120
+
+
+def test_a_replayed_level_is_clamped_to_the_range_in_force_now() -> None:
+    # the journal says what was authorized when the climb happened and
+    # `_steward.md` says what is authorized now; a spawn answers to the second
+    manifest = synth_manifest([TASK])
+    identifier = manifest.tasks[0].identifier
+
+    result = reconcile(
+        manifest,
+        InFlight(),
+        nothing_run(manifest),
+        pool=Pool(samples_ramp=(40, 100)),
+        levels={identifier: 200},
+    )
+
+    assert spawns(result)[0].max_samples == 100
+
+
+def test_a_pinned_run_ignores_stale_levels() -> None:
+    # levels are the ramp's own record, and a pinned setpoint is not the ramp's
+    manifest = synth_manifest([TASK])
+    identifier = manifest.tasks[0].identifier
+
+    result = reconcile(
+        manifest,
+        InFlight(),
+        nothing_run(manifest),
+        pool=Pool(max_samples=12),
+        levels={identifier: 120},
+    )
+
+    assert spawns(result)[0].max_samples == 12
+
+
+def test_a_packed_batch_spawns_at_its_lowest_level() -> None:
+    # one selection value applied per task: a fresh task must not inherit a
+    # sibling's climb, and the climbed one costs a tend before the loop
+    # re-raises it
+    other = SynthTask("other", samples=10, epochs=1)
+    manifest = synth_manifest([TASK, other])
+    climbed = manifest.tasks[0].identifier
+
+    result = reconcile(
+        manifest,
+        InFlight(),
+        nothing_run(manifest),
+        pool=Pool(max_workers=1),
+        levels={climbed: 120},
+    )
+
+    (worker,) = spawns(result)
+    assert len(worker.tasks) == 2
+    assert worker.max_samples == DEFAULT_MAX_SAMPLES

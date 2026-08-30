@@ -123,6 +123,8 @@ def test_a_change_without_a_reason_is_refused_before_it_runs() -> None:
     # a retune nobody can review later is the thing worth preventing
     with pytest.raises(ValueError, match="reason"):
         task_config("any-task", max_samples=8)
+    with pytest.raises(ValueError, match="reason"):
+        task_config("any-task", max_connections=150)
 
 
 # --- one live worker ----------------------------------------------------

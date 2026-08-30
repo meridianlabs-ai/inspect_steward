@@ -95,6 +95,36 @@ class LiveTask:
     parked: LiveParked = field(default_factory=LiveParked)
     total_tokens: int = 0
 
+    max_samples: tuple[int, int] | None = None
+    """The sample-concurrency knob as (in use, limit), or `None` where it is not retunable.
+
+    `in_use == limit` is the saturation the tuning loop's up-gate requires: a limiter with headroom says demand does not exist, and raising it would misreport as discovered capacity what was never asked for.
+    """
+
+    sandboxes: tuple[int, int] | None = None
+    """The process's sandbox limiters as (in use, limit), summed across providers, or `None` where no sandbox limit is in effect.
+
+    The *effective* limit — the definition's `max_sandboxes` where it set one, the provider's own default where it did not — which is what makes the fleet-wide budget readable without manifest archaeology. An elastic provider registers no limiter and reads `None` here, which caps nothing.
+    """
+
+    scale_downs: tuple[float, ...] = ()
+    """When the adaptive connection controllers last cut, as unix timestamps, newest last.
+
+    The pushback signal: a rate-limit episode leaves a multiplicative cut in each controller's recent history, so "any scale-downs since my last turn" is a comparison rather than an inference. Bounded upstream to the last few changes per controller — enough to detect presence in a window, not to count a storm.
+    """
+
+    connections_ceiling: int | None = None
+    """The adaptive controllers' scaling ceiling (their `max`), or `None` where none is adaptive.
+
+    Distinct from `connections.limit`, which is where the controllers currently *are*: the ceiling is how far they may climb, and it is the knob the tuning loop moves — down at once to exit a retry storm, back up stepwise as the pushback clears. The maximum across this row's controllers, since a retune sets them all.
+    """
+
+    connections_limit: int | None = None
+    """The highest limit any of this row's controllers currently holds, or `None` where none is adaptive.
+
+    Where a storm cut clamps the ceiling to, which is why it is a maximum and **not** `connections.limit`'s sum. The two answer different questions: the sum is how many connections the row may have open across its models, which is what a person reading the live block wants; the ceiling is a single number applied to every controller alike, so the sum would set each one's bound to what all of them together were using — a cut that is really a raise.
+    """
+
     refusals: int = 0
     """Model refusals this eval's samples have hit."""
 
@@ -205,18 +235,31 @@ async def _read(
                 # the socket answered but claims no task: the eval finished
                 # between the scan and now, which the next turn will reap
                 return unavailable("finished")
-            # one read per distinct eval, all at once. Awaiting them in turn
-            # would make a packed worker's latency its batch size -- a
-            # five-hundred-task process is five hundred round trips, which is
+            # one read per distinct eval and one per task, all at once. Awaiting
+            # them in turn would make a packed worker's latency its batch size --
+            # a five-hundred-task process is five hundred round trips, which is
             # the serial fleet read this module exists to avoid, rebuilt
             # inside one worker. `timeout` bounds each request, so a serial
-            # chain is not bounded by it either
+            # chain is not bounded by it either.
+            #
+            # the config read is task-scoped rather than the process's `/config`,
+            # because the task envelope is a superset: the same adaptive
+            # controllers, plus the `max_samples` knob and the sandbox limiters
+            # the tuning loop reads. At the default width it is the same number
+            # of requests
             evals = sorted({_text(row.get("eval_id")) for row in rows})
-            read = await asyncio.gather(
-                *(_get(client, f"/evals/{eval_id}/samples") for eval_id in evals)
+            # only rows that name a task: a row without one is a shape this
+            # version has not seen, and it costs its own columns rather than
+            # a request to a path that cannot exist
+            tasks = sorted(
+                {task_id for row in rows if (task_id := _text(row.get("task_id")))}
             )
-            config = await _get(client, "/config")
-            samples = dict(zip(evals, read, strict=True))
+            read = await asyncio.gather(
+                *(_get(client, f"/evals/{eval_id}/samples") for eval_id in evals),
+                *(_get(client, f"/tasks/{task_id}/config") for task_id in tasks),
+            )
+            samples = dict(zip(evals, read[: len(evals)], strict=True))
+            configs = dict(zip(tasks, read[len(evals) :], strict=True))
     except httpx.TimeoutException:
         # alive, and its event loop is busy running the eval -- which is the
         # thing it is supposed to be doing, so this is not a fault
@@ -227,6 +270,7 @@ async def _read(
         return unavailable(f"{type(ex).__name__}: {ex}")
 
     live: list[LiveTask] = []
+    claimed = frozenset(model for row in rows if (model := _text(row.get("model"))))
     for row in rows:
         identifier = _identify(row, target, locations)
         if identifier is None:
@@ -235,6 +279,8 @@ async def _read(
             # one turn, and the alternative is attributing a task's numbers to
             # a sibling that is not the one doing the work
             continue
+        config = configs.get(_text(row.get("task_id")))
+        model = _model(row, target)
         live.append(
             LiveTask(
                 pid=target.pid,
@@ -243,7 +289,12 @@ async def _read(
                 samples=_samples(row.get("samples")),
                 usage=_usage(samples.get(_text(row.get("eval_id")))),
                 parked=_parked(samples.get(_text(row.get("eval_id")))),
-                connections=_connections(config, _model(row, target)),
+                connections=_connections(config, model),
+                max_samples=_sample_limit(config),
+                sandboxes=_sandboxes(config),
+                scale_downs=_scale_downs(config, model, claimed),
+                connections_ceiling=_connections_ceiling(config, model),
+                connections_limit=_connections_limit(config, model),
                 total_tokens=_number(row.get("total_tokens")),
                 refusals=_number(row.get("refusals")),
                 http_retries=_number(row.get("http_retries")),
@@ -371,6 +422,26 @@ def _model(row: dict[str, object], target: LiveTarget) -> str | None:
     return None if target.only is not None else _text(row.get("model")) or None
 
 
+def _controllers(payload: object, model: str | None) -> list[dict[str, object]]:
+    """The adaptive connection controllers in a config payload, narrowed to a model.
+
+    `adaptive` sits at the top of the server's own payload — in the task envelope exactly as in the process one; the `knobs` wrapper `inspect ctl` prints is the CLI's presentation rather than the endpoint's, and this module talks to the endpoint.
+    """
+    if not isinstance(payload, dict):
+        return []
+    controllers = cast(dict[str, object], payload).get("adaptive")
+    if not isinstance(controllers, list):
+        return []
+    return [
+        cast(dict[str, object], entry)
+        for entry in cast(list[object], controllers)
+        if isinstance(entry, dict)
+        and (
+            model is None or _text(cast(dict[str, object], entry).get("name")) == model
+        )
+    ]
+
+
 def _connections(payload: object, model: str | None) -> LiveConnections:
     """The model connection pool, summed across the process's controllers.
 
@@ -378,27 +449,116 @@ def _connections(payload: object, model: str | None) -> LiveConnections:
 
     **Narrowed to the row's own model once a process holds several tasks**, because past that point the process total is not a fact about any one of them: a batch spanning four models would give every row all four pools added together, four times over. Two caveats the narrowing does not remove and cannot, since both are true of the process rather than of the reading. A controller is **shared** — two packed tasks on one model are drawing on the same pool, and it appears in both their rows because that is where it is being spent. And a packed task's **role** models are dropped, since nothing in the row names them; the alternative is attributing a sibling's models to it, which is the error this is fixing.
     """
-    if not isinstance(payload, dict):
-        return LiveConnections()
-    # `adaptive` sits at the top of the server's own payload; the `knobs`
-    # wrapper with `max_connections` inside it is `inspect ctl`'s presentation
-    # rather than the endpoint's, and this module talks to the endpoint
-    controllers = cast(dict[str, object], payload).get("adaptive")
-    if not isinstance(controllers, list):
-        return LiveConnections()
-
     in_use = 0
     limit: int | None = None
-    for entry in cast(list[object], controllers):
-        if not isinstance(entry, dict):
-            continue
-        controller = cast(dict[str, object], entry)
-        if model is not None and _text(controller.get("name")) != model:
-            continue
+    for controller in _controllers(payload, model):
         in_use += _number(controller.get("in_use"))
         if isinstance(controller.get("limit"), int):
             limit = (limit or 0) + cast(int, controller["limit"])
     return LiveConnections(in_use=in_use, limit=limit)
+
+
+def _scale_downs(
+    payload: object, model: str | None, claimed: frozenset[str] = frozenset()
+) -> tuple[float, ...]:
+    """When this row's controllers last cut, oldest first.
+
+    A cut is a `recent_changes` entry whose `to` is below its `from` — the multiplicative decrease a rate-limit episode leaves behind. Narrowed by model as `_connections` is, since a sibling task's pushback is not this row's — but with one deliberate difference, because this reading gates a *decision* where that one feeds a column.
+
+    **A controller no row claims is charged to every row.** A packed task's role models are invisible from its row, so narrowing on the primary model alone drops their pushback from the whole process: nobody claims the grader's controller, so nobody sees it cut, and every sibling reads clean while the process is being rate-limited. Attributing an unclaimed controller to all of them fails closed on exactly the cuts whose owner cannot be established, and leaves a named sibling's pushback where it belongs. `claimed` is the set of models the process's rows name; empty, or a `model` of `None`, means no narrowing is needed at all.
+    """
+    cuts: list[float] = []
+    for controller in _controllers(payload, None):
+        name = _text(controller.get("name"))
+        if model is not None and name != model and name in claimed:
+            continue
+        changes = controller.get("recent_changes")
+        if not isinstance(changes, list):
+            continue
+        for entry in cast(list[object], changes):
+            if not isinstance(entry, dict):
+                continue
+            change = cast(dict[str, object], entry)
+            at, was, to = change.get("at"), change.get("from"), change.get("to")
+            if (
+                isinstance(at, int | float)
+                and not isinstance(at, bool)
+                and isinstance(was, int)
+                and isinstance(to, int)
+                and to < was
+            ):
+                cuts.append(float(at))
+    return tuple(sorted(cuts))
+
+
+def _connections_ceiling(payload: object, model: str | None) -> int | None:
+    """How far this row's adaptive controllers may climb, or `None` where none is adaptive.
+
+    The maximum across controllers rather than a sum, because a retune through the control channel sets every controller's bound to the same number — the ceiling is one setting worn by several, not a pool they divide.
+    """
+    return _highest(payload, model, "max")
+
+
+def _connections_limit(payload: object, model: str | None) -> int | None:
+    """Where this row's adaptive controllers currently sit, or `None` where none is adaptive.
+
+    A maximum for the same reason the ceiling is one: this is what a storm cut clamps the ceiling *to*, and the ceiling it writes is worn by every controller alike.
+    """
+    return _highest(payload, model, "limit")
+
+
+def _highest(payload: object, model: str | None, key: str) -> int | None:
+    values = [
+        cast(int, controller[key])
+        for controller in _controllers(payload, model)
+        if isinstance(controller.get(key), int)
+        and not isinstance(controller.get(key), bool)
+    ]
+    return max(values) if values else None
+
+
+def _sample_limit(payload: object) -> tuple[int, int] | None:
+    """The `max_samples` knob as (in use, limit), or `None` where it is not retunable.
+
+    Only the task envelope carries it, and only as a setpoint where the run set one explicitly — the adaptive sample-concurrency path reports it unadjustable, and a knob the tuning loop cannot turn is one it must not report as a level.
+    """
+    if not isinstance(payload, dict):
+        return None
+    knob = cast(dict[str, object], payload).get("max_samples")
+    if not isinstance(knob, dict):
+        return None
+    view = cast(dict[str, object], knob)
+    if view.get("adjustable") is not True:
+        return None
+    limit, in_use = view.get("limit"), view.get("in_use")
+    if not isinstance(limit, int) or isinstance(limit, bool):
+        return None
+    return (_number(in_use), limit)
+
+
+def _sandboxes(payload: object) -> tuple[int, int] | None:
+    """The process's sandbox limiters as (in use, limit), or `None` where none is in effect.
+
+    Summed across providers, which is almost always a sum of one; an elastic provider registers no limiter at all and so caps nothing.
+    """
+    if not isinstance(payload, dict):
+        return None
+    limiters = cast(dict[str, object], payload).get("max_sandboxes")
+    if not isinstance(limiters, list):
+        return None
+    in_use = limit = 0
+    counted = False
+    for entry in cast(list[object], limiters):
+        if not isinstance(entry, dict):
+            continue
+        limiter = cast(dict[str, object], entry)
+        ceiling = limiter.get("limit")
+        if not isinstance(ceiling, int) or isinstance(ceiling, bool):
+            continue
+        counted = True
+        limit += ceiling
+        in_use += _number(limiter.get("in_use"))
+    return (in_use, limit) if counted else None
 
 
 def _number(value: object) -> int:

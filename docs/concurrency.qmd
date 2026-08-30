@@ -38,21 +38,49 @@ Packing trades away fault isolation to buy back startup cost. It is worth reachi
 
 ## `max_samples` — load within a task
 
-Sample concurrency is a property of the eval — its author knows the workload — so `max_samples` belongs in your definition and `_steward.md` refuses it by name. Set it explicitly: an explicit value is one Steward can honor precisely rather than leaving inspect to adapt on its own.
+Sample concurrency is a property of the eval — its author knows the workload — so `max_samples` belongs in your definition and `_steward.md` refuses it by name. An explicit value **pins** the setpoint: Steward honors it as written and never moves it.
 
-When a worker is spawned, its sample concurrency resolves from three sources, most specific first:
+When nobody pins one, sample concurrency is not a fixed default — it is discovered. When a worker is spawned, the number resolves most specific first:
 
 | Source | Meaning |
 |----|----|
-| `steward tend --max-samples` | an operator typed a number for this run, so nothing outranks it |
-| the definition's `max_samples` | the eval author's preference, honored as written |
-| Steward's default of `40` | nobody expressed a preference |
+| `steward tend --max-samples` | an operator typed a number for this run: pinned, nothing outranks it, and it holds for the rest of the run rather than the turn |
+| the definition's `max_samples` | the eval author's preference: pinned, honored as written |
+| the ramp | nobody expressed a preference, so tasks start at `40` and Steward tunes from there |
+
+## The ramp
+
+The right sample concurrency is roughly *what the provider will actually serve*, which is not a number anyone can look up — it varies by account tier, by model, and by time of day. So by default Steward discovers it: every task starts at the ramp's floor (`40`), and each tend buys one `+20` step toward the ceiling (`200`) when the task's window since the last tend was **clean**:
+
+- the sample limiter was saturated — demand exists, so raising it means something;
+- the provider showed no rate-limit pushback (inspect's adaptive connection controllers record every cut they take, so an episode is visible rather than inferred);
+- no sample errored, and HTTP retries did not surge (a quarter of a retry per sample slot is the line — not zero, because transient 5xxs and dropped connections are ordinary and a zero-tolerance gate would park the ramp against any imperfect endpoint);
+- the worker's CPU had headroom over the window;
+- at least twenty minutes passed since the task's last step, so a new batch has time to reach steady state before it is measured.
+
+On **sustained** pushback — episodes in two consecutive windows, the retry storm that independent per-process controllers cannot escape on their own — the ramp reverses at once: the adaptive connection ceiling is clamped down to where the controllers already fell (backoffs stop in seconds), and sample concurrency steps back down so new samples stop being admitted against connection capacity that is not there. Samples already running are never interrupted; they drain as they finish. The way back up is stepwise, through the same clean-window gates.
+
+Two more bounds cap the climb:
+
+- **`max_sandboxes` is a machine-wide budget.** The fleet-wide sum of sample setpoints never exceeds it — a task's containers never exceed its running samples, so bounding the sum bounds the containers. The budget is your definition's `max_sandboxes` if it sets one, otherwise the sandbox provider's own default; elastic providers (k8s) cap nothing.
+- **The envelope.** The range itself, settable in `_steward.md`:
+
+```{.yaml}
+samples_ramp: [40, 300]   # explore this range
+samples_ramp: false       # never ramp; tasks stay at 40
+```
+
+Every move is recorded three ways: in the eval log (who, when, old → new, and why — inspect's own retune provenance), in the journal as an action, and in the run history every summary carries (`ramped <task> 60→80 — no rate-limit pushback with the limiter saturated…`). The tuning block under the status table shows each task's level and whatever is currently gating its next step.
+
+**Holding the ramp.** An agent (or you) can freeze the climb without touching configuration: `steward ramp hold --reason "..."` holds the fleet (add a task identifier to hold one arm), and `steward ramp resume` re-arms it. A hold stops growth only — the defensive cut stays active, because it exists precisely for when nobody is watching.
+
+**When capacity outruns authority.** If a *pinned* setpoint holds a clean, saturated window for two tends running, or a ramp tops out at its ceiling with pushback still absent, Steward raises a `tuning_proposal` — the binding constraint is a number a person chose, so only a person may move it. Acknowledge it to say "seen, happy where it is"; the acknowledgment is narrow, because a different level is a different item.
 
 ## Provider load
 
 A fleet's demand on a model provider is the product of the knobs above: `max_tasks` tasks, each running `max_samples` samples, is `max_tasks × max_samples` concurrent generate calls against whatever providers the tasks use.
 
-This is worth computing before a large run, because N independent processes cannot discover a safe level on their own: each worker adapting to provider throttling finds headroom the others have not claimed yet, and the fleet overshoots and gets throttled together. Under Steward the total is a number you chose. A policy for managing provider load dynamically — per-model ceilings, backing off under throttling — is planned but not yet built.
+The total is still worth computing before a large run — the ramp's ceiling bounds where discovery can take it, and `max_tasks × 200` is the number the default envelope authorizes. Within one process, inspect's adaptive connection controllers manage the connection pool on their own (AIMD, exactly as TCP shares a link); when a ramp is active Steward raises their scaling ceiling to the ramp's ceiling so the two do not fight, and the ramp moves only the *bounds* while the controllers move within them.
 
 ## Overriding for a single run
 
@@ -61,7 +89,15 @@ Every knob has a one-run CLI override that outranks the standing configuration w
 ```bash
 steward tend --max-tasks 4        # fleet width, this turn
 steward tend --max-workers 2      # process packing, this turn
-steward tend --max-samples 20     # per-task sample concurrency, this turn
+steward tend --max-samples 20     # pin per-task sample concurrency, for the run
 ```
 
-Standing values belong in `_steward.md` front matter (`max_tasks`, `max_workers`) or your definition (`max_samples`); the CLI is for the run where conditions differ.
+Standing values belong in `_steward.md` front matter (`max_tasks`, `max_workers`, `samples_ramp`) or your definition (`max_samples`); the CLI is for the run where conditions differ.
+
+**Two of the three lapse; `--max-samples` does not.** Fleet width and process packing are recomputed from scratch every turn, so a flag that is not repeated simply stops applying. Sample concurrency is different, because a value there does not just set a number — it pins the setpoint and switches the ramp off. So the pin is remembered for the rest of the run, and the way to release it is to write a range in `_steward.md`:
+
+```{.yaml}
+samples_ramp: [40, 200]   # ramp again, whatever an earlier --max-samples pinned
+```
+
+Narrowing the range works on a live run too: a task the ramp had taken to 200 is brought back to a new ceiling of 100 at the next tend, and any worker respawned after the edit starts inside the new range.

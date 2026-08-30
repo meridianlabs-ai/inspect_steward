@@ -1,5 +1,6 @@
 from .reconcile import (
     DEFAULT_MAX_SAMPLES,
+    DEFAULT_SAMPLES_RAMP,
     DEFAULT_STALL_AFTER,
     Action,
     ArchiveLog,
@@ -19,10 +20,12 @@ from .reconcile import (
     pour,
     reconcile,
     resolve_max_samples,
+    resolve_samples_ramp,
 )
 
 __all__ = [
     "DEFAULT_MAX_SAMPLES",
+    "DEFAULT_SAMPLES_RAMP",
     "DEFAULT_STALL_AFTER",
     "Action",
     "ArchiveLog",
@@ -42,4 +45,5 @@ __all__ = [
     "pour",
     "reconcile",
     "resolve_max_samples",
+    "resolve_samples_ramp",
 ]

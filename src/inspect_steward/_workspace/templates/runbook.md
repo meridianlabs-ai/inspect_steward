@@ -155,9 +155,32 @@ nothing depends on a conversation this session did not have.
 
 ## Tuning inside the envelope
 
-*Not yet written.* `_steward.md` sets bounds — `max_tasks` in the front matter
-is the hard ceiling Steward enforces, and the prose says what room you have
-beneath it. The signal is rate limits rather than saturation.
+Tend ramps sample concurrency on its own; your part is oversight, not the
+arithmetic. Unless a `max_samples` is pinned somewhere, every task starts at
+the ramp's floor and climbs one step per clean window — limiter saturated, no
+rate-limit pushback, no new errors, retries not surging, CPU with headroom — and on
+sustained pushback tend cuts the connection ceiling at once and steps sample
+concurrency back down. Every move is a journal action, so your next collect
+shows it as history (`ramped <task> 60→80 — ...`), and the tuning block under
+the status table shows each task's level and whatever gates its next step.
+
+- **When a ramp action coincides with something you dislike** — errors or
+  anomalies rising, pushback the cut is not containing, CPU climbing — run
+  `steward ramp hold --reason "..."` (add a task identifier to hold one arm).
+  Levels stay where they are and the defensive cut stays active; only the
+  climb stops. `steward ramp resume` re-arms it. Holding is yours to do on
+  your own judgement; explain it in the reason, because the reason is the
+  record.
+- **A `tuning_proposal` is capacity tend has no authority to take** — a pinned
+  `max_samples` showing a clean, saturated window, or a ramp at the top of its
+  range with pushback still absent. Only the human can move that bound: raise
+  it to them, and when they rule, record the ruling for them with
+  `steward ack` ("seen, happy at 60"). The ack is narrow — a different level
+  is a different item — so it never silences the next proposal.
+- **Never lower a pinned setpoint and never edit `samples_ramp` yourself** —
+  both are the human's numbers. What you may do freely is hold, resume, and
+  retune *downward* through `inspect ctl config` when you are containing an
+  incident; tend will not climb past your hold.
 
 ## When to notify
 

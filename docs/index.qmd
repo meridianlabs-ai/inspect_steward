@@ -177,9 +177,11 @@ a re-run.
 
 A fleet's demand on a provider is `max_tasks` × `max_samples`. The second
 factor belongs to your definition: set `max_samples` explicitly and Steward
-honors it (when unset, tasks run at 40; `steward tend --max-samples` overrides
-it for a single run). Policy for managing provider load dynamically — per-model
-ceilings, backing off under throttling — will be added here.
+honors it as written. When you leave it unset, Steward **discovers** it — tasks
+start at 40 and the monitor ramps each one toward 200 while the provider shows
+no rate-limit pushback, backing off at once when it does. The range is settable
+as `samples_ramp: [40, 300]` (or `samples_ramp: false` to stay at 40), and
+`steward tend --max-samples` pins a value for a single run.
 
 See the [Concurrency](concurrency.qmd) article for more details on scheduling and execution policy.
 

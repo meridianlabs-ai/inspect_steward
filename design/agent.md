@@ -12,7 +12,7 @@ The design's division of labour is consistent — mechanical work stays in `tend
 
 | | job | what happens without it |
 |---|---|---|
-| **tuner** | raise `max_samples` while rate limits stay absent | the run stays at 40 concurrent all night ([scheduling.md](scheduling.md), *The signal is mechanical; the decision is not*) |
+| **tuner** | hold the ramp when climbing is unwise, and relay `tuning_proposal`s | `tend` climbs into trouble its gates cannot see — someone else's workload on a shared key, an arm whose anomalies argue against speed — and capacity against a pinned setpoint goes unrelayed ([scheduling.md](scheduling.md), *The signal is mechanical, and inside the envelope so is the decision*) |
 | **grouper** | collapse computed error classes into proposals a human can answer | twelve questions where there were two causes ([workflow.md](workflow.md), *Three levels*) |
 | **investigator** | judge scan results, which carry no verdict of their own | the most valuable anomaly source produces rows nobody reads |
 | **author** | write `scanning.md` and `analysis.md` | the run leaves logs and a journal, and nothing that says what happened |
@@ -192,7 +192,7 @@ The bounds are already set by decisions in other documents; collected here becau
 **Freely, as standing work:**
 
 - call `tend`, spawn, reap, and converge toward the manifest
-- raise `max_samples` inside the envelope while rate limits are absent, and pull back when they are not
+- hold the ramp (`steward ramp hold`) on its own judgement and resume it, and retune a worker *downward* through `inspect ctl` when containing an incident — the climb itself is `tend`'s ([scheduling.md](scheduling.md) §3.5)
 - group classes into proposals, and investigate anything
 - write `scanning.md` and `analysis.md`
 - notify

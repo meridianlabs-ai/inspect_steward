@@ -116,6 +116,11 @@ def echo_turn(result: TendResult, *, table: bool = True) -> None:
     for line in _live(result):
         click.echo(line)
 
+    for index, line in enumerate(result.tuning.lines):
+        # one source with the markdown block (`TuningPlan.lines`), so the two
+        # renderings cannot disagree about what the window supported
+        click.echo(f"tuning: {line}" if index == 0 else f"  {line}")
+
     for line in _machinery(result):
         click.echo(line)
 

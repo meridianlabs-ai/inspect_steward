@@ -562,10 +562,44 @@ def test_the_observation_carries_the_settings_a_later_turn_reads_back(
         "max_workers": 4,
         "max_tasks": None,
         "max_samples": 7,
+        "samples_ramp": None,
         "stall_after": 2,
     }
     assert recorded["states"]["complete"] == 1
     assert recorded["drift"] is False
+
+
+def test_a_sample_pin_outlives_the_turn_that_set_it(tmp_path: Path) -> None:
+    # unlike the pool flags, --max-samples decides a regime rather than a
+    # quantity: a pin that lapsed would leave the next tend ramping a level
+    # nobody authorized and spawning the queue at the ramp's floor
+    done = SynthTask("done")
+    workspace, _ = prepared(tmp_path, [done])
+    write_log(workspace.logs, done)
+
+    turn(workspace, max_workers=4, max_samples=7)
+    turn(workspace)
+
+    _, second = observations(workspace)
+    assert second["settings"]["max_samples"] == 7
+    # the pool flags do lapse, which is the contrast that makes the pin one
+    assert second["settings"]["max_workers"] is None
+
+
+def test_a_samples_ramp_range_releases_a_recorded_pin(tmp_path: Path) -> None:
+    # the way back: `_steward.md` holds standing wishes, and a range there is
+    # the one instruction that cannot mean anything but *ramp this run*
+    done = SynthTask("done")
+    workspace, _ = prepared(tmp_path, [done])
+    write_log(workspace.logs, done)
+
+    turn(workspace, max_samples=7)
+    workspace.directives.write_text("---\nsamples_ramp: [40, 100]\n---\n")
+    turn(workspace)
+
+    _, second = observations(workspace)
+    assert second["settings"]["max_samples"] is None
+    assert second["settings"]["samples_ramp"] == [40, 100]
 
 
 def test_status_md_says_how_old_it_is_and_what_needs_a_person(

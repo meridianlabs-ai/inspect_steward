@@ -84,7 +84,11 @@ SAMPLES: dict[str, object] = {
 
 CONFIG: dict[str, object] = {"adaptive": [{"in_use": 52, "limit": 80}]}
 
-WORKER: Routes = {"/tasks": TASKS, "/config": CONFIG, "/evals/E1/samples": SAMPLES}
+WORKER: Routes = {
+    "/tasks": TASKS,
+    "/tasks/T1/config": CONFIG,
+    "/evals/E1/samples": SAMPLES,
+}
 
 FINISHED: Routes = {**WORKER, "/tasks": []}
 """A worker whose eval ended between the scan that found its socket and the read."""
@@ -200,7 +204,9 @@ def test_connection_pools_are_summed_across_a_task_s_controllers(
 ) -> None:
     # one controller per model, so a task with model roles has several and the
     # pool is their total
-    roles = dict(WORKER, **{"/config": {"adaptive": [{"in_use": 4, "limit": 10}] * 3}})
+    roles = dict(
+        WORKER, **{"/tasks/T1/config": {"adaptive": [{"in_use": 4, "limit": 10}] * 3}}
+    )
     with worker(sockets / "w.sock", roles) as target:
         (task,) = read_fleet([target], NO_PACKING).tasks.values()
 
@@ -364,7 +370,8 @@ PACKED_ROWS: list[object] = [
 
 PACKED: Routes = {
     "/tasks": PACKED_ROWS,
-    "/config": TWO_MODELS,
+    "/tasks/T1/config": TWO_MODELS,
+    "/tasks/T2/config": TWO_MODELS,
     "/evals/E1/samples": SAMPLES,
     "/evals/E2/samples": SAMPLES,
 }
@@ -443,7 +450,7 @@ def test_a_worker_holding_one_task_still_sums_every_controller(
 
     One task *is* the whole process, extra controllers included: a task with model roles has one per role, and their total is what its pool actually is. Narrowing by the row's own model would silently drop the roles.
     """
-    single: Routes = {**PACKED, "/tasks": [PACKED_ROWS[0]], "/config": TWO_MODELS}
+    single: Routes = {**PACKED, "/tasks": [PACKED_ROWS[0]]}
     with worker(sockets / "w.sock", single) as target:
         (task,) = read_fleet([target], NO_PACKING).tasks.values()
 
@@ -478,12 +485,12 @@ MALFORMED: list[tuple[str, Routes, str]] = [
     ),
     (
         "a config with no controllers",
-        {**WORKER, "/config": {"knobs": {}}},
+        {**WORKER, "/tasks/T1/config": {"knobs": {}}},
         "connections",
     ),
     (
         "controllers that are not a list",
-        {**WORKER, "/config": {"adaptive": 4}},
+        {**WORKER, "/tasks/T1/config": {"adaptive": 4}},
         "connections",
     ),
     (
@@ -511,3 +518,120 @@ def test_a_shape_this_version_has_not_seen_costs_columns_not_the_row(
     (task,) = fleet.tasks.values()
     assert task.identifier == "task-1"
     assert getattr(task, blank) == BLANK[blank]
+
+
+# --- the tuning loop's signals --------------------------------------------
+
+KNOBBED: dict[str, object] = {
+    "max_samples": {"limit": 40, "in_use": 40, "adjustable": True},
+    "max_sandboxes": [{"type": "docker", "limit": 32, "in_use": 12}],
+    "adaptive": [
+        {
+            "name": "mockllm/model",
+            "in_use": 52,
+            "limit": 80,
+            "min": 10,
+            "max": 100,
+            "recent_changes": [
+                {"at": 100.0, "from": 40, "to": 80, "reason": "clean rounds"},
+                {"at": 200.5, "from": 80, "to": 64, "reason": "rate limited"},
+            ],
+        }
+    ],
+}
+"""A task envelope with everything the tuning loop reads."""
+
+
+def test_the_tuning_signals_ride_the_task_config_read(sockets: Path) -> None:
+    # one request the read already makes, carrying the setpoint, the effective
+    # sandbox limit, the controllers' ceiling, and the pushback history -- no
+    # new endpoint, nothing added to a tend's cost
+    routes = dict(WORKER, **{"/tasks/T1/config": KNOBBED})
+    with worker(sockets / "w.sock", routes) as target:
+        (task,) = read_fleet([target], NO_PACKING).tasks.values()
+
+    assert task.max_samples == (40, 40)
+    assert task.sandboxes == (12, 32)
+    assert task.connections_ceiling == 100
+    # only the cuts: a raise is the controller climbing, not pushback
+    assert task.scale_downs == (200.5,)
+
+
+UNADJUSTABLE: dict[str, object] = {
+    "max_samples": {"limit": 40, "in_use": 3, "adjustable": False},
+    "max_sandboxes": [],
+    "adaptive": [],
+}
+
+
+def test_the_ceiling_and_the_current_limit_are_maxima_where_the_pool_is_a_sum(
+    sockets: Path,
+) -> None:
+    # both feed a knob that writes one number onto every controller, so a sum
+    # would clamp each of them at what all of them together were using -- the
+    # cut that is really a raise. The pool is still a sum, because that is a
+    # count of connections rather than a bound
+    roles: dict[str, object] = {
+        **KNOBBED,
+        "adaptive": [
+            {"name": "mockllm/model", "in_use": 5, "limit": 30, "max": 100},
+            {"name": "mockllm/grader", "in_use": 4, "limit": 45, "max": 100},
+        ],
+    }
+    routes = dict(WORKER, **{"/tasks/T1/config": roles})
+    with worker(sockets / "w.sock", routes) as target:
+        (task,) = read_fleet([target], NO_PACKING).tasks.values()
+
+    assert task.connections.limit == 75
+    assert task.connections_limit == 45
+    assert task.connections_ceiling == 100
+
+
+ROLE_CUT: dict[str, object] = {
+    "adaptive": [
+        {
+            "name": "openai/gpt-4",
+            "in_use": 3,
+            "limit": 10,
+            "recent_changes": [{"at": 300.0, "from": 20, "to": 10}],
+        },
+        {"name": "anthropic/claude", "in_use": 7, "limit": 20},
+        {
+            "name": "openai/grader",
+            "in_use": 1,
+            "limit": 5,
+            "recent_changes": [{"at": 400.0, "from": 10, "to": 5}],
+        },
+    ]
+}
+"""A packed process whose third controller belongs to a role model no row names."""
+
+
+def test_pushback_no_row_can_claim_is_charged_to_every_row(sockets: Path) -> None:
+    """The gate this feeds must fail closed, which narrowing on the primary model alone does not.
+
+    A packed task's role models are invisible from its row, so the grader's cut belongs to nobody and — narrowed — is seen by nobody, leaving every sibling reading clean while the process is being rate-limited. A named sibling's cut still does not leak, which is the precision the narrowing was for.
+    """
+    routes: Routes = {
+        **PACKED,
+        "/tasks/T1/config": ROLE_CUT,
+        "/tasks/T2/config": ROLE_CUT,
+    }
+    with worker(sockets / "w.sock", routes) as target:
+        fleet = read_packed(target.socket, CORRELATION)
+
+    assert fleet.tasks["task-1"].scale_downs == (300.0, 400.0)
+    assert fleet.tasks["task-2"].scale_downs == (400.0,)
+
+
+def test_a_knob_the_loop_cannot_turn_is_no_level(sockets: Path) -> None:
+    # the adaptive sample-concurrency path reports max_samples unadjustable, and
+    # a level the loop cannot move must not be reported as one it holds
+    routes = dict(WORKER, **{"/tasks/T1/config": UNADJUSTABLE})
+    with worker(sockets / "w.sock", routes) as target:
+        (task,) = read_fleet([target], NO_PACKING).tasks.values()
+
+    assert task.max_samples is None
+    assert task.sandboxes is None
+    assert task.connections_ceiling is None
+    assert task.scale_downs == ()

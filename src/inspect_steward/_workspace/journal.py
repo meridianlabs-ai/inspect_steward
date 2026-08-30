@@ -23,6 +23,7 @@ from .._util.jsonl import (
 
 __all__ = [
     "ACKNOWLEDGED",
+    "ACTION",
     "ARMED",
     "COLLECTED",
     "DISARMED",
@@ -30,6 +31,8 @@ __all__ = [
     "OBSERVATION",
     "PAUSED",
     "RAISED",
+    "RAMP_HELD",
+    "RAMP_RESUMED",
     "RESUMED",
     "Ack",
     "Armed",
@@ -42,6 +45,7 @@ __all__ = [
     "LaunchedEvent",
     "Paused",
     "Raised",
+    "RampHold",
     "append_event",
     "read_acks",
     "read_armed",
@@ -50,6 +54,7 @@ __all__ = [
     "read_launched",
     "read_pause",
     "read_raised",
+    "read_ramp_holds",
     "summarize",
     "utc_now",
 ]
@@ -106,6 +111,26 @@ RESUMED = "resumed"
 """Journal event: schedule again.
 
 No reason, unlike its opposite: pausing asserts something about the run that a later reader will want explained, and resuming only restores the default.
+"""
+
+ACTION = "action"
+"""Journal event: something Steward did, and how it turned out.
+
+Written by a tend for each act worth a reader's attention — an archive, a departure with work stranded, a retune. Named here beside the other types because more than one module reads it: the history section admits it, and the tuning loop folds its `ramp` entries back into the levels a respawned worker should start at.
+"""
+
+RAMP_HELD = "ramp_held"
+"""Journal event: stop climbing sample concurrency, leaving the levels where they are.
+
+The agent's brake on the tuning loop, and deliberately **not** a brake on its safety half: a tend under a hold takes no up-steps, and still cuts on sustained pushback, because the cut is the move that exists precisely for when nobody is watching.
+
+Carries `by`, a required `reason`, and an optional `identifier` — one task's ramp, or the fleet's when absent. In the journal rather than `.steward/` for the same reason the pause is: a hold that a cleared cache silently released would resume climbing into whatever the holder saw coming.
+"""
+
+RAMP_RESUMED = "ramp_resumed"
+"""Journal event: let the tuning loop climb again.
+
+Carries an optional `identifier`, matching the hold it releases; absent, it releases the fleet-wide hold and every per-task one — the bare verb means *ramp freely again*, not *ramp except where I have forgotten I said otherwise*.
 """
 
 ARMED = "armed"
@@ -205,6 +230,20 @@ class Paused:
 
     reason: str
     ts: str
+
+
+@dataclass(frozen=True)
+class RampHold:
+    """One hold on the tuning loop, as the fold reports it."""
+
+    by: str
+    """`agent` or `human`."""
+
+    reason: str
+    ts: str
+
+    identifier: str = ""
+    """The task whose ramp is held, or empty for the fleet's."""
 
 
 @dataclass(frozen=True)
@@ -376,6 +415,39 @@ def read_pause(events: list[JournalEvent]) -> Paused | None:
                 ts=event.ts,
             )
     return paused
+
+
+def read_ramp_holds(events: list[JournalEvent]) -> dict[str, RampHold]:
+    """Fold a journal down to the holds on the tuning loop.
+
+    Keyed by task identifier, with the empty string for the fleet-wide hold, so *hold everything* and *hold this arm* compose rather than overwrite: a fleet hold does not erase a per-task one somebody placed for a different reason, and releasing one leaves the other standing. A bare resume clears the lot — see `RAMP_RESUMED`.
+
+    Args:
+        events: Events in file order, as `read_journal` returns them.
+
+    Returns:
+        The holds in force, empty where the loop may climb freely.
+    """
+    holds: dict[str, RampHold] = {}
+    for event in events:
+        if event.type == RAMP_RESUMED:
+            identifier = event.payload.get("identifier")
+            if isinstance(identifier, str) and identifier:
+                holds.pop(identifier, None)
+            else:
+                holds = {}
+        elif event.type == RAMP_HELD:
+            by = event.payload.get("by")
+            reason = event.payload.get("reason")
+            identifier = event.payload.get("identifier")
+            key = identifier if isinstance(identifier, str) else ""
+            holds[key] = RampHold(
+                by=by if isinstance(by, str) else "",
+                reason=reason if isinstance(reason, str) else "",
+                ts=event.ts,
+                identifier=key,
+            )
+    return holds
 
 
 def read_armed(events: list[JournalEvent]) -> Armed | None:
