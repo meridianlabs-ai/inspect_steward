@@ -18,14 +18,12 @@ GITIGNORE_ENTRIES = (
     "logs/",
     "logs-archive/",
     ".env",
-    "steward.log",
-    "timer.log",
 )
 """Paths a workspace never commits. `logs/` and `logs-archive/` hold `.eval` archives, which are large outputs shared through an object store rather than through git; `.steward/` is disposable by construction. Ignored is not the same category as disposable — only `.steward/` is safe to delete.
 
 `.env` is here because arming a timer tells people to write one: a scheduled tend runs under a stripped environment, and the answer Steward gives is *put the credentials in a file the workers already read* (`_timer.env`). Suggesting that without ignoring the file would be handing somebody a way to commit their API keys.
 
-**The two logs are here for the reason `steward.log` exists in the first place.** workflow.md §5.7 justifies splitting machinery out of the journal partly because appending to a committed file every ten minutes "would dirty the working tree on a cadence" — which is only true of the journal if it is *not* true of the file the machinery went to instead. Both are high-volume, low-value, and disposable, and neither belongs in a diff."""
+**Four entries rather than six**, since `steward.log` and `timer.log` moved inside `.steward/` and are covered by the line that was already here. A workspace created before that keeps two stale entries, because `ensure_gitignore` only ever appends — harmless, and cheaper than a rule for removing lines out of a file Steward does not own."""
 
 
 @dataclass(frozen=True)
@@ -104,6 +102,14 @@ class Workspace:
         return self.state / "observed.json"
 
     @property
+    def synced(self) -> Path:
+        """`.steward/synced.json` — what the propagation last wrote out, by name and stamp.
+
+        The most disposable thing here after the attempt cache, and for the same reason: every entry is a claim about a file that is still sitting in the workspace. Losing it costs one full propagation — which is why nothing that touches it raises, and why a record that will not parse is treated as one that does not exist.
+        """
+        return self.state / "synced.json"
+
+    @property
     def workers(self) -> Path:
         """`.steward/workers/` — one selection document and one output file per spawned worker."""
         return self.state / "workers"
@@ -131,18 +137,21 @@ class Workspace:
 
     @property
     def log(self) -> Path:
-        """`steward.log` — whether the machinery worked, as opposed to what it found."""
-        return self.root / "steward.log"
+        """`.steward/steward.log` — whether the machinery worked, as opposed to what it found.
+
+        Disposable, and here rather than at the root because that is the category it belongs to. It used to sit at the top level for one stated reason — so the sync would carry it out without an exception to its own deny list — which is Steward dodging a rule Steward wrote. The sync names it instead, and the root is left for what a person authored and what a person reads.
+        """
+        return self.state / "steward.log"
 
     @property
     def timer_log(self) -> Path:
-        """`timer.log` — what a scheduled tend printed, before Steward could log anything.
+        """`.steward/timer.log` — what a scheduled tend printed, before Steward could log anything.
 
-        **At the root rather than under `.steward/`, and that is the whole point of it.** Every backend opens this path *before* starting Python — cron through a shell redirect, launchd through `StandardOutPath`, systemd through `StandardOutput=append:` — and none of the three creates a missing parent directory. Under `.steward/` the file would therefore make a directory documented as safe to delete into one that silently stops supervision forever: the redirect fails, the command never runs, and so nothing is left to recreate what was deleted, while the journal goes on reporting an armed timer.
+        **The constraint here is real and is met by the command rather than by the location.** Every backend used to open this path *before* starting Python — cron through a shell redirect, launchd through `StandardOutPath`, systemd through `StandardOutput=append:` — and none of the three creates a missing parent directory, so a path under `.steward/` turned a directory documented as safe to delete into one that silently stopped supervision forever. All three now run `mkdir -p` and their own redirect in one shell command (`_timer.entry.shell_command`), so deleting `.steward/` costs the previous contents of this file and nothing else: the next fire recreates the directory.
 
         Ordinary tends write nothing interesting here; `steward.log` remains where Steward says whether its own machinery worked. What lands here is the failure that happens too early to be logged anywhere else.
         """
-        return self.root / "timer.log"
+        return self.state / "timer.log"
 
     def definition(self, type: DefinitionType) -> Path:
         """Conventional path for a definition of `type`.

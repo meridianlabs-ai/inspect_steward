@@ -899,7 +899,7 @@ Three things Steward depends on are **machine-local by construction**:
 - **Control discovery** is a directory of files carrying pids and process start times, and a liveness check against a pid is meaningful only on the host that owns it.
 - **The in-flight record** names pids on the host that spawned them.
 
-`log_dir`, by contrast, is frequently **not** local — S3 is the common case, and *Syncing the workspace out* exists precisely because the log directory may be the only thing a remote observer can reach.
+`log_dir`, by contrast, is frequently **not** local — S3 is the common case, and *Propagating the workspace to the log directory* exists precisely because the log directory may be the only thing a remote observer can reach.
 
 So the constraint is:
 
@@ -912,10 +912,10 @@ That distinction is the whole of the flexibility. An agent on a laptop driving a
 | | workers | `tend` runs | judgement | how a person is reached |
 |---|---|---|---|---|
 | **workstation** | local | local agent | same agent | the conversation |
-| **remote runner** | a rented or internal box, often no git and no inbound network | agent's shell on that box (a harness there, or ssh from elsewhere) | same agent | notifications out, workspace synced to a bucket; replying needs a session on the box |
+| **remote runner** | a rented or internal box, often no git and no inbound network | agent's shell on that box (a harness there, or ssh from elsewhere) | same agent | notifications out, workspace propagated into the log directory; replying needs a session on the box |
 | **Hawk pod** | in the pod | an **in-pod timer** | an external agent over the relay | notifications out; commands in over the relay ([hawk.md](hawk.md), *The relay surface*) |
 
-The middle row is the one the S3 sync was designed for and the one the documents otherwise draw least. Two things about it are worth stating because they are easy to assume away: the agent needs **model access from that box**, which an air-gapped runner must provision deliberately; and the human's reply path is a session on a machine they may not normally use, which is the practical content of [workflow.md](workflow.md) open question 2.
+The middle row is the one the propagation was designed for and the one the documents otherwise draw least. Two things about it are worth stating because they are easy to assume away: the agent needs **model access from that box**, which an air-gapped runner must provision deliberately; and the human's reply path is a session on a machine they may not normally use, which is the practical content of [workflow.md](workflow.md) open question 2.
 
 ### 11.3 Driving and judging are separate roles that usually coincide
 

@@ -47,14 +47,16 @@ my-sweep/
 
   journal.jsonl       # DURABLE   — append-only record; the source of truth
   status.md           # generated — rewritten by every tend
-  steward.log         # generated — whether Steward's own machinery worked
-  timer.log           # generated — what a scheduled tend printed before Steward could log
 
   logs/               # DURABLE   — the flat log directory: the current definition's results
   logs-archive/       # DURABLE   — superseded, removed, and failed logs; never deleted
 
   .steward/           # DISPOSABLE — claim, manifest, in-flight record, caches
+    steward.log       #            — whether Steward's own machinery worked
+    timer.log         #            — what a scheduled tend printed before Steward could log
 ```
+
+The root holds what you authored and what you read, and nothing else: the two machine logs live under `.steward/` with the rest of the disposable state.
 
 `init` **only ever creates** — a second run reports each path as created or kept rather than restoring a pristine copy over your work. It is safe to run in a directory that already has a definition.
 
@@ -67,7 +69,7 @@ The categories that matter are about whether a file can be recovered, not who wr
 | **authored** | `_steward.yaml`, `AGENTS.md`, the definition | your own work is gone |
 | **durable machine state** | `journal.jsonl`, `logs/`, `logs-archive/` | the audit trail, or the results, are gone |
 | **authored by the agent** | `scanning.md`, `analysis.md` *(not yet implemented)* | the investigation is gone, and re-runs from scratch |
-| **disposable** | everything in `.steward/`, `status.md`, `steward.log`, `timer.log` | rebuilt on the next turn, or gone with no loss |
+| **disposable** | everything in `.steward/` (including the two logs), and `status.md` | rebuilt on the next turn, or gone with no loss |
 
 Gitignored is **not** the same as disposable: `logs/` and `logs-archive/` are ignored by git because `.eval` files are large outputs shared through an object store rather than source control — they are still durable. Only `.steward/` is safe to remove, and even that only when nothing is running: a worker that has not yet reached `eval_set()` dies with its instructions, and deleting the claim file under a running tend lets a second tend run concurrently.
 
@@ -80,10 +82,18 @@ Gitignored is **not** the same as disposable: `logs/` and `logs-archive/` are ig
 The rule dividing them is one question: is this a fact about **the eval set**, or about **Steward**?
 
 - `status.md` answers the first — where the run stands, rewritten by every tend.
-- `steward.log` answers the second — a tend that crashed, a spawn that failed. Bounded and disposable.
-- `timer.log` catches what a scheduled tend printed before Steward could log anything at all — a Python that would not start, a workspace that moved. It sits at the workspace root rather than in `.steward/` because schedulers open it before running anything, and none of them creates a missing parent directory.
+- `.steward/steward.log` answers the second — a tend that crashed, a spawn that failed. A healthy run writes nothing to it at all.
+- `.steward/timer.log` catches what a scheduled tend printed before Steward could log anything — a Python that would not start, a workspace that moved. Every scheduler creates the directory before redirecting into it, so clearing `.steward/` costs the file's contents and never the supervision.
 
 The split means *"no tend for four hours"* is computable from the journal's silence, while *why* is in `steward.log` — a run whose tends were crashing does not look like a run with nothing to report.
+
+It is also why there are two files rather than one type of journal event. `steward.log` can be **truncated** and `journal.jsonl` never can: a failure that repeats every ten minutes — a wedged claim, a bucket that went away — is one line per turn forever, which is a bound away from harmless in a disposable file and unbounded growth of an irreplaceable one anywhere else.
+
+### The workspace follows its logs
+
+Every tend mirrors the workspace into the run's log directory: `status.md`, `journal.jsonl`, `steward.log`, your `_steward.yaml` and your definition, and anything else at the top level that you or an agent put there. So a result and the account of how it was produced sit together, and a log directory describes itself wherever it ends up — which on a machine reachable only through an object store is the whole observability channel.
+
+Dotfiles never leave, which is what keeps a stray `.env` on the machine; nor do directories, `AGENTS.md`, symlinks, or anything inspect would read as an eval log. Symlinks are on that list because every other rule is a rule about a *name*, and a `public-config` pointing at `.env` is not a dotfile. Say `sync: false` in `_steward.yaml` (or `--no-sync`, or `STEWARD_SYNC=false`) to decline, or give it a path to send the files somewhere other than the logs — bearing in mind that `journal.jsonl` and an agent's writeups quote what was in the transcripts, so a destination outside the log bucket widens who can read them.
 
 ### Version control
 

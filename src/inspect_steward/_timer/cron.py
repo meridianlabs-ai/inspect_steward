@@ -10,7 +10,7 @@ Two things about cron are different in kind from the other backends, and both sh
 import shutil
 from shlex import quote
 
-from .entry import Runner, TimerEntry, TimerError, run_command
+from .entry import Runner, TimerEntry, TimerError, run_command, shell_command
 
 NAME = "cron"
 
@@ -73,11 +73,9 @@ def cron_line(entry: TimerEntry) -> str:
             f"steps within each hour, so an interval must divide 60 minutes or "
             f"24 hours evenly"
         )
-    command = " ".join(quote(argument) for argument in entry.argv)
-    body = (
-        f"cd {quote(str(entry.workspace))} && "
-        f"{command} >> {quote(str(entry.output))} 2>&1"
-    )
+    # the command field *is* a shell line, so it takes `shell_command` directly
+    # rather than through an `sh -c` the other two backends have to add
+    body = f"cd {quote(str(entry.workspace))} && {shell_command(entry)}"
     return f"{schedule} {body.replace('%', r'\%')}"
 
 

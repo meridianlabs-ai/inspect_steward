@@ -10,6 +10,7 @@ import sys
 from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
+from shlex import quote
 from typing import Callable, Sequence
 
 LABEL_PREFIX = "steward"
@@ -92,6 +93,28 @@ class TimerEntry:
 
     output: Path
     """Where the command's stdout and stderr go."""
+
+
+def shell_command(entry: TimerEntry) -> str:
+    """The tend, with its own output directory and its own redirect.
+
+    **Every backend opens the output itself now, and the reason is a directory documented as safe to delete.** cron's `>>`, launchd's `StandardOutPath` and systemd's `StandardOutput=append:` all open the path before Python starts, and none of the three creates a missing parent — so with the timer log under `.steward/`, deleting that directory would make the redirect fail, the command never run, and nothing be left to recreate what was deleted, while the journal went on reporting an armed timer. One `mkdir -p` in front of the redirect retires that: the next fire rebuilds the directory it needs.
+
+    What it gives up is that a backend used to catch output from before Steward's own shell ran. That is a narrow loss — if `/bin/sh` itself cannot start, there is nothing to write and nowhere it would have gone — and it is bought with the failure above, which is silent and permanent.
+
+    `exec` so that the shell replaces itself: the pid a scheduler holds is Python's, and a signal reaches the tend rather than a shell wrapping it.
+
+    Args:
+        entry: What to schedule.
+
+    Returns:
+        One shell command, quoted, for a backend to hand to `sh -c` (or to write into a crontab, which is already one).
+    """
+    command = " ".join(quote(argument) for argument in entry.argv)
+    return (
+        f"mkdir -p {quote(str(entry.output.parent))} && "
+        f"exec {command} >> {quote(str(entry.output))} 2>&1"
+    )
 
 
 def entry_label(workspace: Path) -> str:

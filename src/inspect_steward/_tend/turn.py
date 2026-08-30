@@ -94,6 +94,9 @@ from .._workspace import (
     read_ramp_holds,
     resolve_pool,
     steward_log,
+    sync_target,
+    sync_workspace,
+    truncate_log,
 )
 from .history import Happened, happened
 from .items import Item, Supervision, Verdict, tend_items, verdict
@@ -234,6 +237,7 @@ def tend(
     max_workers: int | None = None,
     stall_after: int | None = None,
     samples_ramp: tuple[int, int] | bool | None = None,
+    sync: str | bool | None = None,
     break_stale: bool = True,
     claim: Claim | None = None,
 ) -> TendResult | Refused:
@@ -244,6 +248,7 @@ def tend(
         max_workers: Worker processes for this turn, overriding `_steward.yaml`. `None` expresses no preference and defers to the file, which itself defaults to a process per task — it does not request that width, so a workspace that sets the key cannot be widened back to unbounded for one turn.
         stall_after: Fruitless respawns before a task is given up on, overriding `_steward.yaml`.
         samples_ramp: The ramp's envelope for this turn, overriding `_steward.yaml`. A narrower range brings running tasks back inside it.
+        sync: Where to propagate the workspace this turn, overriding `_steward.yaml`. `False` propagates nowhere; `None` defers to the file, which itself defaults to the log directory.
         break_stale: Kill a wedged claim holder and take the claim from it.
         claim: A claim the caller already holds, to run this turn under instead of taking one. For `launch`, whose whole composition — capture, commit, arm, tend — is one span of single-writer work: a launch that released before its own first turn would be refused by it, or worse, would let a timer firing in the gap spawn workers for tasks the commit had just orphaned. Released by the caller, not here, because the caller's work is not over.
 
@@ -265,6 +270,7 @@ def tend(
             max_workers=max_workers,
             stall_after=stall_after,
             samples_ramp=samples_ramp,
+            sync=sync,
         )
 
     outcome = acquire(workspace.claim, command="tend", break_stale=break_stale)
@@ -279,6 +285,7 @@ def tend(
             max_workers=max_workers,
             stall_after=stall_after,
             samples_ramp=samples_ramp,
+            sync=sync,
         )
 
 
@@ -290,6 +297,7 @@ def _tend(
     max_workers: int | None,
     stall_after: int | None,
     samples_ramp: tuple[int, int] | bool | None,
+    sync: str | bool | None = None,
 ) -> TendResult:
     """One turn, with the claim already in hand however it got there."""
     # inside the claim, because resolving these can *write* — a degraded
@@ -303,6 +311,7 @@ def _tend(
         max_workers=max_workers,
         stall_after=stall_after,
         samples_ramp=samples_ramp,
+        sync=sync,
         execute=True,
     )
     if claim.broke is not None:
@@ -556,6 +565,12 @@ class _Settings:
     Not something a turn acts on, and deliberately the *expressed* preference rather than the resolved one — it exists to be compared against what is actually armed, and a comparison against Steward's own default would report drift from a number nobody wrote.
     """
 
+    sync: str | bool | None = None
+    """Where the workspace propagates to, as `_steward.yaml` or the environment expressed it.
+
+    Unresolved, because resolving it needs the log directory and that is `_turn`'s to compute. `None` here means *no preference*, which resolves to the log directory rather than to nowhere.
+    """
+
     policies: list[str] = field(default_factory=list[str])
     """The standing rules in force, from whichever source expressed them.
 
@@ -711,6 +726,7 @@ def _turn(
         workspace, result, pool=settings.pool, tuning=observation_payload(plan, applied)
     )
     _write_status(workspace, result)
+    _sync(workspace, settings, log_dir)
     return result
 
 
@@ -1074,6 +1090,7 @@ def _settings(
     stall_after: int | None,
     samples_ramp: tuple[int, int] | bool | None,
     execute: bool,
+    sync: str | bool | None = None,
 ) -> _Settings:
     """What to operate under, degrading to the last known good where it must.
 
@@ -1136,6 +1153,12 @@ def _settings(
             # an agent reading `status` needs the ones it can have
             policies=_policies(directives) if directives is not None else [],
             interval=directives.tend_interval if directives is not None else None,
+            # for the same reason as the policies: a file that parsed still
+            # says where the workspace goes, and a remote reader watching a
+            # degraded run is exactly who needs the file to keep arriving
+            sync=sync
+            if sync is not None
+            else (directives.sync if directives is not None else None),
         )
 
     return _Settings(
@@ -1155,6 +1178,7 @@ def _settings(
         degraded=None,
         interval=directives.tend_interval,
         policies=_policies(directives),
+        sync=sync if sync is not None else directives.sync,
     )
 
 
@@ -1294,6 +1318,22 @@ def _write_status(workspace: Workspace, result: TendResult) -> None:
         except OSError:
             pass
         steward_log(workspace.log, f"could not write {workspace.status.name}: {ex}")
+
+
+def _sync(workspace: Workspace, settings: _Settings, log_dir: str) -> None:
+    """Propagate the workspace to the log directory, if it propagates anywhere.
+
+    **Last, and after `status.md` is written**, which is what makes it cheap to be interrupted by: everything this turn did has already happened and already been recorded, so a propagation that runs long or not at all costs a remote reader ten minutes of freshness and costs the run nothing.
+
+    Also the reason a slow one needs no cancellation machinery. A turn holds the claim while it runs, so an overrunning propagation means the next timer fire is refused — the ordinary path rather than a problem — and the interval after it converges.
+
+    Truncating `steward.log` happens here rather than beside the writer: the writer is the thing that must not fail, and this is the last point in the turn where the file is finished being written to.
+    """
+    truncate_log(workspace.log)
+    target = sync_target(settings.sync, log_dir)
+    if target is None:
+        return
+    sync_workspace(workspace, target)
 
 
 def _live(inflight: InFlight, logs: ObservedLogs) -> LiveFleet:

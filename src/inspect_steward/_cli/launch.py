@@ -23,6 +23,7 @@ from .options import (
     overrides,
     passthrough_options,
     shape_options,
+    sync_options,
     tend_interval_option,
 )
 from .tasks import parse_args
@@ -130,6 +131,7 @@ _LABELS = {
 )
 @shape_options
 @tend_interval_option
+@sync_options
 @click.option(
     "--no-break-claim",
     is_flag=True,
@@ -159,6 +161,8 @@ def launch_command(
     stall_after: int | None,
     samples_ramp: tuple[int, int] | bool | None,
     tend_interval: int | None,
+    sync: str | bool | None,
+    no_sync: bool,
     no_break_claim: bool,
     output_json: bool,
     **passthrough: Any,
@@ -180,6 +184,11 @@ def launch_command(
             "--no-overrides asks to capture at the definition's own shape, and "
             f"--{sorted(given_overrides)[0].replace('_', '-')} changes it. "
             "Pass whichever you meant."
+        )
+    if no_sync and sync is not None:
+        raise click.UsageError(
+            "--no-sync asks to propagate nowhere, and --sync names a "
+            "destination. Pass whichever you meant."
         )
     if no_log_store and log_store is not None:
         raise click.UsageError(
@@ -209,6 +218,7 @@ def launch_command(
             stall_after=stall_after,
             samples_ramp=samples_ramp,
             tend_interval=tend_interval,
+            sync=False if no_sync else sync,
             break_stale=not no_break_claim,
         )
     except (LaunchError, *TURN_ERRORS) as ex:

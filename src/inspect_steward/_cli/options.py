@@ -220,3 +220,27 @@ def tend_interval_option[F: Callable[..., Any]](f: F) -> F:
             f"{overrides('tend_interval')}"
         ),
     )(f)
+
+
+def sync_options[F: Callable[..., Any]](f: F) -> F:
+    """Where the workspace propagates to, on the commands that propagate it.
+
+    `launch` and `tend`, which are the two verbs that run a turn and therefore the two that write anything out. Not `status`, which writes nothing at all — a read verb that quietly pushed a workspace to a bucket would be exactly the surprise `status` promises not to be.
+    """
+    f = click.option(
+        "--no-sync",
+        is_flag=True,
+        default=False,
+        help="Leave the workspace on this machine, whatever this project configured.",
+    )(f)
+    return click.option(
+        "--sync",
+        type=Setting("sync"),
+        default=None,
+        metavar="PATH|auto",
+        help=(
+            "Where to mirror this workspace's own files. Defaults to the run's "
+            f"log directory, so results and what explains them sit together. "
+            f"{overrides('sync')}"
+        ),
+    )(f)

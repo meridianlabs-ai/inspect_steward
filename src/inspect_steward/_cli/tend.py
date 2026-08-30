@@ -1,7 +1,7 @@
 import click
 
 from .._tend import Refused, tend
-from .options import shape_options
+from .options import shape_options, sync_options
 from .turn import (
     TURN_ERRORS,
     echo_refused,
@@ -14,6 +14,7 @@ from .turn import (
 
 @click.command("tend")
 @shape_options
+@sync_options
 @click.option(
     "--no-break-claim",
     is_flag=True,
@@ -31,6 +32,8 @@ def tend_command(
     max_workers: int | None,
     stall_after: int | None,
     samples_ramp: tuple[int, int] | bool | None,
+    sync: str | bool | None,
+    no_sync: bool,
     no_break_claim: bool,
     output_json: bool,
 ) -> None:
@@ -40,6 +43,12 @@ def tend_command(
 
     Safe to call as often as you like. A repeated turn is a no-op, and an interrupted one is reconciled by the next.
     """
+    if no_sync and sync is not None:
+        raise click.UsageError(
+            "--no-sync asks to propagate nowhere, and --sync names a "
+            "destination. Pass whichever you meant."
+        )
+
     workspace = find_workspace()
     try:
         result = tend(
@@ -47,6 +56,7 @@ def tend_command(
             max_workers=max_workers,
             stall_after=stall_after,
             samples_ramp=samples_ramp,
+            sync=False if no_sync else sync,
             break_stale=not no_break_claim,
         )
     except TURN_ERRORS as ex:

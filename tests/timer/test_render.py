@@ -56,9 +56,14 @@ def test_launchd_carries_the_interval_the_command_and_the_directory() -> None:
     rendered = plist(900)
 
     assert rendered["StartInterval"] == 900
-    assert rendered["ProgramArguments"] == entry().argv
     assert rendered["WorkingDirectory"] == str(WORKSPACE)
     assert rendered["Label"] == entry_label(WORKSPACE)
+    # the tend reaches launchd through a shell, because launchd will not create
+    # the output's directory and `.steward/` may have been deleted
+    program, flag, command = rendered["ProgramArguments"]
+    assert (program, flag) == ("/bin/sh", "-c")
+    assert " ".join(entry().argv) in command
+    assert "StandardOutPath" not in rendered
 
 
 def test_launchd_does_not_tend_the_moment_it_is_armed() -> None:
@@ -74,7 +79,13 @@ def test_systemd_carries_the_interval_the_command_and_the_directory() -> None:
     assert "OnUnitActiveSec=900s" in timer
     assert "OnBootSec=900s" in timer
     assert f"Unit={entry_label(WORKSPACE)}.service" in timer
-    assert f"ExecStart={' '.join(entry().argv)}" in service
+    (execstart,) = [
+        line for line in service.splitlines() if line.startswith("ExecStart=")
+    ]
+    program, flag, command = shlex.split(execstart[len("ExecStart=") :])
+    assert (program, flag) == ("/bin/sh", "-c")
+    assert " ".join(entry().argv) in command
+    assert "StandardOutput=" not in service
     assert f"WorkingDirectory={WORKSPACE}" in service
     assert "Type=oneshot" in service
 
@@ -130,7 +141,11 @@ def test_the_plist_stays_a_plist_when_the_path_has_an_ampersand() -> None:
     rendered: Any = plistlib.loads(render_plist(entry(600, AWKWARD)))
 
     assert rendered["WorkingDirectory"] == str(AWKWARD)
-    assert rendered["StandardOutPath"] == str(AWKWARD / ".steward" / "timer.log")
+    # split, because the path is shell-quoted in the command and an apostrophe
+    # in it is exactly what the quoting is for
+    assert str(AWKWARD / ".steward" / "timer.log") in shlex.split(
+        rendered["ProgramArguments"][2]
+    )
 
 
 def test_the_crontab_line_survives_a_shell() -> None:
@@ -162,4 +177,9 @@ def test_the_systemd_execstart_survives_a_path_with_a_space() -> None:
         if line.startswith("ExecStart=")
     ]
 
-    assert shlex.split(execstart[len("ExecStart=") :])[0] == "/opt/py 3.13/bin/python"
+    # `sh -c` first, then the command it is handed, which is what has to keep
+    # the interpreter in one piece
+    _, _, command = shlex.split(execstart[len("ExecStart=") :])
+    assert shlex.split(command)[shlex.split(command).index("exec") + 1] == (
+        "/opt/py 3.13/bin/python"
+    )

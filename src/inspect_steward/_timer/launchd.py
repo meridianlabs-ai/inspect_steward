@@ -11,7 +11,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from .entry import Runner, TimerEntry, TimerError, run_command
+from .entry import Runner, TimerEntry, TimerError, run_command, shell_command
 
 NAME = "launchd"
 
@@ -23,6 +23,8 @@ def render_plist(entry: TimerEntry) -> bytes:
 
     `RunAtLoad` is false so that arming is not itself a tend: `launch` has just converged the run, and a second turn a millisecond later would find the claim held and refuse — a confusing first line in the timer log for no gain.
 
+    **The redirect is in the command rather than in `StandardOutPath`**, because launchd opens that path itself and will not create a missing parent — see `shell_command`. `WorkingDirectory` still applies: launchd sets it before exec, so the shell and the tend it becomes both start in the workspace.
+
     Args:
         entry: What to schedule.
 
@@ -32,11 +34,9 @@ def render_plist(entry: TimerEntry) -> bytes:
     return plistlib.dumps(
         {
             "Label": entry.label,
-            "ProgramArguments": entry.argv,
+            "ProgramArguments": ["/bin/sh", "-c", shell_command(entry)],
             "WorkingDirectory": str(entry.workspace),
             "StartInterval": entry.interval,
-            "StandardOutPath": str(entry.output),
-            "StandardErrorPath": str(entry.output),
             "RunAtLoad": False,
             "ProcessType": "Background",
         }

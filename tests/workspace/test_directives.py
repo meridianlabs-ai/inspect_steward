@@ -403,6 +403,9 @@ def test_the_log_store_resolves_most_specific_first(
         pytest.param("log_store: ''\n", "empty value", id="empty"),
         pytest.param("log_store: none\n", "`false` now", id="the_retired_spelling"),
         pytest.param("log_store: 3\n", "should be", id="a_number"),
+        pytest.param("sync: true\n", "nothing about where", id="sync_true"),
+        pytest.param("sync: ''\n", "empty value", id="sync_empty"),
+        pytest.param("sync: none\n", "`false` now", id="sync_retired_spelling"),
     ],
 )
 def test_a_location_that_is_not_one_is_refused(
@@ -422,6 +425,8 @@ ENVIRONMENT: list[tuple[str, str, str, str, Any]] = [
     ("an interval", "STEWARD_TEND_INTERVAL", "30m", "tend_interval", 1800),
     ("a store", "STEWARD_LOG_STORE", "s3://team/store", "log_store", "s3://team/store"),
     ("no store", "STEWARD_LOG_STORE", "false", "log_store", False),
+    ("a destination", "STEWARD_SYNC", "s3://team/run", "sync", "s3://team/run"),
+    ("propagating nowhere", "STEWARD_SYNC", "false", "sync", False),
     (
         "a rule",
         "STEWARD_POLICIES",

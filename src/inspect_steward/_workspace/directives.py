@@ -100,7 +100,7 @@ REFUSED: dict[str, str] = {
 }
 """Keys that belong somewhere else, and where.
 
-Everything above the notification rows is the definition's, and configuration.md establishes the definition as the single source of truth for what an eval set *is* — a second file beside it saying otherwise is the drift this whole rule exists to prevent. `max_samples` is here rather than in the model because the definition can express it and two other layers move it at runtime; Steward's own `--max-samples` remains available for one run.
+Everything above the notification rows is the definition's, and configuration.md establishes the definition as the single source of truth for what an eval set *is* — a second file beside it saying otherwise is the drift this whole rule exists to prevent. `max_samples` is here rather than in the model because the definition can express it and two other layers move it at runtime.
 
 The last three are reference-only *by design* upstream, so that credentials stay out of source, shell history, process listings, and eval logs. Accepting them here would break a discipline Steward otherwise inherits for free. Note the distinction this draws: a notification **URL** is refused; notification **policy** — kinds, cadence, quiet hours — is Steward's alone and becomes a key when there is something to read it.
 """
@@ -225,6 +225,31 @@ class Directives(BaseModel):
         if value is True:
             raise ValueError(
                 "should be a path, `auto`, or `false` to use no store — "
+                "`true` says nothing about where"
+            )
+        if isinstance(value, str) and not value.strip():
+            raise ValueError(
+                "should be a path, `auto`, or `false` — not an empty value"
+            )
+        if value == "none":
+            raise ValueError("is `false` now, since `none` reads as a path called none")
+        return value
+
+    sync: str | bool | None = Field(default=None)
+    """Where the workspace's own files are propagated to, `false` for nowhere, or `None` for the log directory.
+
+    Each tend mirrors `status.md`, `journal.jsonl`, `steward.log`, the definition, and whatever else is at the top level into the run's log directory, so that everything explaining a result sits beside it — which on a machine reachable only through an object store is the whole observability channel (workflow.md, *Syncing the workspace out*).
+
+    A path sends them somewhere other than the logs; `auto` is the default said out loud. Passes the admission test the same way `log_store` does: no `eval_set()` argument reaches it, and where the files go is a property of the deployment rather than of the eval.
+    """
+
+    @field_validator("sync", mode="before")
+    @classmethod
+    def _sync(cls, value: object) -> object:
+        """A location, or `false`. Shaped exactly like `log_store`, and refused the same way."""
+        if value is True:
+            raise ValueError(
+                "should be a path, `auto`, or `false` to propagate nowhere — "
                 "`true` says nothing about where"
             )
         if isinstance(value, str) and not value.strip():

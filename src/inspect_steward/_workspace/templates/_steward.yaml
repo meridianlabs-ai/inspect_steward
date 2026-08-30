@@ -33,6 +33,7 @@
 # stall_after: 3          # give up respawning a task after this many fruitless tries
 # samples_ramp: [40, 200] # range to discover sample concurrency in (false to fix it)
 # log_store: auto         # reuse logs already run elsewhere (a path, or false for none)
+# sync: auto              # mirror this workspace into the log directory (a path, or false)
 
 # --- Standing rules an agent applies ----------------------------------------
 #

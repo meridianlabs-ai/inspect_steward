@@ -13,6 +13,7 @@ be followed by asking whether it took.
 """
 
 import json
+import shlex
 import shutil
 from pathlib import Path
 
@@ -273,23 +274,35 @@ def test_a_timer_the_journal_cannot_record_is_removed_again(
 # --- what a timer needs to still be there tomorrow ----------------------
 
 
-def test_the_timer_log_outlives_a_cleared_cache(workspace: Workspace) -> None:
-    """Why a scheduled tend's output does not live under `.steward/`.
+def test_a_cleared_cache_does_not_disable_supervision(
+    workspace: Workspace, crontab: FakeCrontab
+) -> None:
+    """The reason every backend opens its own output.
 
     A scheduler is handed one absolute output path, at arming, and never asked
-    again. `.steward/` is documented as safe to delete — but a launchd job whose
-    `StandardOutPath` directory has gone does not run at all, so putting the
-    timer log there would mean clearing a cache silently disables supervision.
-    That is the one direction this must not fail in, and unlike a pause it is not
-    even visible afterwards.
+    again. `.steward/` is documented as safe to delete — and a job whose redirect
+    names a directory that has gone does not run at all, so an entry that let the
+    backend open the file would mean clearing a cache silently disables
+    supervision. Not visible afterwards, either: the journal goes on reporting an
+    armed timer.
+
+    So the installed command creates the directory before it redirects into it,
+    and the test of that is the entry itself rather than a fire nobody can
+    trigger here.
     """
     run("timer", "arm", "--tend-interval", "30m", "--scheduler", "cron")
     shutil.rmtree(workspace.state)
 
-    assert workspace.timer_log.parent.exists()
-    # and it is still not something git should see, now that it is at the root
+    assert crontab.text is not None
+    (line,) = [
+        line for line in crontab.text.splitlines() if str(workspace.root) in line
+    ]
+    tokens = shlex.split(line.split(" ", 5)[5])
+    assert str(workspace.timer_log) in tokens
+    assert tokens[tokens.index("-p") + 1] == str(workspace.state)
+    # and nothing in `.steward/` is something git should see
     ignored = (workspace.root / ".gitignore").read_text(encoding="utf-8")
-    assert workspace.timer_log.name in ignored
+    assert ".steward/" in ignored
 
 
 # --- disarming and status -----------------------------------------------

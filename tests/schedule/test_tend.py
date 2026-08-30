@@ -24,6 +24,7 @@ from inspect_steward._evalset.manifest import (
     definition_hash,
     write_manifest,
 )
+from inspect_steward._evalset.observe import observe_logs
 from inspect_steward._tend import (
     OBSERVATION,
     Refused,
@@ -806,3 +807,64 @@ def test_a_pause_survives_a_deleted_state_directory(tmp_path: Path) -> None:
     prepared(tmp_path, [SynthTask("waiting")])
 
     assert turn(workspace).verdict is Verdict.PAUSED
+
+
+# --- propagating the workspace ------------------------------------------
+
+
+def test_a_turn_leaves_the_workspace_beside_its_logs(tmp_path: Path) -> None:
+    """What the propagation is for, at the layer that performs it.
+
+    A run's results go one place and everything explaining them goes another,
+    and on a machine reachable only through an object store the second place is
+    unreachable. So each turn mirrors the workspace into the log directory —
+    always, rather than only when that directory is remote, since a mounted NAS
+    has exactly the same need.
+    """
+    done = SynthTask("done")
+    workspace, _ = prepared(tmp_path, [done])
+    write_log(workspace.logs, done)
+
+    turn(workspace)
+
+    landed = {path.name for path in workspace.logs.iterdir()}
+    assert {"status.md", "journal.jsonl"} <= landed
+    # and the run's own results are still the only *logs* in there, which is
+    # what the refusal in `_carried` protects
+    assert observe_logs(workspace.logs).count == 1
+
+
+def test_a_workspace_can_decline_to_propagate(tmp_path: Path) -> None:
+    done = SynthTask("done")
+    workspace, _ = prepared(tmp_path, [done])
+    write_log(workspace.logs, done)
+    workspace.directives.write_text("sync: false\n", encoding="utf-8")
+
+    turn(workspace)
+
+    assert "status.md" not in {path.name for path in workspace.logs.iterdir()}
+
+
+def test_the_flag_outranks_the_file(tmp_path: Path) -> None:
+    # the third spelling, resolving the way every other setting does
+    done = SynthTask("done")
+    workspace, _ = prepared(tmp_path, [done])
+    write_log(workspace.logs, done)
+    workspace.directives.write_text("sync: false\n", encoding="utf-8")
+    elsewhere = tmp_path / "watched"
+
+    turn(workspace, sync=str(elsewhere))
+
+    assert "status.md" in {path.name for path in elsewhere.iterdir()}
+
+
+def test_a_status_propagates_nothing(tmp_path: Path) -> None:
+    # `status` writes nothing at all, and a read verb that quietly pushed a
+    # workspace to a bucket would be the surprise it promises not to be
+    done = SynthTask("done")
+    workspace, _ = prepared(tmp_path, [done])
+    write_log(workspace.logs, done)
+
+    status(workspace)
+
+    assert "status.md" not in {path.name for path in workspace.logs.iterdir()}

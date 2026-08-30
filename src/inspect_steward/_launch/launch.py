@@ -120,6 +120,7 @@ def launch(
     stall_after: int | None = None,
     samples_ramp: tuple[int, int] | bool | None = None,
     tend_interval: int | None = None,
+    sync: str | bool | None = None,
     break_stale: bool = True,
 ) -> Launch | Held:
     """Capture a definition, commit it as desired state, arm a timer, and tend once.
@@ -138,6 +139,7 @@ def launch(
         stall_after: Fruitless respawns before a task is given up on, overriding `_steward.yaml`.
         samples_ramp: The ramp's envelope, overriding `_steward.yaml`.
         tend_interval: Seconds between scheduled tends, overriding `_steward.yaml`. Already parsed — the flag is validated at the door.
+        sync: Where to propagate the workspace, overriding `_steward.yaml`. `False` propagates nowhere; `None` defers to the file, which itself defaults to the log directory. For this launch's own turn only — every later tend reads the file again, because unlike the overrides this is not a property of the run.
         break_stale: Kill a wedged claim holder and take the claim from it.
 
     Returns:
@@ -195,6 +197,7 @@ def launch(
             max_workers=max_workers,
             stall_after=stall_after,
             samples_ramp=samples_ramp,
+            sync=sync,
         )
 
 
@@ -214,6 +217,7 @@ def _launch(
     max_workers: int | None,
     stall_after: int | None,
     samples_ramp: tuple[int, int] | bool | None,
+    sync: str | bool | None,
 ) -> Launch:
     """The launch itself, with the claim in hand for the whole of it."""
     committed = _committed(workspace)
@@ -282,6 +286,7 @@ def _launch(
         max_workers=max_workers,
         stall_after=stall_after,
         samples_ramp=samples_ramp,
+        sync=sync,
         claim=claim,
     )
     return Launch(

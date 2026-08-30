@@ -10,7 +10,7 @@ import shutil
 import sys
 from pathlib import Path
 
-from .entry import Runner, TimerEntry, TimerError, run_command
+from .entry import Runner, TimerEntry, TimerError, run_command, shell_command
 
 NAME = "systemd"
 
@@ -18,8 +18,10 @@ UNITS = ".config/systemd/user"
 
 
 def render_service(entry: TimerEntry) -> str:
-    """The unit that runs one tend."""
-    command = " ".join(shlex.quote(argument) for argument in entry.argv)
+    """The unit that runs one tend.
+
+    **The redirect is in `ExecStart` rather than in `StandardOutput=append:`**, because systemd opens that path itself, will not create a missing parent, and fails the unit when it cannot — see `shell_command`. An `ExecStartPre` mkdir would not help: the output is opened for the whole unit, before the first `ExecStart*` line runs.
+    """
     return "\n".join(
         [
             "[Unit]",
@@ -28,9 +30,7 @@ def render_service(entry: TimerEntry) -> str:
             "[Service]",
             "Type=oneshot",
             f"WorkingDirectory={entry.workspace}",
-            f"ExecStart={command}",
-            f"StandardOutput=append:{entry.output}",
-            f"StandardError=append:{entry.output}",
+            f"ExecStart=/bin/sh -c {shlex.quote(shell_command(entry))}",
             "",
         ]
     )

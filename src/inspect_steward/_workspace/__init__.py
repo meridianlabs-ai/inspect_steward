@@ -58,7 +58,7 @@ from .journal import (
     utc_now,
 )
 from .layout import DEFINITION_NAMES, GITIGNORE_ENTRIES, Workspace
-from .log import steward_log
+from .log import LOG_BOUND, steward_log, truncate_log
 from .overrides import (
     ALIASED,
     LOG_DIR,
@@ -66,6 +66,7 @@ from .overrides import (
     read_overrides,
     spellings,
 )
+from .sync import SYNC_BUDGET, SyncReport, sync_target, sync_workspace
 
 __all__ = [
     "ACKNOWLEDGED",
@@ -131,7 +132,13 @@ __all__ = [
     "resolve_interval",
     "resolve_log_store",
     "resolve_pool",
+    "LOG_BOUND",
+    "SYNC_BUDGET",
+    "SyncReport",
     "steward_log",
+    "sync_target",
+    "sync_workspace",
+    "truncate_log",
     "summarize",
     "utc_now",
 ]

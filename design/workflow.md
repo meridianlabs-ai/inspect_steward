@@ -349,30 +349,34 @@ Two consequences worth naming. Rulings recorded per class are what let a group d
 
 ### 5.7 `steward.log` — whether Steward itself worked
 
-The journal is the record of the *eval set*: what was observed about it and what was decided. A tend that crashed, a spawn that failed, a sync that timed out, a scheduler that refused an entry, a claim found stale and reaped — none of these is a fact about the eval, and they go to `steward.log` instead.
-
-**A second file needs a real justification, because the obvious alternative is cheaper.** The journal already carries a `type` on every event and is already consumed by a fold that ignores types it does not care about, so machinery events could simply be more types. One file, one append path, one thing to sync. Legibility is *not* the argument against that: the journal is JSONL read by a fold, and `analysis.md` and `anomalies.md` are the human-facing renderings.
-
-**The argument is durability.** `journal.jsonl` is committed to git — that is where *A small integrity bonus falls out* comes from, and it is the file the design calls irreplaceable. Appending a spawn error and a sync result every ten minutes would bloat a record meant to be reviewed, and would dirty the working tree on a cadence, which is the thing that makes `revision.dirty` useless in a Steward workspace to begin with. Machinery is high-volume, low-value, and disposable; decisions are the opposite. They want different lifetimes, so they get different files.
-
-So they go to `steward.log`, and the rule is a single question:
+The journal is the record of the *eval set*: what was observed about it and what was decided. A tend that crashed, a spawn that failed, a propagation that could not reach its destination, a scheduler that refused an entry, a claim found stale and reaped — none of these is a fact about the eval, and they go to `steward.log` instead.
 
 > Is this a fact about **the eval set**, or about **Steward**? The first goes to the journal, the second to `steward.log`.
 
-It sits at the top level and is **disposable**, which is exactly the shape `status.md` already has — top-level so the sync carries it out without an exception to the deny list, disposable because nothing in it is irrecoverable. Being disposable also settles the growth question: an append-only log needs a bound, and truncating the oldest entries is free when nothing depends on them.
+**A second file needs a real justification, because the obvious alternative is cheaper.** The journal already carries a `type` on every event and is already consumed by a fold that ignores types it does not care about, so machinery events could simply be more types. One file, one append path, one thing to propagate. Legibility is not the argument against that: the journal is JSONL read by a fold, and `analysis.md` and `anomalies.md` are the human-facing renderings.
 
-**The split turns out to answer a question neither record could answer alone.** A successful tend writes an `observation` to the journal, so *"no tend for four hours"* is computable from the journal's silence — and *why* is in `steward.log`, where the failures went. Had the two shared a file, a run whose tends were crashing would look like a run with nothing to report.
+**Nor is volume, and the first version of this section had that wrong.** Every caller of the writer is a failure path — a spawn that would not start, a retune the control channel refused, a `status.md` that could not be written — so a healthy run writes *nothing at all* here. "Machinery is high-volume" describes a pathology rather than the ordinary case, and an argument that only holds when something is broken is not the argument.
 
-**The writer landed early, at [plan.md](plan.md) step 13 rather than step 22.** Degrading a malformed `_steward.yaml` to the last known good has to say *why* somewhere, and the rule above answers where: a file Steward could not parse is a fact about Steward. It is about fifteen lines and its one hard requirement is that **it never raises** — every caller is already handling a failure, and the conditions most worth recording (a full disk, a directory that went away) are exactly the ones a logger would fail on, turning a reported problem into an unreported crash. A tend also writes here when it cannot read the log directory, and the claim writes a cleared wedged holder. Rotation, the bound, and the sync stay with step 22.
+**The argument is that this file can be truncated and `journal.jsonl` cannot.** The case that matters is a *deterministic* failure: a wedged claim broken every turn, a bucket that has gone away, a full disk. That is one line per turn, forever. In a disposable file it is bounded by dropping the oldest lines and nothing is lost; in the one record a workspace cannot rebuild it is unbounded growth of an artifact that is committed to git, reviewed by a person, and folded on every turn — and there is no bound you can put on it, because every entry in it is load-bearing. Two lifetimes, two files.
+
+**The journal carries the same text as well, and the two copies are not redundant.** A failed action goes into the turn's `failures`, which the observation event records, *and* into `steward.log`. The journal's copy answers *what went wrong during this turn* — folded, rendered in history, diffed against the next turn. This one is the trail across turns, and it is the only place where the same failure at 02:10, 02:20 and 02:30 reads as one thing recurring rather than as three unrelated turns each having a bad night.
+
+**The split also answers a question neither record could answer alone.** A successful tend writes an `observation` to the journal, so *"no tend for four hours"* is computable from the journal's silence — and *why* is in `steward.log`, where the failures went. Had the two shared a file, a run whose tends were crashing would look like a run with nothing to report.
+
+**It lives under `.steward/`, with the two machine logs together.** An earlier version put it at the top level for one reason — so the propagation would carry it out without an exception to its own deny list — which is Steward dodging a rule Steward wrote, and paying a slot in the workspace root for it. The root is for what a person authored and what a person reads; this is disposable machine state, which is what `.steward/` is. The propagation names it and `timer.log` explicitly, which costs one line and buys a root of six entries instead of eight.
+
+**The writer landed early, at [plan.md](plan.md) step 13 rather than step 22.** Degrading a malformed `_steward.yaml` to the last known good has to say *why* somewhere, and the rule above answers where: a file Steward could not parse is a fact about Steward. It is about fifteen lines and its one hard requirement is that **it never raises** — every caller is already handling a failure, and the conditions most worth recording (a full disk, a directory that went away) are exactly the ones a logger would fail on, turning a reported problem into an unreported crash. A tend also writes here when it cannot read the log directory, and the claim writes a cleared wedged holder.
+
+**The bound arrived with step 22 and is enforced once per turn**, at the end of it, rather than on every append: the writer is the thing that must not fail, and a read-and-rewrite on the same path would be several more chances to. Over a megabyte, roughly the newest half survives, whole lines only.
 
 One honest limit: the conditions most worth logging are the ones most likely to prevent logging. A full disk fails the `steward.log` write along with everything else, which is why the substrate failures in [execution.md](execution.md) escalate through the notification channel rather than relying on a file.
 
 ### 5.8 `init` and version control
 
-Where version control is available, `journal.jsonl` survives and is reviewable because it is committed — but nothing so far makes that happen, so `init` takes care of it. (On machines with no git or no network, the S3 sync described under *Syncing the workspace out* plays this role instead; `init` treats a missing git as an ordinary condition, not an error.)
+Where version control is available, `journal.jsonl` survives and is reviewable because it is committed — but nothing so far makes that happen, so `init` takes care of it. (On machines with no git or no network, the propagation described under *Propagating the workspace to the log directory* plays this role instead; `init` treats a missing git as an ordinary condition, not an error.)
 
 - **`git init` if, and only if, there is no repository already.** Detection walks up from the directory: a Steward workspace created inside an existing project (`evals/sweep-2026-08/` in a monorepo) belongs to that repository, and initialising a nested one there is a footgun rather than a convenience. Announce it when it happens, and allow `--no-git` for people who mean it.
-- **Write a local `.gitignore` either way**, listing `.steward/`, `logs/`, and `logs-archive/`. Scoping the rules to a nested `.gitignore` means Steward never edits a file it does not own — the parent project's own ignore rules stay untouched. Append missing entries idempotently if one already exists.
+- **Write a local `.gitignore` either way**, listing `.steward/`, `logs/`, `logs-archive/`, and `.env`. Scoping the rules to a nested `.gitignore` means Steward never edits a file it does not own — the parent project's own ignore rules stay untouched. Append missing entries idempotently if one already exists. Four entries rather than six: `steward.log` and `timer.log` used to need their own lines and are now inside `.steward/`, covered by the entry that was already there.
 
 `logs/` and `logs-archive/` are ignored because `.eval` files are large archives, they are outputs rather than source, and they are shared through a log server or object store rather than through git — ignored, but *durable*: gitignored is not the same category as disposable, and only `.steward/` is safe to remove. `.steward/` is ignored because it is disposable by construction.
 
@@ -562,53 +566,84 @@ blocked: 2 workers waiting on a human
 
 That command is also the general answer to *a detached run cannot be watched live*: any worker can be attached to and observed, not only a parked one.
 
-## 9. Syncing the workspace out
+## 9. Propagating the workspace to the log directory
 
-Some runs happen on machines with no git, and sometimes no internet at all. The deployment worth designing for has exactly two pipes out: a localhost model endpoint that proxies, and an S3 bucket. On such a machine **the bucket is the only observability channel there is** — the alternative to syncing is shelling into the runner, which is precisely what an unattended overnight job should not require.
+Some runs happen on machines with no git, and sometimes no internet at all. The deployment worth designing for has exactly two pipes out: a localhost model endpoint that proxies, and an S3 bucket. On such a machine **the bucket is the only observability channel there is** — the alternative is shelling into the runner, which is precisely what an unattended overnight job should not require.
 
-So each tend mirrors the workspace's top-level files to object storage. Someone watching from another system reads `status.md` for progress, `analysis.md` for what has been found and what it means, `anomalies.md` for accumulating caveats, `journal.jsonl` for what has been decided, `steward.log` for whether the machinery is working, and the definition and `_steward.yaml` for what is being run and under what rules — without touching the runner.
+So each tend mirrors the workspace's files **into the run's log directory**. Someone watching from another system reads `status.md` for progress, `analysis.md` for what has been found and what it means, `anomalies.md` for accumulating caveats, `journal.jsonl` for what has been decided, `steward.log` for whether the machinery is working, and the definition and `_steward.yaml` for what is being run and under what rules — without touching the runner.
 
-It also completes the picture in one place: when `log_dir` is in the same bucket, the remote reader has the logs and the run's state side by side, and `inspect view` works against the same prefix.
+**The destination is the log directory rather than a place of its own**, because the files are all explanations of what is in it: a result and the account of how it was produced belong together, and a log directory that describes itself is one somebody can copy, hand on, or find in six months without also being told where the other half lives. `inspect view` works against the same prefix, and there is no second location for anyone to configure or forget.
+
+**Always, rather than only when that directory is remote.** An earlier version of this section defaulted the destination to *the parent prefix of `log_dir` when `log_dir` is remote*, which quietly skipped a definition pointing at a mounted NAS or `/data/runs/oct/logs` — the same need, the same absent files, and a discriminator answering a question nobody asked. Where the logs go, the workspace follows. When `log_dir` is the workspace's own `logs/`, that means the files are copied into it, which is the same self-describing bundle one directory closer to home.
+
+One consequence has to be accepted rather than argued away: `logs/` stops being *the current definition's results and nothing else*. It becomes *the results, and Steward's own account of them*, and the properties that mattered survive — `samples_df(log_dir)` and `list_eval_logs` both filter on what a log is named, so nothing propagated is read as a result. The rule below is what keeps that true.
 
 ### 9.1 The policy is exclusionary
 
-The point of syncing is to carry out artifacts nobody predicted — an analysis an agent wrote, a note a human left, a report a scaffold generated. An allow-list defeats that by construction: anything unanticipated is silently left behind, which is the failure you notice last and regret most. So everything at the top level goes, minus a short deny list:
+The point is to carry out artifacts nobody predicted — an analysis an agent wrote, a note a human left, a report a scaffold generated. An allow-list defeats that by construction: anything unanticipated is silently left behind, which is the failure you notice last and regret most. So everything at the top level goes, minus a short deny list, plus two paths named outright:
 
 | excluded | why |
 |---|---|
-| directories | `logs/` syncs by other means (or *is* the target); `.steward/` is disposable machine state |
+| directories | `logs/` *is* the destination; `.steward/` is disposable machine state |
 | dotfiles | keeps `.gitignore` out, and more importantly keeps a stray `.env` from being pushed to a bucket |
 | `AGENTS.md`, `CLAUDE.md` | agent bootstrap, static and meaningless to a remote reader |
+| symlinks | see below |
+| anything inspect would list as a log | see below |
 
-The `.env` case deserves the explicit rule rather than an incidental one. Syncing is an **outbound data flow**, and a workspace is a directory humans put things in.
+| named explicitly | why |
+|---|---|
+| `.steward/steward.log` | whether the machinery is working — the question a remote reader most needs answered, from a file that lives under `.steward/` because that is the category it belongs to (§5.7) |
+| `.steward/timer.log` | what a scheduled tend printed before Steward could log anything |
+
+The `.env` case deserves the explicit rule rather than an incidental one. This is an **outbound data flow**, and a workspace is a directory humans put things in.
+
+**Symlinks are not followed, and that closes the one route around the deny list.** Every rule in the table above is a rule about a *name*, and a symlink is a name that means a different name: a top-level `public-config` pointing at `.env` is not a dotfile, is a perfectly good file, and passes every check — and the write dereferences it, putting the credential in the bucket by exactly the path the `.env` rule exists to close. Verified rather than theorised. Following them selectively is not better, since what a link resolves to can be outside the workspace entirely, so they are simply not followed, and each one is named in `steward.log` rather than dropped in silence.
+
+**The log-file exclusion is what the change of destination bought.** A carried file that inspect would list as a log *becomes* a log once it lands: read as a header, failing to parse, and reported as damage every turn thereafter. It is narrow — an `.eval` counts unconditionally, and anything else needs both an ISO-timestamp prefix and a `.json` suffix — and it is not narrow enough to leave to luck, precisely because the policy above is exclusionary and one unanticipated file will eventually be named like that. The predicate is inspect's own (`is_log_file`) rather than a copy of it, so the two cannot disagree; a file it accepts stays where it is and is named in `steward.log`.
 
 A pleasant consequence of exclusionary-by-default: if a rendered `journal.md` is ever added, or a report, or anything else, it flows out with no configuration change.
 
+### 9.1a Saying where, and saying no
+
+`sync` is a Steward word and has the three spellings every Steward word has: the key in `_steward.yaml`, `STEWARD_SYNC`, and `--sync` on `launch` and `tend` — the two verbs that run a turn, and therefore the two that write anything. Not on `status`, which writes nothing at all: a read verb that quietly pushed a workspace to a bucket would be the surprise that command promises not to be.
+
+The value has the same shape `log_store` has: a location, `auto` for the derived one, or `false` for nowhere. `true` is refused for saying nothing about where, and `none` is refused by name because it reads as a path called `none`.
+
+**Only files a turn changes are sent again.** Size and modification time are recorded per file after a successful write, in `.steward/synced.json`, and a file whose pair still matches is skipped. `journal.jsonl` is the one that makes this worth doing: a multi-day run tends every ten minutes, and re-sending a growing file each time is cheap against a bucket in the same region and not cheap at all on the one pipe an air-gapped runner has. Both times are local and compared against a local record, so this does not touch [execution.md](execution.md)'s rule against comparing a local clock with a remote store's. The record is disposable like everything else under `.steward/`: losing it costs one full propagation.
+
+**The record is scoped to the destination**, because the question it answers — *does the far end already have this* — is a question about one far end. Kept by filename alone, the first propagation to a newly-pointed `sync` would report every file as already sent and leave the new destination empty, turning an optimisation into a silent failure to propagate at all. A destination that does not match the recorded one therefore starts from nothing, which costs one full propagation and is the right price for an answer that is genuinely unknown.
+
 ### 9.2 What actually leaves, and why `.env` is not the whole of it
 
-The `.env` rule is correct and it is the easy case. The harder one is that the files being synced *on purpose* carry material lifted out of transcripts:
+The `.env` rule is correct and it is the easy case. The harder one is that the files being propagated *on purpose* carry material lifted out of transcripts:
 
 - **`journal.jsonl`** holds error text and evidence — tracebacks, model output, sandbox paths, dataset content, and occasionally a credential that a library helpfully interpolated into an exception message.
 - **`analysis.md` and `scanning.md`** are an agent's writeup of what transcripts contained, and a good writeup quotes.
 - **`anomalies.md` and `status.md`** carry error text wherever it is the clearest way to say what happened.
 
-Usually the sync target is the same bucket as `log_dir`, which bounds the audience to the one that already has the transcripts — so this is not a new *audience*. **It is a large change in accessibility.** An `.eval` file is a zip that needs tooling to read; `journal.jsonl` is plain text that anyone with bucket read access can grep. The same information becomes far easier to extract, and easy extraction is what turns a theoretical exposure into a real one.
+The destination is the log directory, which bounds the audience to the one that already has the transcripts — so this is not a new *audience*. **It is a large change in accessibility.** An `.eval` file is a zip that needs tooling to read; `journal.jsonl` is plain text that anyone with bucket read access can grep. The same information becomes far easier to extract, and easy extraction is what turns a theoretical exposure into a real one.
 
 **Steward does not attempt to redact.** A redactor that catches most secrets is worse than none, because it converts "this contains transcript material, treat it accordingly" into an implied guarantee that it does not. Three things instead, all cheap:
 
-- **Say it plainly**: the synced workspace carries transcript-derived content and deserves the access controls the transcripts deserve. When the sync target is not the log bucket, that is a decision someone should make deliberately rather than inherit.
+- **Say it plainly**: the propagated workspace carries transcript-derived content and deserves the access controls the transcripts deserve. Pointing `sync` somewhere other than the log directory widens the audience, and that is a decision someone should make deliberately rather than inherit.
 - **Bound the volume.** Error text in a journal event is truncated to a stated length with a pointer to the log, which a full traceback badly needs anyway — the journal is read by a fold on every tend, and an untruncated stack trace is both a size problem and gratuitous surface.
 - **Keep the deny list.** Dotfiles and directories stay excluded, for the reason above and because the failure of an allow-list is silent.
 
 ### 9.3 It must never raise
 
-The sync is advisory. It is important — on an air-gapped runner it is the whole window — but it is not on the critical path of producing results, and an eval must never fail because a bucket was briefly unreachable. So: bounded timeout, failures caught and recorded in `steward.log`, tend proceeds regardless — a sync failure is a fact about the machinery, not about the eval set. This also keeps it consistent with *a tend spawns and reaps; it never does long work itself* — a handful of small files with a timeout, not an unbounded transfer.
+This is advisory. It is important — on an air-gapped runner it is the whole window — but it is not on the critical path of producing results, and an eval must never fail because a bucket was briefly unreachable. So: failures caught and recorded in `steward.log`, tend proceeds regardless. A propagation failure is a fact about the machinery, not about the eval set.
 
-**A failed sync is invisible from the far end**, which is the awkward part: the remote reader sees a `status.md` that simply stopped changing, and cannot tell a stalled run from a broken pipe. That promotes the status timestamp from a nicety to load-bearing — a remote observer detects sync failure precisely by noticing the file is old. It should say its age plainly rather than merely carrying a timestamp to be compared.
+**It runs last, after `status.md` is written**, which is what makes being interrupted by it cheap: everything the turn did has already happened and already been recorded, so a propagation that runs long or not at all costs a remote reader ten minutes of freshness and costs the run nothing.
 
-Note the recursion, and that it resolves: the record of *why* the sync failed is in `steward.log`, which the sync is what would have carried out. So a remote reader sees staleness and nothing else, and diagnosing it means reaching the machine. That is acceptable because the alternative — a second, independent channel purely for reporting the first one's failure — costs more than it is worth for a monitoring pipe, and because the ages in `status.md` already distinguish the two failures that matter ([execution.md](execution.md), *Clocks*).
+**The bound is a deadline between files rather than a cancellation**, and the reasoning is worth keeping because the first design here reached for a thread. Bounding a single call is the storage client's job and it already does it; abandoning a transfer mid-write buys a half-written object and a thread nobody is watching. What a deadline buys instead is that a slow pipe becomes a *reported* fact — *ran out of time with three files to go* — rather than a mysteriously long tend, and because unchanged files are skipped, the next turn carries what this one could not instead of starting over.
 
-The sync is **outbound only**. Editing `_steward.yaml` in the bucket does not change the run; two-way sync would need conflict resolution nobody wants for a monitoring channel.
+**A tend running long is already answered and needs nothing here.** The claim is held while a turn runs, so an overrunning propagation means the next timer fire is refused — the ordinary path rather than a problem, since a tend is built to be interrupted and the interval after it converges — and a genuinely wedged holder is the claim's own kill path.
+
+**A failure is invisible from the far end**, which is the awkward part: the remote reader sees a `status.md` that simply stopped changing, and cannot tell a stalled run from a broken pipe. That promotes the status timestamp from a nicety to load-bearing — a remote observer detects this failure precisely by noticing the file is old. It should say its age plainly rather than merely carrying a timestamp to be compared.
+
+Note the recursion, and that it resolves: the record of *why* it failed is in `steward.log`, which is one of the files that would have been carried. So a remote reader sees staleness and nothing else, and diagnosing it means reaching the machine. That is acceptable because the alternative — a second, independent channel purely for reporting the first one's failure — costs more than it is worth for a monitoring pipe, and because the ages in `status.md` already distinguish the two failures that matter ([execution.md](execution.md), *Clocks*).
+
+It is **outbound only**. Editing `_steward.yaml` in the bucket does not change the run; two-way sync would need conflict resolution nobody wants for a monitoring channel.
 
 ### 9.4 What this means for git
 
@@ -617,11 +652,13 @@ The durability argument earlier leans on version control, and these machines hav
 | environment | how the record leaves the machine |
 |---|---|
 | ordinary workstation | git, as described under *`init` and version control* |
-| air-gapped runner | this sync — the bucket is both durability and observability |
+| air-gapped runner | the log directory, which is where everything else about the run already goes |
 
-`init` must therefore treat git as unavailable-and-fine rather than an error, and the sync target should default to the parent prefix of `log_dir` when that is remote, so the common case needs no configuration.
+Note that these are no longer alternatives in the way they once were. Propagation happens on every workspace, because the destination is derived from `log_dir` rather than from whether the machine has an internet connection — so a workstation gets both, and what the air-gapped runner lacks is only the git half.
 
-One conclusion this does *not* overturn, though it dents its reasoning: *why there is no `journal.md`* argued partly that append-only JSONL diffs cleanly in git, serving the technical reader. That argument is worth nothing here. The decision still stands on reversibility — adding the render later is cheap, and the exclusionary sync would carry it out automatically — but if remote readers turn out to want a rendered journal, this is the environment that will ask for it.
+`init` must therefore treat git as unavailable-and-fine rather than an error, and the destination defaults to `log_dir` itself, so the common case needs no configuration at all.
+
+One conclusion this does *not* overturn, though it dents its reasoning: *why there is no `journal.md`* argued partly that append-only JSONL diffs cleanly in git, serving the technical reader. That argument is worth nothing here. The decision still stands on reversibility — adding the render later is cheap, and the exclusionary policy would carry it out automatically — but if remote readers turn out to want a rendered journal, this is the environment that will ask for it.
 
 ## 10. Resource allocation
 
@@ -1009,7 +1046,7 @@ The reason is that **the workspace is often the ephemeral half.** A run on a ren
 
 It is also consistent rather than novel: Steward already owns the log directory's metadata, writing `eval-set.json` and `logs.json` there. And it is safe — `list_eval_logs` filters by format extension, and `cleanup_older_eval_logs` only ever operates on logs it found through `list_all_eval_logs`, so markdown in the directory is invisible to discovery and never deleted.
 
-They are mirrored on every tend that changes them rather than only at signoff, on the same reasoning that makes the workspace sync unconditional: a run that dies before signoff is exactly the run whose analysis someone will want. Signoff makes them final, not present.
+They are mirrored on every tend that changes them rather than only at signoff, on the same reasoning that makes the workspace propagation unconditional: a run that dies before signoff is exactly the run whose analysis someone will want. Signoff makes them final, not present.
 
 **Both are durable, not disposable.** They belong in the same category as `journal.jsonl` and for the same reason — the interpretation exists nowhere else. `analysis.md` re-derives partly from the journal, but *which things were noteworthy* is judgement, and judgement is not recoverable by replaying events.
 
@@ -1157,7 +1194,7 @@ This is also the argument for the whole workspace being git-friendly: the record
 3. **What does Steward propose, and how confidently?** *Partly resolved.* The unit is settled — a proposal covers a set of classes, because real runs produce two or three causes rather than thirty flavours, and the ruling is recorded per class so the grouping stays unpickable. What a proposal must *carry* is not: an action alone is easier to accept than to check, and stated confidence is the field most likely to be miscalibrated and most likely to be leaned on at 3am. Precedent is the promising alternative to self-assessed confidence, since it grounds the proposal in the human's own past decisions rather than Steward's estimate of itself.
 4. **Who commits the journal?** `init` prepares the repository, but nothing in the workflow commits. If nobody does, the durability-through-git story quietly fails to happen. Candidates: the agent commits at milestones as a runbook instruction, `signoff` commits as its terminal act, or it stays the human's job. Auto-committing on every tend would collide with the user's own working tree, so the cadence matters as much as the owner.
 
-5. **`status.md` staleness.** *Mostly resolved, and it needs two ages rather than one.* The file states how old it is, and separately how long since the last **collection** ([agent.md](agent.md)) — the pair distinguishes a stopped timer from an unattended run, which a single timestamp cannot. This matters most once the file is synced to a bucket, where a stated age is a remote reader's only evidence that anything has failed. What remains open is presentation: the age must read as a fact about the file rather than as part of the snapshot, or a reader skims past exactly the line that says the snapshot is worthless.
+5. **`status.md` staleness.** *Mostly resolved, and it needs two ages rather than one.* The file states how old it is, and separately how long since the last **collection** ([agent.md](agent.md)) — the pair distinguishes a stopped timer from an unattended run, which a single timestamp cannot. This matters most once the file is propagated to a bucket, where a stated age is a remote reader's only evidence that anything has failed. What remains open is presentation: the age must read as a fact about the file rather than as part of the snapshot, or a reader skims past exactly the line that says the snapshot is worthless.
 6. **Multiple runs per directory.** *Resolved, and the question was the wrong shape* — see *A project, not a run*. A workspace is a **project**: one evolving definition, one log directory holding the current definition's results, one archive holding everything superseded, and one journal that is a project history. There is no run entity for anything to be "per", so claims key on the log directory, the manifest is whatever the last `launch` captured, and anomalies scope to the logs they concern. What remains is not a question but a consequence: every fold over the journal spans the project's whole history, which is what makes precedent accumulate.
 7. **How does a scanner result become an anomaly?** *Resolved — see *A scan result is a measurement, and only the agent can read it*.* It does not, mechanically: a result is a reading rather than an event, so no threshold Steward could apply would mean anything. A scanner *erroring* classes like any other error; a scanner *result* is judged by the agent, with Steward narrowing rather than judging — surfacing distributional outliers from `scan_results_df()`, which needs no semantics — and `tend` reporting which results have landed and which look worth a look. The product is `scanning.md` and `analysis.md`, per task, mirrored into the log directory. What survives is sharper than it was: successful reward hacking is *systematic*, so it produces no outlier at all — the most important finding is the one variance cannot see, which is why distributions are reported unconditionally and why cross-run comparison is load-bearing rather than a nicety. Also unresolved: an investigation pass wants different scanners than the broad pass, which a definition's single scanner configuration cannot express.
 
