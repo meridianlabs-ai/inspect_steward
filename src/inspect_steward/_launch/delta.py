@@ -88,6 +88,13 @@ class Reshaped:
     affected: int
     """Tasks holding results that would be run again."""
 
+    workers: tuple[str, ...] = ()
+    """Every worker alive when this was computed, by stem.
+
+    **All of them, for the reason a relocation stops all of them.** A worker's selection is fixed in the document it spawned with; it is running the old slice and cannot be told otherwise. Left alone it finishes, writes a log the next tend reads as `reshaped`, and its task runs again from nothing — so the only thing its remaining hours buy is a superseded attempt.
+
+    Not conditioned on which tasks it holds, because a slice is eval-set level: every worker in the fleet is running the old one."""
+
 
 @dataclass(frozen=True)
 class TaskChange:
@@ -157,7 +164,7 @@ class Delta:
     def stopping(self) -> list[str]:
         """Workers that would have to be stopped, by stem.
 
-        **Two reasons, deduplicated.** A worker is stopped because a task of its is leaving the manifest, or because the directory it is writing to is — and one worker can be both. Signalling the same pid twice would be at best wasted and at worst aimed at whatever inherited the number, so the union is taken here rather than left to the caller.
+        **Three reasons, deduplicated.** A worker is stopped because a task of its is leaving the manifest, because the directory it is writing to is, or because the slice it is running was replaced — and one worker can be all three. Signalling the same pid twice would be at best wasted and at worst aimed at whatever inherited the number, so the union is taken here rather than left to the caller.
 
         Archiving rows first, in row order, then the rest of the fleet in the order the scan reported it.
 
@@ -167,7 +174,7 @@ class Delta:
         seen = set(stems)
         stems.extend(
             worker
-            for worker in (self.relocated.workers if self.relocated else ())
+            for worker in self.wholesale_order
             if worker not in seen and not seen.add(worker)
         )
         return stems
@@ -184,9 +191,16 @@ class Delta:
     def wholesale(self) -> set[str]:
         """Workers to stop outright whatever they are running, by stem.
 
-        Relocation only. It is not about any task — the directory moved out from under all of them — so there is no subset to compute and every task the worker holds is going.
+        Relocation and reshaping. Neither is about any task — the directory moved out from under all of them, or the slice did — so there is no subset to compute and every task the worker holds is going.
         """
-        return set(self.relocated.workers) if self.relocated else set()
+        return set(self.wholesale_order)
+
+    @property
+    def wholesale_order(self) -> tuple[str, ...]:
+        """`wholesale`, in the order the scan reported the fleet, for `stopping` to append."""
+        return (self.relocated.workers if self.relocated else ()) + (
+            self.reshaped.workers if self.reshaped else ()
+        )
 
     @property
     def empty(self) -> bool:
@@ -248,7 +262,7 @@ def compute_delta(
         changes=changes,
         first=old is None,
         relocated=_relocation(wanted, logs, stranded, running),
-        reshaped=_reshaped(new, old, wanted, logs),
+        reshaped=_reshaped(new, old, wanted, logs, running),
     )
 
 
@@ -257,6 +271,7 @@ def _reshaped(
     old: Manifest | None,
     wanted: Mapping[str, ManifestTask],
     logs: ObservedLogs,
+    running: Sequence[RunningWorker],
 ) -> Reshaped | None:
     """Whether the run's dataset slice moved out from under its results.
 
@@ -267,6 +282,7 @@ def _reshaped(
         old: The committed manifest, or `None` on a first launch.
         wanted: The captured manifest's tasks by identifier.
         logs: The run's log directory.
+        running: The fleet as the scan found it, every member of which is running the old slice.
 
     Returns:
         What changed and what it costs, or `None` where nothing did.
@@ -281,6 +297,7 @@ def _reshaped(
     return Reshaped(
         fields=changed,
         affected=sum(1 for identifier in wanted if logs.attempts.get(identifier)),
+        workers=tuple(worker.worker for worker in running),
     )
 
 

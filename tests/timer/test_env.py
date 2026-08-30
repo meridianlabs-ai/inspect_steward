@@ -12,7 +12,7 @@ from pathlib import Path
 
 import pytest
 from inspect_steward._timer import unavailable_credentials
-from inspect_steward._timer.env import credentials, dotenv_names
+from inspect_steward._timer.env import credentials, dotenv_names, explain
 
 SHELL = {
     "ANTHROPIC_API_KEY": "sk-ant-secret",
@@ -155,3 +155,37 @@ def test_a_key_in_the_file_and_not_in_the_shell_is_not_a_problem(
     path = env(tmp_path, "OPENAI_API_KEY=x\n")
 
     assert unavailable_credentials(path, {"PATH": "/usr/bin"}) == []
+
+
+def test_a_setting_inspect_reads_for_itself_is_named_too(tmp_path: Path) -> None:
+    """The variables the manifest cannot carry overnight.
+
+    Everything Steward reads is resolved at launch and recorded, which is what
+    keeps an exported `INSPECT_EVAL_LIMIT` in force at 02:00. These reach a
+    worker through the environment instead, so under a scheduler they are
+    simply gone — and `INSPECT_EVAL_MODEL` disappearing means a definition that
+    named no model resolves a different one, computes a different identifier
+    than the manifest recorded, and writes a log no tend looks for.
+    """
+    env_file = tmp_path / ".env"
+    env_file.write_text("ANTHROPIC_API_KEY=sk-real\n")
+
+    missing = unavailable_credentials(
+        env_file,
+        {"ANTHROPIC_API_KEY": "sk-real", "INSPECT_EVAL_MODEL": "openai/gpt-4o"},
+    )
+
+    assert missing == ["INSPECT_EVAL_MODEL"]
+    # and it is not called a credential, which would read as a bug in the check
+    message = explain(missing, env_file)
+    assert "credential" not in message
+    assert "INSPECT_EVAL_MODEL" in message
+
+
+def test_a_notification_url_is_treated_as_the_token_it_carries(tmp_path: Path) -> None:
+    # `slack://xoxb-.../...` is a bearer token with a scheme in front of it, and
+    # the name matches none of the credential suffixes. Steward deliberately
+    # never reads it as a value, which is why nothing else would notice it go
+    assert credentials({"INSPECT_EVAL_NOTIFICATION": "slack://xoxb-secret/C123"}) == {
+        "INSPECT_EVAL_NOTIFICATION"
+    }

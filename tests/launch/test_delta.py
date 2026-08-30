@@ -483,6 +483,32 @@ def test_a_changed_slice_is_reported_even_though_no_row_moves(tmp_path: Path) ->
     assert delta.additive
 
 
+def test_a_changed_slice_stops_the_fleet_running_the_old_one(tmp_path: Path) -> None:
+    """A worker's slice is fixed when it spawns, so it cannot be told the new one.
+
+    Left running it spends hours producing a log the next tend reads as
+    `reshaped` and re-runs from nothing — the same waste a relocation produces,
+    for the same reason, and it stops the same way. Every worker, not a subset:
+    a slice is eval-set level, so there is no arm of the fleet still running
+    the right one.
+    """
+    logs = tmp_path / "logs"
+    write_log(logs, ADDITION)
+
+    delta = compute_delta(
+        synth_manifest([ADDITION], limit=(5, 10)),
+        synth_manifest([ADDITION], limit=(0, 5)),
+        logs=observe_logs(str(logs)),
+        archived=empty(),
+        running=[running(ADDITION, "add_abc_1")],
+    )
+
+    assert delta.reshaped is not None
+    assert delta.reshaped.workers == ("add_abc_1",)
+    assert delta.stopping == ["add_abc_1"]
+    assert delta.wholesale == {"add_abc_1"}
+
+
 def test_an_unchanged_slice_is_still_nothing_to_change(tmp_path: Path) -> None:
     delta = compute_delta(
         synth_manifest([ADDITION], limit=3),

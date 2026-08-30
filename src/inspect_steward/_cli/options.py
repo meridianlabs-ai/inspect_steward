@@ -177,20 +177,21 @@ class PassthroughCommand(click.Command):
                 formatter.write_dl(passthrough)
 
 
-def collect_overrides(parameters: Mapping[str, Any]) -> dict[str, Any]:
+def collect_overrides(parameters: Mapping[str, Any]) -> dict[str, Any] | None:
     """The passthrough flags as the overrides model spells them.
 
     Args:
         parameters: The command's own parameters, as click bound them.
 
     Returns:
-        Field name to value, for every passthrough flag that was given.
+        Field name to value, for every passthrough flag that was given, or `None` where none was. The two are different instructions: `None` says *nothing was typed*, which lets a re-launch reuse what the committed manifest recorded, where an empty mapping says *the definition's own shape* and displaces it.
     """
-    return {
+    given = {
         field: parameters[f"override_{field}"]
         for field in ALIASED
         if parameters.get(f"override_{field}") is not None
     }
+    return given or None
 
 
 def _passthrough_help(field: str) -> str:

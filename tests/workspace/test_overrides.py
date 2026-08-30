@@ -142,6 +142,24 @@ REFUSED: list[tuple[str, dict[str, str], str]] = [
         {"INSPECT_EVAL_MAX_SAMPLES": "lots"},
         "INSPECT_EVAL_MAX_SAMPLES",
     ),
+    (
+        "a choice inspect does not offer",
+        {"INSPECT_LOG_LEVEL": "chatty"},
+        "INSPECT_LOG_LEVEL",
+    ),
+    (
+        "a config file that is not there",
+        {"INSPECT_EVAL_CACHE": "nowhere.yaml"},
+        "nowhere.yaml",
+    ),
+    # not a `PrerequisiteError` at all: the generate-config pass reaches
+    # readers that raise click's own errors, and catching only the deliberate
+    # refusal left this crashing the 02:00 tend rather than degrading it
+    (
+        "a spec no parser accepts",
+        {"INSPECT_EVAL_ADAPTIVE_CONNECTIONS": "sideways"},
+        "sideways",
+    ),
 ]
 
 

@@ -22,6 +22,9 @@ from typing import TYPE_CHECKING, Any, cast
 # task_identifier is the pairing mechanism eval_set() itself uses; it is
 # versioned rather than public, which is why the manifest records its version
 from inspect_ai._eval.evalset import task_identifier
+
+# the same per-task narrowing `eval_run` applies before a log records what ran
+from inspect_ai._eval.task.util import resolve_task_sample_ids
 from inspect_ai.log import (
     EvalLog,
     EvalLogInfo,
@@ -29,6 +32,7 @@ from inspect_ai.log import (
     list_eval_logs_async,
     read_eval_log_async,
 )
+from inspect_ai.util._sandbox.environment import resolve_sandbox_environment
 
 from .manifest import Manifest, ManifestTask
 
@@ -105,6 +109,15 @@ class LogAttempt:
 
     A mapping rather than a tuple because this survives a round trip through the attempt cache, where a tuple would come back a list and compare unequal to the one just read.
     """
+
+    sandbox: str | None = None
+    """The sandbox this log ran under, as `type` or `type:config`, from `eval.sandbox`.
+
+    **The sandbox as resolved, which is not always the sandbox as asked for.** `--sandbox docker` becomes `docker:compose.yaml` where the task directory holds one, so this compares cleanly against an override that named a config and only on its type against one that did not (`_redirected`).
+    """
+
+    model_base_url: str | None = None
+    """The gateway this log's model calls went to, from `eval.model_base_url`."""
 
     limits: dict[str, int] = field(default_factory=dict[str, int])
     """The per-sample budgets this log ran under, from `eval.config` — `turns`, `messages`, `tokens`, `time`, `working`, `cost`, whichever were set.
@@ -406,7 +419,7 @@ def _observe_task(
             required_samples=required,
         )
 
-    reason = _incomplete_reason(current, required) or _reshaped(manifest, current)
+    reason = _incomplete_reason(current, required) or _reshaped(manifest, task, current)
     return TaskObservation(
         identifier=task.identifier,
         state=TaskState.COMPLETE if reason is None else TaskState.INCOMPLETE,
@@ -421,22 +434,66 @@ def _observe_task(
 SELECTION = ("limit", "sample_id", "sample_shuffle")
 """The `eval_set()` arguments that decide *which* samples run, rather than how many.
 
-All three are identity-neutral and all three are recorded in a log's own config, which is what makes the comparison in `_reshaped` both necessary and possible. `epochs` is not here because the count check already covers it, and `sandbox` and `model_base_url` are not here because a log does not record them in a form that compares — they are the gap `eval_set_overrides` documents as inherited from task identity, and closing it belongs upstream rather than in a count check.
+All three are identity-neutral, all three are recorded in a log's own config, and all three are recorded in a manifest's `options` — which is what makes the comparison in `_reshaped` both necessary and possible. `epochs` is not here because the count check already covers it.
 """
 
 
-def _reshaped(manifest: Manifest, attempt: LogAttempt) -> IncompleteReason | None:
+def _reshaped(
+    manifest: Manifest, task: ManifestTask, attempt: LogAttempt
+) -> IncompleteReason | None:
     """Whether the log answers the question the run is now asking.
 
     Compares the run's *effective* selection — the override where there is one, the definition's own value otherwise — against what the log recorded running with. Both halves matter: an override is how a re-launch changes the slice, and `options` is how an edit to the definition does, and neither moves the identifier.
 
-    Silent where the manifest cannot say. A manifest captured before `options` recorded a field has nothing to compare, and inventing a mismatch there would re-run a settled run on upgrade.
+    **Silent where the manifest cannot say.** A field `options` does not carry is a field a manifest captured by an older inspect never recorded, and reading its absence as `None` would call a shuffled run stale on the day the reader is upgraded — permanently, since the next run records the same nothing. So the definition side is consulted only where the key is present; an override is always comparable, because Steward wrote it.
     """
     for name in SELECTION:
         override = getattr(manifest.overrides, name, None)
-        wanted = override if override is not None else manifest.options.get(name)
+        if override is None and name not in manifest.options:
+            continue
+        wanted = override if override is not None else manifest.options[name]
+        if name == "sample_id" and wanted is not None:
+            # a `task:id` selector belongs to one task, and `eval_run` strips it
+            # per task before the log records what ran -- so an unresolved list
+            # compares against a resolved one and never matches
+            wanted = resolve_task_sample_ids(task.name, wanted)
         if _selection(wanted) != _selection(attempt.selection.get(name)):
             return IncompleteReason.RESHAPED
+
+    return _redirected(manifest, attempt)
+
+
+def _redirected(manifest: Manifest, attempt: LogAttempt) -> IncompleteReason | None:
+    """Whether an override has pointed the task at something else since the log was written.
+
+    `sandbox` and `model_base_url` are identity-neutral and plainly affect results — a different image or a different gateway is a different answer to the same question. Upstream records that gap as inherited from task identity rather than created here; what Steward can do about it is refuse to call such a log settled.
+
+    **Only an override is compared, and only against what it actually said.** The definition's own values are not in `options`, so there is nothing to compare them with — an edit to either is invisible here, as it is to the identifier. And a log records the sandbox *resolved*: `--sandbox docker` becomes `docker:compose.yaml` where the task directory holds one, so comparing the config half of a type-only override would mark every such run stale forever. A type-only override is therefore compared on its type alone; one that names a config suppresses that resolution upstream and is compared whole.
+    """
+    overrides = manifest.overrides
+    if overrides is None:
+        return None
+
+    if (
+        overrides.model_base_url is not None
+        and overrides.model_base_url != attempt.model_base_url
+    ):
+        return IncompleteReason.RESHAPED
+
+    # the same normalisation `resolve_task_sandbox` applies, so that the two
+    # spellings of one sandbox -- `docker` and `SandboxEnvironmentSpec("docker")`
+    # -- are the one value here that they are there
+    sandbox = resolve_sandbox_environment(overrides.sandbox)
+    if sandbox is not None:
+        recorded = attempt.sandbox
+        if sandbox.config is None:
+            wanted = sandbox.type
+            recorded = None if recorded is None else recorded.partition(":")[0]
+        else:
+            wanted = f"{sandbox.type}:{sandbox.config}"
+        if wanted != recorded:
+            return IncompleteReason.RESHAPED
+
     return None
 
 
@@ -501,8 +558,23 @@ def _attempt(info: EvalLogInfo, header: EvalLog) -> LogAttempt:
             )
             if value is not None
         },
+        sandbox=_sandbox(header),
+        model_base_url=header.eval.model_base_url,
         limits=_limits(header),
     )
+
+
+def _sandbox(header: EvalLog) -> str | None:
+    """The log's sandbox in the `type:config` form the command line uses.
+
+    Spelled out rather than `str(spec)`, which is pydantic's repr (`type='docker' config=None`) and would compare against nothing.
+    """
+    sandbox = header.eval.sandbox
+    if sandbox is None:
+        return None
+    if sandbox.config is None:
+        return sandbox.type
+    return f"{sandbox.type}:{sandbox.config}"
 
 
 def _headline(header: EvalLog) -> tuple[float | None, str | None]:

@@ -17,6 +17,7 @@ from typing import Any
 
 import pytest
 from inspect_ai._eval.eval_set_overrides import EvalSetOverrides
+from inspect_ai.util._sandbox.environment import SandboxEnvironmentSpec
 from inspect_steward._evalset.observe import (
     IncompleteReason,
     ObservedLogs,
@@ -335,6 +336,155 @@ def test_a_log_answering_a_different_question_is_incomplete(
     assert only.state == (
         TaskState.COMPLETE if expected is None else TaskState.INCOMPLETE
     )
+
+
+def test_a_manifest_that_never_recorded_a_field_is_not_read_as_a_change(
+    tmp_path: Path,
+) -> None:
+    """An older capture said nothing about `sample_shuffle`, which is not the same as saying no.
+
+    Reading the absence as `None` marks a shuffled run stale on the day the
+    reader is upgraded — and permanently, because the manifest the re-run
+    commits records the same nothing. So the definition side is consulted only
+    where the key is there.
+    """
+    task = SynthTask("probe", samples=3)
+    write_log(tmp_path, task, total=3, selection={"sample_shuffle": 42})
+    manifest = synth_manifest([task])
+    older = manifest.model_copy(
+        update={
+            "options": {
+                key: value
+                for key, value in manifest.options.items()
+                if key != "sample_shuffle"
+            }
+        }
+    )
+
+    (only,) = observe_tasks(older, observe_logs(tmp_path)).tasks
+
+    assert only.reason is None
+    # and the key being present with no value still compares, which is what
+    # tells a definition that shuffles from a manifest that cannot say
+    (current,) = observe_tasks(manifest, observe_logs(tmp_path)).tasks
+    assert current.reason is IncompleteReason.RESHAPED
+
+
+def test_a_task_qualified_sample_id_is_resolved_before_it_is_compared(
+    tmp_path: Path,
+) -> None:
+    """`eval_run` strips the qualifier per task before the log records what ran.
+
+    So `--sample-id probe:a,other:b` reaches the manifest whole and the log as
+    `["a"]`. Compared unresolved the two never match, and a task that ran
+    exactly what was asked of it is re-run every tend until the attempt budget
+    is spent.
+    """
+    # one sample, because capture counts the selection too -- the manifest a
+    # real run commits asks for exactly the sample the log holds
+    task = SynthTask("probe", samples=1)
+    write_log(tmp_path, task, total=1, selection={"sample_id": ["a"]})
+    manifest = synth_manifest([task], sample_id=["probe:a", "other:b"])
+
+    (only,) = observe_tasks(manifest, observe_logs(tmp_path)).tasks
+
+    assert only.reason is None
+
+
+REDIRECTION: list[tuple[str, dict[str, Any], dict[str, Any], bool]] = [
+    (
+        "a gateway that has not moved",
+        {"model_base_url": "https://gw.example/v1"},
+        {"model_base_url": "https://gw.example/v1"},
+        False,
+    ),
+    (
+        "a gateway that has",
+        {"model_base_url": "https://other.example/v1"},
+        {"model_base_url": "https://gw.example/v1"},
+        True,
+    ),
+    (
+        "a gateway where the log had none",
+        {"model_base_url": "https://gw.example/v1"},
+        {},
+        True,
+    ),
+    (
+        "a type-only override against the config it resolved to",
+        {"sandbox": SandboxEnvironmentSpec("docker")},
+        {"sandbox": SandboxEnvironmentSpec("docker", "compose.yaml")},
+        False,
+    ),
+    (
+        "a different sandbox type",
+        {"sandbox": SandboxEnvironmentSpec("k8s")},
+        {"sandbox": SandboxEnvironmentSpec("docker", "compose.yaml")},
+        True,
+    ),
+    (
+        "a named config against the same one",
+        {"sandbox": SandboxEnvironmentSpec("docker", "compose.yaml")},
+        {"sandbox": SandboxEnvironmentSpec("docker", "compose.yaml")},
+        False,
+    ),
+    (
+        "a named config against a different one",
+        {"sandbox": SandboxEnvironmentSpec("docker", "other.yaml")},
+        {"sandbox": SandboxEnvironmentSpec("docker", "compose.yaml")},
+        True,
+    ),
+    (
+        "the same sandbox said the short way",
+        {"sandbox": "docker"},
+        {"sandbox": SandboxEnvironmentSpec("docker")},
+        False,
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("overridden", "ran", "reshaped"),
+    [(overridden, ran, reshaped) for _, overridden, ran, reshaped in REDIRECTION],
+    ids=[case for case, _, _, _ in REDIRECTION],
+)
+def test_an_override_pointing_a_task_elsewhere_makes_its_log_incomplete(
+    overridden: dict[str, Any],
+    ran: dict[str, Any],
+    reshaped: bool,
+    tmp_path: Path,
+) -> None:
+    """A different image or a different gateway is a different answer.
+
+    Both are identity-neutral upstream, so the identifier still pairs the log
+    with the task and the count still agrees. The cases that must *not* fire
+    are the load-bearing ones: a log records the sandbox resolved, so a
+    type-only override compared whole would mark every run with a
+    `compose.yaml` beside it stale forever.
+    """
+    task = SynthTask("probe", samples=3)
+    write_log(tmp_path, task, total=3, **ran)
+    manifest = synth_manifest([task]).model_copy(
+        update={"overrides": EvalSetOverrides(**overridden)}
+    )
+
+    (only,) = observe_tasks(manifest, observe_logs(tmp_path)).tasks
+
+    assert (only.reason is IncompleteReason.RESHAPED) is reshaped
+
+
+def test_the_definition_s_own_sandbox_is_never_compared(tmp_path: Path) -> None:
+    # nothing records what the definition asked for, so there is nothing to
+    # compare -- and comparing the log's own value against the absent override
+    # would call every sandboxed run stale from its first tend
+    task = SynthTask("probe", samples=3)
+    write_log(
+        tmp_path, task, total=3, sandbox=SandboxEnvironmentSpec("docker", "c.yaml")
+    )
+
+    (only,) = observe_tasks(synth_manifest([task]), observe_logs(tmp_path)).tasks
+
+    assert only.reason is None
 
 
 def test_an_override_outranks_the_definition_in_the_comparison(tmp_path: Path) -> None:

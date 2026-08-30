@@ -42,6 +42,7 @@ from inspect_ai.log import (
     HeadlineMetric,
     write_eval_log,
 )
+from inspect_ai.util._sandbox.environment import SandboxEnvironmentSpec
 from inspect_steward._evalset.display import compute_display_keys
 from inspect_steward._evalset.manifest import (
     MANIFEST_VERSION,
@@ -115,13 +116,15 @@ def _eval_spec(
     created: str = CREATED,
     epochs: int | None = None,
     selection: dict[str, Any] | None = None,
+    sandbox: SandboxEnvironmentSpec | None = None,
+    model_base_url: str | None = None,
 ) -> EvalSpec:
     """The one place a synthetic task becomes an `EvalSpec`.
 
     `epochs` overrides what the log ran with, so a test can put a 1-epoch log
     under a 3-epoch manifest task. `selection` does the same for `limit`,
     `sample_id` and `sample_shuffle` — which samples ran, as distinct from how
-    many.
+    many — and `sandbox`/`model_base_url` for what the run talked to.
     """
     return EvalSpec(
         created=created,
@@ -132,6 +135,8 @@ def _eval_spec(
         task_args_passed=task.args,
         dataset=EvalDataset(samples=task.samples),
         model=task.model,
+        sandbox=sandbox,
+        model_base_url=model_base_url,
         # limits go on via `model_copy` rather than as keywords: `EvalConfig`
         # takes a hundred fields of every type, so a `**dict[str, int]` spread
         # is checked against all of them
@@ -146,11 +151,12 @@ def synth_manifest(tasks: Sequence[SynthTask], **options: Any) -> Manifest:
 
     Args:
         tasks: Tasks the definition would resolve to.
-        **options: Informational `eval_set()` options to record.
+        **options: Informational `eval_set()` options to record. The three selection keys are recorded whether named or not, because capture records them whether the definition set them or not — and a reader distinguishes *the definition asked for nothing* from *this manifest predates the field*, so a helper that omitted them would test the wrong one of the two.
 
     Returns:
         Manifest whose identifiers match the logs `write_log` writes for the same tasks.
     """
+    options = {"limit": None, "sample_id": None, "sample_shuffle": None} | options
     rows = [
         ManifestTask(
             name=task.name,
@@ -201,6 +207,8 @@ def write_log(
     scores: dict[str, dict[str, float]] | None = None,
     headline: HeadlineMetric | None = None,
     selection: dict[str, Any] | None = None,
+    sandbox: SandboxEnvironmentSpec | None = None,
+    model_base_url: str | None = None,
 ) -> Path:
     """Write one log for a task.
 
@@ -218,6 +226,8 @@ def write_log(
         scores: Scorer name to metric name to value, e.g. `{"exact": {"accuracy": 0.75}}`.
         headline: Which of `scores` the task declared as its headline, as scoring resolves it onto `results.headline`. `None` leaves the log undeclared, where a reader falls back to the first metric of the first score.
         selection: `limit`, `sample_id` and `sample_shuffle` the log ran with — which samples, rather than how many.
+        sandbox: The sandbox the log ran under, **as resolved** — which is what a log records, config file and all.
+        model_base_url: The gateway the log's model calls went to.
 
     Returns:
         Path the log was written to.
@@ -247,7 +257,14 @@ def write_log(
 
     log = EvalLog(
         status=status,
-        eval=_eval_spec(task, created=created, epochs=epochs, selection=selection),
+        eval=_eval_spec(
+            task,
+            created=created,
+            epochs=epochs,
+            selection=selection,
+            sandbox=sandbox,
+            model_base_url=model_base_url,
+        ),
         plan=EvalPlan(),
         results=results,
         # a log that never finished has no completion time, exactly as the

@@ -133,7 +133,7 @@ def launch(
         timer: Arm a timer. `False` launches unsupervised and records that it did.
         env_check: Refuse to arm when a scheduled tend would not inherit this shell's credentials. Checked **before** the capture, so a Hawk config does not spend five minutes resolving packages on the way to a refusal.
         log_store: Log store for this run — a path or `auto` — overriding `_steward.yaml`. `False` declines the one the file or the environment configured; `None` defers to them. **Recorded and otherwise inert**: nothing reads a store until publication exists (step 33), so a path is recorded rather than resolved.
-        overrides: Inspect's own eval-set arguments for this run, already parsed, keyed as `EvalSetOverrides` spells them. Merged over what `STEWARD_*` and `INSPECT_EVAL_*` say and honoured by the capture, so the manifest describes the run that will happen (`_workspace.overrides`).
+        overrides: Inspect's own eval-set arguments for this run, already parsed, keyed as `EvalSetOverrides` spells them. Merged over what `STEWARD_*` and `INSPECT_EVAL_*` say and honoured by the capture, so the manifest describes the run that will happen (`_workspace.overrides`). `None` — nothing typed and nothing exported — reuses the committed manifest's, for the reason `args` does. **An empty mapping is not the same thing**: it asks for the definition's own shape, which is the only way back once a launch has passed one.
         max_workers: Worker processes for the first turn, overriding `_steward.yaml`. `None` expresses no preference and defers to the file, which itself defaults to a process per task — it does not request that width.
         stall_after: Fruitless respawns before a task is given up on, overriding `_steward.yaml`.
         samples_ramp: The ramp's envelope, overriding `_steward.yaml`.
@@ -191,6 +191,7 @@ def launch(
             interval=interval,
             log_store=store,
             overrides=inspect_overrides,
+            reuse_overrides=overrides is None,
             max_workers=max_workers,
             stall_after=stall_after,
             samples_ramp=samples_ramp,
@@ -209,6 +210,7 @@ def _launch(
     interval: int,
     log_store: str | None,
     overrides: EvalSetOverrides | None,
+    reuse_overrides: bool,
     max_workers: int | None,
     stall_after: int | None,
     samples_ramp: tuple[int, int] | bool | None,
@@ -222,7 +224,7 @@ def _launch(
         type=type
         if type is not None
         else (committed.source.type if committed else None),
-        overrides=overrides,
+        overrides=overrides if not reuse_overrides else _prior_overrides(committed),
     )
     _refuse_scanners(manifest)
 
@@ -390,6 +392,16 @@ def _prior_args(committed: Manifest | None) -> dict[str, Any] | None:
     return dict(committed.source.args)
 
 
+def _prior_overrides(committed: Manifest | None) -> EvalSetOverrides | None:
+    """Inspect's words as the committed manifest recorded them, if any.
+
+    The same argument as `_prior_args`, one vocabulary over, and a stronger one. `--epochs 2` typed at the first launch is recorded in the manifest and carried to every later tend; typed a second time or not, the run's shape should not change. Dropped instead, a bare `steward launch` — the amend path, run to pick up an edited definition — would recapture the eval set at the definition's own epochs and limit, and every landed log would read as `reshaped` and re-run. That is the loss `--accept-archive` exists to catch, arriving through a gate it does not guard, because nothing left `logs/`.
+
+    **Only reached when nothing said otherwise.** Any passthrough flag, any `STEWARD_*`, any `INSPECT_EVAL_*` replaces the whole set rather than merging into it — the same wholesale replacement `-A` performs, and for the same reason: a per-field merge would make *this run has no limit* unsayable. `--no-overrides` is the way back to the definition's own shape.
+    """
+    return committed.overrides if committed is not None else None
+
+
 def _observe(log_dir: str) -> ObservedLogs:
     """Read a directory of logs, or say why it could not be read.
 
@@ -529,6 +541,8 @@ def _overrides(given: dict[str, Any] | None) -> EvalSetOverrides | None:
 
     The flag, then `STEWARD_X`, then inspect's own variable, then the definition — the same shape as every Steward setting, one vocabulary over (`_workspace.overrides`). Resolved here rather than per turn because a run's shape is decided when it is launched: `tend` and `status` recompute Steward's own settings every turn and never re-decide what the eval set *is*.
 
+    **Silence is not the same as nothing.** `None` here means no flag and, once the environment has been read, no variable either — which leaves the committed manifest's overrides in force (`_prior_overrides`). An empty mapping is `--no-overrides`, and displaces both.
+
     **`INSPECT_LOG_DIR` is refused rather than ignored.** Every other variable here is honoured because Steward is standing in for the CLI that documents it, and this one contradicts the answer Steward has already given: the run's logs go where the fleet is watched from. Honouring it would move a worker's output somewhere no tend reads, so every task would land and then read as never started; ignoring it would do the right thing while telling the operator nothing.
     """
     if os.environ.get(LOG_DIR, "").strip():
@@ -538,6 +552,11 @@ def _overrides(given: dict[str, Any] | None) -> EvalSetOverrides | None:
             f"elsewhere is a worker no tend can see. Set `log_dir` in your "
             f"definition instead, and unset {LOG_DIR} for this shell."
         )
+    # an empty mapping is `--no-overrides`, which asks for the definition's own
+    # shape -- so it displaces the environment as well as the committed
+    # manifest, or it could not do what it says on a machine that exports one
+    if given is not None and not given:
+        return None
     try:
         return read_overrides(os.environ, given or {})
     except DirectivesError as ex:

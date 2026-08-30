@@ -67,6 +67,17 @@ _LABELS = {
     ),
 )
 @click.option(
+    "--no-overrides",
+    "no_overrides",
+    is_flag=True,
+    default=False,
+    help=(
+        "Capture at the definition's own shape, rather than reusing the "
+        "overrides the committed manifest recorded. Ignores STEWARD_* and "
+        "INSPECT_EVAL_* for this launch too."
+    ),
+)
+@click.option(
     "--type",
     "definition_type",
     type=click.Choice(["evalset", "flow", "hawk"]),
@@ -137,6 +148,7 @@ def launch_command(
     definition: Path | None,
     definition_args: tuple[str, ...],
     no_args: bool,
+    no_overrides: bool,
     definition_type: DefinitionType | None,
     accept_archive: bool,
     timer: bool,
@@ -162,6 +174,13 @@ def launch_command(
             "--no-args asks to capture with no arguments, and -A supplies one. "
             "Pass whichever you meant."
         )
+    given_overrides = collect_overrides(passthrough)
+    if no_overrides and given_overrides:
+        raise click.UsageError(
+            "--no-overrides asks to capture at the definition's own shape, and "
+            f"--{sorted(given_overrides)[0].replace('_', '-')} changes it. "
+            "Pass whichever you meant."
+        )
     if no_log_store and log_store is not None:
         raise click.UsageError(
             "--no-log-store asks for no store, and --log-store names one. "
@@ -184,7 +203,8 @@ def launch_command(
             timer=timer,
             env_check=env_check,
             log_store=False if no_log_store else log_store,
-            overrides=collect_overrides(passthrough),
+            # `{}` and `None` differ here exactly as they do for `args`
+            overrides={} if no_overrides else given_overrides,
             max_workers=max_workers,
             stall_after=stall_after,
             samples_ramp=samples_ramp,

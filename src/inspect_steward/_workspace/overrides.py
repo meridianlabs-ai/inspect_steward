@@ -14,6 +14,7 @@
 from collections.abc import Mapping
 from typing import Any
 
+import click
 import yaml
 
 # the overrides model and its environment reader are a versioned wire format
@@ -78,10 +79,19 @@ def read_overrides(
     """
     # inspect's own reading of its own names, translated into Steward's error
     # type so that a bad `INSPECT_EVAL_*` degrades a tend exactly as a bad
-    # `_steward.yaml` does rather than escaping as an unhandled exception
+    # `_steward.yaml` does rather than escaping as an unhandled exception.
+    #
+    # `PrerequisiteError` is what upstream raises deliberately, and the other
+    # two are what leaks when a value gets past its converter and fails later.
+    # `ClickException` is reached today, from the config-file and spec readers
+    # the generate-config pass uses; `ValidationError` is not, and is caught
+    # anyway because the line between the two is upstream's converter table
+    # rather than anything Steward controls. Catching only the deliberate one
+    # left a mistyped variable crashing the 02:00 tend, which is the one moment
+    # nobody is there to read the traceback
     try:
         inspect_side = resolve_eval_env(environ)
-    except PrerequisiteError as ex:
+    except (PrerequisiteError, ValidationError, click.ClickException) as ex:
         raise DirectivesError(_message(ex)) from ex
 
     settings: dict[str, Any] = {}
@@ -149,8 +159,14 @@ def _validated(
     return overrides
 
 
-def _message(ex: PrerequisiteError) -> str:
-    """Inspect's refusal, without the console markup its own display strips."""
+def _message(ex: Exception) -> str:
+    """Inspect's refusal, without the console markup its own display strips.
+
+    A `ValidationError` is rendered by pydantic and reaches here as several
+    lines; that is worse than `explain` would do but better than a traceback,
+    and the shape it takes is upstream's to improve rather than Steward's to
+    reformat.
+    """
     text = str(ex).replace("[bold]", "").replace("[/bold]", "")
     return text.removeprefix("ERROR: ")
 

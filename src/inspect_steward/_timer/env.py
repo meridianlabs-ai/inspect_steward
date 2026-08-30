@@ -32,9 +32,27 @@ KNOWN = frozenset(
         "AZURE_TENANT_ID",
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
+        "INSPECT_EVAL_NOTIFICATION",
     }
 )
-"""Credential variables whose names the pattern would miss. `AWS_ACCESS_KEY_ID` ends in neither a key nor a token, and an S3 `log_dir` is the case that made the environment check worth building."""
+"""Credential variables whose names the pattern would miss. `AWS_ACCESS_KEY_ID` ends in neither a key nor a token, and an S3 `log_dir` is the case that made the environment check worth building.
+
+`INSPECT_EVAL_NOTIFICATION` is here because it holds an Apprise URL, and an Apprise URL is a bearer token with a scheme in front of it — `slack://xoxb-.../...`. Steward deliberately never reads it as a value (`eval_set_env.NOT_FROM_ENV`), which is exactly why the check has to: nothing else in Steward will ever notice it is about to disappear."""
+
+
+AMBIENT = frozenset(
+    {
+        "INSPECT_EVAL_MODEL",
+        "INSPECT_EVAL_MODEL_ARGS",
+        "INSPECT_EVAL_MODEL_BASE_URL",
+        "INSPECT_EVAL_LOG_FILE_PATTERN",
+    }
+)
+"""Variables that shape a run without passing through Steward, and so are not carried to 02:00.
+
+**The manifest is what carries a setting overnight, and these never reach it.** Every variable Steward reads is resolved at launch and recorded in the committed manifest, which is what makes an exported `INSPECT_EVAL_LIMIT` still in force at the 02:00 tend. These four are read by inspect's *Python API* instead — by a provider looking up its own base URL, by `eval()` resolving a model when the definition names none — so they reach a worker only through the environment it inherits. Under a scheduler there is no such environment, and the loss is silent in the worst available way: a definition that named no model resolves a different one, computes a different `task_identifier` than the manifest recorded, and writes a log no tend ever looks for. The run then never converges and nothing says why.
+
+Reported alongside the credentials because the remedy is identical — put it in `.env` — and separately worded because none of them is a secret."""
 
 
 def credentials(environ: Mapping[str, str]) -> set[str]:
@@ -83,7 +101,8 @@ def unavailable(env_file: Path, environ: Mapping[str, str]) -> list[str]:
     Returns:
         The names, sorted. Empty when a timer would run with everything this shell has.
     """
-    return sorted(credentials(environ) - dotenv_names(env_file))
+    ambient = {name for name in AMBIENT if environ.get(name, "").strip()}
+    return sorted((credentials(environ) | ambient) - dotenv_names(env_file))
 
 
 def explain(missing: list[str], env_file: Path) -> str:
@@ -94,20 +113,35 @@ def explain(missing: list[str], env_file: Path) -> str:
         env_file: Where it should go.
 
     Returns:
-        A message naming every variable, because the one left out is the one that breaks the night.
+        A message naming every variable, because the one left out is the one that breaks the night. The ambient settings are listed under their own line rather than called credentials, since they are not — and a message that called `INSPECT_EVAL_MODEL` a credential would read as a bug in the check rather than a fact about the shell.
     """
-    names = "\n".join(f"  {name}" for name in missing)
+    ambient = [name for name in missing if name in AMBIENT]
+    secrets = [name for name in missing if name not in AMBIENT]
+
+    parts: list[str] = []
+    if secrets:
+        parts.append(
+            f"{'this credential' if len(secrets) == 1 else 'these credentials'}:\n"
+            + "\n".join(f"  {name}" for name in secrets)
+        )
+    if ambient:
+        parts.append(
+            f"{'this setting' if len(ambient) == 1 else 'these settings'}, which "
+            f"inspect reads from the environment rather than from the manifest:\n"
+            + "\n".join(f"  {name}" for name in ambient)
+        )
+    plural = "it" if len(missing) == 1 else "them"
     return (
-        f"a scheduled tend runs under a stripped environment and would not "
-        f"have {'this credential' if len(missing) == 1 else 'these credentials'}:\n"
-        f"{names}\n"
-        f"put {'it' if len(missing) == 1 else 'them'} in {env_file}, which both "
-        f"the tend and its workers read, or arm with --no-env-check if the "
-        f"timer is meant to run without {'it' if len(missing) == 1 else 'them'}"
+        "a scheduled tend runs under a stripped environment and would not have "
+        + "\nnor ".join(parts)
+        + f"\nput {plural} in {env_file}, which both the tend and its workers "
+        f"read, or arm with --no-env-check if the timer is meant to run "
+        f"without {plural}"
     )
 
 
 __all__ = [
+    "AMBIENT",
     "CREDENTIAL",
     "KNOWN",
     "credentials",

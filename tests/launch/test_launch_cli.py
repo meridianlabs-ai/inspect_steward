@@ -635,6 +635,61 @@ def test_arguments_can_be_cleared_back_to_the_definitions_defaults(
     assert capture.calls[-1].args == {}
 
 
+def test_a_relaunch_reuses_the_committed_overrides(
+    workspace: Workspace, capture: FakeCapture
+) -> None:
+    """The amend path must not un-shape the run it is amending.
+
+    `steward launch` typed a second time to pick up an edited definition would
+    otherwise recapture at the definition's own epochs and limit, and every log
+    the run has produced would read as `reshaped` at the next tend and run
+    again. That loss arrives through a gate `--accept-archive` does not guard,
+    because nothing leaves `logs/`.
+    """
+    assert run("--no-timer", "--epochs", "3").exit_code == 0
+    assert capture.calls[-1].overrides is not None
+    capture.manifest = committed(workspace)
+
+    assert run("--no-timer").exit_code == 0
+    remembered = capture.calls[-1].overrides
+    assert remembered is not None and remembered.epochs == 3
+
+    # and one flag replaces the whole set rather than merging into it, the same
+    # wholesale replacement `-A` performs -- a per-field merge would make *this
+    # run has no epochs* unsayable
+    assert run("--no-timer", "--limit", "5").exit_code == 0
+    replaced = capture.calls[-1].overrides
+    assert replaced is not None and replaced.limit == 5 and replaced.epochs is None
+
+
+def test_overrides_can_be_cleared_back_to_the_definitions_own_shape(
+    workspace: Workspace, capture: FakeCapture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`--no-overrides` is `--no-args` for inspect's vocabulary, and displaces the environment too.
+
+    Without it, a run once launched with `--epochs 3` could never be launched
+    without it again: silence reuses and any flag sets something.
+    """
+    assert run("--no-timer", "--epochs", "3").exit_code == 0
+    capture.manifest = committed(workspace)
+
+    monkeypatch.setenv("INSPECT_EVAL_MAX_SAMPLES", "20")
+    assert run("--no-timer", "--no-overrides").exit_code == 0
+
+    assert capture.calls[-1].overrides is None
+    assert committed(workspace).overrides is None
+
+
+def test_asking_for_no_overrides_and_for_one_at_once_is_a_usage_error(
+    workspace: Workspace, capture: FakeCapture
+) -> None:
+    result = run("--no-timer", "--no-overrides", "--epochs", "2")
+
+    assert result.exit_code != 0
+    assert "--no-overrides" in result.output
+    assert capture.calls == []
+
+
 def test_asking_for_no_arguments_and_for_arguments_at_once_is_a_usage_error(
     workspace: Workspace, capture: FakeCapture
 ) -> None:
