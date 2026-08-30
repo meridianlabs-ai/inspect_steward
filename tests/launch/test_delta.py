@@ -20,6 +20,7 @@ through `launch` itself.
 from pathlib import Path
 
 import pytest
+from inspect_ai._eval.eval_set_overrides import EvalSetOverrides
 from inspect_steward._evalset.observe import ObservedLogs, observe_logs
 from inspect_steward._launch import Change, compute_delta
 from inspect_steward._schedule import RunningWorker
@@ -507,6 +508,49 @@ def test_a_changed_slice_stops_the_fleet_running_the_old_one(tmp_path: Path) -> 
     assert delta.reshaped.workers == ("add_abc_1",)
     assert delta.stopping == ["add_abc_1"]
     assert delta.wholesale == {"add_abc_1"}
+
+
+def test_a_changed_gateway_is_reported_and_stops_the_fleet(tmp_path: Path) -> None:
+    """A redirect re-runs harder than a reshape, so a launch cannot be silent about it.
+
+    `observe` will not merely mark these tasks incomplete — it refuses to
+    resume them, so every landed result is thrown away. Reporting only the
+    slice left `--model-base-url` producing an empty delta and stopping no
+    workers, which is the same silence the slice comparison was added to end.
+    """
+    logs = tmp_path / "logs"
+    write_log(logs, ADDITION)
+    elsewhere = synth_manifest([ADDITION]).model_copy(
+        update={"overrides": EvalSetOverrides(model_base_url="https://new.example/v1")}
+    )
+
+    delta = compute_delta(
+        elsewhere,
+        synth_manifest([ADDITION]),
+        logs=observe_logs(str(logs)),
+        archived=empty(),
+        running=[running(ADDITION, "add_abc_1")],
+    )
+
+    assert not delta.empty
+    assert delta.reshaped is not None
+    assert delta.reshaped.fields == ("model_base_url",)
+    assert delta.reshaped.affected == 1
+    assert delta.stopping == ["add_abc_1"]
+
+
+def test_an_unchanged_gateway_is_nothing_to_change(tmp_path: Path) -> None:
+    # both sides silent on it, which is every run that never overrode one
+    delta = compute_delta(
+        synth_manifest([ADDITION]),
+        synth_manifest([ADDITION]),
+        logs=empty(),
+        archived=empty(),
+        running=[],
+    )
+
+    assert delta.reshaped is None
+    assert delta.empty
 
 
 def test_an_unchanged_slice_is_still_nothing_to_change(tmp_path: Path) -> None:
