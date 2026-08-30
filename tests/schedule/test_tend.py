@@ -373,6 +373,58 @@ def test_a_broken_steward_md_degrades_to_the_last_known_good(tmp_path: Path) -> 
     assert "_steward.yaml" in workspace.log.read_text(encoding="utf-8")
 
 
+def test_a_broken_variable_keeps_the_files_standing_rules(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The file parsed; only the environment did not.
+
+    Reported as one condition, a bad `INSPECT_EVAL_*` took the file's policies
+    down with it — rules that had parsed perfectly, in the one place an agent
+    is told to read them from.
+    """
+    done = SynthTask("done")
+    workspace, _ = prepared(tmp_path, [done])
+    write_log(workspace.logs, done)
+    workspace.directives.write_text(
+        "max_workers: 3\npolicies:\n  - never exceed ten dollars\n", encoding="utf-8"
+    )
+    turn(workspace)
+
+    monkeypatch.setenv("INSPECT_EVAL_MAX_SAMPLES", "lots")
+    degraded = turn(workspace)
+
+    assert degraded.degraded is not None
+    assert "INSPECT_EVAL_MAX_SAMPLES" in degraded.degraded
+    assert degraded.policies == ["never exceed ten dollars"]
+
+
+def test_two_different_broken_variables_are_two_items(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Acknowledging one must not silence the other.
+
+    Both were keyed on `_steward.yaml`'s modification time — the same file,
+    unedited — so two unrelated failures shared an identity and the second
+    arrived already accepted.
+    """
+    done = SynthTask("done")
+    workspace, _ = prepared(tmp_path, [done])
+    write_log(workspace.logs, done)
+    workspace.directives.write_text("max_workers: 3\n", encoding="utf-8")
+    turn(workspace)
+
+    monkeypatch.setenv("INSPECT_EVAL_MAX_SAMPLES", "lots")
+    first = turn(workspace)
+    monkeypatch.delenv("INSPECT_EVAL_MAX_SAMPLES")
+    monkeypatch.setenv("INSPECT_EVAL_MAX_TASKS", "heaps")
+    second = turn(workspace)
+
+    assert first.degraded_at is not None and second.degraded_at is not None
+    assert first.degraded_at != second.degraded_at
+    # and the same failure twice is one item rather than one per turn
+    assert turn(workspace).degraded_at == second.degraded_at
+
+
 def test_a_broken_steward_md_with_no_history_refuses(tmp_path: Path) -> None:
     # nothing to fall back to, and defaults would discard the operator's
     # instruction silently, which is the one outcome worse than stopping

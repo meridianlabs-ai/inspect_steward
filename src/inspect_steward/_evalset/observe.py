@@ -34,7 +34,7 @@ from inspect_ai.log import (
 )
 from inspect_ai.util._sandbox.environment import resolve_sandbox_environment
 
-from .manifest import Manifest, ManifestTask
+from .manifest import SELECTION, Manifest, ManifestTask
 
 if TYPE_CHECKING:
     # the cache reads `LogAttempt` from here, so the run-time import goes one way
@@ -240,9 +240,19 @@ class IncompleteReason(StrEnum):
     """Claims success but carries no results at all."""
 
     RESHAPED = "reshaped"
-    """Succeeded, and answers a different question than the run is now asking — a different dataset slice, a different sample selection, a different shuffle.
+    """Succeeded, and covers a different slice of the dataset than the run is now asking for — a different limit, a different sample selection, a different shuffle.
 
     The one incompleteness that is not about the log falling short. `task_identifier` ignores `limit`, `sample_id` and `sample_shuffle` on purpose, so that raising a limit resumes rather than orphaning what has run; the cost is that *changing which samples* run is invisible to it, and a count check cannot see it either once the counts agree. Without this a re-launch that reshuffles a limited run reports nothing to do and signs off on the previous subset.
+
+    **Resumes, and that is the point.** Only the *slice* moved; every sample the log holds was answered under the settings still in force, so the ones still wanted are still good and only the difference has to run. A raised limit is the ordinary case and re-running its first ten samples would be pure waste.
+    """
+
+    REDIRECTED = "redirected"
+    """Succeeded, and answered under settings the run has since pointed somewhere else — a different sandbox, a different model gateway.
+
+    **The one reason that must not resume.** Every other kind of incompleteness leaves the log's finished samples worth keeping, so a spawn hands the worker its prior log and inspect reuses them per sample id. Here the sample *set* is unchanged and every answer in it is stale, so resuming would find all of them, reuse all of them, and complete having run nothing — the task would report as re-run and be byte-identical. So a redirected task starts fresh, and its prior log stays as a superseded attempt.
+
+    Checked before the reasons that resume, because it outranks them: a log that is both short and redirected has to reset, and letting `SHORT` answer first would resume it.
     """
 
 
@@ -419,7 +429,14 @@ def _observe_task(
             required_samples=required,
         )
 
-    reason = _incomplete_reason(current, required) or _reshaped(manifest, task, current)
+    # a redirect first: it invalidates every sample in the log, where every
+    # other reason leaves them worth resuming, so it has to answer before one
+    # of those masks it
+    reason = (
+        _redirected(manifest, current)
+        or _incomplete_reason(current, required)
+        or _reshaped(manifest, task, current)
+    )
     return TaskObservation(
         identifier=task.identifier,
         state=TaskState.COMPLETE if reason is None else TaskState.INCOMPLETE,
@@ -429,13 +446,6 @@ def _observe_task(
         superseded=logs.superseded(task.identifier),
         required_samples=required,
     )
-
-
-SELECTION = ("limit", "sample_id", "sample_shuffle")
-"""The `eval_set()` arguments that decide *which* samples run, rather than how many.
-
-All three are identity-neutral, all three are recorded in a log's own config, and all three are recorded in a manifest's `options` — which is what makes the comparison in `_reshaped` both necessary and possible. `epochs` is not here because the count check already covers it.
-"""
 
 
 def _reshaped(
@@ -459,14 +469,13 @@ def _reshaped(
             wanted = resolve_task_sample_ids(task.name, wanted)
         if _selection(wanted) != _selection(attempt.selection.get(name)):
             return IncompleteReason.RESHAPED
-
-    return _redirected(manifest, attempt)
+    return None
 
 
 def _redirected(manifest: Manifest, attempt: LogAttempt) -> IncompleteReason | None:
     """Whether an override has pointed the task at something else since the log was written.
 
-    `sandbox` and `model_base_url` are identity-neutral and plainly affect results — a different image or a different gateway is a different answer to the same question. Upstream records that gap as inherited from task identity rather than created here; what Steward can do about it is refuse to call such a log settled.
+    `sandbox` and `model_base_url` are identity-neutral and plainly affect results — a different image or a different gateway is a different answer to the same question. Upstream records that gap as inherited from task identity rather than created here; what Steward can do about it is refuse to call such a log settled, and refuse to resume it (`IncompleteReason.REDIRECTED`).
 
     **Only an override is compared, and only against what it actually said.** The definition's own values are not in `options`, so there is nothing to compare them with — an edit to either is invisible here, as it is to the identifier. And a log records the sandbox *resolved*: `--sandbox docker` becomes `docker:compose.yaml` where the task directory holds one, so comparing the config half of a type-only override would mark every such run stale forever. A type-only override is therefore compared on its type alone; one that names a config suppresses that resolution upstream and is compared whole.
     """
@@ -478,7 +487,7 @@ def _redirected(manifest: Manifest, attempt: LogAttempt) -> IncompleteReason | N
         overrides.model_base_url is not None
         and overrides.model_base_url != attempt.model_base_url
     ):
-        return IncompleteReason.RESHAPED
+        return IncompleteReason.REDIRECTED
 
     # the same normalisation `resolve_task_sandbox` applies, so that the two
     # spellings of one sandbox -- `docker` and `SandboxEnvironmentSpec("docker")`
@@ -492,7 +501,7 @@ def _redirected(manifest: Manifest, attempt: LogAttempt) -> IncompleteReason | N
         else:
             wanted = f"{sandbox.type}:{sandbox.config}"
         if wanted != recorded:
-            return IncompleteReason.RESHAPED
+            return IncompleteReason.REDIRECTED
 
     return None
 

@@ -640,17 +640,24 @@ def _spawn_order(tasks: list[TaskObservation]) -> list[TaskObservation]:
     return sorted(pending, key=group)
 
 
+# the one reason whose log must not be handed back to the worker
+RESET = frozenset({IncompleteReason.REDIRECTED})
+
+
 def _spawn(observation: TaskObservation, inflight: InFlight) -> SpawnTask:
     """One task's spawn decision.
 
-    A task with a prior log resumes it whatever went wrong — short, errored, cancelled, invalidated, or a worker that died mid-run. There is deliberately no branch on the reason: resume reuses exactly the samples that are worth keeping, so the reason is reporting material rather than an input to the decision.
+    A task with a prior log resumes it whatever went wrong — short, errored, cancelled, invalidated, a reshuffled slice, or a worker that died mid-run. The reason is reporting material rather than an input, because resume reuses exactly the samples still worth keeping: inspect looks each sample of the *new* slice up in the prior log by id, so a raised limit keeps its first ten and a moved range finds nothing to keep and runs the lot.
+
+    **`REDIRECTED` is the exception, and it is the exception precisely because resume works.** A changed sandbox or gateway leaves the sample set identical, so every sample would be found, every answer reused, and the worker would finish having run nothing — a task reported as re-run and byte-identical to the one that was stale. Nothing about the *slice* changed, so nothing about the lookup fails; what changed is that the answers are no longer worth having, which is a judgement only the reason carries. So a redirected task is spawned without its prior log, and that log stays where it is as a superseded attempt.
     """
     current = observation.current
     task = observation.task
+    resume = None if observation.reason in RESET else current
     return SpawnTask(
         identifier=observation.identifier,
         key=observation.key,
-        resume=current.location if current is not None else None,
+        resume=resume.location if resume is not None else None,
         attempt=_attempt(observation, inflight),
         reason=observation.reason,
         # from the manifest, never recomputed. These are what let a worker skip

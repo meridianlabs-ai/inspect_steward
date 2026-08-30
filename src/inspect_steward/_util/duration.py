@@ -1,6 +1,6 @@
 """Durations, as a human writes them and Steward stores them.
 
-One interval reaches Steward from two directions — `_steward.yaml`'s `tend_interval` and a `--interval` flag — and both are typed by a person. A bare number would make each of them ambiguous in the way that matters most: `tend_interval: 10` is ten seconds to whoever wrote the parser and ten minutes to whoever wrote the file, and the failure is silent in both directions. So the written form always carries its unit and the stored form is always seconds.
+One interval reaches Steward from two directions — `_steward.yaml`'s `tend_interval` and a `--tend-interval` flag — and both are typed by a person. A bare number would make each of them ambiguous in the way that matters most: `tend_interval: 10` is ten seconds to whoever wrote the parser and ten minutes to whoever wrote the file, and the failure is silent in both directions. So the written form always carries its unit and the stored form is always seconds.
 """
 
 import re

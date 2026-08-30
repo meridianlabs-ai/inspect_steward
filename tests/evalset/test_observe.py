@@ -470,7 +470,7 @@ def test_an_override_pointing_a_task_elsewhere_makes_its_log_incomplete(
 
     (only,) = observe_tasks(manifest, observe_logs(tmp_path)).tasks
 
-    assert (only.reason is IncompleteReason.RESHAPED) is reshaped
+    assert (only.reason is IncompleteReason.REDIRECTED) is reshaped
 
 
 def test_the_definition_s_own_sandbox_is_never_compared(tmp_path: Path) -> None:
@@ -500,3 +500,37 @@ def test_an_override_outranks_the_definition_in_the_comparison(tmp_path: Path) -
     (only,) = observe_tasks(manifest, observe_logs(tmp_path)).tasks
 
     assert only.reason is None
+
+
+def test_a_redirect_outranks_a_reason_that_would_resume(tmp_path: Path) -> None:
+    """A short *and* redirected log has to reset, not resume.
+
+    Every other reason leaves the log's finished samples worth keeping, so the
+    spawn hands the worker its prior log. Letting `SHORT` answer first would do
+    exactly that for a log whose every answer is stale — and since the sample
+    set is unchanged, the worker would find all of them, reuse all of them, and
+    finish having run nothing.
+    """
+    task = SynthTask("probe", samples=5)
+    write_log(tmp_path, task, total=2, model_base_url="https://old.example/v1")
+    manifest = synth_manifest([task]).model_copy(
+        update={"overrides": EvalSetOverrides(model_base_url="https://new.example/v1")}
+    )
+
+    (only,) = observe_tasks(manifest, observe_logs(tmp_path)).tasks
+
+    assert only.reason is IncompleteReason.REDIRECTED
+
+
+def test_a_changed_slice_is_still_reshaped_rather_than_redirected(
+    tmp_path: Path,
+) -> None:
+    # the distinction is the action: a moved slice resumes, because the samples
+    # still wanted were answered under settings still in force
+    task = SynthTask("probe", samples=3)
+    write_log(tmp_path, task, total=3, selection={"limit": 3})
+    manifest = synth_manifest([task], limit=(5, 8))
+
+    (only,) = observe_tasks(manifest, observe_logs(tmp_path)).tasks
+
+    assert only.reason is IncompleteReason.RESHAPED

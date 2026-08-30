@@ -18,6 +18,7 @@ They cannot drift, because they are the same code path with one flag. That is wo
 **An interrupted turn is reconciled by the next one**, and that is a requirement rather than a hope. There is no resume path here and no partial-turn state to recover: the next turn re-reads the log directory and the process table and decides again from what it finds. Every write is ordered so that being interrupted before it costs a repeat rather than a corruption.
 """
 
+import hashlib
 import os
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
@@ -544,7 +545,10 @@ class _Settings:
     pool: Pool
     degraded: str | None
     degraded_at: str | None = None
-    """`_steward.yaml`'s modification time when it would not parse — what keys the item, so an edit that still fails is heard again."""
+    """What keys the degraded item, so that a second, different failure is heard rather than covered by the first acknowledgment.
+
+    `_steward.yaml`'s modification time where the *file* would not parse, so an edit that still fails is heard again. Where the **environment** is what failed there is no file to stamp — the same `_steward.yaml`, unedited, would have stamped two different broken variables identically and let an acknowledgment of one suppress the other — so it is a fingerprint of the refusal itself.
+    """
 
     interval: int | None = None
     """How often `_steward.yaml` asks to be tended, or `None` where it does not ask.
@@ -1081,6 +1085,12 @@ def _settings(
 
     **A `STEWARD_MAX_SAMPLES` outlives its turn**, which `_pin` argues. It is also read in the same breath as the file, so a value neither can parse degrades this turn rather than stopping the fleet.
     """
+    # read separately, because they fail separately and only one of them is a
+    # file. A bad `INSPECT_EVAL_*` used to be caught alongside a bad
+    # `_steward.yaml` and reported as one condition, which lost the file's
+    # standing rules -- rules that had parsed perfectly and that an agent is
+    # told to get from `steward status`
+    directives: Directives | None = None
     try:
         directives = read_directives(workspace.directives)
         overrides = read_overrides(os.environ)
@@ -1112,8 +1122,20 @@ def _settings(
         return _Settings(
             pool=pool,
             degraded=str(ex),
-            degraded_at=_stamp(workspace.directives),
-            interval=None,
+            # the file's mtime only where the file is what failed. Keyed on it
+            # regardless, two different broken variables were one item, and
+            # acknowledging the first silenced the second -- so an environment
+            # failure is keyed on what it said instead
+            degraded_at=(
+                _stamp(workspace.directives)
+                if directives is None
+                else _fingerprint(str(ex))
+            ),
+            # a file that parsed still has rules, and they are still in force:
+            # the turn degrades on the *pool*, not on the standing rules, and
+            # an agent reading `status` needs the ones it can have
+            policies=_policies(directives) if directives is not None else [],
+            interval=directives.tend_interval if directives is not None else None,
         )
 
     return _Settings(
@@ -1186,6 +1208,14 @@ def _stamp(path: Path) -> str | None:
         return str(path.stat().st_mtime_ns)
     except OSError:
         return None
+
+
+def _fingerprint(message: str) -> str:
+    """An identity for a failure that has no file to be stamped from.
+
+    Short and content-derived: two different broken variables must key two different items, and the *same* broken variable across turns must key one — which is exactly what a hash of the refusal gives, where a timestamp would give a new item every ten minutes and a constant would give one item forever.
+    """
+    return hashlib.sha256(message.encode("utf-8")).hexdigest()[:16]
 
 
 def _positive(value: Any) -> int | None:

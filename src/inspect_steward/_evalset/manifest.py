@@ -89,21 +89,49 @@ def manifest_digest(manifest: Manifest) -> str:
 
     **Identifiers alone are not enough either, and the reason is a deliberate property of the identifier.** `task_identifier` covers the solver plan, generate config, model args, roles, version and execution limits — and pointedly not the sample count or the epochs, so that raising either leaves existing logs resumable rather than orphaning them. Steward relies on exactly that: `observe` computes `samples × epochs` separately and calls a task `SHORT` when its log has fewer. So a ten-sample run relaunched for twenty is the *same* identifier and a genuinely different set of results, and a digest over identifiers alone would let the first acceptance cover the second silently.
 
+    **Nor is the count enough, which is the same argument one step further in.** `limit`, `sample_id` and `sample_shuffle` are identity-neutral *and* count-neutral: `(0, 5)` and `(5, 10)` name five samples each, so two genuinely different result sets hashed identically and an acknowledgment of the first silently covered the second. `sandbox` and `model_base_url` do not move the count either and make every answer a different one. So the run's shaping fields go into the digest beside the per-task rows — they belong to the eval set rather than to any task, which is why they are hashed once rather than per row.
+
     Sorted, so that a capture which enumerates the same tasks in a different order is the same result set rather than a new one.
 
     Args:
         manifest: A committed manifest.
 
     Returns:
-        `sha256:<hex>` over each task's identifier, sample count, and epochs.
+        `sha256:<hex>` over each task's identifier, sample count and epochs, and the run's effective shaping fields.
     """
-    joined = "\n".join(
-        sorted(
-            f"{task.identifier}\t{task.samples}\t{task.epochs}"
-            for task in manifest.tasks
-        )
+    rows = sorted(
+        f"{task.identifier}\t{task.samples}\t{task.epochs}" for task in manifest.tasks
     )
+    shape = [f"{name}\t{_shaping(manifest, name)!r}" for name in SHAPING]
+    joined = "\n".join([*rows, *shape])
     return f"sha256:{hashlib.sha256(joined.encode('utf-8')).hexdigest()}"
+
+
+SELECTION = ("limit", "sample_id", "sample_shuffle")
+"""The `eval_set()` arguments that decide *which* samples run, rather than how many.
+
+All three are identity-neutral, all three are recorded in a log's own config, and all three are recorded in a manifest's `options` — which is what makes the comparison in `_reshaped` both necessary and possible. `epochs` is not here because the count check already covers it.
+"""
+
+
+REDIRECTION = ("sandbox", "model_base_url")
+"""The `eval_set()` arguments that decide what a task *talks to*, rather than which samples it runs.
+
+Both are identity-neutral and both plainly change the answer. Unlike `SELECTION` they are not in a manifest's `options`, so only an override moves them — see `_redirected`, and `_launch.delta` which reports the same change at the moment somebody types it.
+"""
+
+
+SHAPING: tuple[str, ...] = (*SELECTION, *REDIRECTION)
+"""Everything that changes a run's results without changing a task identifier or a sample count.
+
+The union of the two comparisons `observe` makes per task. Named here as one tuple because the digest's question is different from theirs — not *is this log stale* but *is this the same set of results somebody already accepted* — and both answers have to come from the same list or an acceptance covers a run it never saw.
+"""
+
+
+def _shaping(manifest: Manifest, name: str) -> Any:
+    """One shaping field's effective value: the override, or what the definition passed."""
+    override = getattr(manifest.overrides, name, None)
+    return override if override is not None else manifest.options.get(name)
 
 
 def definition_hash(path: Path) -> str:

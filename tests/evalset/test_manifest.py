@@ -10,11 +10,14 @@ capture happens (`tests/schedule/test_tend_live.py`).
 
 import hashlib
 from pathlib import Path
+from typing import Any
 
 import pytest
+from inspect_ai._eval.eval_set_overrides import EvalSetOverrides
 from inspect_steward._evalset.manifest import (
     ManifestError,
     definition_hash,
+    manifest_digest,
     read_manifest,
     write_manifest,
 )
@@ -105,3 +108,64 @@ def test_any_edit_at_all_changes_the_hash(tmp_path: Path) -> None:
     # deliberately blunt: the hash is a nudge to re-capture, not a judgement
     # about whether the edit was semantically interesting
     assert definition_hash(definition) != before
+
+
+SHAPES: list[tuple[str, dict[str, Any], dict[str, Any]]] = [
+    ("a moved range of the same size", {"limit": (0, 5)}, {"limit": (5, 10)}),
+    ("a reshuffle", {"sample_shuffle": 7}, {"sample_shuffle": 42}),
+    ("different ids", {"sample_id": ["a", "b"]}, {"sample_id": ["a", "c"]}),
+]
+
+
+@pytest.mark.parametrize(
+    ("one", "other"),
+    [(one, other) for _, one, other in SHAPES],
+    ids=[case for case, _, _ in SHAPES],
+)
+def test_two_different_result_sets_do_not_share_a_digest(
+    one: dict[str, Any], other: dict[str, Any]
+) -> None:
+    """The digest is what an acknowledgment is keyed on, so a collision is silent.
+
+    `limit`, `sample_id` and `sample_shuffle` are identity-neutral *and*
+    count-neutral — `(0, 5)` and `(5, 10)` are five samples each — so two
+    genuinely different result sets hashed identically, and acknowledging the
+    first `signoff_ready` quietly covered the second.
+    """
+    task = SynthTask("probe", samples=5)
+
+    assert manifest_digest(synth_manifest([task], **one)) != manifest_digest(
+        synth_manifest([task], **other)
+    )
+
+
+def test_a_redirect_is_a_different_result_set_too() -> None:
+    # same samples, every answer different
+    task = SynthTask("probe", samples=5)
+    plain = synth_manifest([task])
+    elsewhere = plain.model_copy(
+        update={"overrides": EvalSetOverrides(model_base_url="https://other.example")}
+    )
+
+    assert manifest_digest(plain) != manifest_digest(elsewhere)
+
+
+def test_the_same_run_said_twice_is_one_digest() -> None:
+    # the property the whole thing rests on: re-capturing an unedited definition
+    # must not invalidate an acknowledgment somebody already gave
+    task = SynthTask("probe", samples=5)
+
+    assert manifest_digest(synth_manifest([task], limit=(0, 5))) == manifest_digest(
+        synth_manifest([task], limit=(0, 5))
+    )
+
+
+def test_an_override_and_a_definition_saying_the_same_thing_agree() -> None:
+    """The digest is over *effective* values, so where a run ends up is what counts."""
+    task = SynthTask("probe", samples=5)
+    from_definition = synth_manifest([task], limit=3)
+    from_override = synth_manifest([task]).model_copy(
+        update={"overrides": EvalSetOverrides(limit=3)}
+    )
+
+    assert manifest_digest(from_definition) == manifest_digest(from_override)

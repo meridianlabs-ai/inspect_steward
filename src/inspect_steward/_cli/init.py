@@ -1,7 +1,12 @@
 import click
 
 from .._evalset.detect import DefinitionType
-from .._workspace import CreateReport, Outcome, create_workspace
+from .._workspace import (
+    CreateReport,
+    DirectivesError,
+    Outcome,
+    create_workspace,
+)
 
 
 @click.command("init")
@@ -34,6 +39,12 @@ def init_command(directory: str, definition_type: DefinitionType, no_git: bool) 
     """
     try:
         report = create_workspace(directory, type=definition_type, git=not no_git)
+    except DirectivesError as ex:
+        # the rename refusal: `init` in a workspace still holding an
+        # unconverted `_steward.md` stops before writing anything, and that is
+        # a message for the operator rather than a bug. Uncaught it arrived as
+        # a traceback, during the one migration everybody has to do
+        raise click.ClickException(str(ex)) from ex
     except OSError as ex:
         raise click.ClickException(f"Unable to create the workspace: {ex}") from ex
 

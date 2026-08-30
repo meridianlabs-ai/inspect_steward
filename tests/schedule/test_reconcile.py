@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from inspect_ai._eval.eval_set_overrides import EvalSetOverrides
 from inspect_steward._evalset.manifest import Manifest
 from inspect_steward._evalset.observe import (
     IncompleteReason,
@@ -164,6 +165,48 @@ def test_one_task(
         assert worker.reason == reason
         # a task that has run before resumes it; one that has not starts fresh
         assert (worker.resume is not None) == (log is not None)
+
+
+def test_a_redirected_task_is_spawned_without_its_prior_log(tmp_path: Path) -> None:
+    """The one reason that must not resume, and the reason it must not.
+
+    A changed sandbox or gateway leaves the sample *set* identical, so resume
+    would look every sample up in the prior log, find every one of them, reuse
+    every one, and finish having run nothing — the task reported as re-run and
+    byte-identical to the stale one it replaced. Nothing about the lookup
+    fails; what changed is that the answers are no longer worth having, which
+    only the reason knows.
+    """
+    manifest = synth_manifest([TASK]).model_copy(
+        update={"overrides": EvalSetOverrides(model_base_url="https://new.example/v1")}
+    )
+    write_log(tmp_path, TASK, model_base_url="https://old.example/v1")
+
+    result = reconcile(
+        manifest, InFlight(), observe_tasks(manifest, observe_logs(tmp_path)), pool=POOL
+    )
+
+    (worker,) = planned(result)
+    assert worker.reason is IncompleteReason.REDIRECTED
+    assert worker.resume is None
+
+    # and the prior log is still there, as a superseded attempt
+    assert list(tmp_path.glob("*.json"))
+
+
+def test_a_reshaped_task_still_resumes(tmp_path: Path) -> None:
+    # the slice moved, so the samples still wanted were answered under settings
+    # still in force -- re-running the ones that overlap would be pure waste
+    manifest = synth_manifest([TASK], limit=(5, 15))
+    write_log(tmp_path, TASK, selection={"limit": 10})
+
+    result = reconcile(
+        manifest, InFlight(), observe_tasks(manifest, observe_logs(tmp_path)), pool=POOL
+    )
+
+    (worker,) = planned(result)
+    assert worker.reason is IncompleteReason.RESHAPED
+    assert worker.resume is not None
 
 
 def test_a_crashed_worker_is_indistinguishable_in_the_log_directory(

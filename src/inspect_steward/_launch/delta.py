@@ -20,8 +20,13 @@ from dataclasses import dataclass, field
 from enum import StrEnum
 from typing import Any
 
-from .._evalset.manifest import Manifest, ManifestTask
-from .._evalset.observe import SELECTION, ObservedLogs
+from .._evalset.manifest import (
+    REDIRECTION,
+    SELECTION,
+    Manifest,
+    ManifestTask,
+)
+from .._evalset.observe import ObservedLogs
 from .._schedule import RunningWorker
 
 
@@ -83,7 +88,7 @@ class Reshaped:
     """
 
     fields: tuple[str, ...]
-    """Which of `limit`, `sample_id`, `sample_shuffle` differ, in that order."""
+    """Which shaping fields differ — the slice first, then what the run talks to."""
 
     affected: int
     """Tasks holding results that would be run again."""
@@ -273,9 +278,11 @@ def _reshaped(
     logs: ObservedLogs,
     running: Sequence[RunningWorker],
 ) -> Reshaped | None:
-    """Whether the run's dataset slice moved out from under its results.
+    """Whether the run's shape moved out from under its results.
 
-    Compares the two manifests' *effective* selection — the override where there is one, the definition's own value otherwise — because either can move it and neither moves an identifier. `observe` reaches the same conclusion per task, from the logs themselves, and is what actually re-runs them; this exists so that `launch` says so at the moment somebody types it rather than leaving them to notice a full re-run at the next tend.
+    Compares the two manifests' *effective* values — the override where there is one, the definition's own otherwise — because either can move them and neither moves an identifier. `observe` reaches the same conclusion per task, from the logs themselves, and is what actually re-runs them; this exists so that `launch` says so at the moment somebody types it rather than leaving them to notice a full re-run at the next tend.
+
+    **Both kinds, because both re-run.** The dataset slice (`limit`, `sample_id`, `sample_shuffle`) is what makes a log answer a different question; `sandbox` and `model_base_url` leave the question alone and make every answer stale, which `observe` treats more harshly still — a redirected task is spawned without its prior log rather than resumed. A launch that reported only the first would have promised *nothing to change* for a changed gateway and stopped no workers, which is the same silence the slice comparison was added to end.
 
     Args:
         new: The manifest just captured.
@@ -290,7 +297,9 @@ def _reshaped(
     if old is None:
         return None
     changed = tuple(
-        name for name in SELECTION if _selected(new, name) != _selected(old, name)
+        name
+        for name in (*SELECTION, *REDIRECTION)
+        if _selected(new, name) != _selected(old, name)
     )
     if not changed:
         return None
@@ -302,6 +311,10 @@ def _reshaped(
 
 
 def _selected(manifest: Manifest, name: str) -> Any:
+    """One shaping field's effective value, comparable between two manifests.
+
+    A field `options` does not record can still be compared here, unlike in `observe`: both sides come from a manifest rather than from a log, so an absent key is absent on both and the comparison is silent by construction. `sandbox` and `model_base_url` are exactly that case — the definition's own values are recorded nowhere, so only an override moves them.
+    """
     override = getattr(manifest.overrides, name, None)
     return override if override is not None else manifest.options.get(name)
 
