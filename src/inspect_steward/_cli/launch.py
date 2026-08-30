@@ -16,7 +16,7 @@ from .._evalset.detect import DefinitionType
 from .._launch import Change, Delta, Launch, LaunchError, launch
 from .._util.duration import format_duration
 from .._workspace import Held, Workspace
-from .options import shape_options, tend_interval_option
+from .options import Setting, overrides, shape_options, tend_interval_option
 from .tasks import parse_args
 from .turn import TURN_ERRORS, echo_turn, find_workspace
 
@@ -94,13 +94,20 @@ _LABELS = {
     help="Arm even though a scheduled tend would not inherit this shell's credentials.",
 )
 @click.option(
-    "--store",
+    "--log-store",
+    type=Setting("log_store"),
     default=None,
-    metavar="PATH|auto|none",
+    metavar="PATH|auto",
     help=(
-        "Log store for this run, overriding INSPECT_STEWARD_STORE. Recorded "
-        "now; read when signoff can publish to it."
+        "Where to look for logs this run does not have to produce. Recorded "
+        f"now; read when signoff can publish to it. {overrides('log_store')}"
     ),
+)
+@click.option(
+    "--no-log-store",
+    is_flag=True,
+    default=False,
+    help="Run against no log store, whatever this project or machine configured.",
 )
 @shape_options
 @tend_interval_option
@@ -137,7 +144,8 @@ def launch_command(
     accept_archive: bool,
     timer: bool,
     env_check: bool,
-    store: str | None,
+    log_store: str | bool | None,
+    no_log_store: bool,
     max_workers: int | None,
     stall_after: int | None,
     samples_ramp: tuple[int, int] | bool | None,
@@ -158,6 +166,11 @@ def launch_command(
             "--no-args asks to capture with no arguments, and -A supplies one. "
             "Pass whichever you meant."
         )
+    if no_log_store and log_store is not None:
+        raise click.UsageError(
+            "--no-log-store asks for no store, and --log-store names one. "
+            "Pass whichever you meant."
+        )
 
     workspace = find_workspace()
     resolved = definition or _own_definition(workspace)
@@ -174,10 +187,13 @@ def launch_command(
             accept_archive=accept_archive,
             timer=timer,
             env_check=env_check,
-            store=store,
+            log_store=False if no_log_store else log_store,
             max_workers=max_workers,
             max_tasks=max_tasks,
             max_samples=max_samples,
+            stall_after=stall_after,
+            samples_ramp=samples_ramp,
+            tend_interval=tend_interval,
             break_stale=not no_break_claim,
         )
     except (LaunchError, *TURN_ERRORS) as ex:

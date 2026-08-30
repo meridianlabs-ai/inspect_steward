@@ -269,7 +269,7 @@ Flow ships a **store**: a Delta Lake table mapping `log_path → task_identifier
 
 Two things make it directly relevant rather than a Flow implementation detail. It is keyed on **`task_identifier`** — inspect_ai's identity, the same key Steward keys everything on, and versioned by `TASK_IDENTIFIER_VERSION` in the table's columns. And it works against local disk or S3 with concurrent writers, which is exactly the deployment Steward targets.
 
-**Disabling it wholesale was an error, and Flow had already drawn the right line.** `FlowStoreConfig` carries independent `read` and `write` flags, defaulting to `read=False, write=True` — index everything, match nothing unless asked. `--store none` turned off both to solve a problem with one of them.
+**Disabling it wholesale was an error, and Flow had already drawn the right line.** `FlowStoreConfig` carries independent `read` and `write` flags, defaulting to `read=False, write=True` — index everything, match nothing unless asked. Flow's `--store none` turned off both to solve a problem with one of them.
 
 | half | what it does | under worker mode |
 |---|---|---|
@@ -286,6 +286,8 @@ The obvious repair is to leave workers writing and move only the read to Steward
 
 Nothing about the store is actually Flow-specific. It is keyed on `task_identifier`, which is inspect_ai's, and `store_factory` accepts a bare path string rather than a `FlowSpec` — so the whole mechanism is already definition-type agnostic. Only its *configuration surface* belongs to Flow.
 
+**Which is why Steward's name for it is `log_store` and not `flow_store`.** The Flow implementation is one way to answer *where have these logs already been run*, and the question is asked identically by an `evalset` and a `hawk` project. Naming the setting after the implementation would have made the general mechanism look like a borrowed one, and would have to be renamed the moment a second implementation existed — which the note below argues is closer than it looks. The bare `store` it replaced was worse in the other direction: Inspect already has a `Store` (per-sample scratch state shared between solvers and tools), and a Steward run has both.
+
 So Steward takes both halves:
 
 - **Workers run with `store=none`** — which is where this started, but now for the opposite reason. The function moved to the single writer rather than being discarded. *Implemented*: the flow worker command passes `--no-store-read --no-store-write`.
@@ -293,6 +295,10 @@ So Steward takes both halves:
 - **Steward writes at signoff, and only then** — see below. Not as logs land.
 
 Three properties follow, and they are the same three the rest of the design keeps arriving at: one writer, uniform behaviour across frontends, and a cache whose loss costs time rather than correctness — a missed row means a re-run, and `flow store import` rebuilds the table from the logs at any point.
+
+**A plain directory of logs is also a store, and that is worth recording before anything is built.** `task_identifier`'s `EvalLog` branch computes an identifier from a log's own header — which is exactly how `flow store import` rebuilds the Delta table in the first place. So a directory of `.eval` files already contains everything a store holds; what the table adds is an index, not information. That suggests dispatching on the target rather than on the definition type: a `_delta_log/` subdirectory means query it through Flow, and anything else means scan headers with `read_eval_log(header_only=True)`. Two consequences worth stating so that neither is discovered later — **reads unify and writes do not**, because publishing to a table appends a pointer while publishing to a directory copies the log, so the directory implementation is naturally read-mostly and `signoff --publish` has to say which it is doing; and it would **drop the `[flow]` extra for the common case**, which §5.6's dependency wrinkle currently has no better answer to.
+
+None of that is built. Both halves of the store are step 33, so this is a note about which shape to build rather than a description of one, and the value shape (`log_store: auto`, a path, or `false`) is already general enough to carry it.
 
 ### 5.5 Publication is an act of signoff, not a side effect of landing
 
@@ -316,14 +322,16 @@ The store is a **machine-level resource**, frequently shared: pointing several m
 
 | setting | where | why |
 |---|---|---|
-| **where the store is** | `INSPECT_STEWARD_STORE` (a path, `auto`, or `none`), with `--store` as a launch override | mechanics, and a property of the machine rather than the project — the same reasoning that puts the notification channel in the environment |
+| **where the store is** | `log_store` — a path or `auto`, `false` for none — said in `_steward.yaml`, in `STEWARD_LOG_STORE`, or as `steward launch --log-store` | one of Steward's own words, so it gets all three spellings and the narrowest wins ([workflow.md](workflow.md), *One setting, three spellings*) |
 | **whether to publish to it** | decided at `steward signoff`, defaulting from `_steward.yaml` | publication is an attestation, so it belongs to the one command a human always runs personally |
 
 **Configuring a store is the opt-in, and it enables reads.** There is no separate switch, because there is nothing to protect against: a match means the identifier is equal, and what it points at was signed off by someone. Reads are still *reported* in the launch delta — visibility, not consent — because a reused log is a result this project did not produce.
 
 Writing has no default beyond what policy says, since it is a decision on a command a human is present for. Someone who never signs off never publishes; someone whose project is exploratory can say so once in `_steward.yaml` and stop being asked.
 
-Neither gets a `_steward.yaml` entry ([workflow.md](workflow.md), *A config file may not say anything the definition can*): the location is environmental, and the publication rule is prose a human writes.
+**An earlier draft routed the location to the environment alone**, on the grounds that a store is a property of the machine rather than of the project. That is true of *where this machine's store lives* and false of *which store this project reuses from*, and both are real questions — a team's shared S3 prefix is a fact about the project and belongs beside it in git, while a laptop's local mirror is a fact about the laptop. The precedence answers them in the right order without anybody choosing between them, so the setting is a key **and** a variable **and** a flag, like every other word Steward owns. What the draft got right survives: the key names a *location*, and the publication rule is prose a human writes ([workflow.md](workflow.md), *A config file may not say anything the definition can*).
+
+**`false` is how a project declines a store the machine configured**, replacing the `none` the location used to accept. A value that is secretly an enum is the hazard `samples_ramp: false` avoids in the same file, and `none` had the additional problem of being a perfectly good directory name — so it is refused by name rather than taken literally. Declining and never having one resolve alike, deliberately: both run against no store, and recording a difference nothing reads would be inventing state.
 
 **This unifies with the archive**, since both are identifier-keyed caches — one project-local, one global. Convergence for a wanted identifier with no log in `logs/` consults them in cost order:
 
@@ -337,7 +345,7 @@ Neither gets a `_steward.yaml` entry ([workflow.md](workflow.md), *A config file
 
 `FlowStoreConfig.filter` is the lever for the policy that follows — a `LogFilter` restricting what may be matched (only logs that scored, only recent ones). What that policy should be is unresolved; what matters here is that the mechanism exists and belongs to Steward rather than to each worker.
 
-**The one wrinkle is the dependency.** The implementation lives in `inspect_flow._store`, so store support for a Hawk or plain-script project would today require installing the `[flow]` extra — an odd thing to tell someone whose project has nothing to do with Flow. Steward should accept that for now and say so plainly when a store is configured without Flow present, rather than failing obscurely.
+**The one wrinkle is the dependency.** The implementation lives in `inspect_flow._store`, so store support for a Hawk or plain-script project would today require installing the `[flow]` extra — an odd thing to tell someone whose project has nothing to do with Flow. Steward should accept that for now and say so plainly when a store is configured without Flow present, rather than failing obscurely. The directory implementation §5.4 records would remove the wrinkle for the common case rather than explaining it, which is the better answer if it is reached before step 33 needs one.
 
 **The destination is inspect_ai**, and this is the same move as the public directory operations above: a cache keyed on inspect_ai's own identifier, useful to `eval_set()` directly (cross-directory reuse is not a Steward-specific want), sitting in a private module of an optional third package. If it moves, Steward changes one import — the design above assumes nothing about where the code lives, only that `store_factory` takes a path.
 
@@ -840,7 +848,7 @@ So **epochs cannot be raised on a running eval**, and should not be: epochs is s
 
 Everything above assumes the machine works. Three ways it stops, all of which a multi-day run meets eventually.
 
-**Credentials for the log store expire mid-run.** This is the one most likely to be missed, because the analogous problem is already solved next door: Hawk refreshes model tokens for the duration of a run, and *nothing refreshes the log store's credentials*. A sweep that runs for three days on a session token issued for twelve hours loses the ability to write its own results partway through, having done all the work.
+**Credentials for the log directory expire mid-run.** This is the one most likely to be missed, because the analogous problem is already solved next door: Hawk refreshes model tokens for the duration of a run, and *nothing refreshes the log directory's credentials*. A sweep that runs for three days on a session token issued for twelve hours loses the ability to write its own results partway through, having done all the work.
 
 **The disk fills**, which takes out `.eval` writes, sandbox images, `.steward/`, and Steward's own logging together.
 
@@ -848,7 +856,7 @@ Everything above assumes the machine works. Three ways it stops, all of which a 
 
 ### 9.1 The hazard is that a substrate failure wears the costume of an eval failure
 
-`fail_on_error=False` absorbs everything sample-shaped, so a log store that stops accepting writes surfaces as **a wave of errored samples** rather than as an infrastructure alarm. The classing is honest as far as it goes — the exception type will say `OSError` or an S3 error, and [workflow.md](workflow.md)'s class key puts them all in one anomaly — but the ordinary *response* to a wave of errored samples is a re-run, and re-running into a store that is still broken burns the work twice.
+`fail_on_error=False` absorbs everything sample-shaped, so a log directory that stops accepting writes surfaces as **a wave of errored samples** rather than as an infrastructure alarm. The classing is honest as far as it goes — the exception type will say `OSError` or an S3 error, and [workflow.md](workflow.md)'s class key puts them all in one anomaly — but the ordinary *response* to a wave of errored samples is a re-run, and re-running into a directory that is still broken burns the work twice.
 
 This is the same shape as the provider outage that *Considered and declined: pausing a failing model* worked through, and it gets the same answer for the same reason: no mechanical response, because by the time a tend sees the pattern the damage is done, and the correct action depends on a fact Steward cannot check. What it gets instead is a **runbook rule**: a class whose exception is a storage or filesystem error is a *substrate* class, and no re-run is proposed for one until the substrate has been verified by hand. Re-running is not wrong here, it is merely premature, and the ordering is what matters.
 
@@ -888,7 +896,7 @@ Three things Steward depends on are **machine-local by construction**:
 - **Control discovery** is a directory of files carrying pids and process start times, and a liveness check against a pid is meaningful only on the host that owns it.
 - **The in-flight record** names pids on the host that spawned them.
 
-`log_dir`, by contrast, is frequently **not** local — S3 is the common case, and *Syncing the workspace out* exists precisely because the log store may be the only thing a remote observer can reach.
+`log_dir`, by contrast, is frequently **not** local — S3 is the common case, and *Syncing the workspace out* exists precisely because the log directory may be the only thing a remote observer can reach.
 
 So the constraint is:
 
@@ -1061,7 +1069,7 @@ Two more come out of asking what a ruling on an errored sample may actually deci
 
    **Redirection only works where the work produces files.** Where it produces *process state* — Hawk resolves secrets into `os.environ` and sets provider variables for gateway routing — there is nothing to point elsewhere, and the answer needs a second half: the frontend must be able to **report** what it resolved, so the runner can hand it to each worker. `DefinitionCommand.env` is already shaped to carry that. This is the part of the ask that no amount of cleverness on Steward's side reaches.
 
-2. **What replaces flow's store.** *Resolved: nothing replaces it, because the mechanism keeps working — but Steward operates it, not the worker* — see *Steward owns both halves, because the store is not really Flow's*. `--store none` disabled two halves to fix one, and the repair is **not** to hand the write half back to workers: an `evalset` or `hawk` worker has no Flow code in it to index anything, so a store fed by workers is empty for two thirds of the projects that would benefit. Workers therefore run with the store off, Steward reads once at launch, and Steward writes at signoff.
+2. **What replaces flow's store.** *Resolved: nothing replaces it, because the mechanism keeps working — but Steward operates it, not the worker* — see *Steward owns both halves, because the store is not really Flow's*. Flow's `--store none` disabled two halves to fix one, and the repair is **not** to hand the write half back to workers: an `evalset` or `hawk` worker has no Flow code in it to index anything, so a store fed by workers is empty for two thirds of the projects that would benefit. Workers therefore run with the store off, Steward reads once at launch, and Steward writes at signoff.
 
    **Only the first of those three is built.** The flow adapter passes `--no-store-read --no-store-write`; both of Steward's halves are step 33, in M4. Until then the store is **inert for Steward runs** — nothing indexes and nothing is reused — where before it was flow workers appending unattested rows on flow's `write=True` default. That is the correct interim state rather than a regression, for the reason *Publication is an act of signoff* gives, and what it costs is narrow: reuse *across* log directories for flow definitions, since reconcile already declines to re-run a task whose log is in this run's directory.
 

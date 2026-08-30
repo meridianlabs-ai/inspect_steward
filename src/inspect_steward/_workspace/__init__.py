@@ -16,6 +16,7 @@ from .directives import (
     parse_setting,
     read_directives,
     resolve_interval,
+    resolve_log_store,
     resolve_pool,
 )
 from .journal import (
@@ -114,6 +115,7 @@ __all__ = [
     "read_raised",
     "read_ramp_holds",
     "resolve_interval",
+    "resolve_log_store",
     "resolve_pool",
     "steward_log",
     "summarize",

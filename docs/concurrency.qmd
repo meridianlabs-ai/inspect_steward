@@ -96,7 +96,7 @@ Every setting Steward owns can be said three ways, and they resolve most specifi
 | `STEWARD_MAX_WORKERS=8` | what this machine or this shell wants |
 | `steward tend --max-workers 8` | what this invocation wants |
 
-That holds for all of them, with no exceptions to remember: `max_workers`, `stall_after`, `samples_ramp`, `tend_interval`, and `policies`. All three spellings go through one parser, so a value that is refused in the file is refused the same way and with the same message everywhere else — `STEWARD_MAX_WORKERS=yes` fails naming the `True` that YAML made of it, exactly as `max_workers: yes` does.
+That holds for every setting Steward owns, with no exceptions to remember — `max_workers`, `stall_after`, `samples_ramp`, `tend_interval`, and `policies` among them. All three spellings go through one parser, so a value that is refused in the file is refused the same way and with the same message everywhere else — `STEWARD_MAX_WORKERS=yes` fails naming the `True` that YAML made of it, exactly as `max_workers: yes` does.
 
 Two details worth knowing. `--tend-interval` appears on `steward launch` and `steward timer arm` but not on `tend` or `status`, because those run a single turn and have no cadence to set. And a `STEWARD_*` name Steward does not recognise is **refused**, not ignored — a misspelled `STEWARD_SAMPLE_RAMP` that sat inert would be a setting you believed was in force.
 

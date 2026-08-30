@@ -39,7 +39,7 @@ The categories that matter are about whether a file can be recovered, not who wr
 | **authored by the agent** | `scanning.md`, `analysis.md` *(not yet implemented)* | the investigation is gone, and re-runs from scratch |
 | **disposable** | everything in `.steward/`, `status.md`, `steward.log`, `timer.log` | rebuilt on the next turn, or gone with no loss |
 
-Gitignored is **not** the same as disposable: `logs/` and `logs-archive/` are ignored by git because `.eval` files are large outputs shared through a log store rather than source control — they are still durable. Only `.steward/` is safe to remove, and even that only when nothing is running: a worker that has not yet reached `eval_set()` dies with its instructions, and deleting the claim file under a running tend lets a second tend run concurrently.
+Gitignored is **not** the same as disposable: `logs/` and `logs-archive/` are ignored by git because `.eval` files are large outputs shared through an object store rather than source control — they are still durable. Only `.steward/` is safe to remove, and even that only when nothing is running: a worker that has not yet reached `eval_set()` dies with its instructions, and deleting the claim file under a running tend lets a second tend run concurrently.
 
 ## The journal
 

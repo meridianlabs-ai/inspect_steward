@@ -81,7 +81,7 @@ REFUSED: dict[str, str] = {
     ),
     "notify": "the INSPECT_EVAL_NOTIFICATION environment variable",
     "notification": "the INSPECT_EVAL_NOTIFICATION environment variable",
-    "store": "the INSPECT_STEWARD_STORE environment variable",
+    "store": "`log_store`, which is what it is now called",
 }
 """Keys that belong somewhere else, and where.
 
@@ -187,6 +187,38 @@ class Directives(BaseModel):
         # DurationError is a ValueError, so a bad unit arrives as a field error
         # naming the value, like every other refusal in this file
         return parse_duration(value)
+
+    log_store: str | bool | None = Field(default=None)
+    """Where to look for logs this run does not have to produce, `false` for nowhere, or `None` for no preference.
+
+    An index of completed logs keyed on inspect_ai's `task_identifier`, holding paths rather than data — Steward reads it at launch and publishes to it at signoff (execution.md §5.3–5.6). A path, or `auto` for the default location.
+
+    **A key here as well as a variable, and the two do not conflict.** execution.md §5.6 routes the location to the environment on the grounds that a store is a property of the machine rather than of the project, which is true of *where this machine's store lives* and not of *which store this project wants to reuse from*. Both are real questions and the precedence answers them in the right order: the file is the project's preference, a variable is the machine's, and the flag is the invocation's.
+
+    `false` is how a project declines a store the machine configured, and it resolves the same as expressing no preference at all — deliberately, because the two are indistinguishable in effect and inventing a record of the difference would be recording something nothing reads.
+    """
+
+    @field_validator("log_store", mode="before")
+    @classmethod
+    def _log_store(cls, value: object) -> object:
+        """A location, or `false`. `true` says nowhere in particular, which is not an answer.
+
+        The empty string is refused for the reason `--log-store ''` is: typing a value and leaving it blank is a mistake, where *saying nothing* already has a spelling.
+
+        `none` is refused by name rather than taken literally. It used to mean *no store* and now means a directory called `none`, so the one reading nobody intends is the one it would silently get.
+        """
+        if value is True:
+            raise ValueError(
+                "should be a path, `auto`, or `false` to use no store — "
+                "`true` says nothing about where"
+            )
+        if isinstance(value, str) and not value.strip():
+            raise ValueError(
+                "should be a path, `auto`, or `false` — not an empty value"
+            )
+        if value == "none":
+            raise ValueError("is `false` now, since `none` reads as a path called none")
+        return value
 
     policies: str | list[str] | None = Field(default=None)
     """Standing rules an agent applies, as prose or as a list of them, or `None` where the project has none.
@@ -400,6 +432,26 @@ def resolve_interval(
     if directives.tend_interval is not None:
         return directives.tend_interval
     return DEFAULT_TEND_INTERVAL
+
+
+def resolve_log_store(
+    directives: Directives, *, log_store: str | bool | None = None
+) -> str | None:
+    """Resolve where this run may find logs it does not have to produce.
+
+    The same chain one key over: the command line, then `_steward.yaml` or its variable, then nowhere. Nowhere is the default because a store is an optimisation — its absence costs time and never correctness — so a workspace that has never heard of one behaves exactly as it did.
+
+    **`false` and *no preference* resolve alike, and the collapse is deliberate.** A project declining the machine's store and a machine with no store both run against no store, and the two are indistinguishable in effect; recording the difference would be recording something nothing reads. What `false` buys is the *ability* to decline, which is only meaningful because the file and the variable now stack.
+
+    Args:
+        directives: What the workspace's `_steward.yaml` and environment said.
+        log_store: A location from the command line, `False` to use none, or `None`.
+
+    Returns:
+        A location, or `None` for no store. Unresolved — a path is not checked, because a store is created when something first publishes to it rather than when a launch mentions it.
+    """
+    resolved = log_store if log_store is not None else directives.log_store
+    return resolved if isinstance(resolved, str) else None
 
 
 def _superseded(path: Path) -> None:

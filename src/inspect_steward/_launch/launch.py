@@ -51,15 +51,10 @@ from .._workspace import (
     ensure_gitignore,
     read_directives,
     resolve_interval,
+    resolve_log_store,
     steward_log,
 )
 from .delta import Change, Delta, compute_delta
-
-STORE_ENV = "INSPECT_STEWARD_STORE"
-"""Where the log store is, for a machine rather than for a project.
-
-A store is frequently shared — several machines pointing at one S3 prefix, so a colleague's completed task is one your next launch does not have to run — which is why the location is environmental and `--store` is a per-launch override of it (execution.md §5.6).
-"""
 
 
 class LaunchError(Exception):
@@ -110,7 +105,7 @@ def launch(
     accept_archive: bool = False,
     timer: bool = True,
     env_check: bool = True,
-    store: str | None = None,
+    log_store: str | bool | None = None,
     max_workers: int | None = None,
     max_tasks: int | None = None,
     max_samples: int | None = None,
@@ -129,7 +124,7 @@ def launch(
         accept_archive: Commit even though tasks would leave `logs/`.
         timer: Arm a timer. `False` launches unsupervised and records that it did.
         env_check: Refuse to arm when a scheduled tend would not inherit this shell's credentials. Checked **before** the capture, so a Hawk config does not spend five minutes resolving packages on the way to a refusal.
-        store: Log store for this run — a path, `auto`, or `none` — overriding `INSPECT_STEWARD_STORE`. **Recorded and otherwise inert**: nothing reads a store until publication exists (step 33), and the only validation available before then is that the value is not empty.
+        log_store: Log store for this run — a path or `auto` — overriding `_steward.yaml`. `False` declines the one the file or the environment configured; `None` defers to them. **Recorded and otherwise inert**: nothing reads a store until publication exists (step 33), so a path is recorded rather than resolved.
         max_workers: Worker processes for the first turn, overriding `_steward.yaml`. `None` expresses no preference and defers to the file, which itself defaults to a process per task — it does not request that width.
         max_tasks: Tasks in flight at once for the first turn, overriding the definition's `max_tasks`. `None` defers to it.
         max_samples: Sample concurrency for the first turn.
@@ -146,8 +141,12 @@ def launch(
         DirectivesError: `_steward.yaml` could not be parsed. Launching against settings nobody can read is the one place degrading would be wrong — a tend degrades because a fleet must keep converging, and a launch has nothing to keep going.
         ManifestError: What is committed is not a manifest. A launch is exactly the command that replaces it, so this reports rather than overwrites: the delta would otherwise be computed against nothing and propose archiving a directory full of real results.
     """
-    interval = _interval(workspace, tend_interval)
-    resolved = _store(store)
+    # read once and resolved twice: two reads could disagree if the file were
+    # edited between them, and a launch that armed one interval while recording
+    # another would be a run nobody could explain
+    directives = read_directives(workspace.directives)
+    interval = resolve_interval(directives, tend_interval=tend_interval)
+    store = resolve_log_store(directives, log_store=log_store)
 
     # before the capture and before the claim, because both of the things below
     # are cheap and one of them is a refusal. A five-minute Hawk capture that
@@ -182,7 +181,7 @@ def launch(
             accept_archive=accept_archive,
             timer=timer,
             interval=interval,
-            store=resolved,
+            log_store=store,
             max_workers=max_workers,
             max_tasks=max_tasks,
             max_samples=max_samples,
@@ -201,7 +200,7 @@ def _launch(
     accept_archive: bool,
     timer: bool,
     interval: int,
-    store: str | None,
+    log_store: str | None,
     max_workers: int | None,
     max_tasks: int | None,
     max_samples: int | None,
@@ -264,7 +263,7 @@ def _launch(
         definition=manifest.source.path,
         tasks=len(manifest.tasks),
         timer=armed.scheduler if armed is not None else None,
-        store=store,
+        log_store=log_store,
     )
     if refused is not None:
         raise LaunchError(refused)
@@ -509,36 +508,6 @@ def _supervise(
         )
 
 
-def _interval(workspace: Workspace, tend_interval: int | None) -> int:
-    """How often this workspace asks to be tended.
-
-    The flag, then `_steward.yaml` or its variable, then Steward's default. `launch` carries the flag because a launch is the one command that *installs* a timer — `tend` and `status` run a single turn and have no cadence to set, which is what the rule means by a flag on every command that can act on the setting.
-
-    This deliberately had no flag for several steps, on the argument that an interval is a standing property of a workspace rather than of one launch. That describes the usual case rather than a reason the operator could not have a different one for the exceptional launch, and it left the setting reachable only by arming the timer separately afterwards.
-    """
-    return resolve_interval(
-        read_directives(workspace.directives), tend_interval=tend_interval
-    )
-
-
-def _store(store: str | None) -> str | None:
-    """The store this launch names, checked as far as anything can check it yet.
-
-    `auto`, `none`, or a path (execution.md §5.6). The location is a property of the machine rather than of the project, so it lives in `INSPECT_STEWARD_STORE` and `--store` is a per-launch override of it — which means there has to be something to override, and a launch on a machine with a store configured has to record *that* store rather than nothing.
-
-    **An exported-but-empty variable is unset; an empty value typed on the command line is a typo.** The same reading `_timer.env` gives a credential, and for the same reason: refusing to launch because somebody's shell profile exports an empty variable would be refusing a correct setup, while `--store ''` is a deliberate act that did not say anything.
-
-    **Recorded and inert.** Reads and publication arrive with step 33, and until then the only thing that can be wrong with a value is that it says nothing — a path is not resolved, because a store is created when something first publishes to it rather than when a launch mentions it.
-    """
-    if store is None:
-        return os.environ.get(STORE_ENV) or None
-    if not store.strip():
-        raise LaunchError(
-            "--store takes a path, `auto`, or `none`, and was given an empty value"
-        )
-    return store
-
-
 def _log_dir(workspace: Workspace, manifest: Manifest) -> str:
     """The run's log directory: the definition's own, or the workspace's by default.
 
@@ -561,4 +530,4 @@ def _failed(
     steward_log(workspace.log, failure)
 
 
-__all__ = ["STORE_ENV", "Launch", "LaunchError", "launch"]
+__all__ = ["Launch", "LaunchError", "launch"]

@@ -30,6 +30,7 @@
 # max_workers: 8          # pack the run into this many worker processes
 # stall_after: 3          # give up respawning a task after this many fruitless tries
 # samples_ramp: [40, 200] # range to discover sample concurrency in (false to fix it)
+# log_store: auto         # reuse logs already run elsewhere (a path, or false for none)
 
 # --- Standing rules an agent applies ----------------------------------------
 #

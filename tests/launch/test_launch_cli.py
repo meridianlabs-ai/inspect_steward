@@ -135,6 +135,26 @@ def test_a_launch_arms_a_timer_and_writes_itself_down(
     assert event["definition"] == DEFINITION
 
 
+def test_the_turn_settings_typed_at_launch_reach_the_launch(
+    workspace: Workspace, capture: FakeCapture
+) -> None:
+    """A flag that parses and is then dropped is worse than no flag.
+
+    `launch` grew `--stall-after`, `--samples-ramp` and `--tend-interval` with
+    the rule that every setting is sayable on every command that can act on it,
+    and for one commit it accepted all three and passed none of them on. The
+    interval is the one with a visible effect this early — the other two shape a
+    turn `tests/schedule` covers — so it is what this asserts.
+    """
+    result = run(
+        "--tend-interval", "30m", "--stall-after", "2", "--samples-ramp", "false"
+    )
+
+    assert result.exit_code == 0, result.output
+    armed = read_armed(read_journal(workspace.journal).events)
+    assert armed is not None and armed.interval == 1800
+
+
 def test_the_startup_memory_bound_is_printed_once(
     workspace: Workspace, capture: FakeCapture
 ) -> None:
@@ -326,7 +346,7 @@ def test_a_held_claim_stops_the_launch_and_says_who_has_it(
     assert launched(workspace) == []
 
 
-def test_a_store_is_recorded_and_an_empty_one_is_refused(
+def test_a_log_store_is_recorded_and_an_empty_one_is_refused(
     workspace: Workspace, capture: FakeCapture
 ) -> None:
     """All that can be checked about a store before anything reads one.
@@ -335,11 +355,13 @@ def test_a_store_is_recorded_and_an_empty_one_is_refused(
     is not resolved because a store is created when something first publishes to
     it rather than when a launch mentions it.
     """
-    assert run("--no-timer", "--store", "   ").exit_code == 1
+    # a usage error at the door rather than a refusal inside the command: an
+    # empty value cannot mean anything, and YAML would read it as no preference
+    assert run("--no-timer", "--log-store", "   ").exit_code == 2
 
-    assert run("--no-timer", "--store", "s3://bucket/store").exit_code == 0
+    assert run("--no-timer", "--log-store", "s3://bucket/store").exit_code == 0
     (event,) = launched(workspace)
-    assert event["store"] == "s3://bucket/store"
+    assert event["log_store"] == "s3://bucket/store"
 
 
 def test_a_workspace_with_no_definition_is_told_so(
@@ -424,34 +446,69 @@ def test_no_timer_removes_a_timer_that_is_already_armed(
     assert "disarmed" in result.output
 
 
-def test_the_store_falls_back_to_the_environment(
+def test_the_log_store_is_said_three_ways_and_the_narrowest_wins(
     workspace: Workspace, capture: FakeCapture, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """`--store` is documented as a launch override of `INSPECT_STEWARD_STORE`, which means there is something to override."""
-    monkeypatch.setenv("INSPECT_STEWARD_STORE", "s3://team/store")
+    """The setting resolves like every other one Steward owns.
 
-    assert run("--no-timer").exit_code == 0
-    assert launched(workspace)[-1]["store"] == "s3://team/store"
-
-    # and the flag wins over it, which is what makes it an override
-    assert run("--no-timer", "--store", "none").exit_code == 0
-    assert launched(workspace)[-1]["store"] == "none"
-
-
-def test_an_exported_but_empty_store_is_unset_rather_than_a_typo(
-    workspace: Workspace, capture: FakeCapture, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """The same reading `_timer.env` gives an exported-but-empty credential.
-
-    A variable someone exported and left empty carries nothing, and refusing to
-    launch over it would be refusing a correct setup. A value *typed* on the
-    command line is a different act, and an empty one there is a typo.
+    The file is what this project reuses from, the variable is what this machine
+    has, and the flag is this launch — which is the whole reason the file gained
+    a key that execution.md once routed to the environment alone.
     """
-    monkeypatch.setenv("INSPECT_STEWARD_STORE", "")
-
+    workspace.directives.write_text("log_store: s3://project/store\n")
     assert run("--no-timer").exit_code == 0
-    assert launched(workspace)[-1]["store"] is None
-    assert run("--no-timer", "--store", "   ").exit_code == 1
+    assert launched(workspace)[-1]["log_store"] == "s3://project/store"
+
+    monkeypatch.setenv("STEWARD_LOG_STORE", "s3://team/store")
+    assert run("--no-timer").exit_code == 0
+    assert launched(workspace)[-1]["log_store"] == "s3://team/store"
+
+    assert run("--no-timer", "--log-store", "s3://mine/store").exit_code == 0
+    assert launched(workspace)[-1]["log_store"] == "s3://mine/store"
+
+
+def test_a_launch_can_decline_the_store_the_workspace_configured(
+    workspace: Workspace, capture: FakeCapture
+) -> None:
+    """`false` is what replaced `none`, and declining resolves the same as never having one.
+
+    The two are indistinguishable in effect — both run against no store — so
+    nothing records the difference.
+    """
+    workspace.directives.write_text("log_store: s3://project/store\n")
+
+    assert run("--no-timer", "--no-log-store").exit_code == 0
+    assert launched(workspace)[-1]["log_store"] is None
+
+    # and the file can decline what the machine configured, which is the same
+    # act one spelling out
+    workspace.directives.write_text("log_store: false\n")
+    assert run("--no-timer").exit_code == 0
+    assert launched(workspace)[-1]["log_store"] is None
+
+
+def test_asking_for_a_store_and_for_none_is_a_usage_error(
+    workspace: Workspace, capture: FakeCapture
+) -> None:
+    """Two flags saying opposite things is a typo, not a precedence question."""
+    result = run("--no-timer", "--log-store", "s3://bucket/store", "--no-log-store")
+
+    assert result.exit_code == 2
+    assert "whichever you meant" in result.output
+
+
+def test_the_retired_none_is_refused_by_name(
+    workspace: Workspace, capture: FakeCapture
+) -> None:
+    """`none` used to mean *no store* and would now mean a directory called none.
+
+    Taking it literally is the one reading nobody intends, so it is refused
+    pointing at `false` rather than silently obeyed.
+    """
+    result = run("--no-timer", "--log-store", "none")
+
+    assert result.exit_code == 2
+    assert "`false` now" in result.output
 
 
 def test_arguments_can_be_cleared_back_to_the_definitions_defaults(

@@ -18,6 +18,7 @@ from inspect_steward._workspace import (
     parse_setting,
     read_directives,
     resolve_interval,
+    resolve_log_store,
     resolve_pool,
 )
 
@@ -362,6 +363,55 @@ def test_the_ramp_reaches_the_pool_and_defaults_to_none(tmp_path: Path) -> None:
     assert resolve_pool(Directives(samples_ramp=False)).samples_ramp is False
 
 
+# --- the log store ---------------------------------------------------------
+
+STORE: list[tuple[str, str | bool | None, str, str | None]] = [
+    ("nobody named one", None, "", None),
+    (
+        "the workspace did",
+        None,
+        "log_store: s3://project/store\n",
+        "s3://project/store",
+    ),
+    ("the default location", None, "log_store: auto\n", "auto"),
+    ("the command line did", "s3://mine", "log_store: s3://project\n", "s3://mine"),
+    ("the workspace declined", None, "log_store: false\n", None),
+    ("the launch declined", False, "log_store: s3://project\n", None),
+]
+
+
+@pytest.mark.parametrize(
+    ("cli", "text", "expected"),
+    [(cli, text, expected) for _, cli, text, expected in STORE],
+    ids=[case for case, _, _, _ in STORE],
+)
+def test_the_log_store_resolves_most_specific_first(
+    cli: str | bool | None, text: str, expected: str | None, tmp_path: Path
+) -> None:
+    # declining and never having one resolve alike, deliberately: both run
+    # against no store, and recording the difference would record something
+    # nothing reads
+    directives = read_directives(written(tmp_path, text))
+
+    assert resolve_log_store(directives, log_store=cli) == expected
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        pytest.param("log_store: true\n", "nothing about where", id="true"),
+        pytest.param("log_store: ''\n", "empty value", id="empty"),
+        pytest.param("log_store: none\n", "`false` now", id="the_retired_spelling"),
+        pytest.param("log_store: 3\n", "should be", id="a_number"),
+    ],
+)
+def test_a_location_that_is_not_one_is_refused(
+    text: str, message: str, tmp_path: Path
+) -> None:
+    with pytest.raises(DirectivesError, match=message):
+        read_directives(written(tmp_path, text))
+
+
 # --- the environment -------------------------------------------------------
 
 ENVIRONMENT: list[tuple[str, str, str, str, Any]] = [
@@ -370,6 +420,8 @@ ENVIRONMENT: list[tuple[str, str, str, str, Any]] = [
     ("a ramp range", "STEWARD_SAMPLES_RAMP", "[60, 300]", "samples_ramp", (60, 300)),
     ("a ramp switched off", "STEWARD_SAMPLES_RAMP", "false", "samples_ramp", False),
     ("an interval", "STEWARD_TEND_INTERVAL", "30m", "tend_interval", 1800),
+    ("a store", "STEWARD_LOG_STORE", "s3://team/store", "log_store", "s3://team/store"),
+    ("no store", "STEWARD_LOG_STORE", "false", "log_store", False),
     (
         "a rule",
         "STEWARD_POLICIES",

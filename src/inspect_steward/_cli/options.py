@@ -31,13 +31,22 @@ class Setting(click.ParamType):
     ) -> Any:
         if not isinstance(value, str):
             return value
+        # blank text is the one thing the shared parser cannot refuse, because
+        # YAML reads it as `null` and *no preference* is a legitimate value in
+        # the file. Typing a flag and leaving it empty is a different act from
+        # not typing it, and the only reading of it is a mistake -- the same
+        # distinction `_environment` draws in the other direction, where an
+        # exported-but-empty variable is a shell profile rather than an
+        # instruction
+        if not value.strip():
+            self.fail("was given an empty value", param, ctx)
         try:
             return parse_setting(self.key, value)
         except DirectivesError as ex:
             self.fail(str(ex), param, ctx)
 
 
-def _overrides(key: str) -> str:
+def overrides(key: str) -> str:
     """The sentence every one of these options ends with.
 
     Both other spellings named in one place, because a flag that mentions the file but not the variable teaches half the rule.
@@ -56,7 +65,7 @@ def shape_options[F: Callable[..., Any]](f: F) -> F:
         default=None,
         help=(
             "Range to discover sample concurrency in, e.g. `[40, 300]`, or "
-            f"`false` to fix it. {_overrides('samples_ramp')}"
+            f"`false` to fix it. {overrides('samples_ramp')}"
         ),
     )(f)
     f = click.option(
@@ -65,7 +74,7 @@ def shape_options[F: Callable[..., Any]](f: F) -> F:
         default=None,
         help=(
             "Fruitless respawns before a task is given up on. "
-            f"{_overrides('stall_after')}"
+            f"{overrides('stall_after')}"
         ),
     )(f)
     f = click.option(
@@ -74,7 +83,7 @@ def shape_options[F: Callable[..., Any]](f: F) -> F:
         default=None,
         help=(
             "Worker processes, or unset for a process per task. "
-            f"{_overrides('max_workers')}"
+            f"{overrides('max_workers')}"
         ),
     )(f)
     return f
@@ -91,6 +100,6 @@ def tend_interval_option[F: Callable[..., Any]](f: F) -> F:
         default=None,
         help=(
             "How often a scheduled tend runs, with a unit, e.g. `10m`. "
-            f"{_overrides('tend_interval')}"
+            f"{overrides('tend_interval')}"
         ),
     )(f)
