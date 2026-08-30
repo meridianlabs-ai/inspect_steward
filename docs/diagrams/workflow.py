@@ -60,8 +60,10 @@ SANS, MONO = 2, 3  # Excalidraw font ids: 1 hand-drawn, 2 Helvetica, 3 code
 
 # ---------------------------------------------------------------- geometry
 
-CANVAS_W = 1000
-FRAME_PAD = 22
+# no outer frame: the diagram floats on the page, so the canvas is exactly the
+# content width and the card widths below are unchanged from the framed version
+CANVAS_W = 956
+FRAME_PAD = 0
 GAP = 32          # between cards, horizontally
 ROW_GAP = 28      # between rows, taken up by a chevron
 CARD_PAD = 16
@@ -351,7 +353,7 @@ def run_column(width: float) -> Group:
     el, h = label(0, 0, "steward tend", 18, MONO, INDIGO_TEXT)
     row.add(el)
     el2, _ = label(measure("steward tend", 18, MONO) + 9, 5,
-                   "every ten minutes", 13, SANS, MUTED)
+                   "every 10 minutes", 13, SANS, MUTED)
     row.add(el2)
     row.h = h
     t.block(row)
@@ -486,8 +488,6 @@ def build() -> list[dict]:
     between(x0, PAIR_W, y, h)
     y += h
 
-    # the outer frame, drawn last so it sits behind nothing and above nothing
-    els.insert(0, rect(0, 0, CANVAS_W, y + FRAME_PAD, NONE, FRAME_LINE, 1, radius=10))
     return els
 
 

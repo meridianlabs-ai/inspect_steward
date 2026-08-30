@@ -14,7 +14,7 @@ inspect-docs:
       href: index.qmd
     - text: Using Steward
       contents:
-        - href: workspace.qmd
+        - href: workflow.qmd
         - href: concurrency.qmd
         - href: errors.qmd
         - href: runbook.qmd

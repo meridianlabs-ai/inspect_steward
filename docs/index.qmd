@@ -9,22 +9,35 @@ tbl-colwidths: [30,70]
 
 ```{=html}
 <style>
-.overview-hero::after { content: ""; display: block; clear: both; }
-.overview-hero .overview-diagram {
-  float: right;
-  width: min(340px, 100%);
-  margin: 0.1rem 0 0.75rem 1.75rem;
+/* The intro runs the full measure, then the bullets and the diagram sit side
+   by side beneath it -- the bullets are close to the diagram's height, so the
+   two columns come out even. Grid rather than float, so nothing wraps back
+   under the image. */
+.overview-hero {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) clamp(240px, 43%, 340px);
+  column-gap: clamp(1rem, 3%, 1.75rem);
+  align-items: start;
 }
+.overview-hero .overview-text    { grid-column: 1 / -1; grid-row: 1; }
+.overview-hero .overview-bullets { grid-column: 1; grid-row: 2; }
+.overview-hero .overview-diagram { grid-column: 2; grid-row: 2; margin: -5px 0 0; }
+.overview-hero .overview-diagram img { display: block; width: 100%; height: auto; }
+
+/* Percentage vertical margins resolve against the column's width, so the
+   bullets open up as the column widens -- which is exactly when they need the
+   extra height to reach the bottom of the diagram beside them. */
+.overview-hero .overview-bullets li + li { margin-top: clamp(0.25rem, 3%, 0.9rem); }
+
+/* phones: one column, diagram folded under the text at its own width */
 @media (max-width: 767.98px) {
-  /* fold the diagram below the text on small screens */
   .overview-hero { display: flex; flex-direction: column; }
   .overview-hero .overview-diagram {
-    float: none;
     order: 99;
     width: 100%;
-    margin: 0.5rem auto 0;
+    max-width: 410px;
+    margin: 0.75rem auto 0;
   }
-  .overview-hero .overview-diagram img { width: 100%; }
 }
 </style>
 ```
@@ -34,16 +47,22 @@ tbl-colwidths: [30,70]
 ![](diagrams/overview.excalidraw)
 :::
 
+::: {.overview-text}
 Inspect Steward is a system for automated execution and supervision of long-running evaluations. Steward enables you to launch a large run and walk away while a coding agent monitors it and automatically intervenes when required. 
+:::
 
+::: {.overview-bullets}
 - Evaluation runs are fully unattended by design, but can escalate to humans when required.
 - Opinionated defaults for error handling keep tasks running, with an agent driven workflow for error resolution and retry.
 - Slack notifications to keep operators apprised of status and pending decisions.
 - Works with `eval_set()` as well as with execution frameworks like [Inspect Flow](https://meridianlabs-ai.github.io/inspect_flow/) and [Inspect Hawk](https://hawk.metr.org).
+:::
 ::::
 
 
 ## Quick Tour
+
+### Setup
 
 First, install Steward from GitHub with:
 
@@ -59,7 +78,7 @@ cd ~/runs/swe-evals
 steward init
 ```
 
-This will scaffold up a Steward workspace with an `evalset.py` and `AGENTS.md` file that teaches the agent how to use Steward to run an evaluation. First, define your eval set:
+This will scaffold up a Steward workspace with an `evalset.py`, a `_steward.yaml` for your standing rules, and an `AGENTS.md` file that teaches the agent how to use Steward to run an evaluation. First, define your eval set:
 
 ```{.python filename="evalset.py"}
 from inspect_ai import eval_set
@@ -75,18 +94,31 @@ eval_set(
 Steward can manage any evalution defined with a script that ends in a call to `eval_set()` or alternatively a `flow.py` from [Flow](https://meridianlabs-ai.github.io/inspect_flow/) or a `hawk.yaml` from [Hawk](https://hawk.metr.org).
 
 
+### Run the Eval
+
 Next, launch your coding agent from the workspace and tell it to run the evaluation (you should typically run from a [tmux](https://github.com/tmux/tmux/wiki) detached terminal so the agent is persistent):
 
-```bash
-$ claude
+```{.bash filename="Coding Agent"}
 ───────────────────────────────────────────── swe-evals ─
 ❯ please run this evaluation.
 ─────────────────────────────────────────────────────────
 ```
 
-The agent will launch all of the tasks, setup a background monitoring process, and respond to alerts that require its intervention. From here you can detach and walk away. The run depends on neither you nor the agent staying connected. When you come back, ask how it's going:
+The agent will launch all of the tasks, setup a background monitoring process, and respond to alerts that require its intervention. From here you can detach and walk away. 
 
-```bash
+::: {.callout-note}
+#### Notifications
+
+To be notified when things required your attention, we strongly recommend you also configure [Inspect Notifications](https://inspect.aisi.org.uk/intervention.html#notifications) by setting an `INSPECT_EVAL_NOTIFICATION` environment variable. For example in your `.env` file:
+
+```{.ini}
+INSPECT_EVAL_NOTIFICATION=slack://{OAuthToken}/
+```
+:::
+
+The run depends on neither you nor the agent staying connected. When you come back, ask how it's going:
+
+```{.bash filename="Coding Agent"}
 ───────────────────────────────────────────── swe-evals ─
 ❯ how is the eval going?
 ─────────────────────────────────────────────────────────
@@ -94,84 +126,48 @@ The agent will launch all of the tasks, setup a background monitoring process, a
 
 The agent reports where the run stands: per-task progress, what it resolved on its own while you were gone, and anything that is waiting on a decision from you.
 
-::: {.callout-note}
-#### Notifications
 
-We strongly recommend you also configure [Inspect Notifications](https://inspect.aisi.org.uk/intervention.html#notifications) by setting an `INSPECT_EVAL_NOTIFICATION` environment variable. For example in your `.env` file:
+### Make Decisions
 
-```{.ini}
-INSPECT_EVAL_NOTIFICATION=slack://{OAuthToken}/
+Runs rarely go perfectly, and the questions that survive the agent's own judgement come back to you. For example, the agent might prompt. you with this when you check in:
+
+```{.bash filename="Coding Agent"}
+89 samples in cais_swebenchpro failed with the same
+sandbox timeout, all inside a 30-minute window last 
+night. Automatic retry has already spent its attempts.
+
+re-run them, score them as failed, or exclude them 
+from scoring?
+
+───────────────────────────────────────────── swe-evals ─
+❯ re-run them, the disk issue is fixed
+─────────────────────────────────────────────────────────
 ```
+
+## Workflow
+
+Steward provides a system that is fully unattended by default but which escalates for things that only the human operator can decide. The basic workflow is:
+
+1. Define your eval set and policies that will govern the run.
+
+2. Launch the eval set for unattended execution. Let standing policies and agents handle tuning and errors whenever possible.
+
+3. Receive notifications whenever something needs your attention mid-run and make whatever decisions are required.
+
+4. At the end of the run, make final judgements about how to score anomolies and then signoff the completed run.
+
+::: {.column-body-outset-right}
+![](diagrams/workflow.excalidraw)
 :::
-
-## Eval Workflow
-
-An evaluation run moves through five phases. The agent drives all of them; you
-make the decisions that require a person. In practice the middle phases
-overlap: errors are investigated while the eval is running, and scanning
-starts as tasks complete.
-
-
-| Phase | Description |
-|----|----|
-| Smoke | `steward launch --smoke` rehearses the eval set with a few samples per task under a time cap, catching configuration and environment problems before the full run. |
-| Eval | The full run: one process per task, with progress reported on a schedule. Tasks that fail outright are re-launched (up to `stall_after` attempts); sample errors don't halt a task and are collected for later review. If a task is waiting on human input (e.g. a tool call approval) you are notified. |
-| Scanning | As tasks complete, Steward scans transcripts for problems that scores don't surface (refusals scored as failures, environment misconfiguration, evaluation awareness). Findings are written to `scanning.md`. |
-| Investigation | Errors and scan findings are grouped into classes for review. The agent investigates each class, then acts within your standing policy or asks you. Decisions are recorded as they happen; the agent's writeup lands in `analysis.md`. |
-| Signoff | `steward signoff` records that you accept the results, unschedules the background monitor, and archives superseded logs. The one command the agent may never run. |
-: {tbl-colwidths="[20,80]"}
-
-However, evaluation runs don't always proceed without a hitch! Steward has several pieces of agent-driven workflow to help work through issues that can arise. For example:
-
-- Steward automatically continues tasks even where there are sample errors. You
-  will then need to decide how to handle these errors (re-run them, score them
-  as failed, exclude them from scoring, etc.) and the agent carries out your
-  decision.
-
-- When a task fails outright (for example, an import error or an out-of-memory
-  crash) Steward re-launches it a limited number of times, then stops and
-  reports it rather than spending money on retries that won't succeed.
-
-- The agent groups errors into classes (rate limits, sandbox failures, a scorer
-  bug) so that you can make one decision about a hundred samples rather than a
-  hundred decisions.
-
-- If a task is waiting on human input (for example, a tool call approval)
-  Steward notifies you and the task holds its place in the run until you
-  respond.
-
-- You can change the eval set mid-run: edit your definition and launch again,
-  and Steward runs only what is new or changed. Completed work is never re-run.
-
-The agent will notify you when any of these conditions exist and will help you resolve them as required.
-
-## Steward Options
-
-Steward writes a `_steward.yaml` file to your workspace which can be used to tune the behavior of the monitor and agent. The settings at the top are what Steward acts on by itself; `policies` is free-form text the agent consults when making decisions. For example:
-
-```{.yaml filename="_steward.yaml"}
-tend_interval: 10m
-stall_after: 3
-max_workers: 8
-
-policies:
-  - If more than 10% of the samples in a task error out, pause the run
-    and notify me right away. Otherwise, batch up questions for the end
-    of the run.
-  - A re-run that would replay more than 200 samples needs my approval
-    first.
-  - If a task's score looks implausible (e.g. near zero on a task that
-    usually scores well), investigate the transcripts before proposing
-    a re-run.
-```
-
-See the [Workspace](workspace.qmd) article for details on all available options.
 
 ## Learning More
 
-- [Workspace](workspace.qmd): Run defininion and a record of actions taken and things observed.
-- [Concurrency](concurrency.qmd): Options for tuning the parallelism of steward runs.
-- [Error Handling](errors.qmd): How errors and retries are handled and dipatched.
-- [Agent Runbook](runbook.qmd): Operating instructions for agents supervising runs.
+- [Workflow](workflow.qmd) is the comprehensive guide to a Steward run: the workspace it lives in, what launch commits, the tend loop, the decisions that reach you, the standing rules you write in `_steward.yaml`, and how a run ends.
 
-Platform-specific notes are in [Inspect Flow](flow.qmd) and [Inspect Hawk](hawk.qmd), and the complete CLI and Python API are in the [Reference](reference/index.qmd).
+- [Concurrency](concurrency.qmd) describes the various options for tuning concurrency, including automatic ramping behavior and caps on resource utilization.
+
+- [Error Handling](errors.qmd) covers standing policies for error retries and resolution, including dealing with errors that are never resolved.
+
+- [Agent Runbook](runbook.qmd) provides the full operating instructions that coding agents use to supervise and make decisions during runs.
+
+Integrations with popular execution environments are covered in [Inspect Flow](flow.qmd) and [Inspect Hawk](hawk.qmd).

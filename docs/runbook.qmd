@@ -7,7 +7,7 @@ llms-description: "What a coding agent supervising a Steward run decides, what i
 
 Steward is built to be operated by a coding agent: almost every verb is one an agent runs, while yours are `init`, `signoff`, editing the definition and `_steward.yaml`, and asking questions in prose. The agent's operating instructions ship with the package — `steward runbook` prints them — so an agent can never follow last year's instructions against this year's CLI. Your workspace's `AGENTS.md` tells the agent to read them; you never need to run the command yourself.
 
-The agent supplies judgement within bounds: it diagnoses errors, oversees the [concurrency ramp](concurrency.qmd#the-ramp) (holding the climb when the run argues for caution), investigates findings, and writes up what happened — acting on its own where your [eval policy](index.qmd#eval-policy) pre-authorizes it, and bringing you a question where it does not.
+The agent supplies judgement within bounds: it diagnoses errors, oversees the [concurrency ramp](concurrency.qmd#the-ramp) (holding the climb when the run argues for caution), investigates findings, and writes up what happened — acting on its own where your [eval policy](workflow.qmd#standing-rules) pre-authorizes it, and bringing you a question where it does not.
 
 ## What it may never do
 
