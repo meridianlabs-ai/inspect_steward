@@ -162,7 +162,7 @@ Steward provides a system that is fully unattended by default but which escalate
 
 ## Learning More
 
-- [Workflow](workflow.qmd) is the comprehensive guide to a Steward run: the workspace it lives in, what launch commits, the tend loop, the decisions that reach you, the standing rules you write in `_steward.yaml`, and how a run ends.
+- [Workflow](workflow.qmd) is the comprehensive guide to a Steward run: the workspace directory, launching and tending runs, agent and human decisions, and how a run ends.
 
 - [Concurrency](concurrency.qmd) describes the various options for tuning concurrency, including automatic ramping behavior and caps on resource utilization.
 
@@ -170,4 +170,4 @@ Steward provides a system that is fully unattended by default but which escalate
 
 - [Agent Runbook](runbook.qmd) provides the full operating instructions that coding agents use to supervise and make decisions during runs.
 
-Integrations with popular execution environments are covered in [Inspect Flow](flow.qmd) and [Inspect Hawk](hawk.qmd).
+Integrations with execution environments are covered in [Inspect Flow](flow.qmd) and [Inspect Hawk](hawk.qmd).
