@@ -60,6 +60,8 @@ from .._workspace import (
     read_directives,
     read_overrides,
     resolve_interval,
+    resolve_log_dir,
+    resolve_log_root,
     resolve_log_store,
     steward_log,
 )
@@ -114,6 +116,7 @@ def launch(
     accept_archive: bool = False,
     timer: bool = True,
     env_check: bool = True,
+    log_root: str | bool | None = None,
     log_store: str | bool | None = None,
     overrides: dict[str, Any] | None = None,
     max_workers: int | None = None,
@@ -133,6 +136,7 @@ def launch(
         accept_archive: Commit even though tasks would leave `logs/`.
         timer: Arm a timer. `False` launches unsupervised and records that it did.
         env_check: Refuse to arm when a scheduled tend would not inherit this shell's credentials. Checked **before** the capture, so a Hawk config does not spend five minutes resolving packages on the way to a refusal.
+        log_root: The root this machine keeps eval logs under, overriding `_steward.yaml`. Used only where the definition names no `log_dir` of its own, in which case the run writes to `<root>/<workspace name>`. `False` keeps this run's logs in the workspace whatever the machine says; `None` defers to the file and the environment.
         log_store: Log store for this run — a path or `auto` — overriding `_steward.yaml`. `False` declines the one the file or the environment configured; `None` defers to them. **Recorded and otherwise inert**: nothing reads a store until publication exists (step 33), so a path is recorded rather than resolved.
         overrides: Inspect's own eval-set arguments for this run, already parsed, keyed as `EvalSetOverrides` spells them. Merged over what `STEWARD_*` and `INSPECT_EVAL_*` say and honoured by the capture, so the manifest describes the run that will happen (`_workspace.overrides`). `None` — nothing typed and nothing exported — reuses the committed manifest's, for the reason `args` does. **An empty mapping is not the same thing**: it asks for the definition's own shape, which is the only way back once a launch has passed one.
         max_workers: Worker processes for the first turn, overriding `_steward.yaml`. `None` expresses no preference and defers to the file, which itself defaults to a process per task — it does not request that width.
@@ -156,6 +160,7 @@ def launch(
     directives = read_directives(workspace.directives)
     interval = resolve_interval(directives, tend_interval=tend_interval)
     store = resolve_log_store(directives, log_store=log_store)
+    root = resolve_log_root(directives, log_root=log_root)
     inspect_overrides = _overrides(overrides)
 
     # before the capture and before the claim, because both of the things below
@@ -191,6 +196,7 @@ def launch(
             accept_archive=accept_archive,
             timer=timer,
             interval=interval,
+            log_root=root,
             log_store=store,
             overrides=inspect_overrides,
             reuse_overrides=overrides is None,
@@ -211,6 +217,7 @@ def _launch(
     accept_archive: bool,
     timer: bool,
     interval: int,
+    log_root: str | None,
     log_store: str | None,
     overrides: EvalSetOverrides | None,
     reuse_overrides: bool,
@@ -232,12 +239,17 @@ def _launch(
     )
     _refuse_scanners(manifest)
 
-    log_dir = _log_dir(workspace, manifest)
+    # resolved here and nowhere else, then carried by the manifest: a tend
+    # re-deriving it would be re-reading an environment a scheduler does not
+    # supply (`Manifest.log_dir`). Recorded even on the refusal path below,
+    # where it is what the launch *would* have used
+    log_dir = resolve_log_dir(workspace, manifest, log_root)
+    manifest = manifest.model_copy(update={"log_dir": log_dir})
     # the *committed* manifest's directory, which is where the run's results
     # actually are. Ordinarily the same string and read once; when a `log_dir`
-    # edit has moved it, the difference is the whole of what the delta would
-    # otherwise miss
-    previous = _log_dir(workspace, committed) if committed is not None else log_dir
+    # edit or a moved `log_root` has moved it, the difference is the whole of
+    # what the delta would otherwise miss
+    previous = _previous(workspace, committed, log_dir)
 
     inflight = resolve_inflight(workspace.inflight, workspace.workers)
     logs = _observe(log_dir)
@@ -568,17 +580,16 @@ def _overrides(given: dict[str, Any] | None) -> EvalSetOverrides | None:
         raise LaunchError(str(ex)) from ex
 
 
-def _log_dir(workspace: Workspace, manifest: Manifest) -> str:
-    """The run's log directory: the definition's own, or the workspace's by default.
+def _previous(workspace: Workspace, committed: Manifest | None, log_dir: str) -> str:
+    """Where the committed run's results actually are.
 
-    The same resolution `_tend.turn` performs, and it has to be: the delta is computed against the directory the fleet will write into, and two answers to *where do the logs go* would make a launch propose archiving a directory no tend ever reads.
+    **Read back rather than recomputed, which is the whole of what makes a moved root visible.** Resolving both sides against the *current* `log_root` would compare a value with itself: every identifier survives a relocation, so the delta's rows would be empty, the gate would pass, and a launch would silently strand a directory full of results and re-run the sweep.
+
+    A manifest committed before `Manifest.log_dir` existed carries none, and is resolved the way it was resolved then — without a root, since there were none.
     """
-    configured = manifest.options.get("log_dir")
-    if isinstance(configured, str) and configured:
-        if "://" in configured or Path(configured).is_absolute():
-            return configured
-        return str(workspace.root / configured)
-    return str(workspace.logs)
+    if committed is None:
+        return log_dir
+    return committed.log_dir or resolve_log_dir(workspace, committed)
 
 
 def _failed(

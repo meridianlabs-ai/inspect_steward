@@ -50,6 +50,24 @@ The third row is what makes extending a project cheap rather than merely possibl
 
 **It also needs no new mechanism, and cannot have one.** Epochs is not a live knob — nothing on the control channel adds work to a running eval, by design ([execution.md](execution.md), *The channel changes how work runs, never what work exists*). Extension happens through the loop instead: the running worker is left alone, its log lands and reads as incomplete, and the next tend respawns with `resume`. Letting it finish is clearly right rather than merely defensible, because what it is producing is epoch 1 — precisely what the extension reuses. The cost is latency, since a task hours from finishing starts its new epochs hours from now.
 
+### 2.1a Where a run's logs go
+
+Three rungs, and the order is the whole design:
+
+| the definition names a `log_dir` | that directory — absolute or a URL as given, relative against the workspace root |
+| a `log_root` is configured | `<root>/<workspace directory name>` |
+| neither | `<workspace>/logs` |
+
+**The third rung existed from the start and was unreachable, which is why the first was the only one anybody used.** `eval_set()` declared `log_dir` as a required positional with no default — alone among inspect's entry points, since `eval()` has always fallen back to `INSPECT_LOG_DIR` and then `./logs` — so every definition named one whether its author had an opinion or not, and Steward's fallback never ran. The fix was upstream and two lines: `log_dir: str | None = None`, resolved where `eval()` resolves it. Two properties of the capture path made it sufficient on their own. Capture builds its `options` mapping *above* the point overrides and defaults are applied, so a definition that named nothing is recorded as having named nothing rather than as having chosen `./logs`; and capture exits before the first `log_dir` side effect, so it never needs a resolved value at all.
+
+**The second rung is a default and never an override, which is what admits it.** §5.9's *Inspect's words* rule says Steward refuses every way of moving a `log_dir` the definition stated — no flag, no alias, `INSPECT_LOG_DIR` refused at launch. A root does not move one: a stated `log_dir` is returned untouched, unrebased and unprefixed. What it answers is silence, which is not an assertion. And what it expresses — *where this machine keeps eval logs* — is something no definition can portably say, since a definition knows neither the root nor the workspace's name.
+
+**The subdirectory is forced rather than chosen.** §9 mirrors the workspace *into* its log directory, so two workspaces sharing one would overwrite each other's `status.md` and `journal.jsonl`. Under a root each therefore gets a directory of its own, named for the workspace. Two workspaces *named* the same still collide, which is documented and not guarded: that is a fact about what somebody named their directories, and a check here would be Steward babysitting a decision it cannot make better.
+
+**The resolved directory is recorded in the manifest, and re-deriving it per turn would be a nightly failure rather than an inefficiency.** A root arrives in the environment, and a scheduled tend inherits almost none of one — the property [execution.md](execution.md) and `_timer/env.py` both build on is that *every variable Steward reads is resolved at launch and recorded in the manifest*. A turn resolving this for itself would read `logs/` at 02:00 while the fleet wrote under the root: every task lands and then reads as never started, all night, with nothing saying why. It is exactly the category `AMBIENT` names, and the manifest is the answer to it.
+
+Recording it is also what makes a root change *visible*. Every identifier survives a relocation, so the delta's rows are empty and only the directory comparison catches it — and comparing the new directory against one re-derived from the same new root would compare a value with itself. Read back from the committed manifest, moving the root strands results exactly the way editing `log_dir` does, and is gated by the same predicate (§2.3).
+
 ### 2.2 Steward never destroys a result, but it does curate the directory
 
 The tempting invariant is *additive only* — Steward adds work and never removes anything. That is the wrong line, and the case that breaks it is ordinary: a provider has an outage, you decide mid-flight to drop that arm. Under additive-only its half-failed logs stay in `logs/` forever, so the arm you abandoned is still in your results.
@@ -389,7 +407,7 @@ The original position here was that there is **no** config file at all, and most
 | candidate | where it actually goes |
 |---|---|
 | definition pointer | discovered (`evalset.py` / `flow.yaml` in the directory) |
-| `log_dir` | defaults to `logs/` |
+| `log_dir` | defaults to `logs/`, or to `<log_root>/<workspace name>` where the machine names a root (*Where a run's logs go*) |
 | notification channel | `INSPECT_EVAL_NOTIFICATION` — reference-only *by design*, so a config file is the wrong home |
 | log-reuse store location | the environment — a machine-level resource shared across projects, not a property of one |
 | whether to publish to it | a `signoff` decision, defaulting from `_steward.yaml` — publishing a result for others to reuse is an attestation, not a setting |
@@ -436,6 +454,10 @@ Steward's first answer was `steward tend --max-samples`, and it was the wrong on
 **Two asymmetries with Steward's own vocabulary follow, and both are the ownership rule rather than exceptions to it.** These words are settable on `launch` alone, because a run's *shape* is decided when it is launched and `tend` only converges toward it — where Steward's own words are settable on every command that acts, because each turn recomputes them from scratch. And they are never a `_steward.yaml` key: a committed file beside the definition is exactly where a contradicting `epochs` would ossify, which is the drift §5.9 exists to prevent. The variable and the flag are scoping devices for one shell or one invocation, not a place to write policy.
 
 **`log_dir` is the one inspect word Steward keeps.** It has no flag, no alias, and `INSPECT_LOG_DIR` is refused at launch rather than ignored — the run's logs go where the fleet is watched from, so honouring it would put a worker's output somewhere no tend reads, and every task would land and then read as never started.
+
+**`log_root` is a Steward word and not a hole in that rule, though it looks like one.** The rule above is about *overriding* a `log_dir` the definition stated; `log_root` answers the case where the definition states none, which — since `eval_set()` gained a default — is the case worth recommending. The two cannot collide: a stated `log_dir` wins, unrebased and unprefixed. What the key expresses is *where this machine keeps eval logs*, which passes the admission test on the strongest available reading — no definition can portably say it, since a definition knows neither the machine's root nor the workspace's name. It gets all three spellings for the reason `log_store` does, and the shipped precedence for the same reason: the file is the project's preference, the variable is the machine's, and the machine outranks the project on a question about the machine.
+
+See *Where a run's logs go* for the resolution and for why its answer is recorded rather than re-derived.
 
 **`policies` gets a variable too, and that changed the agent's contract rather than only the parser.** `AGENTS.md` said *read `_steward.yaml`*, which stops being the whole truth the moment standing rules can arrive from the environment. So `steward status` reports the rules actually in force, and both templates now say to read the file for the reasoning and `status` for what is set.
 
@@ -539,7 +561,7 @@ Not deleted the moment a smoke passes, though — reading a transcript or two af
 
 Almost nothing about a smoke needs special machinery. It is a run with a sample limit, a time cap, and a different log directory — launched, tended, and reported like any other, then recorded in the journal as part of the same story. The cap is the one exception, for the reason below.
 
-**Half its upstream dependency has landed.** Redirecting a definition's `log_dir` needs an override the definition cannot pre-empt, which no environment variable can supply — `eval_set()` declares `log_dir` with no default, so every definition passes it explicitly and `INSPECT_LOG_DIR` always loses. Selection documents carry that override in their `overrides` container (execution.md, item 4), so the log-directory half works for script definitions as well as Flow ones.
+**Half its upstream dependency has landed.** Redirecting a definition's `log_dir` needs an override the definition cannot pre-empt, which no environment variable can supply — a variable is a *default*, and an explicit argument beats a default. `eval_set()` now has a default of its own (§2.1a), which does not change that: it widens which definitions omit the argument, and an omitted one still has to be redirected to Steward's answer rather than to the worker's cwd. Selection documents carry that override in their `overrides` container (execution.md, item 4), so the log-directory half works for script definitions as well as Flow ones.
 
 **The sample slice does not, and a name collision is what hid it: `max_samples` is concurrency, not a limit.** The override that landed beside `log_dir` bounds how many of a task's samples run *at once*; a smoke needs `eval_set()`'s separate `limit`, which bounds how many run *at all*. Nothing in the selection document supplies that today — see execution.md, item 8, where it is one more entry in the same container for the same reason the others were: `task_identifier` hashes a task's *execution* limits (message, token, turn, time, working, cost) and not its dataset slice, so truncating a worker's dataset cannot desynchronize it from the capture manifest.
 

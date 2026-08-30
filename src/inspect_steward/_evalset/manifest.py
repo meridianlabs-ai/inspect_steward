@@ -70,6 +70,16 @@ class Manifest(BaseModel):
     options: dict[str, Any]
     """Informational `eval_set()` options as the *definition* passed them (e.g. `log_dir`, `retry_attempts`, `limit`)."""
 
+    log_dir: str | None = None
+    """The run's log directory as the launch resolved it, or `None` on a manifest committed before this field existed.
+
+    **Resolved once and recorded, for the reason `overrides` is.** The resolution has three rungs — the definition's own `log_dir`, then a machine's `log_root`, then the workspace's `logs/` — and the middle one arrives in the environment. A scheduled tend inherits almost no environment (`_timer.env`, *AMBIENT*: "every variable Steward reads is resolved at launch and recorded in the committed manifest"), so re-deriving this per turn would have the 02:00 tend read `logs/` while the fleet wrote to the root: every task lands and then reads as never started, all night, with nothing saying why.
+
+    Recording it also makes a root change *visible*. A launch compares this against the directory it has just resolved, so moving the root strands the previous results exactly the way editing the definition's `log_dir` does — and is gated by the same predicate. Recomputing both sides from the current root would have compared a value against itself.
+
+    `MANIFEST_VERSION` deliberately did not move, on the `capture_rss` reasoning rather than the sharper half of the `overrides` one: absence here means *resolve it the way it was resolved before this field*, which `resolve_log_dir` still does exactly, so an old manifest and a new reader agree.
+    """
+
     overrides: EvalSetOverrides | None = None
     """Inspect's words as this run said them, or `None` where the run is the definition's own.
 

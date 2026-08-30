@@ -545,6 +545,86 @@ def test_moving_the_log_directory_is_refused_rather_than_rerunning_everything(
     assert committed(workspace).options["log_dir"] == "logs2"
 
 
+def test_a_launch_records_the_directory_it_resolved(
+    workspace: Workspace, capture: FakeCapture
+) -> None:
+    """Where the logs go is decided once, by the launch, and carried by the manifest.
+
+    Deriving it per turn would mean re-reading an environment a scheduler does
+    not supply — so this is the field every later tend reads instead.
+    """
+    assert run("--no-timer").exit_code == 0
+
+    assert committed(workspace).log_dir == str(workspace.logs)
+
+
+def test_a_root_gives_the_run_a_directory_of_its_own_under_it(
+    workspace: Workspace, capture: FakeCapture, tmp_path: Path
+) -> None:
+    """`log_root` answers the silence, and the answer names this workspace.
+
+    Two workspaces sharing one directory would overwrite each other's
+    `status.md` and `journal.jsonl`, since each propagates into its own log
+    directory — so the root is a parent, never the directory itself.
+    """
+    root = tmp_path / "runs"
+
+    # a relocation, because the committed run's results are in the workspace
+    result = run("--no-timer", "--log-root", str(root), "--accept-archive")
+
+    assert result.exit_code == 0, result.output
+    assert committed(workspace).log_dir == str(root / workspace.root.name)
+
+
+def test_a_definition_that_names_a_log_dir_is_left_alone_by_a_root(
+    workspace: Workspace, capture: FakeCapture, tmp_path: Path
+) -> None:
+    # the root supplies a default; it never rebases a stated answer. Steward
+    # refuses every *override* of a definition's log_dir, and this is not one
+    capture.manifest = synth_manifest([ADDITION, ECHO], log_dir="logs")
+
+    result = run("--no-timer", "--log-root", str(tmp_path / "runs"))
+
+    assert result.exit_code == 0, result.output
+    assert committed(workspace).log_dir == str(workspace.logs)
+
+
+def test_changing_the_root_is_a_relocation_rather_than_a_silent_move(
+    workspace: Workspace, capture: FakeCapture, tmp_path: Path
+) -> None:
+    """The reason the resolved directory is recorded rather than recomputed.
+
+    A root arrives in the environment, so it can differ between two launches
+    without anything in the workspace changing. Every identifier survives the
+    move, so the delta's rows are empty — and comparing the new directory
+    against one *re-derived from the same new root* would compare a value with
+    itself, pass the gate, and strand a directory full of results.
+    """
+    root = tmp_path / "runs"
+    assert run("--no-timer", "--log-root", str(root), "--accept-archive").exit_code == 0
+    write_log(root / workspace.root.name, ADDITION)
+    write_log(root / workspace.root.name, ECHO)
+
+    # the same root again is not a move
+    assert run("--no-timer", "--log-root", str(root)).exit_code == 0
+
+    # dropping it is
+    refused = run("--no-timer")
+
+    assert refused.exit_code == 1
+    assert "the log directory moves" in refused.output
+    assert committed(workspace).log_dir == str(root / workspace.root.name)
+
+
+def test_asking_for_a_root_and_for_none_is_a_usage_error(
+    workspace: Workspace, capture: FakeCapture
+) -> None:
+    result = run("--log-root", "/data/runs", "--no-log-root")
+
+    assert result.exit_code == 2
+    assert "Pass whichever you meant" in result.output
+
+
 def test_no_timer_removes_a_timer_that_is_already_armed(
     workspace: Workspace, capture: FakeCapture
 ) -> None:

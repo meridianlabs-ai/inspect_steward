@@ -114,6 +114,23 @@ _LABELS = {
     help="Arm even though a scheduled tend would not inherit this shell's credentials.",
 )
 @click.option(
+    "--log-root",
+    type=Setting("log_root"),
+    default=None,
+    metavar="PATH",
+    help=(
+        "Root this machine keeps eval logs under. Used only where the "
+        "definition names no log_dir, in which case this run writes to "
+        f"<root>/<workspace name>. {overrides('log_root')}"
+    ),
+)
+@click.option(
+    "--no-log-root",
+    is_flag=True,
+    default=False,
+    help="Keep this run's logs in the workspace, whatever root the machine configured.",
+)
+@click.option(
     "--log-store",
     type=Setting("log_store"),
     default=None,
@@ -155,6 +172,8 @@ def launch_command(
     accept_archive: bool,
     timer: bool,
     env_check: bool,
+    log_root: str | bool | None,
+    no_log_root: bool,
     log_store: str | bool | None,
     no_log_store: bool,
     max_workers: int | None,
@@ -190,6 +209,11 @@ def launch_command(
             "--no-sync asks to propagate nowhere, and --sync names a "
             "destination. Pass whichever you meant."
         )
+    if no_log_root and log_root is not None:
+        raise click.UsageError(
+            "--no-log-root asks to keep the logs here, and --log-root names a "
+            "root. Pass whichever you meant."
+        )
     if no_log_store and log_store is not None:
         raise click.UsageError(
             "--no-log-store asks for no store, and --log-store names one. "
@@ -211,6 +235,7 @@ def launch_command(
             accept_archive=accept_archive,
             timer=timer,
             env_check=env_check,
+            log_root=False if no_log_root else log_root,
             log_store=False if no_log_store else log_store,
             # `{}` and `None` differ here exactly as they do for `args`
             overrides={} if no_overrides else given_overrides,

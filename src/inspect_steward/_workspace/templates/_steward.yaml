@@ -34,6 +34,13 @@
 # samples_ramp: [40, 200] # range to discover sample concurrency in (false to fix it)
 # log_store: auto         # reuse logs already run elsewhere (a path, or false for none)
 # sync: auto              # mirror this workspace into the log directory (a path, or false)
+# log_root: s3://…/runs   # where this machine keeps logs, one directory per workspace
+#
+# log_root is not an exception to the rule above, though it looks like one. It
+# never overrides a log_dir your definition names — it answers the case where
+# your definition names none, which is the one Steward recommends. Usually it
+# belongs in the environment (STEWARD_LOG_ROOT) rather than here, since it is a
+# fact about the machine; put it here when it is a fact about the project.
 
 # --- Standing rules an agent applies ----------------------------------------
 #

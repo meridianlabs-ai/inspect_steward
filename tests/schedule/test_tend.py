@@ -325,6 +325,45 @@ def test_a_relative_log_dir_is_relative_to_the_workspace(tmp_path: Path) -> None
     assert result.summary.states["complete"] == 1
 
 
+def test_a_tend_reads_the_directory_the_launch_recorded(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The one case the recorded field exists for, and it is the 02:00 one.
+
+    A `log_root` arrives in the environment, and a scheduled tend inherits
+    almost none of one. A turn that resolved this for itself would read the
+    workspace's own `logs/` while the fleet wrote under the root — every task
+    landing and then reading as never started, all night, with nothing saying
+    why.
+    """
+    done = SynthTask("done")
+    workspace, manifest = prepared(tmp_path, [done])
+    under_a_root = tmp_path / "runs" / workspace.root.name
+    write_manifest(
+        manifest.model_copy(update={"log_dir": str(under_a_root)}), workspace.manifest
+    )
+    write_log(under_a_root, done)
+    monkeypatch.delenv("STEWARD_LOG_ROOT", raising=False)
+
+    result = turn(workspace)
+
+    assert result.summary.states["complete"] == 1
+    assert not workspace.logs.exists()
+
+
+def test_a_manifest_committed_before_the_field_resolves_as_it_always_did(
+    tmp_path: Path,
+) -> None:
+    # absence means *resolve it the way it was resolved then*, which is without
+    # a root, since there were none
+    done = SynthTask("done")
+    workspace, manifest = prepared(tmp_path, [done])
+    assert manifest.log_dir is None
+    write_log(workspace.logs, done)
+
+    assert turn(workspace).summary.states["complete"] == 1
+
+
 def test_drift_is_reported_and_never_applied(tmp_path: Path) -> None:
     done = SynthTask("done")
     workspace, _ = prepared(tmp_path, [done])

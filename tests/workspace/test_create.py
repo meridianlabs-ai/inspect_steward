@@ -41,8 +41,13 @@ def test_creates_the_workspace(tmp_path: Path) -> None:
     }
     assert workspace.agents.read_text().startswith("# AGENTS.md")
     assert workspace.directives.exists()
-    # the definition is a placeholder, not a guess at what is being measured
-    assert workspace.definition("evalset").read_text() == ""
+    # the definition is a placeholder, not a guess at what is being measured:
+    # comments only, carrying the one thing a person cannot infer
+    placeholder = workspace.definition("evalset").read_text()
+    assert all(
+        not line.strip() or line.startswith("#") for line in placeholder.splitlines()
+    )
+    assert "Leave log_dir out" in placeholder
 
     # created on demand by the steps that own them, not here -- and git would
     # not carry an empty directory anyway
@@ -65,14 +70,20 @@ def test_opens_the_journal_with_a_real_event(tmp_path: Path) -> None:
 
 
 @pytest.mark.parametrize(
-    ("type", "filename"),
-    [("evalset", "evalset.py"), ("flow", "flow.yaml"), ("hawk", "hawk.yaml")],
+    ("type", "filename", "empty"),
+    [
+        # only the evalset placeholder has anything to say: hawk has no
+        # log-directory option at all, and a flow spec's is a different key
+        ("evalset", "evalset.py", False),
+        ("flow", "flow.yaml", True),
+        ("hawk", "hawk.yaml", True),
+    ],
 )
 def test_definition_type_chooses_the_filename(
-    type: DefinitionType, filename: str, tmp_path: Path
+    type: DefinitionType, filename: str, empty: bool, tmp_path: Path
 ) -> None:
     create_workspace(tmp_path, type=type, git=False)
-    assert (tmp_path / filename).read_text() == ""
+    assert ((tmp_path / filename).read_text() == "") is empty
 
 
 def test_rerunning_changes_nothing(tmp_path: Path) -> None:

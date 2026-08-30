@@ -17,6 +17,7 @@ from .directives import (
     parse_setting,
     read_directives,
     resolve_interval,
+    resolve_log_root,
     resolve_log_store,
     resolve_pool,
 )
@@ -57,7 +58,12 @@ from .journal import (
     summarize,
     utc_now,
 )
-from .layout import DEFINITION_NAMES, GITIGNORE_ENTRIES, Workspace
+from .layout import (
+    DEFINITION_NAMES,
+    GITIGNORE_ENTRIES,
+    Workspace,
+    resolve_log_dir,
+)
 from .log import LOG_BOUND, steward_log, truncate_log
 from .overrides import (
     ALIASED,
@@ -130,6 +136,8 @@ __all__ = [
     "read_raised",
     "read_ramp_holds",
     "resolve_interval",
+    "resolve_log_dir",
+    "resolve_log_root",
     "resolve_log_store",
     "resolve_pool",
     "LOG_BOUND",

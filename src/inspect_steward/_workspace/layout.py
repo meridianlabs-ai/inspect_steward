@@ -2,6 +2,7 @@ from dataclasses import dataclass
 from pathlib import Path
 
 from .._evalset.detect import DefinitionType
+from .._evalset.manifest import Manifest
 
 JOURNAL = "journal.jsonl"
 """The durable record, and the file that marks a directory as a workspace."""
@@ -210,3 +211,48 @@ class Workspace:
             if (candidate / JOURNAL).exists():
                 return cls(root=candidate)
         return None
+
+
+def resolve_log_dir(
+    workspace: Workspace, manifest: Manifest, log_root: str | None = None
+) -> str:
+    """Where this run's logs go: the definition's own directory, a machine's root, or the workspace's.
+
+    Three rungs, in order, and **the root supplies a default rather than modifying an answer**. A definition that names a `log_dir` is the single source of truth for where its results go, so the root does not rebase it, prefix it, or otherwise touch it — silence is the only thing the root answers. That is what keeps this consistent with the rule one level out: Steward refuses every *override* of a stated `log_dir` (`INSPECT_LOG_DIR` among them, at launch) and supplies a *default* where the definition states none.
+
+    Called once, by `launch`, whose answer is committed to the manifest and read back by every later tend. Deriving it per turn would mean a scheduled tend — which inherits almost no environment — resolving a different directory from the one its fleet is writing to (`Manifest.log_dir`).
+
+    Args:
+        workspace: The workspace, whose directory name is the run's name under a root.
+        manifest: The captured manifest, whose `options` carry the definition's own `log_dir` when it named one.
+        log_root: A machine's root for eval logs, as `resolve_log_root` settled it, or `None` for none.
+
+    Returns:
+        The log directory, as a local path or a URL. Its archive is `archive_dir()` of it.
+    """
+    configured = manifest.options.get("log_dir")
+    if isinstance(configured, str) and configured:
+        if _remote(configured) or Path(configured).is_absolute():
+            return configured
+        # a relative log_dir is relative to where the definition was captured,
+        # which for a workspace's own definition is the workspace
+        return str(workspace.root / configured)
+    if log_root:
+        # the workspace's directory name, which is what keeps two workspaces
+        # sharing one root from sharing one directory -- and they must not,
+        # since each propagates its own `status.md` and `journal.jsonl` into it
+        # (`_workspace.sync`). Two workspaces *named* the same still collide,
+        # which is a fact about what they were named
+        if _remote(log_root):
+            return f"{log_root.rstrip('/')}/{workspace.root.name}"
+        # resolved rather than left relative: a root is a location on this
+        # machine, and one read from the environment of whatever shell typed
+        # `launch` would otherwise mean a different directory per shell. Once
+        # here it is recorded, so this is the only time it can vary at all
+        return str(Path(log_root).expanduser().resolve() / workspace.root.name)
+    return str(workspace.logs)
+
+
+def _remote(location: str) -> bool:
+    """Whether a location names a filesystem other than this machine's."""
+    return "://" in location

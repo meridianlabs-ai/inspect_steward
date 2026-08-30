@@ -597,6 +597,17 @@ Three attempts at one key is worth naming as a pattern rather than as three mist
 - **Refs.** workflow §5.7, §9, §9.1–9.4; exec §9.
 - **Done when** an unwritable destination degrades a run instead of stopping it.
 
+### Step 22a — Where a run's logs go ✅
+
+**Delivers** a definition that names no log directory, which is now the one worth writing.
+
+- **Scope.** The three-rung resolution (the definition's `log_dir`, then a machine's `log_root`, then the workspace's `logs/`), collapsed into one `resolve_log_dir` in `_workspace/layout.py` from two identical copies; `log_root` in all three spellings; the resolved directory recorded on the manifest and read back by every tend; the `evalset.py` placeholder saying to omit `log_dir`.
+- **Refs.** workflow §2.1a, §5.9 *Inspect's words*; config item 4.
+- **Upstream.** `eval_set(log_dir: str | None = None)`, resolved where `eval()` resolves it. Two lines, and the third rung was unreachable without them.
+- **Done when** a run under `STEWARD_LOG_ROOT` is still tended correctly by a scheduler that inherits no environment, and changing the root is reported as a relocation rather than followed.
+
+**Unscheduled, and it belongs beside step 22 rather than anywhere else.** Step 22 made the workspace propagate *into* `log_dir`, which is what turned "two workspaces could share a log directory" from untidy into destructive — each would overwrite the other's `status.md` and `journal.jsonl`. So the subdirectory under a root is forced by the step before it, and the two are one idea about what a log directory is.
+
 ## 5. Judgement
 
 ### Step 23 — Anomalies, proposals, and precedent

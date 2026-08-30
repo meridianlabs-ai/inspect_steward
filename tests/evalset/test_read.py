@@ -40,6 +40,22 @@ def test_read_eval_set(tmp_path: Path) -> None:
     assert not (tmp_path / "logs").exists()
 
 
+def test_a_definition_that_names_no_log_dir_is_captured_as_saying_nothing(
+    tmp_path: Path,
+) -> None:
+    """The hinge of the whole resolution: *silent* has to be distinguishable from *chose ./logs*.
+
+    Capture builds its options above the point `eval_set()` resolves the
+    default, so a definition that named none is reported as having named none —
+    which is what lets Steward answer with the workspace's `logs/` or with a
+    directory under the machine's root, rather than with the process's cwd.
+    """
+    manifest = read_eval_set(FIXTURES / "no_log_dir_evalset.py", cwd=tmp_path)
+
+    assert manifest.options["log_dir"] is None
+    assert not (tmp_path / "logs").exists()
+
+
 def test_read_eval_set_sweep(tmp_path: Path) -> None:
     manifest = read_eval_set(FIXTURES / "sweep_evalset.py", cwd=tmp_path)
 

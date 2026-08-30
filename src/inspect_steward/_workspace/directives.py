@@ -203,6 +203,36 @@ class Directives(BaseModel):
         # naming the value, like every other refusal in this file
         return parse_duration(value)
 
+    log_root: str | bool | None = Field(default=None)
+    """The root this machine keeps eval logs under, `false` for none, or `None` for no preference.
+
+    A workspace whose definition names no `log_dir` writes to `<root>/<workspace directory name>` instead of to its own `logs/` — one export, and every workspace on the machine lands in the bucket, each in a directory of its own (`_workspace.layout.resolve_log_dir`).
+
+    **A default, never an override, which is what admits it at all.** `log_dir` is the one inspect word Steward keeps, and Steward refuses every way of overriding a definition's stated one — there is no `--log-dir`, and `INSPECT_LOG_DIR` is refused at launch. This contradicts none of that: a definition that names a directory is untouched, and what the root answers is the case where the definition names none. What it expresses is *where this machine keeps logs*, which no definition can portably say, since a definition knows neither the machine's root nor the workspace's name.
+
+    `auto` is refused rather than accepted, unlike `log_store`: there is no default root to name, and *unset* already spells "the workspace's own `logs/`".
+    """
+
+    @field_validator("log_root", mode="before")
+    @classmethod
+    def _log_root(cls, value: object) -> object:
+        """A location, or `false`. Shaped like `log_store` minus the one word that has nothing to mean here."""
+        if value is True:
+            raise ValueError(
+                "should be a path, or `false` to use none — `true` says nothing "
+                "about where"
+            )
+        if isinstance(value, str) and not value.strip():
+            raise ValueError("should be a path, or `false` — not an empty value")
+        if value == "none":
+            raise ValueError("is `false` now, since `none` reads as a path called none")
+        if value == "auto":
+            raise ValueError(
+                "has no default location to name — leave it unset for the "
+                "workspace's own logs/ directory"
+            )
+        return value
+
     log_store: str | bool | None = Field(default=None)
     """Where to look for logs this run does not have to produce, `false` for nowhere, or `None` for no preference.
 
@@ -473,6 +503,28 @@ def resolve_interval(
     if directives.tend_interval is not None:
         return directives.tend_interval
     return DEFAULT_TEND_INTERVAL
+
+
+def resolve_log_root(
+    directives: Directives, *, log_root: str | bool | None = None
+) -> str | None:
+    """Resolve the root this machine keeps eval logs under.
+
+    The same chain as every other setting — the command line, then `_steward.yaml` or its variable, then none — and none is the default, which is what leaves a workspace that has never heard of a root writing to its own `logs/`.
+
+    **The variable beating the file is the shipped ordering, and it is the right one here too.** `log_root: false` in a committed `_steward.yaml` does not survive a machine that exports `STEWARD_LOG_ROOT`, exactly as `log_store: false` does not: the file is the project's preference and the variable is the machine's, and a machine that has said where its logs go is answering a question the project cannot. `--no-log-root` is how one launch overrules both.
+
+    Resolved at launch and nowhere else. The answer goes into the committed manifest as a *directory* rather than as a root, so nothing downstream reads this again (`Manifest.log_dir`).
+
+    Args:
+        directives: What the workspace's `_steward.yaml` and environment said.
+        log_root: A location from the command line, `False` to use none, or `None`.
+
+    Returns:
+        A location, or `None` for none. Unresolved — `resolve_log_dir` is what turns it into a directory, and the directory is created by the run that writes into it.
+    """
+    resolved = log_root if log_root is not None else directives.log_root
+    return resolved if isinstance(resolved, str) else None
 
 
 def resolve_log_store(

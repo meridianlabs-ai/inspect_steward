@@ -89,6 +89,23 @@ The split means *"no tend for four hours"* is computable from the journal's sile
 
 It is also why there are two files rather than one type of journal event. `steward.log` can be **truncated** and `journal.jsonl` never can: a failure that repeats every ten minutes — a wedged claim, a bucket that went away — is one line per turn forever, which is a bound away from harmless in a disposable file and unbounded growth of an irreplaceable one anywhere else.
 
+### Where your logs go
+
+**Leave `log_dir` out of your definition.** It is the one argument worth omitting: name one and it is the one Steward uses, forever and everywhere, and you have written a fact about a machine into a file about an eval.
+
+Say nothing and Steward answers in one of two ways:
+
+| you have said | logs go to |
+|---|---|
+| nothing at all | `logs/` in the workspace, with `logs-archive/` beside it |
+| `STEWARD_LOG_ROOT=s3://org-evals/runs` | `s3://org-evals/runs/<workspace directory name>`, archive alongside |
+
+The root is where *this machine* keeps eval logs, so it is usually a shell export rather than a committed setting — one line, and every workspace on the box lands in the bucket under a directory of its own. It can also be `log_root:` in `_steward.yaml` where it is a fact about the project, or `--log-root` for one launch; `--no-log-root` keeps a single run's logs at home whatever the machine says.
+
+Each workspace gets its **own** directory under the root and needs to: the workspace is mirrored into its log directory (below), so two runs sharing one would overwrite each other's `status.md`. Two workspaces with the same directory name under one root will collide — name them for what they measure.
+
+Moving a run's logs after it has started is a **relocation**: nothing is lost, but the results stay where they are and the whole sweep runs again, so `steward launch` reports it and refuses without `--accept-archive`. That applies to changing `STEWARD_LOG_ROOT` exactly as it applies to editing `log_dir`, because the directory a launch resolved is recorded in the run rather than re-derived each turn — which is also what keeps a 02:00 tend, inheriting no shell, reading the directory its workers are writing to.
+
 ### The workspace follows its logs
 
 Every tend mirrors the workspace into the run's log directory: `status.md`, `journal.jsonl`, `steward.log`, your `_steward.yaml` and your definition, and anything else at the top level that you or an agent put there. So a result and the account of how it was produced sit together, and a log directory describes itself wherever it ends up — which on a machine reachable only through an object store is the whole observability channel.

@@ -18,6 +18,7 @@ from inspect_steward._workspace import (
     parse_setting,
     read_directives,
     resolve_interval,
+    resolve_log_root,
     resolve_log_store,
     resolve_pool,
 )
@@ -363,6 +364,43 @@ def test_the_ramp_reaches_the_pool_and_defaults_to_none(tmp_path: Path) -> None:
     assert resolve_pool(Directives(samples_ramp=False)).samples_ramp is False
 
 
+# --- the log root ----------------------------------------------------------
+
+ROOT: list[tuple[str, str | bool | None, str, str | None]] = [
+    ("nobody named one", None, "", None),
+    ("the workspace did", None, "log_root: /data/runs\n", "/data/runs"),
+    ("the command line did", "/mine", "log_root: /data/runs\n", "/mine"),
+    ("the workspace declined", None, "log_root: false\n", None),
+    ("the launch declined", False, "log_root: /data/runs\n", None),
+]
+
+
+@pytest.mark.parametrize(
+    ("cli", "text", "expected"),
+    [(cli, text, expected) for _, cli, text, expected in ROOT],
+    ids=[case for case, _, _, _ in ROOT],
+)
+def test_the_log_root_resolves_most_specific_first(
+    cli: str | bool | None, text: str, expected: str | None, tmp_path: Path
+) -> None:
+    directives = read_directives(written(tmp_path, text))
+
+    assert resolve_log_root(directives, log_root=cli) == expected
+
+
+def test_the_machine_beats_the_project_on_where_logs_go(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # the shipped ordering, applied to a key where it has teeth: a project that
+    # declined a root still lands under the one the machine exported, and
+    # --no-log-root is what overrules both
+    monkeypatch.setenv("STEWARD_LOG_ROOT", "/data/runs")
+    directives = read_directives(written(tmp_path, "log_root: false\n"))
+
+    assert resolve_log_root(directives) == "/data/runs"
+    assert resolve_log_root(directives, log_root=False) is None
+
+
 # --- the log store ---------------------------------------------------------
 
 STORE: list[tuple[str, str | bool | None, str, str | None]] = [
@@ -406,6 +444,12 @@ def test_the_log_store_resolves_most_specific_first(
         pytest.param("sync: true\n", "nothing about where", id="sync_true"),
         pytest.param("sync: ''\n", "empty value", id="sync_empty"),
         pytest.param("sync: none\n", "`false` now", id="sync_retired_spelling"),
+        pytest.param("log_root: true\n", "nothing about where", id="root_true"),
+        pytest.param("log_root: ''\n", "empty value", id="root_empty"),
+        pytest.param("log_root: none\n", "`false` now", id="root_retired_spelling"),
+        # the one refusal `log_root` has and `log_store` does not: there is no
+        # default root to name, and unset already spells the workspace's logs/
+        pytest.param("log_root: auto\n", "no default location", id="root_auto"),
     ],
 )
 def test_a_location_that_is_not_one_is_refused(
@@ -425,6 +469,8 @@ ENVIRONMENT: list[tuple[str, str, str, str, Any]] = [
     ("an interval", "STEWARD_TEND_INTERVAL", "30m", "tend_interval", 1800),
     ("a store", "STEWARD_LOG_STORE", "s3://team/store", "log_store", "s3://team/store"),
     ("no store", "STEWARD_LOG_STORE", "false", "log_store", False),
+    ("a root", "STEWARD_LOG_ROOT", "s3://team/runs", "log_root", "s3://team/runs"),
+    ("no root", "STEWARD_LOG_ROOT", "false", "log_root", False),
     ("a destination", "STEWARD_SYNC", "s3://team/run", "sync", "s3://team/run"),
     ("propagating nowhere", "STEWARD_SYNC", "false", "sync", False),
     (

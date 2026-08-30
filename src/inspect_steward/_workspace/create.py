@@ -141,17 +141,22 @@ def _link_claude(report: CreateReport, workspace: Workspace) -> None:
 def _create_definition(
     report: CreateReport, workspace: Workspace, type: DefinitionType
 ) -> None:
-    """Place an empty definition, unless the workspace already has one.
+    """Place a definition placeholder, unless the workspace already has one.
 
-    Empty on purpose. A placeholder says where the definition goes; a scaffolded example would be a guess at what is being measured, and has to be deleted before it can be useful.
+    **Nothing runnable, on purpose.** A placeholder says where the definition goes; a scaffolded example would be a guess at what is being measured, and has to be deleted before it can be useful.
+
+    What the `evalset` placeholder does carry is comments, which is a different thing from an example and costs nothing to leave in place. They exist for one fact a person cannot infer and will otherwise get wrong: **omit `log_dir`.** `eval_set()` takes one, every example on the internet passes one, and under Steward passing one opts out of the resolution that puts a run's logs where the machine keeps logs. The `flow` and `hawk` placeholders stay empty — hawk has no log-directory option at all, and a flow spec's is a different key under a different schema.
     """
     if (existing := workspace.find_definition()) is not None:
         report.record(_relative(workspace, existing), Outcome.KEPT)
         return
     path = workspace.definition(type)
-    path.touch()
+    if type == "evalset":
+        path.write_text(_template("evalset.txt"), encoding="utf-8")
+    else:
+        path.touch()
     report.record(
-        _relative(workspace, path), Outcome.CREATED, "empty; write your eval set here"
+        _relative(workspace, path), Outcome.CREATED, "write your eval set here"
     )
 
 

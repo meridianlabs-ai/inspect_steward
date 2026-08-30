@@ -78,7 +78,7 @@ cd ~/runs/swe-evals
 steward init
 ```
 
-This will scaffold up a Steward workspace with an `evalset.py`, a `_steward.yaml` for your standing rules, and an `AGENTS.md` file that teaches the agent how to use Steward to run an evaluation. First, define your eval set:
+This will scaffold up a Steward workspace with a placeholder `evalset.py`, a `_steward.yaml` for your standing rules, and an `AGENTS.md` file that teaches the agent how to use Steward to run an evaluation. First, define your eval set:
 
 ```{.python filename="evalset.py"}
 from inspect_ai import eval_set
@@ -87,7 +87,6 @@ from inspect_harbor import cais_swebenchpro, datacurve_deep_swe
 eval_set(
     tasks=[cais_swebenchpro(),  datacurve_deep_swe()],
     model=["openai/gpt-5.6-sol", "anthropic/claude-opus-5"],
-    log_dir="logs/swe-evals"
 )
 ```
 

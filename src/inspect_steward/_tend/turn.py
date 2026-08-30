@@ -92,6 +92,7 @@ from .._workspace import (
     read_pause,
     read_raised,
     read_ramp_holds,
+    resolve_log_dir,
     resolve_pool,
     steward_log,
     sync_target,
@@ -1394,12 +1395,10 @@ def _drifted(workspace: Workspace, manifest: Manifest) -> _Drift:
 
 
 def _log_dir(workspace: Workspace, manifest: Manifest) -> str:
-    """The run's log directory: the definition's own, or the workspace's by default."""
-    configured = manifest.options.get("log_dir")
-    if isinstance(configured, str) and configured:
-        if "://" in configured or Path(configured).is_absolute():
-            return configured
-        # a relative log_dir is relative to where the definition was captured,
-        # which for a workspace's own definition is the workspace
-        return str(workspace.root / configured)
-    return str(workspace.logs)
+    """The run's log directory, as the launch that committed this manifest resolved it.
+
+    **Read back, never re-derived.** The resolution takes a `log_root` that arrives in the environment, and a scheduled tend inherits almost none of one — so a turn that resolved this for itself would read `logs/` at 02:00 while the fleet wrote to the root, and every task would land and then read as never started (`_timer.env`, *AMBIENT*).
+
+    A manifest committed before the field existed carries none, and resolving it without a root reproduces exactly the answer it was committed under.
+    """
+    return manifest.log_dir or resolve_log_dir(workspace, manifest)
