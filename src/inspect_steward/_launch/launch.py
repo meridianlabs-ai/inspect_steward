@@ -128,7 +128,7 @@ def launch(
         timer: Arm a timer. `False` launches unsupervised and records that it did.
         env_check: Refuse to arm when a scheduled tend would not inherit this shell's credentials. Checked **before** the capture, so a Hawk config does not spend five minutes resolving packages on the way to a refusal.
         store: Log store for this run — a path, `auto`, or `none` — overriding `INSPECT_STEWARD_STORE`. **Recorded and otherwise inert**: nothing reads a store until publication exists (step 33), and the only validation available before then is that the value is not empty.
-        max_workers: Worker processes for the first turn, overriding `_steward.md`. `None` expresses no preference and defers to the file, which itself defaults to a process per task — it does not request that width.
+        max_workers: Worker processes for the first turn, overriding `_steward.yaml`. `None` expresses no preference and defers to the file, which itself defaults to a process per task — it does not request that width.
         max_tasks: Tasks in flight at once for the first turn, overriding the definition's `max_tasks`. `None` defers to it.
         max_samples: Sample concurrency for the first turn.
         break_stale: Kill a wedged claim holder and take the claim from it.
@@ -138,7 +138,7 @@ def launch(
 
     Raises:
         LaunchError: The definition could not be read, the credentials check refused, no timer could be armed, or the committed manifest could not be replaced.
-        DirectivesError: `_steward.md` could not be parsed. Launching against settings nobody can read is the one place degrading would be wrong — a tend degrades because a fleet must keep converging, and a launch has nothing to keep going.
+        DirectivesError: `_steward.yaml` could not be parsed. Launching against settings nobody can read is the one place degrading would be wrong — a tend degrades because a fleet must keep converging, and a launch has nothing to keep going.
         ManifestError: What is committed is not a manifest. A launch is exactly the command that replaces it, so this reports rather than overwrites: the delta would otherwise be computed against nothing and propose archiving a directory full of real results.
     """
     interval = _interval(workspace)
@@ -501,7 +501,7 @@ def _supervise(
 def _interval(workspace: Workspace) -> int:
     """How often this workspace asks to be tended.
 
-    From `_steward.md` or Steward's default, and deliberately not from a flag: an interval is a standing property of a workspace rather than a property of one launch, which is the argument that put it in that file in the first place (plan.md §9). Somebody who wants a different one for a single run arms it themselves.
+    From `_steward.yaml` or Steward's default, and deliberately not from a flag: an interval is a standing property of a workspace rather than a property of one launch, which is the argument that put it in that file in the first place (plan.md §9). Somebody who wants a different one for a single run arms it themselves.
     """
     try:
         return resolve_interval(read_directives(workspace.directives))

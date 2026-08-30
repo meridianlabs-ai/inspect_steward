@@ -1,6 +1,6 @@
-"""Reading `_steward.md`.
+"""Reading `_steward.yaml`.
 
-Three claims, and they are the whole point of the file: the front matter is read and the prose is not, a setting that belongs elsewhere is refused by name rather than ignored, and the command line outranks the workspace.
+Three claims, and they are the whole point of the file: the settings are executed while `policies` is only carried, a setting that belongs elsewhere is refused by name rather than ignored, and the command line outranks the workspace.
 """
 
 from pathlib import Path
@@ -20,19 +20,17 @@ from inspect_steward._workspace import (
 
 
 def written(tmp_path: Path, text: str) -> Path:
-    path = tmp_path / "_steward.md"
+    path = tmp_path / "_steward.yaml"
     path.write_text(text, encoding="utf-8")
     return path
 
 
 PARSED: list[tuple[str, str, int | None]] = [
-    ("no front matter at all", "# _steward.md\n\nnever spend over $200.\n", None),
-    ("an empty front matter", "---\n---\n\nprose.\n", None),
-    ("nothing but comments", "---\n# max_workers: 8\n---\n", None),
-    ("a setting", "---\nmax_workers: 8\n---\n\nprose.\n", 8),
-    ("no body", "---\nmax_workers: 3\n---\n", 3),
-    ("a rule in the body", "---\nmax_workers: 4\n---\n\nfirst\n\n---\n\nsecond\n", 4),
-    ("trailing space on the fences", "--- \nmax_workers: 5\n--- \n", 5),
+    ("an empty file", "", None),
+    ("nothing but comments", "# max_workers: 8\n", None),
+    ("a setting", "max_workers: 8\n", 8),
+    ("a setting beside policies", "max_workers: 3\npolicies: never past 8.\n", 3),
+    ("policies alone", "policies:\n  - never spend over $200.\n", None),
 ]
 
 
@@ -41,7 +39,7 @@ PARSED: list[tuple[str, str, int | None]] = [
     [(text, expected) for _, text, expected in PARSED],
     ids=[case for case, _, _ in PARSED],
 )
-def test_the_front_matter_is_read_and_the_body_is_not(
+def test_a_settings_document_is_read(
     text: str, max_workers: int | None, tmp_path: Path
 ) -> None:
     assert read_directives(written(tmp_path, text)).max_workers == max_workers
@@ -49,39 +47,57 @@ def test_the_front_matter_is_read_and_the_body_is_not(
 
 def test_a_workspace_with_no_file_expressed_no_preferences(tmp_path: Path) -> None:
     # absent is a workspace that said nothing, not a workspace that is broken
-    assert read_directives(tmp_path / "_steward.md") == Directives()
+    assert read_directives(tmp_path / "_steward.yaml") == Directives()
 
 
 def test_the_file_init_writes_parses(tmp_path: Path) -> None:
-    # the template ships a commented-out front matter, so it must survive being
-    # read as one -- a broken fence there would break every workspace at once
+    # the template ships every setting commented out, so it must survive being
+    # read as one -- a syntax error there would break every workspace at once
     workspace = create_workspace(tmp_path, git=False).workspace
     assert read_directives(workspace.directives) == Directives()
 
 
+def test_a_workspace_still_holding_the_old_file_is_refused(tmp_path: Path) -> None:
+    # the quiet failure this exists to prevent: an unconverted workspace parses
+    # perfectly as one with no directives at all, and every standing rule in it
+    # stops applying with nothing said
+    (tmp_path / "_steward.md").write_text(
+        "---\nmax_workers: 8\n---\n", encoding="utf-8"
+    )
+
+    with pytest.raises(DirectivesError, match="_steward.md"):
+        read_directives(tmp_path / "_steward.yaml")
+
+
+def test_a_converted_workspace_does_not_pay_for_the_check(tmp_path: Path) -> None:
+    # a leftover _steward.md beside a real _steward.yaml is somebody's backup,
+    # not an unconverted workspace -- the file that exists is the one that rules
+    (tmp_path / "_steward.md").write_text(
+        "---\nmax_workers: 8\n---\n", encoding="utf-8"
+    )
+
+    assert read_directives(written(tmp_path, "max_workers: 2\n")).max_workers == 2
+
+
 REJECTED: list[tuple[str, str, str]] = [
-    ("a fence that never closes", "---\nmax_workers: 8\n\nprose\n", "never closed"),
-    ("front matter that is not yaml", "---\nmax_workers: [8\n---\n", "not valid YAML"),
-    ("front matter that is not a mapping", "---\n- max_workers\n---\n", "a mapping"),
-    ("a key the definition owns", "---\nlog_dir: out/\n---\n", "eval_set()"),
-    ("sample concurrency", "---\nmax_samples: 40\n---\n", "eval_set()"),
-    (
-        "a notification url",
-        "---\nnotify: slack://tok@chan\n---\n",
-        "INSPECT_EVAL_NOTIFICATION",
-    ),
-    ("a typo", "---\nmax_wokrers: 8\n---\n", "not a setting Steward knows"),
-    ("a meaningless ceiling", "---\nmax_workers: 0\n---\n", "greater than 0"),
-    ("a ceiling that is not a number", "---\nmax_workers: lots\n---\n", "max_workers"),
+    ("a document that is not yaml", "max_workers: [8\n", "not valid YAML"),
+    ("a document that is not a mapping", "- max_workers\n", "a mapping"),
+    ("prose where settings belong", "never spend over $200.\n", "a mapping"),
+    ("a key the definition owns", "log_dir: out/\n", "eval_set()"),
+    ("sample concurrency", "max_samples: 40\n", "eval_set()"),
+    ("a notification url", "notify: slack://tok@chan\n", "INSPECT_EVAL_NOTIFICATION"),
+    ("a typo", "max_wokrers: 8\n", "not a setting Steward knows"),
+    ("a meaningless ceiling", "max_workers: 0\n", "greater than 0"),
+    ("a ceiling that is not a number", "max_workers: lots\n", "max_workers"),
     # YAML rewrites all four of these before pydantic ever sees them, and
     # pydantic's default would rewrite them again into a plausible integer --
     # `yes` all the way to 1, which would throttle a fleet to one worker and
     # say nothing. The error has to name the value that arrived, because that
     # is the only way the author learns what YAML did to what they typed.
-    ("a ceiling YAML read as true", "---\nmax_workers: yes\n---\n", "not True"),
-    ("a ceiling YAML read as false", "---\nmax_workers: off\n---\n", "not False"),
-    ("a ceiling in quotes", '---\nmax_workers: "8"\n---\n', "not '8'"),
-    ("a ceiling with a decimal point", "---\nmax_workers: 8.0\n---\n", "not 8.0"),
+    ("a ceiling YAML read as true", "max_workers: yes\n", "not True"),
+    ("a ceiling YAML read as false", "max_workers: off\n", "not False"),
+    ("a ceiling in quotes", 'max_workers: "8"\n', "not '8'"),
+    ("a ceiling with a decimal point", "max_workers: 8.0\n", "not 8.0"),
 ]
 
 
@@ -103,8 +119,8 @@ def test_a_file_in_the_wrong_encoding_is_refused_by_name(tmp_path: Path) -> None
     # an editor that saved as latin-1 is the ordinary way to get one, and
     # `UnicodeDecodeError` is a ValueError rather than an OSError -- so without
     # its own branch this is a traceback instead of a message naming the file
-    path = tmp_path / "_steward.md"
-    path.write_bytes("---\nmax_workers: 8\n---\n\ncafé\n".encode("latin-1"))
+    path = tmp_path / "_steward.yaml"
+    path.write_bytes("policies: café\n".encode("latin-1"))
 
     with pytest.raises(DirectivesError, match="not valid UTF-8"):
         read_directives(path)
@@ -113,10 +129,56 @@ def test_a_file_in_the_wrong_encoding_is_refused_by_name(tmp_path: Path) -> None
 @pytest.mark.parametrize("key", sorted(REFUSED))
 def test_every_key_that_belongs_elsewhere_says_where(key: str, tmp_path: Path) -> None:
     with pytest.raises(DirectivesError) as caught:
-        read_directives(written(tmp_path, f"---\n{key}: something\n---\n"))
+        read_directives(written(tmp_path, f"{key}: something\n"))
 
     assert key in str(caught.value)
     assert REFUSED[key] in str(caught.value)
+
+
+# --- policies --------------------------------------------------------------
+
+POLICIES: list[tuple[str, str, str | list[str] | None]] = [
+    (
+        "a block of prose",
+        "policies: |\n  first rule.\n\n  second rule.\n",
+        "first rule.\n\nsecond rule.\n",
+    ),
+    ("one line", "policies: never past eight workers.\n", "never past eight workers."),
+    ("a list of rules", "policies:\n  - first.\n  - second.\n", ["first.", "second."]),
+    ("written and left empty", "policies:\n", None),
+    ("an empty list", "policies: []\n", None),
+]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [(text, expected) for _, text, expected in POLICIES],
+    ids=[case for case, _, _ in POLICIES],
+)
+def test_policies_are_carried_however_they_are_written(
+    text: str, expected: str | list[str] | None, tmp_path: Path
+) -> None:
+    # prose and a list are both first-class, because a project with three rules
+    # wants three entries and one with a page of reasoning wants a block scalar
+    assert read_directives(written(tmp_path, text)).policies == expected
+
+
+def test_a_list_entry_that_is_not_text_is_refused_by_position(tmp_path: Path) -> None:
+    # which entry, not just that the field is wrong -- a twelve-rule list needs
+    # to say where to look
+    with pytest.raises(DirectivesError, match="entry 2"):
+        read_directives(written(tmp_path, "policies:\n  - fine.\n  - 3\n"))
+
+
+def test_nothing_interprets_the_policy_text(tmp_path: Path) -> None:
+    # Steward carries the words and never reads them, so text that looks like a
+    # setting is still just text
+    text = "policies: |\n  max_workers: 4000\n  log_dir: /tmp\n"
+
+    directives = read_directives(written(tmp_path, text))
+
+    assert directives.max_workers is None
+    assert directives.policies == "max_workers: 4000\nlog_dir: /tmp\n"
 
 
 CEILING: list[tuple[str, int | None, int | None, int | None]] = [
@@ -151,9 +213,9 @@ def test_the_two_shape_knobs_are_independent() -> None:
 
 
 PATIENCE: list[tuple[str, str, int]] = [
-    ("nobody expressed one", "---\nmax_workers: 8\n---\n", DEFAULT_STALL_AFTER),
-    ("the workspace did", "---\nstall_after: 5\n---\n", 5),
-    ("a project with no patience at all", "---\nstall_after: 1\n---\n", 1),
+    ("nobody expressed one", "max_workers: 8\n", DEFAULT_STALL_AFTER),
+    ("the workspace did", "stall_after: 5\n", 5),
+    ("a project with no patience at all", "stall_after: 1\n", 1),
 ]
 
 
@@ -175,9 +237,9 @@ def test_how_much_patience_a_project_wants_is_its_own(
 @pytest.mark.parametrize(
     ("text", "message"),
     [
-        pytest.param("---\nstall_after: 0\n---\n", "greater than 0", id="never_try"),
-        pytest.param("---\nstall_after: yes\n---\n", "not True", id="coerced"),
-        pytest.param("---\nstall_after: '2'\n---\n", "not '2'", id="quoted"),
+        pytest.param("stall_after: 0\n", "greater than 0", id="never_try"),
+        pytest.param("stall_after: yes\n", "not True", id="coerced"),
+        pytest.param("stall_after: '2'\n", "not '2'", id="quoted"),
     ],
 )
 def test_a_meaningless_threshold_is_refused(
@@ -196,10 +258,10 @@ def test_the_file_is_never_a_source_of_sample_concurrency() -> None:
 
 
 INTERVAL: list[tuple[str, str | None, str, int]] = [
-    ("nobody expressed one", None, "---\nmax_workers: 8\n---\n", DEFAULT_TEND_INTERVAL),
-    ("the workspace did", None, "---\ntend_interval: 30m\n---\n", 1800),
-    ("the command line did", "5m", "---\ntend_interval: 30m\n---\n", 300),
-    ("the command line, with nothing in the file", "1h", "---\n---\n", 3600),
+    ("nobody expressed one", None, "max_workers: 8\n", DEFAULT_TEND_INTERVAL),
+    ("the workspace did", None, "tend_interval: 30m\n", 1800),
+    ("the command line did", "5m", "tend_interval: 30m\n", 300),
+    ("the command line, with nothing in the file", "1h", "", 3600),
 ]
 
 
@@ -221,10 +283,10 @@ def test_the_tend_interval_resolves_most_specific_first(
 @pytest.mark.parametrize(
     ("text", "message"),
     [
-        pytest.param("---\ntend_interval: 10\n---\n", "unit", id="a_bare_number"),
-        pytest.param("---\ntend_interval: 10d\n---\n", "10d", id="an_unknown_unit"),
-        pytest.param("---\ntend_interval: 0m\n---\n", "zero", id="never"),
-        pytest.param("---\ntend_interval: yes\n---\n", "unit", id="coerced"),
+        pytest.param("tend_interval: 10\n", "unit", id="a_bare_number"),
+        pytest.param("tend_interval: 10d\n", "10d", id="an_unknown_unit"),
+        pytest.param("tend_interval: 0m\n", "zero", id="never"),
+        pytest.param("tend_interval: yes\n", "unit", id="coerced"),
     ],
 )
 def test_an_interval_that_is_not_one_is_refused(
@@ -237,7 +299,7 @@ def test_an_interval_that_is_not_one_is_refused(
 
 
 def test_an_interval_is_stored_as_seconds(tmp_path: Path) -> None:
-    directives = read_directives(written(tmp_path, "---\ntend_interval: 2h\n---\n"))
+    directives = read_directives(written(tmp_path, "tend_interval: 2h\n"))
 
     assert directives.tend_interval == 7200
 
@@ -245,13 +307,13 @@ def test_an_interval_is_stored_as_seconds(tmp_path: Path) -> None:
 # --- the ramp envelope -----------------------------------------------------
 
 RAMP: list[tuple[str, str, tuple[int, int] | bool | None]] = [
-    ("a range", "---\nsamples_ramp: [60, 300]\n---\n", (60, 300)),
-    ("a one-step range", "---\nsamples_ramp: [50, 50]\n---\n", (50, 50)),
-    ("switched off", "---\nsamples_ramp: false\n---\n", False),
+    ("a range", "samples_ramp: [60, 300]\n", (60, 300)),
+    ("a one-step range", "samples_ramp: [50, 50]\n", (50, 50)),
+    ("switched off", "samples_ramp: false\n", False),
     # YAML 1.1 reads `off` as a boolean, and refusing what it delivers would
     # refuse a perfectly natural spelling of the same instruction
-    ("off, as YAML reads it", "---\nsamples_ramp: off\n---\n", False),
-    ("unset", "---\nmax_workers: 2\n---\n", None),
+    ("off, as YAML reads it", "samples_ramp: off\n", False),
+    ("unset", "max_workers: 2\n", None),
 ]
 
 
@@ -267,11 +329,11 @@ def test_the_ramp_envelope_parses(
 
 
 NOT_A_RANGE: list[tuple[str, str, str]] = [
-    ("true says nothing about how far", "---\nsamples_ramp: true\n---\n", "how far"),
-    ("one number is not a range", "---\nsamples_ramp: [40]\n---\n", "two ordered"),
-    ("an inverted range", "---\nsamples_ramp: [200, 40]\n---\n", "ordered"),
-    ("a zero floor", "---\nsamples_ramp: [0, 40]\n---\n", "positive"),
-    ("words", "---\nsamples_ramp: fast\n---\n", "range"),
+    ("true says nothing about how far", "samples_ramp: true\n", "how far"),
+    ("one number is not a range", "samples_ramp: [40]\n", "two ordered"),
+    ("an inverted range", "samples_ramp: [200, 40]\n", "ordered"),
+    ("a zero floor", "samples_ramp: [0, 40]\n", "positive"),
+    ("words", "samples_ramp: fast\n", "range"),
 ]
 
 
@@ -288,7 +350,7 @@ def test_a_meaningless_ramp_is_refused(text: str, message: str, tmp_path: Path) 
 def test_the_ramp_reaches_the_pool_and_defaults_to_none(tmp_path: Path) -> None:
     # `None` rather than the default range, so `resolve_samples_ramp` keeps the
     # *no preference* / *this range* distinction the max_samples chain also draws
-    envelope = read_directives(written(tmp_path, "---\nsamples_ramp: [60, 300]\n---\n"))
+    envelope = read_directives(written(tmp_path, "samples_ramp: [60, 300]\n"))
 
     assert resolve_pool(envelope).samples_ramp == (60, 300)
     assert resolve_pool(Directives()).samples_ramp is None

@@ -51,11 +51,11 @@ class Workspace:
 
     @property
     def directives(self) -> Path:
-        """`_steward.md` — this human's standing rules, structured and not.
+        """`_steward.yaml` — this human's standing rules, structured and not.
 
-        YAML front matter Steward acts on unattended, prose an agent interprets when it arrives. Steward proposes changes and never writes it (workflow.md, *The one file Steward must never write*). The underscore sorts it to the top of a listing, beside `AGENTS.md`.
+        Settings Steward acts on unattended, and a `policies` key an agent interprets when it arrives. Steward proposes changes and never writes it (workflow.md, *The one file Steward must never write*) — a rule under more pressure now the whole file is machine-shaped, and no less binding for it. The underscore sorts it to the top of a listing, beside `AGENTS.md`.
         """
-        return self.root / "_steward.md"
+        return self.root / "_steward.yaml"
 
     # durable machine state — nothing here can be rebuilt
     @property

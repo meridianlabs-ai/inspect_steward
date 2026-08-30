@@ -359,10 +359,10 @@ def test_a_broken_steward_md_degrades_to_the_last_known_good(tmp_path: Path) -> 
     done = SynthTask("done")
     workspace, _ = prepared(tmp_path, [done])
     write_log(workspace.logs, done)
-    workspace.directives.write_text("---\nmax_workers: 3\n---\n", encoding="utf-8")
+    workspace.directives.write_text("max_workers: 3\n", encoding="utf-8")
     turn(workspace)
 
-    workspace.directives.write_text("---\nmax_workers: yes\n---\n", encoding="utf-8")
+    workspace.directives.write_text("max_workers: yes\n", encoding="utf-8")
     degraded = turn(workspace)
 
     assert degraded.degraded is not None
@@ -370,14 +370,14 @@ def test_a_broken_steward_md_degrades_to_the_last_known_good(tmp_path: Path) -> 
     # the settings the last good turn recorded, not Steward's own defaults --
     # running on those would silently discard what the operator wrote
     assert degraded.summary.max_workers == 3
-    assert "_steward.md" in workspace.log.read_text(encoding="utf-8")
+    assert "_steward.yaml" in workspace.log.read_text(encoding="utf-8")
 
 
 def test_a_broken_steward_md_with_no_history_refuses(tmp_path: Path) -> None:
     # nothing to fall back to, and defaults would discard the operator's
     # instruction silently, which is the one outcome worse than stopping
     workspace, _ = prepared(tmp_path, [SynthTask("done")])
-    workspace.directives.write_text("---\nmax_workers: nope\n---\n", encoding="utf-8")
+    workspace.directives.write_text("max_workers: nope\n", encoding="utf-8")
 
     with pytest.raises(DirectivesError):
         tend(workspace)
@@ -587,14 +587,14 @@ def test_a_sample_pin_outlives_the_turn_that_set_it(tmp_path: Path) -> None:
 
 
 def test_a_samples_ramp_range_releases_a_recorded_pin(tmp_path: Path) -> None:
-    # the way back: `_steward.md` holds standing wishes, and a range there is
+    # the way back: `_steward.yaml` holds standing wishes, and a range there is
     # the one instruction that cannot mean anything but *ramp this run*
     done = SynthTask("done")
     workspace, _ = prepared(tmp_path, [done])
     write_log(workspace.logs, done)
 
     turn(workspace, max_samples=7)
-    workspace.directives.write_text("---\nsamples_ramp: [40, 100]\n---\n")
+    workspace.directives.write_text("samples_ramp: [40, 100]\n")
     turn(workspace)
 
     _, second = observations(workspace)

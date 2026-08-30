@@ -10,7 +10,7 @@ Concurrency under Steward has three dimensions, and they are controlled by three
 | Dimension | Knob | Owner |
 |----|----|----|
 | How many tasks run at once | `max_tasks` | your definition |
-| How many processes those tasks are divided into | `max_workers` | `_steward.md` |
+| How many processes those tasks are divided into | `max_workers` | `_steward.yaml` |
 | How many samples run at once within a task | `max_samples` | your definition |
 
 By default all tasks run at once, each in its own process, with sample concurrency taken from your definition. This page explains what each knob actually does, why they are split the way they are, and how to override them.
@@ -28,7 +28,7 @@ The cost is per-process startup: every worker imports your definition and its de
 
 `max_tasks` caps how many tasks are in flight across the whole fleet. Unset, every task runs at once. Set, tasks queue in the order your definition declares them, and each completed task frees a slot for the next.
 
-It belongs in your definition — `eval_set(max_tasks=...)` — and `_steward.md` refuses it by name, on the same rule that refuses `max_samples`: **inspect's words go in the definition; `_steward.md` holds only words `eval_set()` does not know.** Steward reads the value your definition asked for and applies it to the fleet, so the number means what it says even though each worker is handed only its own share of it.
+It belongs in your definition — `eval_set(max_tasks=...)` — and `_steward.yaml` refuses it by name, on the same rule that refuses `max_samples`: **inspect's words go in the definition; `_steward.yaml` holds only words `eval_set()` does not know.** Steward reads the value your definition asked for and applies it to the fleet, so the number means what it says even though each worker is handed only its own share of it.
 
 One difference from a plain `eval_set()` run worth knowing: leaving it unset means *every task at once* here, where `eval()`'s own rule for an unset `max_tasks` is one at a time. A fleet exists to run wide, and saying nothing is no preference rather than a preference for sequential.
 
@@ -40,7 +40,7 @@ Packing trades away fault isolation to buy back startup cost. It is worth reachi
 
 ## `max_samples` — load within a task
 
-Sample concurrency is a property of the eval — its author knows the workload — so `max_samples` belongs in your definition and `_steward.md` refuses it by name. An explicit value **pins** the setpoint: Steward honors it as written and never moves it.
+Sample concurrency is a property of the eval — its author knows the workload — so `max_samples` belongs in your definition and `_steward.yaml` refuses it by name. An explicit value **pins** the setpoint: Steward honors it as written and never moves it.
 
 When nobody pins one, sample concurrency is not a fixed default — it is discovered. When a worker is spawned, the number resolves most specific first:
 
@@ -67,7 +67,7 @@ On **sustained** pushback — episodes in two consecutive windows, the retry sto
 Two more bounds cap the climb:
 
 - **`max_sandboxes` is a machine-wide budget.** The fleet-wide sum of sample setpoints never exceeds it — a task's containers never exceed its running samples, so bounding the sum bounds the containers. The budget is your definition's `max_sandboxes` if it sets one, otherwise the sandbox provider's own default; elastic providers (k8s) cap nothing.
-- **The envelope.** The range itself, settable in `_steward.md`:
+- **The envelope.** The range itself, settable in `_steward.yaml`:
 
 ```{.yaml}
 samples_ramp: [40, 300]   # explore this range
@@ -96,9 +96,9 @@ steward tend --max-workers 2      # process packing, this turn
 steward tend --max-samples 20     # pin per-task sample concurrency, for the run
 ```
 
-Standing values belong in `_steward.md` front matter (`max_workers`, `samples_ramp`, `stall_after`, `tend_interval`) or your definition (`max_tasks`, `max_samples`); the CLI is for the run where conditions differ.
+Standing values belong in `_steward.yaml` (`max_workers`, `samples_ramp`, `stall_after`, `tend_interval`) or your definition (`max_tasks`, `max_samples`); the CLI is for the run where conditions differ.
 
-**Two of the three lapse; `--max-samples` does not.** Fleet width and process packing are recomputed from scratch every turn, so a flag that is not repeated simply stops applying. Sample concurrency is different, because a value there does not just set a number — it pins the setpoint and switches the ramp off. So the pin is remembered for the rest of the run, and the way to release it is to write a range in `_steward.md`:
+**Two of the three lapse; `--max-samples` does not.** Fleet width and process packing are recomputed from scratch every turn, so a flag that is not repeated simply stops applying. Sample concurrency is different, because a value there does not just set a number — it pins the setpoint and switches the ramp off. So the pin is remembered for the rest of the run, and the way to release it is to write a range in `_steward.yaml`:
 
 ```{.yaml}
 samples_ramp: [40, 200]   # ramp again, whatever an earlier --max-samples pinned

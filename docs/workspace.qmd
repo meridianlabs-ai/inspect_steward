@@ -11,7 +11,7 @@ The deliverable of `steward init` is a **workspace** — a directory that you an
 my-sweep/
   AGENTS.md           # authored  — bootstrap: "you are tending a run; read the runbook"
   CLAUDE.md           # authored  — symlink to AGENTS.md
-  _steward.md         # authored  — your eval policy
+  _steward.yaml         # authored  — your eval policy
   evalset.py          # authored  — your definition (or flow.py / hawk.yaml)
   .env                # authored  — credentials, if you keep them here
 
@@ -34,7 +34,7 @@ The categories that matter are about whether a file can be recovered, not who wr
 
 | Category | Files | If you delete it |
 |----|----|----|
-| **authored** | `_steward.md`, `AGENTS.md`, the definition | your own work is gone |
+| **authored** | `_steward.yaml`, `AGENTS.md`, the definition | your own work is gone |
 | **durable machine state** | `journal.jsonl`, `logs/`, `logs-archive/` | the audit trail, or the results, are gone |
 | **authored by the agent** | `scanning.md`, `analysis.md` *(not yet implemented)* | the investigation is gone, and re-runs from scratch |
 | **disposable** | everything in `.steward/`, `status.md`, `steward.log`, `timer.log` | rebuilt on the next turn, or gone with no loss |

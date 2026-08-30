@@ -32,7 +32,7 @@ def test_creates_the_workspace(tmp_path: Path) -> None:
     assert outcomes(report) == {
         "AGENTS.md": Outcome.CREATED,
         "CLAUDE.md": Outcome.CREATED,
-        "_steward.md": Outcome.CREATED,
+        "_steward.yaml": Outcome.CREATED,
         "evalset.py": Outcome.CREATED,
         ".gitignore": Outcome.CREATED,
         "git": Outcome.SKIPPED,

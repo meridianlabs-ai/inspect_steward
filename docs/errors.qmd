@@ -29,7 +29,7 @@ To stop a run when error rates climb, write it as a policy rule — e.g. *"if mo
 
 A task that fails outright — an import error, an OOM, a scorer that throws, a worker process that dies — is re-launched by the next turn of the monitor. Attempts are counted, and after `stall_after` of them finish nothing new (default: 2) the task is marked **stalled**: it will not be re-launched again, and it is reported as needing a person.
 
-The limit exists because a structural failure re-runs to the same place at full price — a definition that will not import fails identically on attempt ten. Steward never retries past the limit on its own; raising `stall_after` in `_steward.md` is how you buy more patience for a genuinely flaky environment (a sandbox fleet earns more of it than a deterministic scorer bug).
+The limit exists because a structural failure re-runs to the same place at full price — a definition that will not import fails identically on attempt ten. Steward never retries past the limit on its own; raising `stall_after` in `_steward.yaml` is how you buy more patience for a genuinely flaky environment (a sandbox fleet earns more of it than a deterministic scorer bug).
 
 When a person rules on a stalled task — fixing the definition and re-launching, or invalidating samples for a re-run — the attempt history before that ruling is cleared: a decision to try again is made by the only party entitled to make one, and what happened before it no longer counts against the task.
 

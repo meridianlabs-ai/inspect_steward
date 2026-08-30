@@ -93,12 +93,12 @@ OWNERS = {
     PARKED: Owner.HUMAN,
     TUNING_PROPOSAL: Owner.HUMAN,
 }
-"""Default owner per kind. Policy may move some of these once `_steward.md` can say so (step 23); a kind absent from the table is the agent's, since an unrouted item is an investigation rather than a question."""
+"""Default owner per kind. Policy may move some of these once `_steward.yaml` can say so (step 23); a kind absent from the table is the agent's, since an unrouted item is an investigation rather than a question."""
 
 FIXED_OWNER = frozenset({PARKED})
 """Kinds whose owner policy may not move.
 
-One entry, and it is the reason the module docstring says `owner` is a function of *(kind, state, policy)* with an exception. A park is a request for a human decision about what an eval measures, and the agent may never answer one (agent.md §6) — so a `_steward.md` that routed it to the agent would not be expressing a preference, it would be asking Steward to answer an approval on a person's behalf.
+One entry, and it is the reason the module docstring says `owner` is a function of *(kind, state, policy)* with an exception. A park is a request for a human decision about what an eval measures, and the agent may never answer one (agent.md §6) — so a `_steward.yaml` that routed it to the agent would not be expressing a preference, it would be asking Steward to answer an approval on a person's behalf.
 """
 
 UNACKNOWLEDGEABLE = frozenset({ACTION_FAILED, PARKED})
@@ -127,7 +127,7 @@ class Supervision:
     """
 
     interval: int | None
-    """The interval `_steward.md` asks for, or `None` where it does not ask for one.
+    """The interval `_steward.yaml` asks for, or `None` where it does not ask for one.
 
     **What the workspace *expressed*, never what a resolution produced.** `None` covers both a file that says nothing about intervals and one that would not parse, and in each case the right number of complaints is zero: an operator who armed a one-off `--interval 1m` against a file with no opinion has not created a conflict, and reporting one against Steward's own default would be reporting drift from a value nobody wrote. The same reasoning that keeps a `degraded` file from producing two items.
     """
@@ -446,7 +446,7 @@ def _tuning(result: "TendResult") -> list[Item]:
             summary = (
                 f"{proposal.key} reached the top of its ramp ({proposal.level}) "
                 f"with pushback still absent — the envelope is the binding "
-                f"constraint; raise `samples_ramp` in _steward.md to authorize more"
+                f"constraint; raise `samples_ramp` in _steward.yaml to authorize more"
             )
         items.append(
             Item(
@@ -491,9 +491,9 @@ def _degraded(result: "TendResult") -> list[Item]:
             kind=DEGRADED,
             owner=OWNERS[DEGRADED],
             level=Level.ATTENTION,
-            subject="_steward.md",
+            subject="_steward.yaml",
             summary=(
-                f"_steward.md could not be read, so this turn ran on the "
+                f"_steward.yaml could not be read, so this turn ran on the "
                 f"settings the last one recorded ({result.degraded})"
             ),
         )
@@ -694,7 +694,7 @@ def _signoff(result: "TendResult") -> list[Item]:
 
     **The gap the verdict had.** A sweep whose every task completed reported ✅ *nothing needs you*, which is false in the one way that matters: the results exist and no person has looked at them. Reporting a finished run as all-clear is how one sits unread for a week.
 
-    **Worded as a state rather than as an instruction, deliberately.** `steward signoff` is step 26, and a surface telling somebody to run a command that does not exist is the same lie as a `_steward.md` key that parses and does nothing. So this says what is true — every task is complete and nothing further will run — and gains the command when there is one. It is acknowledgeable meanwhile, which is how a person who has accepted the results silences it today.
+    **Worded as a state rather than as an instruction, deliberately.** `steward signoff` is step 26, and a surface telling somebody to run a command that does not exist is the same lie as a `_steward.yaml` key that parses and does nothing. So this says what is true — every task is complete and nothing further will run — and gains the command when there is one. It is acknowledgeable meanwhile, which is how a person who has accepted the results silences it today.
 
     Fires on completeness alone rather than on *completeness and nothing else wrong*: a run that finished with an unreadable file beside it is still finished, and signoff accepts exceptions (workflow.md, *The attestation*).
     """

@@ -155,7 +155,7 @@ class Installed:
     """Whether that backend actually still holds the entry, or `None` where nothing was recorded to probe for."""
 
     interval: int | None
-    """What `_steward.md` asks for now, or `None` where it asks for nothing.
+    """What `_steward.yaml` asks for now, or `None` where it asks for nothing.
 
     The *expressed* preference rather than a resolved one, for the same reason `items.Supervision` carries it that way: an operator who armed a one-off `--interval 1m` against a file with no opinion has not created a conflict, and comparing against Steward's default would invent one.
     """

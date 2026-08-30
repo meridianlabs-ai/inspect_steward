@@ -1,6 +1,6 @@
 """`steward.log` — whether the machinery worked, as opposed to what it found.
 
-The journal answers *was this eval set conducted properly*. A tend that crashed, a spawn that failed, a claim found wedged and killed, a `_steward.md` that would not parse — none of those is a fact about the eval, and putting them in the journal would bloat the one record a workspace cannot rebuild, on a ten-minute cadence, with material nobody reviewing the run's conduct wants to read. So the rule is a single question: **is this a fact about the eval set, or about Steward?** (workflow.md, *`steward.log` — whether Steward itself worked*.)
+The journal answers *was this eval set conducted properly*. A tend that crashed, a spawn that failed, a claim found wedged and killed, a `_steward.yaml` that would not parse — none of those is a fact about the eval, and putting them in the journal would bloat the one record a workspace cannot rebuild, on a ten-minute cadence, with material nobody reviewing the run's conduct wants to read. So the rule is a single question: **is this a fact about the eval set, or about Steward?** (workflow.md, *`steward.log` — whether Steward itself worked*.)
 
 The split answers something neither record could answer alone. A successful tend writes an `observation` to the journal, so *no tend for four hours* is computable from the journal's silence — and *why* is here, where the failures went. Sharing one file would make a run whose tends were all crashing look like a run with nothing to report.
 

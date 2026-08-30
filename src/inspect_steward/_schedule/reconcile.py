@@ -63,7 +63,7 @@ class Pool:
 
     Two knobs that shape the run, and they are about different things. `max_tasks` is *how much runs at once* — the fleet's concurrency, and with `max_samples` its whole load on a provider. `max_workers` is *how many processes that is divided into*, which costs startup and buys crash isolation and changes nothing about how much is in flight. Both are unbounded by default, so a run with neither set puts every task in flight in a process of its own (scheduling.md, *The worker pool*).
 
-    **What this carries is what the *operator* asked for, which is not the same as what is in force.** Only `max_workers` and `stall_after` resolve here, because `_steward.md` is their source. The two knobs the definition can also express — `max_tasks` and `max_samples` — carry the command line's value or `None`, and their chains finish in `resolve_max_tasks` and `resolve_max_samples`, which have the manifest to ask.
+    **What this carries is what the *operator* asked for, which is not the same as what is in force.** Only `max_workers` and `stall_after` resolve here, because `_steward.yaml` is their source. The two knobs the definition can also express — `max_tasks` and `max_samples` — carry the command line's value or `None`, and their chains finish in `resolve_max_tasks` and `resolve_max_samples`, which have the manifest to ask.
     """
 
     max_workers: int | None = None
@@ -89,7 +89,7 @@ class Pool:
     samples_ramp: tuple[int, int] | Literal[False] | None = None
     """The range the tuning loop may explore, `False` to disable it, or `None` for the default.
 
-    From `_steward.md`, and consulted only when nothing pinned a setpoint: an explicit `max_samples` — this pool's or the definition's — switches the whole policy off, which is what keeps the key from ever contradicting a definition. See `resolve_samples_ramp`.
+    From `_steward.yaml`, and consulted only when nothing pinned a setpoint: an explicit `max_samples` — this pool's or the definition's — switches the whole policy off, which is what keeps the key from ever contradicting a definition. See `resolve_samples_ramp`.
     """
 
     stall_after: int = DEFAULT_STALL_AFTER
@@ -726,9 +726,9 @@ def resolve_max_samples(manifest: Manifest, pool: Pool) -> int:
 def resolve_max_tasks(manifest: Manifest, pool: Pool) -> int | None:
     """Fleet width: how many tasks may be in flight at once, or `None` for all of them.
 
-    The `max_samples` chain, one key over — the command line, then the definition, then Steward's default — and it lives here for the same reason: `_steward.md` is not a source, so the file has nothing to say and `resolve_pool` has no manifest to ask.
+    The `max_samples` chain, one key over — the command line, then the definition, then Steward's default — and it lives here for the same reason: `_steward.yaml` is not a source, so the file has nothing to say and `resolve_pool` has no manifest to ask.
 
-    **`max_tasks` is inspect's word, so the definition owns it.** An earlier version made this a `_steward.md` key, justified by the reaches-the-runtime test: a definition's value never survives to a worker, because the selection document overrides it unconditionally with that worker's own batch size, so the file contradicted nothing. The test was sound and the key was still confusing — `eval_set()` knows the word, and somebody writing it there watched it do nothing while a same-named key lived in the policy file. The simpler rule is worth the migration: **inspect's words go in the definition; `_steward.md` holds only words `eval_set()` does not know** (execution.md, item 17).
+    **`max_tasks` is inspect's word, so the definition owns it.** An earlier version made this a `_steward.yaml` key, justified by the reaches-the-runtime test: a definition's value never survives to a worker, because the selection document overrides it unconditionally with that worker's own batch size, so the file contradicted nothing. The test was sound and the key was still confusing — `eval_set()` knows the word, and somebody writing it there watched it do nothing while a same-named key lived in the policy file. The simpler rule is worth the migration: **inspect's words go in the definition; `_steward.yaml` holds only words `eval_set()` does not know** (execution.md, item 17).
 
     One divergence from `eval_set()` worth stating rather than hiding: unset means *everything at once* here, where `eval()`'s own rule is one task at a time for a single model. A fleet exists to run wide, and a definition that says nothing has expressed no preference rather than a preference for sequential.
 
@@ -753,7 +753,7 @@ def resolve_max_tasks(manifest: Manifest, pool: Pool) -> int | None:
 def resolve_samples_ramp(manifest: Manifest, pool: Pool) -> tuple[int, int] | None:
     """The range the tuning loop may explore, or `None` where the setpoint is pinned.
 
-    An explicit `max_samples` anywhere — the command line or the definition — pins the value and switches the policy off entirely, which is what lets `samples_ramp` live in `_steward.md` without ever contradicting a definition: the key governs only Steward's own exploration, and the moment anybody expresses a setpoint there is nothing left for it to govern. An author who wants a custom start *and* a ramp writes the start as the range's floor.
+    An explicit `max_samples` anywhere — the command line or the definition — pins the value and switches the policy off entirely, which is what lets `samples_ramp` live in `_steward.yaml` without ever contradicting a definition: the key governs only Steward's own exploration, and the moment anybody expresses a setpoint there is nothing left for it to govern. An author who wants a custom start *and* a ramp writes the start as the range's floor.
 
     When pinned, the signal still runs — a persistently clean, saturated window against a pinned setpoint becomes a `tuning_proposal` item rather than a move, because the pin is somebody's and only they may move it (`_tend.tuning`).
 
@@ -786,7 +786,7 @@ def _spawn_level(
 
     The resolved start, or the level the tuning loop already climbed its tasks to — a respawn picks up where the climb left off rather than re-earning it twenty samples at a time. The minimum over a packed batch, because a selection carries one value applied per task: a fresh task must not inherit a sibling's climb, and an under-started climbed task costs one tend before the loop re-raises it, where the other direction would overshoot a level nothing measured.
 
-    **A recorded level is clamped into the range in force now**, because the range can be edited between the climb and the respawn. A run that reached 200 under `[40, 300]` and is then narrowed to `[40, 100]` must come back at 100: the journal says what was authorized then, and `_steward.md` says what is authorized now, and a spawn answers to the second. Only the replay is clamped — `start` is already the resolved floor.
+    **A recorded level is clamped into the range in force now**, because the range can be edited between the climb and the respawn. A run that reached 200 under `[40, 300]` and is then narrowed to `[40, 100]` must come back at 100: the journal says what was authorized then, and `_steward.yaml` says what is authorized now, and a spawn answers to the second. Only the replay is clamped — `start` is already the resolved floor.
     """
     recorded = [levels[task.identifier] for task in batch if task.identifier in levels]
     if ramp is not None:

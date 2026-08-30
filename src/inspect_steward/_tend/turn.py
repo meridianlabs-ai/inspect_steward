@@ -143,7 +143,7 @@ class TendResult:
     """
 
     degraded: str | None
-    """Why `_steward.md` could not be read, when a turn ran on the last known good settings anyway."""
+    """Why `_steward.yaml` could not be read, when a turn ran on the last known good settings anyway."""
 
     claim: Held | None
     """Who holds the run claim. Only ever set by `status`, which reports one rather than taking one."""
@@ -161,7 +161,7 @@ class TendResult:
     """
 
     degraded_at: str | None = None
-    """`_steward.md`'s modification time when it would not parse, for the same reason — an edited file that still fails is a new item rather than one already acknowledged."""
+    """`_steward.yaml`'s modification time when it would not parse, for the same reason — an edited file that still fails is a new item rather than one already acknowledged."""
 
     supervision: Supervision | None = None
     """Whether anything is scheduled to run the next turn. `None` where nothing asked — an item projection over a result assembled by hand has no opinion about timers."""
@@ -235,7 +235,7 @@ def tend(
 
     Args:
         workspace: The workspace to tend.
-        max_workers: Worker processes for this turn, overriding `_steward.md`. `None` expresses no preference and defers to the file, which itself defaults to a process per task — it does not request that width, so a workspace that sets the key cannot be widened back to unbounded for one turn.
+        max_workers: Worker processes for this turn, overriding `_steward.yaml`. `None` expresses no preference and defers to the file, which itself defaults to a process per task — it does not request that width, so a workspace that sets the key cannot be widened back to unbounded for one turn.
         max_tasks: Tasks in flight at once for this turn, overriding the definition's `max_tasks`. `None` defers to it.
         max_samples: Sample concurrency for this turn, overriding the definition.
         break_stale: Kill a wedged claim holder and take the claim from it.
@@ -245,7 +245,7 @@ def tend(
         What the turn saw and did, or a `Refused` naming the holder that would not give up the claim. Never `Refused` when `claim` is given — the claim is already in hand.
 
     Raises:
-        TendError: The turn could not be run — no committed manifest, an unreadable log directory, or a `_steward.md` that cannot be parsed and no history to fall back on.
+        TendError: The turn could not be run — no committed manifest, an unreadable log directory, or a `_steward.yaml` that cannot be parsed and no history to fall back on.
         ManifestError: The committed manifest is not a manifest.
         ManifestVersionError: The manifest was captured by a different `task_identifier` version, so nothing in the log directory can be matched to it.
     """
@@ -272,7 +272,7 @@ def _tend(
 ) -> TendResult:
     """One turn, with the claim already in hand however it got there."""
     # inside the claim, because resolving these can *write* — a degraded
-    # `_steward.md` says so in `steward.log` — and a refused turn has to be
+    # `_steward.yaml` says so in `steward.log` — and a refused turn has to be
     # a genuine no-op. A timer firing every ten minutes against an agent's
     # long-held claim would otherwise leave a line each time it fired
     history = _history(workspace)
@@ -358,7 +358,7 @@ def status(
 class _History:
     """What the journal says, read once and used for everything that asks.
 
-    A turn used to read the journal only when `_steward.md` would not parse. It now has eight questions for it — the last good settings, the previous turn's items and when it happened, what has been acknowledged, what the agent has raised, how far anyone has collected, whether the run is paused, and what timer is armed — and they are one pass over the same events. The file is small by design (roughly sixty records a night, workflow.md §5.6) and the alternative is six reads of it per turn.
+    A turn used to read the journal only when `_steward.yaml` would not parse. It now has eight questions for it — the last good settings, the previous turn's items and when it happened, what has been acknowledged, what the agent has raised, how far anyone has collected, whether the run is paused, and what timer is armed — and they are one pass over the same events. The file is small by design (roughly sixty records a night, workflow.md §5.6) and the alternative is six reads of it per turn.
     """
 
     pool: Pool | None
@@ -492,7 +492,7 @@ def _pool(recorded: object) -> Pool | None:
 def _ramp(recorded: object) -> tuple[int, int] | Literal[False] | None:
     """The `samples_ramp` a settings payload recorded, if it recorded a usable one.
 
-    Part of the degrade path, for the same reason the rest of the payload is: an operator who disabled ramping and then broke `_steward.md` with an edit must not have a fleet start climbing on Steward's default — that is exactly the *further into a provider than anyone chose* the fallback exists to prevent.
+    Part of the degrade path, for the same reason the rest of the payload is: an operator who disabled ramping and then broke `_steward.yaml` with an edit must not have a fleet start climbing on Steward's default — that is exactly the *further into a provider than anyone chose* the fallback exists to prevent.
     """
     if recorded is False:
         return False
@@ -524,10 +524,10 @@ class _Settings:
     pool: Pool
     degraded: str | None
     degraded_at: str | None = None
-    """`_steward.md`'s modification time when it would not parse — what keys the item, so an edit that still fails is heard again."""
+    """`_steward.yaml`'s modification time when it would not parse — what keys the item, so an edit that still fails is heard again."""
 
     interval: int | None = None
-    """How often `_steward.md` asks to be tended, or `None` where it does not ask.
+    """How often `_steward.yaml` asks to be tended, or `None` where it does not ask.
 
     Not something a turn acts on, and deliberately the *expressed* preference rather than the resolved one — it exists to be compared against what is actually armed, and a comparison against Steward's own default would report drift from a number nobody wrote.
     """
@@ -1045,7 +1045,7 @@ def _settings(
 ) -> _Settings:
     """What to operate under, degrading to the last known good where it must.
 
-    A human may edit `_steward.md` at 10pm with a fleet up, and a typo in it must not stop the fleet converging — that is exactly the unattended failure the timer exists to prevent. So a file that will not parse falls back to the settings the last turn recorded, and says so loudly enough that nobody mistakes the run for one following the file.
+    A human may edit `_steward.yaml` at 10pm with a fleet up, and a typo in it must not stop the fleet converging — that is exactly the unattended failure the timer exists to prevent. So a file that will not parse falls back to the settings the last turn recorded, and says so loudly enough that nobody mistakes the run for one following the file.
 
     **Falling back needs somewhere to fall back to.** With no `observation` in the journal there is no last known good, and running on Steward's own defaults would silently discard whatever the operator wrote — the one outcome worse than stopping. So the first turn after a bad edit refuses, and every turn after a good one degrades.
 
@@ -1098,11 +1098,11 @@ def _pin(given: int | None, directives: Directives, history: _History) -> int | 
 
     `--max-workers` and `--max-tasks` are settings for one turn and leave no residue: each turn recomputes the fleet from scratch, so a flag that lapses simply stops applying. `--max-samples` is not like that. It decides a *regime* rather than a quantity — a value pins the setpoint and switches the ramp off entirely (`resolve_samples_ramp`) — and that regime persists in the workers it spawned. A pin that lapsed after one turn would leave the next tend reading a level nobody was ramping, climbing it, and spawning the queue at the ramp's floor instead: the operator's number overridden twice, by a default they never chose, while nobody was watching.
 
-    So the pin is recorded like everything else a turn ran under, and read back here. **The way out is `_steward.md`**, and only a range: writing `samples_ramp: [x, y]` says *ramp this run* in the file that holds standing wishes, which is the one instruction that could mean nothing else. `samples_ramp: false` does not release it — that agrees with the pin rather than contradicting it, and would only substitute Steward's floor for the operator's number.
+    So the pin is recorded like everything else a turn ran under, and read back here. **The way out is `_steward.yaml`**, and only a range: writing `samples_ramp: [x, y]` says *ramp this run* in the file that holds standing wishes, which is the one instruction that could mean nothing else. `samples_ramp: false` does not release it — that agrees with the pin rather than contradicting it, and would only substitute Steward's floor for the operator's number.
 
     Args:
         given: What this invocation's `--max-samples` said, or `None`.
-        directives: The parsed front matter, for the release.
+        directives: The parsed `_steward.yaml`, for the release.
         history: The journal, for what an earlier turn recorded.
 
     Returns:
@@ -1170,7 +1170,7 @@ def _record(
         # against, and a rendered summary is not something to diff
         items=[item.id for item in result.items],
         # what this turn ran under, which is what a later turn reads back when
-        # `_steward.md` will not parse
+        # `_steward.yaml` will not parse
         settings={
             "max_workers": pool.max_workers,
             "max_tasks": pool.max_tasks,

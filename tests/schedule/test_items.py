@@ -886,7 +886,7 @@ def test_an_interval_the_workspace_no_longer_asks_for_is_reported(
 ) -> None:
     workspace = unfinished(tmp_path)
     armed(workspace, interval=1800)
-    workspace.directives.write_text("---\ntend_interval: 5m\n---\n", encoding="utf-8")
+    workspace.directives.write_text("tend_interval: 5m\n", encoding="utf-8")
 
     item = items(workspace)[TIMER_DRIFT]
 
@@ -899,11 +899,11 @@ def test_editing_the_interval_again_asks_the_question_again(tmp_path: Path) -> N
     # match clears it
     workspace = unfinished(tmp_path)
     armed(workspace, interval=1800)
-    workspace.directives.write_text("---\ntend_interval: 5m\n---\n", encoding="utf-8")
+    workspace.directives.write_text("tend_interval: 5m\n", encoding="utf-8")
     first = items(workspace)[TIMER_DRIFT]
 
     ack(workspace, first.id)
-    workspace.directives.write_text("---\ntend_interval: 1m\n---\n", encoding="utf-8")
+    workspace.directives.write_text("tend_interval: 1m\n", encoding="utf-8")
 
     assert items(workspace)[TIMER_DRIFT].id != first.id
 
@@ -911,7 +911,7 @@ def test_editing_the_interval_again_asks_the_question_again(tmp_path: Path) -> N
 def test_a_timer_armed_at_the_interval_asked_for_is_quiet(tmp_path: Path) -> None:
     workspace = unfinished(tmp_path)
     armed(workspace, interval=1800)
-    workspace.directives.write_text("---\ntend_interval: 30m\n---\n", encoding="utf-8")
+    workspace.directives.write_text("tend_interval: 30m\n", encoding="utf-8")
 
     assert TIMER_DRIFT not in items(workspace)
 
@@ -925,7 +925,7 @@ def test_a_broken_steward_md_does_not_also_report_timer_drift(
     workspace = unfinished(tmp_path)
     armed(workspace, interval=1800)
     turn(workspace)
-    workspace.directives.write_text("---\nnot: [valid\n---\n", encoding="utf-8")
+    workspace.directives.write_text("not: [valid\n", encoding="utf-8")
 
     found = items(workspace)
     assert DEGRADED in found
@@ -937,7 +937,7 @@ def test_a_one_off_interval_against_a_silent_file_is_not_drift(
 ) -> None:
     """The comparison is against what the workspace *expressed*, not what resolved.
 
-    An operator who armed `--interval 1m` against a `_steward.md` with no
+    An operator who armed `--interval 1m` against a `_steward.yaml` with no
     opinion about intervals has not created a conflict — and reporting one
     would be reporting drift from Steward's own default, a number nobody wrote.
     Found by arming a real timer and being told, one second later, that the

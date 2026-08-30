@@ -147,25 +147,24 @@ The agent will notify you when any of these conditions exist and will help you r
 
 ## Eval Policy
 
-Steward writes a `_steward.md` file to your workspace which can be used to tune the behavior of the monitor and agent. The top part of the file has YAML configuration, and the body of the file contains free form prose that the agent consults when making decisions. For example:
+Steward writes a `_steward.yaml` file to your workspace which can be used to tune the behavior of the monitor and agent. The settings at the top are what Steward acts on by itself; `policies` is free-form text the agent consults when making decisions. For example:
 
-```{.markdown filename="_steward.md"}
----
+```{.yaml filename="_steward.yaml"}
 max_workers: 8
 stall_after: 3
----
 
-If more than 10% of the samples in a task error out, pause the run
-and notify me right away. Otherwise, batch up questions for the end
-of the run.
-
-A re-run that would replay more than 200 samples needs my approval
-first.
-
-If a task's score looks implausible (e.g. near zero on a task that
-usually scores well), investigate the transcripts before proposing
-a re-run.
+policies:
+  - If more than 10% of the samples in a task error out, pause the run
+    and notify me right away. Otherwise, batch up questions for the end
+    of the run.
+  - A re-run that would replay more than 200 samples needs my approval
+    first.
+  - If a task's score looks implausible (e.g. near zero on a task that
+    usually scores well), investigate the transcripts before proposing
+    a re-run.
 ```
+
+Write `policies` as a list like this, or as one block of prose — Steward carries the text and never interprets it, so whichever reads better for the person picking up your project is the right one.
 
 #### Concurrency
 
@@ -177,12 +176,12 @@ a re-run.
 
 A fleet's demand on a provider is `max_tasks` × `max_samples`, and **both of
 those belong to your definition** — they are words `eval_set()` knows, so
-`_steward.md` refuses them and points you there. `max_tasks` caps how many tasks
+`_steward.yaml` refuses them and points you there. `max_tasks` caps how many tasks
 run at once (unset, all of them). `max_samples` Steward honors as written when
 you set it; when you leave it unset it **discovers** the value — tasks start at
 40 and the monitor ramps each one toward 200 while the provider shows no
 rate-limit pushback, backing off at once when it does. That range is the one
-concurrency setting that does live in `_steward.md`, because a range to discover
+concurrency setting that does live in `_steward.yaml`, because a range to discover
 a setpoint within is not something a definition can express.
 
 See the [Concurrency](concurrency.qmd) article for more details on scheduling and execution policy.

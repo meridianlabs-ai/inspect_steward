@@ -16,7 +16,7 @@ from .turn import (
     "--max-workers",
     type=click.IntRange(min=1),
     default=None,
-    help="Worker processes for this turn, or unset for a process per task (overrides _steward.md).",
+    help="Worker processes for this turn, or unset for a process per task (overrides _steward.yaml).",
 )
 @click.option(
     "--max-tasks",

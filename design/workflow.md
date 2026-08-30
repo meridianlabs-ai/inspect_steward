@@ -126,7 +126,7 @@ launching would:
 
 The third row is why the predicate is asked of the delta as a whole rather than counted off its rows. It was missed on the first pass at exactly the point that framing invites: a gate built as *are any rows archiving?* answers **no** to the most expensive edit in the table.
 
-Two consequences follow. **The timer detects drift but never applies it** — a scheduled tend keeps existing work moving; accepting *new instructions* means weighing whether a delta looks like a mistake, which is judgement and therefore the agent's ([execution.md](execution.md), *Driving and judging are separate roles that usually coincide*). So an edited definition sits as an observation until an agent collects it. And **whether the agent auto-applies additive changes at all is a `_steward.md` line**, defaulting to yes: it is a standing rule about granted autonomy, which is exactly what that file is for.
+Two consequences follow. **The timer detects drift but never applies it** — a scheduled tend keeps existing work moving; accepting *new instructions* means weighing whether a delta looks like a mistake, which is judgement and therefore the agent's ([execution.md](execution.md), *Driving and judging are separate roles that usually coincide*). So an edited definition sits as an observation until an agent collects it. And **whether the agent auto-applies additive changes at all is a `_steward.yaml` line**, defaulting to yes: it is a standing rule about granted autonomy, which is exactly what that file is for.
 
 The mid-edit hazard survives this but stops mattering. An intermediate save that is additive gets applied early and the next tend picks up the rest, so the final state is right and only the start is staggered — convergence is forgiving that way. One that is syntactically broken fails capture and is noise. One that is valid but wrong is only harmful when it archives, and that is gated.
 
@@ -138,7 +138,7 @@ If the definition evolves, an attestation has to name what it covered. It pins t
 
 | command | who calls it | what it does |
 |---|---|---|
-| `steward init [DIR] [--type evalset\|flow\|hawk] [--no-git]` | human | Create the workspace: bootstrap `AGENTS.md`, a definition placeholder, `_steward.md`, a repository, `.gitignore`, and the journal's first event. Only ever creates — a second run keeps what is there. |
+| `steward init [DIR] [--type evalset\|flow\|hawk] [--no-git]` | human | Create the workspace: bootstrap `AGENTS.md`, a definition placeholder, `_steward.yaml`, a repository, `.gitignore`, and the journal's first event. Only ever creates — a second run keeps what is there. |
 | `steward runbook` | agent | Emit the current mechanics — how to tend, what never to do. Ships with the package so it cannot go stale. |
 | `steward launch [--smoke] [--accept-archive] [--no-timer]` | agent | Capture the manifest, report the delta, commit it as desired state, spawn, **arm the tend timer or fail**, and **return**. The only verb that reads the definition, and therefore the amend path too — call it again after an edit. `--smoke` runs a bounded rehearsal first — see *Smoke first*. |
 | `steward tend` | **a timer, ~q10m**; an agent may also call it to force a turn | One turn of the loop: reconcile, spawn, reap, rewrite `status.md`, append to the journal, and report which scan results have landed and which look worth investigating. Never blocks. |
@@ -174,7 +174,7 @@ So `steward pause` means the first. The second exists as an **action a ruling ma
        │ "run the sonnet/haiku sweep overnight"
        └──────────────────►  reads AGENTS.md
                              steward runbook  ─────► mechanics
-                             reads _steward.md ─────► this human's standing rules
+                             reads _steward.yaml ─────► this human's standing rules
                              steward launch --smoke ► 2 samples/task, 15m cap ► ●
                                   │                  (.steward/smoke/, local)
                              steward launch  ───────► claim, delta, manifest,
@@ -208,7 +208,7 @@ The output of `init` is a workspace that a human and an agent co-inhabit, and th
 my-sweep/
   AGENTS.md          # authored — bootstrap: "you are tending a run; read the runbook"
   CLAUDE.md          # authored — symlink to AGENTS.md
-  _steward.md        # authored — this human's standing rules; front matter Steward
+  _steward.yaml        # authored — this human's standing rules; settings Steward
                      #   executes, prose an agent interprets
   evalset.py         # authored — scaffolded by `init --type evalset` (or flow)
 
@@ -233,7 +233,7 @@ my-sweep/
 
 **`init` only ever creates.** Everything authored in a workspace is someone's work, so a second run reports each path as created or kept rather than restoring a pristine copy over it. `.gitignore` is the single exception and gains missing entries idempotently, because those entries are Steward's rather than the author's.
 
-The `_steward.md` it writes has its front matter entirely commented out, which parses as *no preferences expressed*. That is deliberate rather than a placeholder: a template shipping live values would make Steward's defaults look like the human's decisions, and the point of the distinction between the two is that only one of them is a claim anybody made.
+The `_steward.yaml` it writes has every setting commented out, which parses as *no preferences expressed*. That is deliberate rather than a placeholder: a template shipping live values would make Steward's defaults look like the human's decisions, and the point of the distinction between the two is that only one of them is a claim anybody made.
 
 ### 5.1 Three categories, and the one that matters
 
@@ -241,7 +241,7 @@ The obvious split — "human-readable top level, machine-owned `.steward/`" — 
 
 | category | examples | if you delete it |
 |---|---|---|
-| **authored** | `_steward.md`, `AGENTS.md`, the definition | the human's own work is gone |
+| **authored** | `_steward.yaml`, `AGENTS.md`, the definition | the human's own work is gone |
 | **durable machine state** | `journal.jsonl`, `logs/`, `logs-archive/` | the audit trail, or the results, are gone |
 | **authored by the agent** | `scanning.md`, `analysis.md` | the investigation is gone, and it re-runs from scratch |
 | **disposable machine state** | everything in `.steward/`, `status.md`, `anomalies.md`, `steward.log` | rebuilt on the next tend, or simply gone with no loss |
@@ -250,7 +250,7 @@ The fourth category is the newest and easy to mislabel as rendered. `scanning.md
 
 `journal.jsonl` therefore sits at the top level, beside the authored files, where a file nobody can regenerate belongs. Nothing in `.steward/` is irreplaceable, which makes it disposable — a property worth more than a tidy listing.
 
-**The journal is also what marks a directory as a workspace**, and it is the only file that can be. `.steward/` is disposable, so its absence proves nothing; a definition can sit in any directory; and `_steward.md` is optional, so its absence proves nothing either. The journal is durable, Steward-specific, and present for exactly as long as the workspace is — which is why `init` opens it with a real `initialized` event rather than leaving it until the first launch. An empty file would have served as a marker, but a record of when the workspace came into being is the same cost and is worth having, and it means the account of what happened starts where the workspace does.
+**The journal is also what marks a directory as a workspace**, and it is the only file that can be. `.steward/` is disposable, so its absence proves nothing; a definition can sit in any directory; and `_steward.yaml` is optional, so its absence proves nothing either. The journal is durable, Steward-specific, and present for exactly as long as the workspace is — which is why `init` opens it with a real `initialized` event rather than leaving it until the first launch. An empty file would have served as a marker, but a record of when the workspace came into being is the same cost and is worth having, and it means the account of what happened starts where the workspace does.
 
 **Losing `.steward/` mostly fails in the safe direction.** Anomalies re-derive from the log directory, since the errored samples are right there; the manifest is re-captured from the definition; in-flight records are rebuilt from the logs. Nothing durable is lost, because the rulings — the part that could not be recovered — are not in there.
 
@@ -284,17 +284,17 @@ It fails on one property, and the failure is not recoverable by care: **line-del
 
 (YAML's coercion of `no` and version-like strings is a lesser hazard and a controllable one, since Steward writes the file. And a `---` immediately after a paragraph makes it an H2 in CommonMark, so the delimiter is both load-bearing and ambiguous.)
 
-**None of this argues against `_steward.md`, and the difference is worth stating because the two look alike.** What is disqualifying here is *cascading* failure across many entries: a mistyped delimiter in a log of thousands of appended records swallows everything after it, and the record it corrupts is the one that decides whether Steward re-asks a human. `_steward.md` has **one** block, authored by hand, read at startup, with a single fence to get wrong — and an unterminated one is caught and reported rather than absorbing the file, because with one block there is a right answer to what "unterminated" means. The coercion hazard does carry over, and carries over *worse*, since a human writes this file rather than Steward. **Typing the keys is not by itself the answer, and finding that out cost a bug.** A validator with coercive defaults composes with YAML's rather than cancelling it: `max_workers: yes` becomes `True` becomes `1`, so a workspace that meant to say something gets a fleet throttled to one process and no error at all. What closes it is **strict** validation, plus an error that names the value that arrived — someone who typed `yes` needs to see `True` to understand what happened, since *should be a valid integer* on its own describes their input as something they did not write.
+**None of this argued against `_steward.yaml`, which carried a fence of its own for several steps, and the difference is worth stating because the two looked alike.** What is disqualifying here is *cascading* failure across many entries: a mistyped delimiter in a log of thousands of appended records swallows everything after it, and the record it corrupts is the one that decides whether Steward re-asks a human. A single hand-authored block read at startup had one fence to get wrong, and an unterminated one was caught and reported rather than absorbing the file, because with one block there is a right answer to what "unterminated" means. That file has since dropped its fence for unrelated reasons (§5.10) — the argument here never required it to, and does not change now that it is gone. The coercion hazard is the part that carries over, and it carries over *worse*, since a human writes that file rather than Steward. **Typing the keys is not by itself the answer, and finding that out cost a bug.** A validator with coercive defaults composes with YAML's rather than cancelling it: `max_workers: yes` becomes `True` becomes `1`, so a workspace that meant to say something gets a fleet throttled to one process and no error at all. What closes it is **strict** validation, plus an error that names the value that arrived — someone who typed `yes` needs to see `True` to understand what happened, since *should be a valid integer* on its own describes their input as something they did not write.
 
 Its co-writability is worth noting but not worth building for: the need for human annotation was a property of *that* design rather than a requirement anyone stated. If it turns out to be wanted, appending a narrative event to the journal is a small addition at any time.
 
 ### 5.4 The one file Steward must never write
 
-`status.md`, `anomalies.md`, and `steward.log` are generated, carry a header, and are expendable. `_steward.md` is their counterexample, and the reason the line is worth drawing visibly in the directory listing: it is the human's own document, and the one thing Steward only ever *proposes* changes to.
+`status.md`, `anomalies.md`, and `steward.log` are generated, carry a header, and are expendable. `_steward.yaml` is their counterexample, and the reason the line is worth drawing visibly in the directory listing: it is the human's own document, and the one thing Steward only ever *proposes* changes to.
 
-**The rule is under more pressure now that the file has a structured half, and it still holds.** Prose does not invite writing; a YAML block does, and somebody will want `steward config set max_workers=12` within a week of using it. The answer is the same one that keeps Steward out of the definition: an edit Steward made to the human's standing rules is, afterwards, indistinguishable from one the human made — and the whole value of the file is that reading it tells you what a person decided. So a command that wants to change a setting **prints the change to make** and lets the person make it. This costs one round trip and buys an artifact nobody has to trust Steward about.
+**The rule is under more pressure the more machine-shaped the file gets, and it still holds.** Prose does not invite writing; YAML does, and somebody will want `steward config set max_workers=12` within a week of using it. That pressure went up again when the file stopped being markdown at all (§5.10) — a document that is *entirely* a data structure reads like something a tool should be able to edit. The answer does not change with the format: an edit Steward made to the human's standing rules is, afterwards, indistinguishable from one the human made, and the whole value of the file is that reading it tells you what a person decided. So a command that wants to change a setting **prints the change to make** and lets the person make it. This costs one round trip and buys an artifact nobody has to trust Steward about.
 
-It applies to both halves. The front matter is more tempting because it is machine-shaped, which is exactly why it needs saying.
+It applies to the whole file. The settings are more tempting than `policies` because they are the machine-shaped part, which is exactly why it needs saying.
 
 ### 5.5 State is a fold over the journal
 
@@ -336,7 +336,7 @@ That is a change from an earlier draft, and the reason is a race. A stored seque
 | `resolution` | what became of it: re-ran and passed, re-ran and failed again, accepted | as observed |
 | `signoff` | terminal; who, when, the manifest digest, the exceptions accepted | the human |
 
-**Nine of these are written today** ([plan.md](plan.md) steps 12–19): `initialized`, and — from every executed tend — `observation`, carrying task-state counts, running/spawning/queued/stalled/orphan counts, whether the definition has drifted from the manifest, the verdict, this turn's open item ids, and the concurrency settings in force. Two of those fields are not reporting material. The settings are what a turn reads back when `_steward.md` cannot be parsed, which is how degrading to the last known good is possible at all; the item ids are what the *next* turn diffs against, which is how a notification fires on a change rather than on a state. `action` is written for an archive, with the log's origin, its destination, and its reason. `acknowledged` is written by `steward ack` and by nothing else — a tend observes, and disposing of an observation is somebody's decision rather than a turn's. `paused`/`resumed` and `armed`/`disarmed` are likewise never written by a tend, and both fold as **switches** rather than accumulations: the last word wins, so a double pause or a resume with nothing to resume is the state it leaves behind rather than an error anybody has to handle. `raised` is written by `steward raise` and `collected` by `steward collect`, both of them agent verbs and neither of them a tend — `raised` folds per item id like `acknowledged`, and `collected` folds as a switch like the pause, so a `--since` that deliberately reaches backwards and then advances leaves the newer position behind. The rest arrive with the steps that produce them.
+**Nine of these are written today** ([plan.md](plan.md) steps 12–19): `initialized`, and — from every executed tend — `observation`, carrying task-state counts, running/spawning/queued/stalled/orphan counts, whether the definition has drifted from the manifest, the verdict, this turn's open item ids, and the concurrency settings in force. Two of those fields are not reporting material. The settings are what a turn reads back when `_steward.yaml` cannot be parsed, which is how degrading to the last known good is possible at all; the item ids are what the *next* turn diffs against, which is how a notification fires on a change rather than on a state. `action` is written for an archive, with the log's origin, its destination, and its reason. `acknowledged` is written by `steward ack` and by nothing else — a tend observes, and disposing of an observation is somebody's decision rather than a turn's. `paused`/`resumed` and `armed`/`disarmed` are likewise never written by a tend, and both fold as **switches** rather than accumulations: the last word wins, so a double pause or a resume with nothing to resume is the state it leaves behind rather than an error anybody has to handle. `raised` is written by `steward raise` and `collected` by `steward collect`, both of them agent verbs and neither of them a tend — `raised` folds per item id like `acknowledged`, and `collected` folds as a switch like the pause, so a `--since` that deliberately reaches backwards and then advances leaves the newer position behind. The rest arrive with the steps that produce them.
 
 **`armed` is the only reason *the timer is not running* is detectable at all.** A scheduler cannot report its own absence, and probing one costs a subprocess on every turn — which `status` is explicitly not allowed to spend, since it is meant to be cheap enough to type constantly. So arming records what it installed, once, and every later turn compares that record against how long it has actually been since an `observation`. That catches a crontab somebody edited by hand as well as one Steward removed, which no probe of Steward's own entry would.
 
@@ -363,7 +363,7 @@ It sits at the top level and is **disposable**, which is exactly the shape `stat
 
 **The split turns out to answer a question neither record could answer alone.** A successful tend writes an `observation` to the journal, so *"no tend for four hours"* is computable from the journal's silence — and *why* is in `steward.log`, where the failures went. Had the two shared a file, a run whose tends were crashing would look like a run with nothing to report.
 
-**The writer landed early, at [plan.md](plan.md) step 13 rather than step 22.** Degrading a malformed `_steward.md` to the last known good has to say *why* somewhere, and the rule above answers where: a file Steward could not parse is a fact about Steward. It is about fifteen lines and its one hard requirement is that **it never raises** — every caller is already handling a failure, and the conditions most worth recording (a full disk, a directory that went away) are exactly the ones a logger would fail on, turning a reported problem into an unreported crash. A tend also writes here when it cannot read the log directory, and the claim writes a cleared wedged holder. Rotation, the bound, and the sync stay with step 22.
+**The writer landed early, at [plan.md](plan.md) step 13 rather than step 22.** Degrading a malformed `_steward.yaml` to the last known good has to say *why* somewhere, and the rule above answers where: a file Steward could not parse is a fact about Steward. It is about fifteen lines and its one hard requirement is that **it never raises** — every caller is already handling a failure, and the conditions most worth recording (a full disk, a directory that went away) are exactly the ones a logger would fail on, turning a reported problem into an unreported crash. A tend also writes here when it cannot read the log directory, and the claim writes a cleared wedged holder. Rotation, the bound, and the sync stay with step 22.
 
 One honest limit: the conditions most worth logging are the ones most likely to prevent logging. A full disk fails the `steward.log` write along with everything else, which is why the substrate failures in [execution.md](execution.md) escalate through the notification channel rather than relying on a file.
 
@@ -388,18 +388,18 @@ The original position here was that there is **no** config file at all, and most
 | `log_dir` | defaults to `logs/` |
 | notification channel | `INSPECT_EVAL_NOTIFICATION` — reference-only *by design*, so a config file is the wrong home |
 | log-reuse store location | `INSPECT_STEWARD_STORE` — a machine-level resource shared across projects, not a property of one |
-| whether to publish to it | a `signoff` decision, defaulting from `_steward.md` — publishing a result for others to reuse is an attestation, not a setting |
+| whether to publish to it | a `signoff` decision, defaulting from `_steward.yaml` — publishing a result for others to reuse is an attestation, not a setting |
 | eval configuration | the definition, which configuration.md establishes as the single source of truth |
 
 What is left over is mostly per-run and belongs on the command line — `--smoke`, `--accept-archive`. A config file is for settings you re-apply across many invocations; a run is launched once. (An earlier draft made the case with `--max-spend`; see *Spend is not Steward's to manage* for why that argument lost its example.)
 
-**Two rows did not survive, and they are why the structured half of `_steward.md` exists.** *Tend interval* was routed here to "the runbook, and the agent's scheduling", which does not hold: the runbook is prose, while a crontab expression and a launchd `StartInterval` both need a number, so it would otherwise arrive as a `launch` flag — a standing property of a workspace showing up as a per-launch argument, which is the thing this section concedes config files are *for*. It is `tend_interval` in `_steward.md` as of step 15. And **fleet shape** was never in the table, because until there was a choice about how tasks divide across processes there was nothing to express. Both affect Steward and neither is anything Inspect has an opinion about.
+**Two rows did not survive, and they are why the structured half of `_steward.yaml` exists.** *Tend interval* was routed here to "the runbook, and the agent's scheduling", which does not hold: the runbook is prose, while a crontab expression and a launchd `StartInterval` both need a number, so it would otherwise arrive as a `launch` flag — a standing property of a workspace showing up as a per-launch argument, which is the thing this section concedes config files are *for*. It is `tend_interval` in `_steward.yaml` as of step 15. And **fleet shape** was never in the table, because until there was a choice about how tasks divide across processes there was nothing to express. Both affect Steward and neither is anything Inspect has an opinion about.
 
 **The drift objection is what the rule answers.** configuration.md spends its length establishing that the definition is the single source of truth for what an eval set *is*, and a second file beside it is precisely where a contradicting `log_dir` or `model` ends up. So the file may express only what the definition **cannot** — and the keys the definition owns are refused by name, with a message saying where they belong, rather than ignored. Unknown keys are rejected outright. That is the same posture a selection document takes and for the same reason: this is input, not history. Policing by schema is cheap; policing by discipline is what was being avoided.
 
 **The rule is sharper than "is it useful to Steward".** `max_samples` is the case that teaches it: Steward genuinely needs the number, writes it into every selection document, and has a field for it — and it is still refused, because `eval_set(max_samples=...)` can say it and a workspace-level constant would silently outrank an author who did. `max_workers` passes the same test in the other direction, because the fan-out into processes is Steward's invention and no `eval_set()` argument reaches it. Whether Steward consumes a value is not the question; whether the definition could express it is.
 
-**And it is sharper still than the test that was actually being applied.** `max_tasks` lived in the file for several steps, admitted on a narrower question — *does a definition's value reach the runtime* — which it passed honestly: every selection overrides `max_tasks` with that worker's own batch size, so the file contradicted nothing. What that missed is that drift is not the only cost. `eval_set()` knows the word, so somebody writing it in the definition watched it do nothing while a same-named key sat in the policy file, and the rule needed an exception to explain. It is now refused and fleet width comes from the definition ([execution.md](execution.md), item 17), which leaves the final form: **inspect's words go in the definition; `_steward.md` holds only words `eval_set()` does not know.** The remaining keys — `max_workers`, `stall_after`, `tend_interval`, `samples_ramp` — are Steward inventions with no exceptions.
+**And it is sharper still than the test that was actually being applied.** `max_tasks` lived in the file for several steps, admitted on a narrower question — *does a definition's value reach the runtime* — which it passed honestly: every selection overrides `max_tasks` with that worker's own batch size, so the file contradicted nothing. What that missed is that drift is not the only cost. `eval_set()` knows the word, so somebody writing it in the definition watched it do nothing while a same-named key sat in the policy file, and the rule needed an exception to explain. It is now refused and fleet width comes from the definition ([execution.md](execution.md), item 17), which leaves the final form: **inspect's words go in the definition; `_steward.yaml` holds only words `eval_set()` does not know.** The remaining keys — `max_workers`, `stall_after`, `tend_interval`, `samples_ramp` — are Steward inventions with no exceptions.
 
 **`samples_ramp` is the near miss, and it stays.** It governs sample concurrency and sits directly beside a refused `max_samples`, which looks like the exception the paragraph above just claimed not to have. It is not one, on the rule as stated: `eval_set()` has no word for *a range to discover a setpoint within*, so there is nothing in the definition it could contradict — and the moment a definition does express a setpoint the key goes inert rather than fighting it. The distinction that makes this principled rather than convenient is between a value and a **policy for finding one**: the first is the eval's, the second is Steward's, because only Steward is running the loop that looks.
 
@@ -407,15 +407,19 @@ What is left over is mostly per-run and belongs on the command line — `--smoke
 
 **Notification splits across the line rather than sitting on one side of it.** The table above sends the *channel* to `INSPECT_EVAL_NOTIFICATION` and that stands — a URL is a credential, and keeping credentials out of files, shell history, and process listings is a discipline Steward inherits for free and must not break. Notification **policy** is a different object: which kinds go out, how often a digest fires, when to stay quiet. Inspect has no policy layer at all (*What Inspect already provides*), so there is nothing to contradict and nowhere else for it to live.
 
-### 5.10 One file, because the seam between its halves is ours and not the reader's
+### 5.10 One file, because the seam between its regions is ours and not the reader's
 
-`_steward.md` is markdown with YAML front matter, and it *replaces* `policy.md` rather than joining it.
+`_steward.yaml` is one YAML document holding settings and a `policies` key, and it *replaces* `policy.md` rather than joining it.
 
-> **The front matter is what Steward executes at 3am with nobody watching. The prose is what an agent applies when it arrives.**
+> **The settings are what Steward executes at 3am with nobody watching. `policies` is what an agent applies when it arrives.**
 
 Two files was the obvious arrangement and is the wrong one, because that boundary is a fact about **Steward's current capability rather than about the author's intent**, and it moves as Steward improves. Today `max_workers: 8` is executable and *"back off at the first sign of throttling"* is prose an agent interprets; next quarter the second may be executable too. Splitting the file makes that seam visible to the *user*, so their mental model has to track our implementation. One file with two regions keeps it ours.
 
-What adjacency buys is that a human writes one sentence — *"never go past eight workers here, and if the sonnet arm starts failing systematically, pause it and tell me"* — and the executable half sits directly above the reasoning for it. Neither can drift, and a reader arriving cold sees every standing instruction in one place.
+What adjacency buys is that a human writes one sentence — *"never go past eight workers here, and if the sonnet arm starts failing systematically, pause it and tell me"* — and the executable half sits directly beside the reasoning for it. Neither can drift, and a reader arriving cold sees every standing instruction in one place.
+
+**The seam is a key rather than a delimiter, and it started out as one.** The file was markdown with YAML front matter for its first several steps, which was a reasonable reading of *structured above, prose below* and turned out to be paying for a boundary nobody needed. Two things settled it. The prose was never parsed — the agent opened the file itself, so the fence was separating Steward's region from a region Steward only had to not read — and once every setting also had to be sayable from the environment and the command line, a format where one half was YAML and the other was not made the mapping between the three spellings awkward for no gain. So `policies` became a key like any other: a string for a project whose standards want paragraphs, a list for one whose standards are three sentences.
+
+What that costs is honest and small. Under the fence, no prose however malformed could break a tend, because the parser stopped at the closing delimiter; now a mis-indented block scalar is a parse failure for the whole file. The degrade path already existed for exactly this class of accident — a tend that cannot read the file carries on with the settings the last one recorded and says so — and it is what makes the trade acceptable rather than merely cheap. What it buys back is that a rule graduating from prose to setting moves out of `policies` and up the file, with nothing reformatted and no fence to move.
 
 **It also closes a hole that had no other answer.** Pre-authorised rulings were prose an agent reads, which means a standing rule fires only when an agent is in session — precisely when it is least needed. A rule the tend loop can act on is a rule that holds overnight.
 
@@ -427,7 +431,7 @@ The underscore sorts it to the top of a directory listing, beside `AGENTS.md`. T
 
 This is the distinction I most want to get right, because conflating them causes both of the obvious failure modes.
 
-| | `steward runbook` (a command) | `_steward.md` (a file) |
+| | `steward runbook` (a command) | `_steward.yaml` (a file) |
 |---|---|---|
 | answers | how Steward works | what this human wants |
 | owner | the package | the user |
@@ -436,20 +440,20 @@ This is the distinction I most want to get right, because conflating them causes
 
 Making the runbook a *command* rather than a file solves version skew: instructions and implementation ship together, so an agent can never follow last year's runbook against this year's CLI. Making the standing rules a *file* lets them be edited, reviewed, and version-controlled by the person whose standards they encode.
 
-The distinction survives `_steward.md` gaining a machine-readable half untouched, and it is worth noticing why: the front matter is still *what this human wants*, merely said in a form Steward can act on alone. Mechanics never move into it. What changed is how much of the human's intent Steward can execute without an agent present, not who is making the claim.
+The distinction survives `_steward.yaml` gaining a machine-readable half untouched, and it is worth noticing why: a setting is still *what this human wants*, merely said in a form Steward can act on alone. Mechanics never move into it. What changed is how much of the human's intent Steward can execute without an agent present, not who is making the claim.
 
 `AGENTS.md` is the thin bootstrap that points at both. It is the only thing that has to be discovered by convention.
 
 ### 6.1 A ruling is not a policy
 
-`_steward.md` grows over the life of a project, but **Steward should not write to it.** The distinction that matters: a *ruling* is a human's decision about one situation, with all of that situation's context behind it. A *policy* is a standing rule for every future situation of that shape. Promoting the first into the second is itself a judgement, and it is the human's.
+`_steward.yaml` grows over the life of a project, but **Steward should not write to it.** The distinction that matters: a *ruling* is a human's decision about one situation, with all of that situation's context behind it. A *policy* is a standing rule for every future situation of that shape. Promoting the first into the second is itself a judgement, and it is the human's.
 
 Auto-promotion would quietly convert "invalidate those 47 rate-limit errors from the 15:40 outage" into "always invalidate rate-limit errors" — which is a different and much larger claim, and one the human never made. For a tool whose output is evaluation results, silently widening the human's standards is close to the worst failure available.
 
 So the division is:
 
 - **`journal.jsonl`** — every ruling, machine-written, with reasoning and evidence. Append-only, and the only copy.
-- **`_steward.md`** — standing rules, human-authored. Steward *proposes*: "you have ruled the same way on this class three times; add it to your standing rules?" The human accepts, edits, or declines.
+- **`_steward.yaml`** — standing rules, human-authored. Steward *proposes*: "you have ruled the same way on this class three times; add it to your standing rules?" The human accepts, edits, or declines.
 
 The accumulation benefit survives, and authorship stays where it belongs. It also gives the workflow a legible success metric: **interruptions per run, trending down.**
 
@@ -530,7 +534,7 @@ That command is also the general answer to *a detached run cannot be watched liv
 
 Some runs happen on machines with no git, and sometimes no internet at all. The deployment worth designing for has exactly two pipes out: a localhost model endpoint that proxies, and an S3 bucket. On such a machine **the bucket is the only observability channel there is** — the alternative to syncing is shelling into the runner, which is precisely what an unattended overnight job should not require.
 
-So each tend mirrors the workspace's top-level files to object storage. Someone watching from another system reads `status.md` for progress, `analysis.md` for what has been found and what it means, `anomalies.md` for accumulating caveats, `journal.jsonl` for what has been decided, `steward.log` for whether the machinery is working, and the definition and `_steward.md` for what is being run and under what rules — without touching the runner.
+So each tend mirrors the workspace's top-level files to object storage. Someone watching from another system reads `status.md` for progress, `analysis.md` for what has been found and what it means, `anomalies.md` for accumulating caveats, `journal.jsonl` for what has been decided, `steward.log` for whether the machinery is working, and the definition and `_steward.yaml` for what is being run and under what rules — without touching the runner.
 
 It also completes the picture in one place: when `log_dir` is in the same bucket, the remote reader has the logs and the run's state side by side, and `inspect view` works against the same prefix.
 
@@ -572,7 +576,7 @@ The sync is advisory. It is important — on an air-gapped runner it is the whol
 
 Note the recursion, and that it resolves: the record of *why* the sync failed is in `steward.log`, which the sync is what would have carried out. So a remote reader sees staleness and nothing else, and diagnosing it means reaching the machine. That is acceptable because the alternative — a second, independent channel purely for reporting the first one's failure — costs more than it is worth for a monitoring pipe, and because the ages in `status.md` already distinguish the two failures that matter ([execution.md](execution.md), *Clocks*).
 
-The sync is **outbound only**. Editing `_steward.md` in the bucket does not change the run; two-way sync would need conflict resolution nobody wants for a monitoring channel.
+The sync is **outbound only**. Editing `_steward.yaml` in the bucket does not change the run; two-way sync would need conflict resolution nobody wants for a monitoring channel.
 
 ### 9.4 What this means for git
 
@@ -717,7 +721,7 @@ The config view carries an `adaptive` section reporting each controller's live l
 
 ### 10.10 The envelope is policy; the tuning runs inside it
 
-The **envelope** is a judgement call about infrastructure that only the user can make — how big the box is, whether the cluster scales, how much they are willing to have running at once. It belongs in `_steward.md`, and it is the part of resource policy precise enough to be keys rather than sentences: `max_workers` for the pool, `samples_ramp` for sample concurrency. Everything inside the envelope is tuned **without asking** — and, as of the tuning loop ([scheduling.md](scheduling.md) §3.5), without needing an agent in session: `tend` starts each task conservatively at the ramp's floor, raises while pushback stays absent and local headroom holds, and pulls back when scale-downs cluster — deterministically, on mechanical gates. Delegating the arithmetic to a timer rather than a session is what makes the night's tuning survive nobody being attached.
+The **envelope** is a judgement call about infrastructure that only the user can make — how big the box is, whether the cluster scales, how much they are willing to have running at once. It belongs in `_steward.yaml`, and it is the part of resource policy precise enough to be keys rather than sentences: `max_workers` for the pool, `samples_ramp` for sample concurrency. Everything inside the envelope is tuned **without asking** — and, as of the tuning loop ([scheduling.md](scheduling.md) §3.5), without needing an agent in session: `tend` starts each task conservatively at the ramp's floor, raises while pushback stays absent and local headroom holds, and pulls back when scale-downs cluster — deterministically, on mechanical gates. Delegating the arithmetic to a timer rather than a session is what makes the night's tuning survive nobody being attached.
 
 What the mechanics cannot settle is a short list, and the items on it are unclear for structural reasons rather than for want of data:
 
@@ -761,7 +765,7 @@ That is the first thing in this design that wants to persist **outside the works
 
 ## 11. Notification is the gate on autonomy
 
-The entire value proposition is "don't bother me unless it matters," and both failure modes are bad in the same way: notify too much and the human stops reading; notify too little and they discover in the morning that $400 went somewhere wrong. So notification policy is *the* tuning knob for how much autonomy the human has actually granted, and it belongs in `_steward.md` — in the front matter, because a mechanical notification has to fire when no agent is present to interpret a sentence. The channel itself stays out; see *A config file may not say anything the definition can* for the split between a credential and a policy.
+The entire value proposition is "don't bother me unless it matters," and both failure modes are bad in the same way: notify too much and the human stops reading; notify too little and they discover in the morning that $400 went somewhere wrong. So notification policy is *the* tuning knob for how much autonomy the human has actually granted, and it belongs in `_steward.yaml` — as a setting rather than in `policies`, because a mechanical notification has to fire when no agent is present to interpret a sentence. The channel itself stays out; see *A config file may not say anything the definition can* for the split between a credential and a policy.
 
 Two sources, and the distinction matters:
 
@@ -1085,7 +1089,7 @@ The hardest part of the workflow, and the least designed. Some starting position
 
 The rule holds for the *live* conditions too, where it is easier to miss because each one arrives with an obvious per-sample action attached. A stuck sample has a directive that would free exactly it ([execution.md](execution.md), *The stuck sample*), which makes one item per sample look like the natural shape — right up to the provider that goes silent and leaves forty samples stuck at once, when the decision was never about a sample at all. Live conditions group per task for the same reason errors group per class: what is being decided is the condition, not its instances.
 
-**A ruling is reusable, and that is how policy grows** — but only with the human's consent (see *A ruling is not a policy*). Rulings land in `journal.jsonl` automatically; promotion into `_steward.md` is proposed and never assumed. Over months the human's actual standards accumulate in place of the ones they guessed at up front, which is the most interesting property in the whole design.
+**A ruling is reusable, and that is how policy grows** — but only with the human's consent (see *A ruling is not a policy*). Rulings land in `journal.jsonl` automatically; promotion into `_steward.yaml` is proposed and never assumed. Over months the human's actual standards accumulate in place of the ones they guessed at up front, which is the most interesting property in the whole design.
 
 **A ruling says what happens to the number, not only whether to re-run.** There are four things that can become of an errored sample — re-run it, leave it out of scoring, score it zero, or score whatever it managed before it died — and they are genuinely different scientific claims ([execution.md](execution.md), *Four dispositions for an errored sample*). A crashed sandbox that the agent caused is a failure and scoring it zero is honest; the same crash caused by a host going away is not a measurement at all and excluding it is honest. Nothing can pick between those from the exception, which is why the disposition is the human's to state and the ruling's to carry. The one to watch is *exclude*, because it is what happens when nobody says anything: the sample has no score, so it is already out of the metric and n moved on its own.
 

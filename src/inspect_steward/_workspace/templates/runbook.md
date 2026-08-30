@@ -1,9 +1,9 @@
 # Steward runbook
 
 How Steward works. This ships with the package, so it can never be out of date
-with the CLI you are running. It is mechanics; `_steward.md` is what this
-particular human wants — YAML front matter Steward already enforces on its own,
-and prose beneath it that you are the one who applies.
+with the CLI you are running. It is mechanics; `_steward.yaml` is what this
+particular human wants — settings Steward already enforces on its own, and a
+`policies` key that you are the one who applies.
 
 > **Status: skeletal.** The prohibitions and the reading disciplines below are
 > settled and binding now. The sections marked *not yet written* describe
@@ -23,7 +23,8 @@ No situation makes any of these correct.
   adding a comment explaining what the eval set is for: you were never told why
   it exists, and a plausible-but-invented rationale is worse than none, because
   a later reader cannot tell it from the author's.
-- **Write `_steward.md`.** Propose; the human writes. Both halves of it.
+- **Write `_steward.yaml`.** Propose; the human writes. The settings as much as
+  the policies.
 - **Move or delete a log.** Not even an empty cancelled one, and not into a
   folder named for discards. Resume matches logs where they are.
 - **Pass `steward launch --accept-archive` on your own judgement.** A launch
@@ -149,7 +150,7 @@ an open decision, and it is not yours.
 *Partly written.* The full procedure for attaching to a run you did not start
 depends on machinery that does not exist yet — the anomaly list and
 `analysis.md`. What is settled is where it begins: `steward runbook`, then
-`_steward.md` for this human's standing rules, then **`steward collect`** for
+`_steward.yaml` for this human's standing rules, then **`steward collect`** for
 what is true and what you missed. Everything you need is in the workspace, so
 nothing depends on a conversation this session did not have.
 

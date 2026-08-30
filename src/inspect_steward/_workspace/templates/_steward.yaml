@@ -1,0 +1,59 @@
+# Your standing rules for this project, in two halves.
+#
+# The settings below are what Steward executes by itself, at 3am, with nobody
+# watching. The `policies` key at the bottom is what an agent reads and applies
+# when one is in session. They live in one file so that a decision and its
+# reasoning stay next to each other.
+#
+# Steward never writes this file. It proposes changes and you decide, because
+# promoting a one-off ruling into a standing rule is a judgement that widens
+# what you have committed to.
+#
+# An empty file is a valid one: everything then escalates to you. Rules
+# accumulate as you notice yourself answering the same question twice, and the
+# run gets quieter as they do.
+
+# --- Settings Steward acts on -----------------------------------------------
+#
+# Only words `eval_set()` does not know belong here. Anything inspect knows —
+# log_dir, model, max_samples, max_tasks, epochs, limits — is refused by name,
+# because your definition is the single source of truth for those.
+#
+# Uncomment what you want. Anything left commented out uses Steward's default.
+
+# tend_interval: 10m      # how often a scheduled tend runs (always with a unit)
+# max_workers: 8          # pack the run into this many worker processes
+# stall_after: 3          # give up respawning a task after this many fruitless tries
+# samples_ramp: [40, 200] # range to discover sample concurrency in (false to fix it)
+
+# --- Standing rules an agent applies ----------------------------------------
+#
+# Free-form. Write a list of rules, or one block of prose — Steward carries the
+# text and never interprets it, so say whatever a person would need to hear.
+#
+# What is worth writing down:
+#
+#   - Failures you already know about, so the agent does not wake you for them.
+#     e.g. "Sandbox startup times out on roughly 1% of samples in this eval;
+#     that is the environment, not the model. Invalidate and re-run."
+#
+#   - What always reaches you regardless.
+#     e.g. "Anything touching the grader — I want to see grader failures even
+#     if they look transient."
+#
+#   - Rulings granted in advance. An agent acting on one of these is executing
+#     a decision you have already made, not making its own.
+#     e.g. "Re-run samples that failed on provider rate limits, up to twice,
+#     without asking."
+#
+#   - The room an agent may move in beneath the settings above, where that
+#     takes judgement rather than a number.
+#     e.g. "Back off at the first sign of provider throttling rather than
+#     riding the limit."
+#
+#   - What this eval set is for, and anything a third party picking up the
+#     directory cold would need in order to judge the results.
+
+# policies:
+#   - Notify me before re-running anything that would replay more than 200 samples.
+#   - Sandbox startup timeouts under 1% are expected here — invalidate and re-run.

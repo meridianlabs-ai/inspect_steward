@@ -108,7 +108,7 @@ def test_arming_records_what_it_installed(
 def test_the_interval_comes_from_steward_md_when_no_flag_says_otherwise(
     workspace: Workspace,
 ) -> None:
-    workspace.directives.write_text("---\ntend_interval: 1h\n---\n", encoding="utf-8")
+    workspace.directives.write_text("tend_interval: 1h\n", encoding="utf-8")
 
     code, output = run("timer", "arm", "--scheduler", "cron")
 
@@ -340,7 +340,7 @@ def test_status_reports_an_interval_the_workspace_no_longer_asks_for(
     workspace: Workspace,
 ) -> None:
     run("timer", "arm", "--interval", "30m", "--scheduler", "cron")
-    workspace.directives.write_text("---\ntend_interval: 5m\n---\n", encoding="utf-8")
+    workspace.directives.write_text("tend_interval: 5m\n", encoding="utf-8")
 
     code, output = run("timer", "status")
 

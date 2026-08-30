@@ -129,7 +129,7 @@ def acquire(
         path: Path to `.steward/claim`. Created, along with its directory, if absent.
         command: The command taking it, recorded for whoever is refused later.
         break_stale: Kill a wedged holder and take the claim from it. On by default because an unattended run has nobody to ask; the caller turns it off when someone is attached and would rather look at the wedge than clear it.
-        stale_after: How long counts as wedged. A parameter so a workspace can set it (`_steward.md`) and so tests can reach the break path without waiting.
+        stale_after: How long counts as wedged. A parameter so a workspace can set it (`_steward.yaml`) and so tests can reach the break path without waiting.
 
     Returns:
         A `Claim` to hold for the duration of the work, or a `Held` describing the holder that would not give it up.

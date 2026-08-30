@@ -178,7 +178,7 @@ def test_a_workspace_that_never_launched_is_told_to(
 def test_a_meaningless_ceiling_is_refused_at_the_door(
     argv: list[str], workspace: Workspace
 ) -> None:
-    # the same refusal `_steward.md` makes, because this is the same setting
+    # the same refusal `_steward.yaml` makes, because this is the same setting
     # arriving through the other door -- and a ceiling of zero is a run that
     # tends forever and never spawns
     code, output = run(*argv)

@@ -65,7 +65,7 @@ def test_a_packed_run_lands_every_log_from_one_process(
     clear_credentials(monkeypatch)
     create_workspace(tmp_path, git=False)
     workspace = Workspace.at(tmp_path)
-    workspace.directives.write_text("---\nmax_workers: 1\n---\n", encoding="utf-8")
+    workspace.directives.write_text("max_workers: 1\n", encoding="utf-8")
     definition = workspace.root / "evalset.py"
     shutil.copy(FIXTURES / "simple_evalset.py", definition)
 

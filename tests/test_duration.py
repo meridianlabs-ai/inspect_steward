@@ -1,7 +1,7 @@
 """Durations, as a human writes them.
 
 Small, and here because one interval reaches Steward from two directions —
-`_steward.md`'s front matter and a `--interval` flag — and both are typed by a
+`_steward.yaml`'s front matter and a `--interval` flag — and both are typed by a
 person. What earns the tests is the refusal: a bare number is the one input
 where being helpful would be being wrong, since `10` is ten minutes to whoever
 wrote it and ten seconds to whoever wrote the parser.

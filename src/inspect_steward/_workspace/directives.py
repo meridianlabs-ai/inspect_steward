@@ -1,6 +1,6 @@
-"""`_steward.md` — everything this human has told Steward, structured and not.
+"""`_steward.yaml` — everything this human has told Steward, structured and not.
 
-One file with two regions. **The YAML front matter is what Steward executes at 3am with nobody watching; the prose below it is what an agent applies when it arrives.** They live together because the line between them is a fact about Steward's current capability rather than about the author's intent, and it moves as Steward improves — two files would make the reader's mental model track the implementation. Adjacency is the point: a human writes one sentence about concurrency and the executable half sits directly above the reasoning, where neither can drift from the other.
+One file with two regions. **The settings are what Steward executes at 3am with nobody watching; `policies` is what an agent applies when it arrives.** They live together because the line between them is a fact about Steward's current capability rather than about the author's intent, and it moves as Steward improves — two files would make the reader's mental model track the implementation. Adjacency is the point: a human writes one sentence about concurrency and the executable half sits directly beside the reasoning, where neither can drift from the other. The seam being a key rather than a delimiter is what lets a rule graduate from prose to setting by moving out of `policies` and up the file, with nothing reformatted.
 
 **The rule that makes the file safe is that it may express only what the definition cannot** (workflow.md, *A config file may not say anything the definition can*). Things affecting Steward, never things affecting Inspect. The sharpest form of the rule, and the one the current key set obeys with no exceptions to explain: **inspect's words go in the definition; this file holds only words `eval_set()` does not know.** `max_workers` qualifies because fanning an eval set across processes is Steward's invention and no `eval_set()` argument reaches it; `max_samples` and `max_tasks` do not, and are refused by name.
 
@@ -11,13 +11,15 @@ That rule is stricter than the test it replaced. `max_tasks` used to live here, 
 - **Keys the definition owns are refused by name**, with a message saying where they belong.
 - **Everything else unrecognised is rejected outright.** Same posture as a selection document, for the same reason: this is input, not history.
 
-**Steward parses the front matter and never reads the body.** The agent opens the file itself, so nothing here has to understand markdown — which also means no prose, however malformed, can break a tend.
+**Steward parses `policies` and never interprets it.** The value is carried, not read: an agent is the audience, and Steward's only interest is being able to report what is in force. It is a string or a list of them, because a project with three rules wants three list entries and a project with a page of reasoning wants a block scalar, and neither should have to pretend to be the other.
+
+The cost of the format is here rather than hidden. When the prose sat below a fence, no prose however malformed could break a tend, because the parser stopped at the closing delimiter. Now it is a YAML value, so a mis-indented block scalar is a parse failure for the whole file. That is a real loss and it is survivable for a reason that already existed: parsing raises, and a tend degrades. See below.
 
 **Every value is typed, and validated strictly.** That is what answers YAML's coercion hazards, which workflow.md §5.3 could dismiss for the journal on the grounds that Steward wrote it and here cannot, because a human does. Typing alone is not enough and it is worth saying why: pydantic's default is coercive and YAML's is too, so the two compose into the hazard rather than cancelling it — `max_workers: yes` arrives as `True` and validates as `1`, throttling a fleet to a single worker with nothing reported. `strict=True` is what turns that into a refusal, and the error names the value that arrived so the author can see what YAML did to it.
 
 **Parsing is strict, and degrading is the caller's.** A malformed file raises here, always — this module has no way to know whether the caller has anything better to fall back on. A tend does: the settings in force are recorded in every `observation`, so it can carry on with the last known good ones and say so, which is the right behaviour for a file a human may edit at 10pm while a fleet is up. A command with no such history still refuses (`_tend.turn`).
 
-That §5.3 rejected markdown-with-front-matter for `journal.jsonl` is not in tension with this. Its argument was that block-delimited formats fail *globally* — one mistyped `---` swallows the remainder of a file — which is disqualifying for an append-only log of thousands of machine-written entries. This is a single human-authored block read at startup, with exactly one fence to get wrong and a loud error when it is.
+That §5.3 rejected markdown-with-front-matter for `journal.jsonl` is not in tension with this, and is in fact the argument that eventually removed the fence here too. Its case was that block-delimited formats fail *globally* — one mistyped `---` swallows the remainder of a file — which is disqualifying for an append-only log of thousands of machine-written entries and merely unhelpful for one human-authored file read at startup. What settled it is that the fence was never buying anything: the prose below it was already a value Steward carried rather than a document it parsed, so making that explicit costs one failure mode and removes a delimiter nobody needed to learn.
 """
 
 from pathlib import Path
@@ -35,8 +37,8 @@ DEFAULT_TEND_INTERVAL = 600
 Ten minutes, because the cost of a turn is bounded by what it reads and the cost of *missing* one is a fleet sitting idle for the whole interval. Short enough that an empty slot is refilled while somebody is still awake to care; long enough that a settled directory of two thousand logs is not re-read every minute.
 """
 
-FENCE = "---"
-"""Opens and closes the front matter. Recognised only at the very start of the file and then at column zero, so a horizontal rule in the prose is prose."""
+SUPERSEDED = "_steward.md"
+"""The name this file used to have, refused by name so a rename is reported rather than silently ignoring a workspace's standing rules."""
 
 _DEFINITION = "your definition's `eval_set()` call"
 
@@ -76,16 +78,16 @@ The last three are reference-only *by design* upstream, so that credentials stay
 
 
 class DirectivesError(Exception):
-    """`_steward.md` could not be read as directives.
+    """`_steward.yaml` could not be read as directives.
 
     Raised rather than reported, because there is no useful way to proceed: running on defaults would silently discard an operator's instruction, which is the one outcome worse than stopping. Every message names the file and, where the key belongs somewhere else, says where.
     """
 
 
 class Directives(BaseModel):
-    """What the front matter said.
+    """What `_steward.yaml` said.
 
-    Carries the structured half only. The prose is the agent's to read, and nothing here parses it.
+    Both halves, since `policies` is a key like any other now — but only one of them means anything to Steward. The settings are executed; the prose is carried so that a command can report what is in force, and interpreted by an agent rather than here.
     """
 
     model_config = ConfigDict(extra="forbid", strict=True)
@@ -172,22 +174,49 @@ class Directives(BaseModel):
         # naming the value, like every other refusal in this file
         return parse_duration(value)
 
+    policies: str | list[str] | None = Field(default=None)
+    """Standing rules an agent applies, as prose or as a list of them, or `None` where the project has none.
+
+    The half of the file Steward does not execute. It is typed only enough to be carried and reported: a block scalar for a project whose standards want paragraphs, a list for one whose standards are three sentences, and no attempt to tell them apart. Nothing here parses the text, so a rule Steward cannot act on costs nothing beyond the words.
+
+    Last in the model because it is last in the file a person writes — settings first, then the reasoning nobody has taught Steward to execute yet.
+    """
+
+    @field_validator("policies", mode="before")
+    @classmethod
+    def _policies(cls, value: object) -> object:
+        """A list of rules is a list of strings, and a list of anything else is refused with its meaning.
+
+        `mode="before"` for the same reason `samples_ramp` needs it: strict validation would report a list containing an integer as a type error against the whole field, when what the author wants told is which entry is wrong. An empty list is a project that wrote `policies:` and stopped, which is `None` rather than an error.
+        """
+        if not isinstance(value, list):
+            return value
+        entries = cast(list[object], value)
+        for index, entry in enumerate(entries):
+            if not isinstance(entry, str):
+                raise ValueError(
+                    f"should be text, or a list of it — entry {index + 1} is "
+                    f"{type(entry).__name__} rather than text: {entry!r}"
+                )
+        return entries or None
+
 
 def read_directives(path: Path) -> Directives:
     """Read a workspace's directives.
 
     Args:
-        path: `_steward.md`. Need not exist.
+        path: `_steward.yaml`. Need not exist.
 
     Returns:
-        The front matter's settings. All defaults when the file is absent, has no front matter, or has an empty one — an absent file is a workspace that expressed no preferences, not an error.
+        What the file said. All defaults when it is absent or empty — an absent file is a workspace that expressed no preferences, not an error.
 
     Raises:
-        DirectivesError: The front matter is unterminated, is not valid YAML, is not a mapping, or names a key that belongs elsewhere.
+        DirectivesError: The file is not valid YAML, is not a mapping, names a key that belongs elsewhere, or the workspace still holds a `_steward.md` under the old format.
     """
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
+        _superseded(path)
         return Directives()
     except OSError as ex:
         raise DirectivesError(f"{path.name} could not be read: {ex}") from ex
@@ -197,23 +226,16 @@ def read_directives(path: Path) -> Directives:
         # message naming the file
         raise DirectivesError(f"{path.name} is not valid UTF-8: {ex}") from ex
 
-    front = _front_matter(text, name=path.name)
-    if front is None:
-        return Directives()
-
     try:
-        loaded: Any = yaml.safe_load(front)
+        loaded: Any = yaml.safe_load(text)
     except yaml.YAMLError as ex:
-        raise DirectivesError(
-            f"the front matter in {path.name} is not valid YAML: {ex}"
-        ) from ex
+        raise DirectivesError(f"{path.name} is not valid YAML: {ex}") from ex
 
     if loaded is None:
         return Directives()
     if not isinstance(loaded, dict):
         raise DirectivesError(
-            f"the front matter in {path.name} must be a mapping of settings, "
-            f"not {type(loaded).__name__}"
+            f"{path.name} must be a mapping of settings, not {type(loaded).__name__}"
         )
 
     settings = cast(dict[str, Any], loaded)
@@ -238,18 +260,18 @@ def resolve_pool(
 
     | | |
     |---|---|
-    | `max_workers` | the CLI, then `_steward.md`, then unbounded |
-    | `stall_after` | `_steward.md`, then the default — there is no flag, because patience is a standing property rather than something to retype each turn |
+    | `max_workers` | the CLI, then `_steward.yaml`, then unbounded |
+    | `stall_after` | `_steward.yaml`, then the default — there is no flag, because patience is a standing property rather than something to retype each turn |
     | `max_tasks` | the CLI, then **the definition**, then unbounded — the file is not a source |
     | `max_samples` | the CLI, then **the definition**, then the default — the file is not a source |
-    | `samples_ramp` | `_steward.md`, then the default range — no flag, because an envelope is a standing property of the workspace, and the CLI's `--max-samples` is how one run opts out of it |
+    | `samples_ramp` | `_steward.yaml`, then the default range — no flag, because an envelope is a standing property of the workspace, and the CLI's `--max-samples` is how one run opts out of it |
 
     The last two chains continue inside `resolve_max_tasks` and `resolve_max_samples`, which is why their CLI values pass straight through rather than being filled in here: *no preference* yields to whatever the definition asked for, and a number is an instruction that does not. Both are words `eval_set()` knows, so the definition owns them and this file refuses them by name.
 
     `max_workers` has no default to fall back to, which is not an omission: `None` is the answer, and it means *do not bound this* — a run nobody shaped runs everything, in a process each.
 
     Args:
-        directives: What the workspace's front matter said.
+        directives: What the workspace's `_steward.yaml` said.
         max_workers: Process count from the command line, or `None`.
         max_tasks: Task concurrency from the command line, or `None`.
         max_samples: Sample concurrency from the command line, or `None`.
@@ -277,10 +299,10 @@ def resolve_pool(
 def resolve_interval(directives: Directives, *, interval: str | None = None) -> int:
     """Resolve how often this workspace should tend.
 
-    The `max_workers` chain, one key over: the command line, then `_steward.md`, then the default. An interval is a standing property of the host, so the file is a real source for it — unlike `max_samples`, whose source is the definition.
+    The `max_workers` chain, one key over: the command line, then `_steward.yaml`, then the default. An interval is a standing property of the host, so the file is a real source for it — unlike `max_samples`, whose source is the definition.
 
     Args:
-        directives: What the workspace's front matter said.
+        directives: What the workspace's `_steward.yaml` said.
         interval: A duration from the command line, e.g. `10m`, or `None`.
 
     Returns:
@@ -296,23 +318,18 @@ def resolve_interval(directives: Directives, *, interval: str | None = None) -> 
     return DEFAULT_TEND_INTERVAL
 
 
-def _front_matter(text: str, *, name: str) -> str | None:
-    """The YAML between the fences, or `None` where there is no front matter.
+def _superseded(path: Path) -> None:
+    """Refuse a workspace that still holds the old file, rather than running as if it said nothing.
 
-    The opening fence must be the file's first line, so a `policy.md` of pure prose renamed to `_steward.md` keeps working and a horizontal rule further down stays a horizontal rule. An *unterminated* fence is an error rather than a file read to the end: that is the one failure §5.3 names, and catching it is what makes a single block safe where an append-only log of them would not be.
+    Only reached when `_steward.yaml` is absent, so a workspace that has been converted never pays for this. The failure it prevents is the quiet one: an unconverted workspace parses perfectly — as a workspace with no directives at all — and every standing rule in it stops applying with nothing said. Silence is the wrong answer to a file somebody wrote on purpose.
     """
-    lines = text.splitlines()
-    if not lines or lines[0].rstrip() != FENCE:
-        return None
-
-    for index, line in enumerate(lines[1:], start=1):
-        if line.rstrip() == FENCE:
-            return "\n".join(lines[1:index])
-
-    raise DirectivesError(
-        f"the front matter in {name} opens with `{FENCE}` and is never closed — "
-        f"add a `{FENCE}` line where the settings end"
-    )
+    old = path.with_name(SUPERSEDED)
+    if old.exists():
+        raise DirectivesError(
+            f"this workspace has a {SUPERSEDED}, which Steward no longer reads — "
+            f"rename it to {path.name} and convert it to YAML, moving the prose "
+            f"below the front matter into a `policies:` key"
+        )
 
 
 def _refuse(settings: dict[str, Any], *, name: str) -> None:

@@ -64,7 +64,7 @@ OBSERVATION = "observation"
 
 Written by every executed turn (`_tend.turn`), whether or not anything happened, because an agent reads the run as a **time series** and its own memory does not survive a session boundary — there are several of those in a night. If the series is not written down it does not exist, and the 6am agent inherits a list of open items with no idea which are getting worse (workflow.md, *The journal records observations, not only decisions*).
 
-It is also what makes degrading `_steward.md` possible: the settings in force are recorded here, so a turn that cannot parse the file has somewhere to read the last good ones from.
+It is also what makes degrading `_steward.yaml` possible: the settings in force are recorded here, so a turn that cannot parse the file has somewhere to read the last good ones from.
 
 Named here with the other event types rather than beside its writer because two folds read it: the next turn diffs its `items` to find what appeared and what resolved, and `read_raised` uses the same list to expire a hand-off whose item is gone. It is the only record of a condition having *stopped* being true.
 """

@@ -42,7 +42,7 @@ def timer_command() -> None:
 @click.option(
     "--interval",
     default=None,
-    help="How often to tend, e.g. `10m`. Overrides `_steward.md`.",
+    help="How often to tend, e.g. `10m`. Overrides `_steward.yaml`.",
 )
 @click.option(
     "--scheduler",
@@ -125,7 +125,7 @@ def status_command(output_json: bool) -> None:
     The one command that asks the scheduler rather than the journal. Every other reader — a tend, a `status`, the item projection — goes on what arming recorded, because they run every few minutes and this costs a subprocess.
     """
     workspace = find_workspace()
-    # the preference `_steward.md` expressed, not a resolved one: an operator
+    # the preference `_steward.yaml` expressed, not a resolved one: an operator
     # who armed a one-off `--interval 1m` against a file with no opinion has
     # not created a conflict for this to report
     wanted = _directives(workspace).tend_interval
@@ -183,7 +183,7 @@ def _directives(workspace: Workspace) -> Directives:
 
 
 def _interval(workspace: Workspace, interval: str | None) -> int:
-    """What this workspace should tend at: the flag, then `_steward.md`, then the default."""
+    """What this workspace should tend at: the flag, then `_steward.yaml`, then the default."""
     try:
         return resolve_interval(_directives(workspace), interval=interval)
     except DurationError as ex:

@@ -911,7 +911,7 @@ WIDTH: list[tuple[str, dict[str, Any], Pool, int | None]] = [
     ids=[case for case, _, _, _ in WIDTH],
 )
 def test_max_tasks(options: dict[str, Any], pool: Pool, expected: int | None) -> None:
-    # `max_tasks` is inspect's word, so the definition owns it and `_steward.md`
+    # `max_tasks` is inspect's word, so the definition owns it and `_steward.yaml`
     # refuses it -- the chain is the command line, then the definition, then
     # unbounded
     manifest = synth_manifest([TASK], **options)
@@ -1012,7 +1012,7 @@ def test_a_respawn_starts_where_the_climb_left_off() -> None:
 
 def test_a_replayed_level_is_clamped_to_the_range_in_force_now() -> None:
     # the journal says what was authorized when the climb happened and
-    # `_steward.md` says what is authorized now; a spawn answers to the second
+    # `_steward.yaml` says what is authorized now; a spawn answers to the second
     manifest = synth_manifest([TASK])
     identifier = manifest.tasks[0].identifier
 

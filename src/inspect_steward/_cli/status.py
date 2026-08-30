@@ -9,7 +9,7 @@ from .turn import TURN_ERRORS, echo_turn, find_workspace, turn_json
     "--max-workers",
     type=click.IntRange(min=1),
     default=None,
-    help="Worker processes to preview against (overrides _steward.md).",
+    help="Worker processes to preview against (overrides _steward.yaml).",
 )
 @click.option(
     "--max-tasks",
