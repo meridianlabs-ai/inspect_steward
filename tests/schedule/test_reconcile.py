@@ -36,6 +36,7 @@ from inspect_steward._schedule import (
     SpawnTask,
     SpawnWorker,
     reconcile,
+    resolve_max_tasks,
     resolve_samples_ramp,
 )
 
@@ -891,6 +892,54 @@ def test_the_summary_counts_what_a_status_line_needs(tmp_path: Path) -> None:
     assert result.summary.spawning == 2
     assert result.summary.unreadable == 0
     assert result.summary.max_workers == 8
+
+
+# --- fleet width: the definition's word, not the file's -------------------
+
+
+WIDTH: list[tuple[str, dict[str, Any], Pool, int | None]] = [
+    ("nobody expressed one", {}, POOL, None),
+    ("the definition did", {"max_tasks": 6}, POOL, 6),
+    ("the command line did", {}, Pool(max_tasks=3), 3),
+    ("the command line outranks it", {"max_tasks": 6}, Pool(max_tasks=3), 3),
+]
+
+
+@pytest.mark.parametrize(
+    ("options", "pool", "expected"),
+    [(options, pool, expected) for _, options, pool, expected in WIDTH],
+    ids=[case for case, _, _, _ in WIDTH],
+)
+def test_max_tasks(options: dict[str, Any], pool: Pool, expected: int | None) -> None:
+    # `max_tasks` is inspect's word, so the definition owns it and `_steward.md`
+    # refuses it -- the chain is the command line, then the definition, then
+    # unbounded
+    manifest = synth_manifest([TASK], **options)
+
+    assert resolve_max_tasks(manifest, pool) == expected
+
+
+def test_an_unset_width_runs_everything_rather_than_one_at_a_time() -> None:
+    # the deliberate divergence from `eval()`, whose own rule for an unset
+    # max_tasks is sequential: a fleet exists to run wide, and a definition
+    # that says nothing has expressed no preference rather than a preference
+    manifest = synth_manifest([TASK, SynthTask("other")])
+
+    result = reconcile(manifest, InFlight(), nothing_run(manifest), pool=POOL)
+
+    assert result.summary.spawning == 2
+    assert result.summary.max_tasks is None
+
+
+def test_the_definitions_width_bounds_what_starts() -> None:
+    tasks = [TASK, SynthTask("second"), SynthTask("third")]
+    manifest = synth_manifest(tasks, max_tasks=2)
+
+    result = reconcile(manifest, InFlight(), nothing_run(manifest), pool=POOL)
+
+    assert result.summary.spawning == 2
+    assert len(result.queued) == 1
+    assert result.summary.max_tasks == 2
 
 
 # --- the ramp: on by default, pinned by anyone explicit -------------------

@@ -139,26 +139,15 @@ def test_the_worker_count_resolves_most_specific_first(
     assert pool.max_workers == expected
 
 
-@pytest.mark.parametrize(
-    ("cli", "file", "expected"),
-    [(cli, file, expected) for _, cli, file, expected in CEILING],
-    ids=[case for case, _, _, _ in CEILING],
-)
-def test_task_concurrency_resolves_the_same_way(
-    cli: int | None, file: int | None, expected: int | None
-) -> None:
-    # the same chain as `max_workers`, and unbounded where nobody said
-    # otherwise -- `None` is the answer rather than the absence of one
-    pool = resolve_pool(Directives(max_tasks=file), max_tasks=cli)
-    assert pool.max_tasks == expected
-
-
 def test_the_two_shape_knobs_are_independent() -> None:
     # they bound different things -- how much runs, and how few processes it
-    # runs in -- so setting one must not imply anything about the other
+    # runs in -- so setting one must not imply anything about the other. Fleet
+    # width reaches the pool only from the command line now: the file is not a
+    # source for it, and the definition's value is read in `resolve_max_tasks`
     pool = resolve_pool(Directives(max_workers=2))
 
     assert (pool.max_workers, pool.max_tasks) == (2, None)
+    assert resolve_pool(Directives(max_workers=2), max_tasks=3).max_tasks == 3
 
 
 PATIENCE: list[tuple[str, str, int]] = [

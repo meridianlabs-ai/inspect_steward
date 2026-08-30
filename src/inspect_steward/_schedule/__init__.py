@@ -20,6 +20,7 @@ from .reconcile import (
     pour,
     reconcile,
     resolve_max_samples,
+    resolve_max_tasks,
     resolve_samples_ramp,
 )
 
@@ -45,5 +46,6 @@ __all__ = [
     "pour",
     "reconcile",
     "resolve_max_samples",
+    "resolve_max_tasks",
     "resolve_samples_ramp",
 ]

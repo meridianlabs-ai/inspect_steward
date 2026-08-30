@@ -129,7 +129,7 @@ def launch(
         env_check: Refuse to arm when a scheduled tend would not inherit this shell's credentials. Checked **before** the capture, so a Hawk config does not spend five minutes resolving packages on the way to a refusal.
         store: Log store for this run — a path, `auto`, or `none` — overriding `INSPECT_STEWARD_STORE`. **Recorded and otherwise inert**: nothing reads a store until publication exists (step 33), and the only validation available before then is that the value is not empty.
         max_workers: Worker processes for the first turn, overriding `_steward.md`. `None` expresses no preference and defers to the file, which itself defaults to a process per task — it does not request that width.
-        max_tasks: Tasks in flight at once for the first turn, overriding `_steward.md`. `None` defers to the file in the same way.
+        max_tasks: Tasks in flight at once for the first turn, overriding the definition's `max_tasks`. `None` defers to it.
         max_samples: Sample concurrency for the first turn.
         break_stale: Kill a wedged claim holder and take the claim from it.
 

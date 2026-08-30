@@ -236,7 +236,7 @@ def tend(
     Args:
         workspace: The workspace to tend.
         max_workers: Worker processes for this turn, overriding `_steward.md`. `None` expresses no preference and defers to the file, which itself defaults to a process per task — it does not request that width, so a workspace that sets the key cannot be widened back to unbounded for one turn.
-        max_tasks: Tasks in flight at once for this turn, overriding `_steward.md`. `None` defers to the file in the same way.
+        max_tasks: Tasks in flight at once for this turn, overriding the definition's `max_tasks`. `None` defers to it.
         max_samples: Sample concurrency for this turn, overriding the definition.
         break_stale: Kill a wedged claim holder and take the claim from it.
         claim: A claim the caller already holds, to run this turn under instead of taking one. For `launch`, whose whole composition — capture, commit, arm, tend — is one span of single-writer work: a launch that released before its own first turn would be refused by it, or worse, would let a timer firing in the gap spawn workers for tasks the commit had just orphaned. Released by the caller, not here, because the caller's work is not over.

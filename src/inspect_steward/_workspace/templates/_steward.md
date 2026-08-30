@@ -1,15 +1,16 @@
 ---
 # Settings Steward acts on by itself, at 3am, with nobody watching.
 #
-# Only what affects *Steward* belongs up here. Anything that affects the eval —
-# log_dir, model, max_samples, epochs, limits — is refused by name, because
-# your definition is the single source of truth for those.
+# Only words `eval_set()` does not know belong up here. Anything inspect knows —
+# log_dir, model, max_samples, max_tasks, epochs, limits — is refused by name,
+# because your definition is the single source of truth for those.
 #
 # Uncomment what you want. Anything left commented out uses Steward's default.
 
-# tend_interval: 10m  # how often a scheduled tend runs (always with a unit)
-# max_tasks: 24       # never run more than this many tasks at once, fleet-wide
-# max_workers: 8      # pack those tasks into this many worker processes
+# tend_interval: 10m      # how often a scheduled tend runs (always with a unit)
+# max_workers: 8          # pack the run into this many worker processes
+# stall_after: 3          # give up respawning a task after this many fruitless tries
+# samples_ramp: [40, 200] # range to discover sample concurrency in (false to fix it)
 ---
 
 # _steward.md

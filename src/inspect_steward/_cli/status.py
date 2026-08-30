@@ -15,7 +15,7 @@ from .turn import TURN_ERRORS, echo_turn, find_workspace, turn_json
     "--max-tasks",
     type=click.IntRange(min=1),
     default=None,
-    help="Tasks in flight to preview against (overrides _steward.md).",
+    help="Tasks in flight to preview against (overrides the definition).",
 )
 @click.option(
     "--max-samples",

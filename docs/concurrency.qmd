@@ -9,7 +9,7 @@ Concurrency under Steward has three dimensions, and they are controlled by three
 
 | Dimension | Knob | Owner |
 |----|----|----|
-| How many tasks run at once | `max_tasks` | `_steward.md` |
+| How many tasks run at once | `max_tasks` | your definition |
 | How many processes those tasks are divided into | `max_workers` | `_steward.md` |
 | How many samples run at once within a task | `max_samples` | your definition |
 
@@ -28,7 +28,9 @@ The cost is per-process startup: every worker imports your definition and its de
 
 `max_tasks` caps how many tasks are in flight across the whole fleet. Unset, every task runs at once. Set, tasks queue in the order your definition declares them, and each completed task frees a slot for the next.
 
-Note that `eval_set()` also has a `max_tasks` argument, but under Steward it never takes effect: each worker is handed its own share of the run, so the definition's value has nothing to control. Task concurrency belongs to the fleet, which is why this knob lives in `_steward.md` rather than being refused like other `eval_set()` options.
+It belongs in your definition — `eval_set(max_tasks=...)` — and `_steward.md` refuses it by name, on the same rule that refuses `max_samples`: **inspect's words go in the definition; `_steward.md` holds only words `eval_set()` does not know.** Steward reads the value your definition asked for and applies it to the fleet, so the number means what it says even though each worker is handed only its own share of it.
+
+One difference from a plain `eval_set()` run worth knowing: leaving it unset means *every task at once* here, where `eval()`'s own rule for an unset `max_tasks` is one at a time. A fleet exists to run wide, and saying nothing is no preference rather than a preference for sequential.
 
 ## `max_workers` — how many processes
 
@@ -94,7 +96,7 @@ steward tend --max-workers 2      # process packing, this turn
 steward tend --max-samples 20     # pin per-task sample concurrency, for the run
 ```
 
-Standing values belong in `_steward.md` front matter (`max_tasks`, `max_workers`, `samples_ramp`) or your definition (`max_samples`); the CLI is for the run where conditions differ.
+Standing values belong in `_steward.md` front matter (`max_workers`, `samples_ramp`, `stall_after`, `tend_interval`) or your definition (`max_tasks`, `max_samples`); the CLI is for the run where conditions differ.
 
 **Two of the three lapse; `--max-samples` does not.** Fleet width and process packing are recomputed from scratch every turn, so a flag that is not repeated simply stops applying. Sample concurrency is different, because a value there does not just set a number — it pins the setpoint and switches the ramp off. So the pin is remembered for the rest of the run, and the way to release it is to write a range in `_steward.md`:
 

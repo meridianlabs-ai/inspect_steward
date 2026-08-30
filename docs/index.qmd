@@ -151,7 +151,7 @@ Steward writes a `_steward.md` file to your workspace which can be used to tune 
 
 ```{.markdown filename="_steward.md"}
 ---
-max_tasks: 8
+max_workers: 8
 stall_after: 3
 ---
 
@@ -171,17 +171,19 @@ a re-run.
 
 |  |  |
 |----|----|
-| `max_tasks` | How many tasks run at once (default: all of them). |
 | `max_workers` | How many processes tasks are divided into (default: one per task, for maximum fault isolation). |
+| `samples_ramp` | The range Steward may discover sample concurrency in (default: `[40, 200]`). |
 | `tend_interval` | How often the background monitor checks the run (default: `10m`). |
 
-A fleet's demand on a provider is `max_tasks` × `max_samples`. The second
-factor belongs to your definition: set `max_samples` explicitly and Steward
-honors it as written. When you leave it unset, Steward **discovers** it — tasks
-start at 40 and the monitor ramps each one toward 200 while the provider shows
-no rate-limit pushback, backing off at once when it does. The range is settable
-as `samples_ramp: [40, 300]` (or `samples_ramp: false` to stay at 40), and
-`steward tend --max-samples` pins a value for a single run.
+A fleet's demand on a provider is `max_tasks` × `max_samples`, and **both of
+those belong to your definition** — they are words `eval_set()` knows, so
+`_steward.md` refuses them and points you there. `max_tasks` caps how many tasks
+run at once (unset, all of them). `max_samples` Steward honors as written when
+you set it; when you leave it unset it **discovers** the value — tasks start at
+40 and the monitor ramps each one toward 200 while the provider shows no
+rate-limit pushback, backing off at once when it does. That range is the one
+concurrency setting that does live in `_steward.md`, because a range to discover
+a setpoint within is not something a definition can express.
 
 See the [Concurrency](concurrency.qmd) article for more details on scheduling and execution policy.
 

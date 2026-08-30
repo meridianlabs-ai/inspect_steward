@@ -160,7 +160,11 @@ def test_the_pour(
     blocked: Blocked | None,
 ) -> None:
     poured = pour(
-        pending(count), pool=pool, tasks_running=running, workers_running=workers
+        pending(count),
+        pool=pool,
+        max_tasks=pool.max_tasks,
+        tasks_running=running,
+        workers_running=workers,
     )
 
     assert sizes(poured.workers) == expected, case
@@ -175,7 +179,11 @@ def test_a_full_process_budget_queues_rather_than_joining_a_live_worker() -> Non
     # a selection document is written once, at spawn, so a running worker
     # cannot be handed more work -- the tasks wait for a process to free up
     poured = pour(
-        pending(4), pool=Pool(max_workers=2), tasks_running=2, workers_running=2
+        pending(4),
+        pool=Pool(max_workers=2),
+        max_tasks=None,
+        tasks_running=2,
+        workers_running=2,
     )
 
     assert poured.workers == []
@@ -191,7 +199,11 @@ def test_tasks_are_dealt_round_robin_rather_than_sliced() -> None:
     the uncomparable interruption the transposition exists to prevent.
     """
     poured = pour(
-        pending(6), pool=Pool(max_workers=2), tasks_running=0, workers_running=0
+        pending(6),
+        pool=Pool(max_workers=2),
+        max_tasks=None,
+        tasks_running=0,
+        workers_running=0,
     )
 
     assert [[task.identifier for task in batch] for batch in poured.workers] == [
@@ -207,7 +219,8 @@ def test_a_run_short_of_processes_blames_the_process_limit_not_the_task_one() ->
     """
     poured = pour(
         pending(4),
-        pool=Pool(max_workers=1, max_tasks=10),
+        pool=Pool(max_workers=1),
+        max_tasks=10,
         tasks_running=1,
         workers_running=1,
     )
@@ -220,7 +233,11 @@ def test_the_queue_keeps_spawn_order() -> None:
     # the queue is the same decision deferred, so what waits is the tail of the
     # order rather than an arbitrary remainder
     poured = pour(
-        pending(5), pool=Pool(max_tasks=2), tasks_running=0, workers_running=0
+        pending(5),
+        pool=Pool(),
+        max_tasks=2,
+        tasks_running=0,
+        workers_running=0,
     )
 
     assert [task.identifier for task in poured.queued] == ["id-2", "id-3", "id-4"]

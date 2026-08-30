@@ -2,7 +2,11 @@
 
 One file with two regions. **The YAML front matter is what Steward executes at 3am with nobody watching; the prose below it is what an agent applies when it arrives.** They live together because the line between them is a fact about Steward's current capability rather than about the author's intent, and it moves as Steward improves — two files would make the reader's mental model track the implementation. Adjacency is the point: a human writes one sentence about concurrency and the executable half sits directly above the reasoning, where neither can drift from the other.
 
-**The rule that makes the file safe is that it may express only what the definition cannot** (workflow.md, *A config file may not say anything the definition can*). Things affecting Steward, never things affecting Inspect. `max_workers` qualifies because the fan-out into processes is Steward's invention and no `eval_set()` argument reaches it; `max_samples` does not, and is refused by name. Two mechanisms enforce it, and both fail loudly on the first read, because the failure mode being guarded against is a key someone adds in good faith and never learns was ignored:
+**The rule that makes the file safe is that it may express only what the definition cannot** (workflow.md, *A config file may not say anything the definition can*). Things affecting Steward, never things affecting Inspect. The sharpest form of the rule, and the one the current key set obeys with no exceptions to explain: **inspect's words go in the definition; this file holds only words `eval_set()` does not know.** `max_workers` qualifies because fanning an eval set across processes is Steward's invention and no `eval_set()` argument reaches it; `max_samples` and `max_tasks` do not, and are refused by name.
+
+That rule is stricter than the test it replaced. `max_tasks` used to live here, justified by *does a definition's value reach the runtime* — it does not, because every selection document overrides it with that worker's own batch size, so the key contradicted nothing. The test was sound and the key was still confusing: `eval_set()` knows the word, so somebody writing it there watched it do nothing while a same-named key sat in the policy file. Fleet width now resolves from the definition (`_schedule.resolve_max_tasks`), which cost one upstream field and bought a rule with no exceptions (execution.md, item 17).
+
+`samples_ramp` is the near miss worth naming, since it governs sample concurrency and sits next to a refused `max_samples`. It stays because `eval_set()` has no such word: a *range to discover a setpoint within* is not something a definition can express, and the moment a definition does express a setpoint the key goes inert rather than contradicting it. Two mechanisms enforce it, and both fail loudly on the first read, because the failure mode being guarded against is a key someone adds in good faith and never learns was ignored:
 
 - **Keys the definition owns are refused by name**, with a message saying where they belong.
 - **Everything else unrecognised is rejected outright.** Same posture as a selection document, for the same reason: this is input, not history.
@@ -52,6 +56,13 @@ REFUSED: dict[str, str] = {
     "fail_on_error": _DEFINITION,
     "retry_on_error": _DEFINITION,
     "max_samples": _DEFINITION,
+    # the one refusal that says more than where the key goes, because this key
+    # used to live here and deleting it is not the same as moving it: Steward
+    # reads an unset fleet width as *everything at once*
+    "max_tasks": (
+        f"{_DEFINITION}, which is now where fleet width comes from — and move it "
+        f"rather than deleting it, since unset means every task at once"
+    ),
     "notify": "the INSPECT_EVAL_NOTIFICATION environment variable",
     "notification": "the INSPECT_EVAL_NOTIFICATION environment variable",
     "store": "the INSPECT_STEWARD_STORE environment variable",
@@ -89,12 +100,6 @@ class Directives(BaseModel):
     A standing property of the host and the workspace rather than a setpoint — "do not run more than 8 processes here" — which is what makes it the operator's envelope rather than something a tuning loop moves (workflow.md, *The envelope is policy; the tuning is the agent's job*).
 
     Fewer processes than tasks means packing several tasks into each, which buys back the per-process startup a frontend charges and costs crash isolation. It does not change how much runs at once: that is `max_tasks`.
-    """
-
-    max_tasks: int | None = Field(default=None, gt=0)
-    """How many tasks may be in flight at once, or `None` for all of them.
-
-    The fleet's concurrency, and with the definition's `max_samples` its whole load on a provider. Passes the same test `max_workers` does despite sharing a name with an `eval_set()` argument: a definition's `max_tasks` never reaches a Steward worker, because the selection document overrides it unconditionally with that worker's own share of this (`_worker.spawn.worker_selection`). There is nothing here for a definition to contradict.
     """
 
     stall_after: int | None = Field(default=None, gt=0)
@@ -234,14 +239,14 @@ def resolve_pool(
     | | |
     |---|---|
     | `max_workers` | the CLI, then `_steward.md`, then unbounded |
-    | `max_tasks` | the CLI, then `_steward.md`, then unbounded |
     | `stall_after` | `_steward.md`, then the default — there is no flag, because patience is a standing property rather than something to retype each turn |
+    | `max_tasks` | the CLI, then **the definition**, then unbounded — the file is not a source |
     | `max_samples` | the CLI, then **the definition**, then the default — the file is not a source |
     | `samples_ramp` | `_steward.md`, then the default range — no flag, because an envelope is a standing property of the workspace, and the CLI's `--max-samples` is how one run opts out of it |
 
-    The `max_samples` chain continues inside `resolve_max_samples`, which is why `None` is passed straight through rather than filled in here: *no preference* yields to whatever the definition asked for, and a number is an instruction that does not.
+    The last two chains continue inside `resolve_max_tasks` and `resolve_max_samples`, which is why their CLI values pass straight through rather than being filled in here: *no preference* yields to whatever the definition asked for, and a number is an instruction that does not. Both are words `eval_set()` knows, so the definition owns them and this file refuses them by name.
 
-    The first two have no default to fall back to, which is not an omission: `None` is the answer, and it means *do not bound this*. So unlike `max_samples` there is nothing downstream still to resolve — a run nobody shaped runs everything, in a process each.
+    `max_workers` has no default to fall back to, which is not an omission: `None` is the answer, and it means *do not bound this* — a run nobody shaped runs everything, in a process each.
 
     Args:
         directives: What the workspace's front matter said.
@@ -255,7 +260,7 @@ def resolve_pool(
     ramp = directives.samples_ramp
     return Pool(
         max_workers=max_workers if max_workers is not None else directives.max_workers,
-        max_tasks=max_tasks if max_tasks is not None else directives.max_tasks,
+        max_tasks=max_tasks,
         max_samples=max_samples,
         # `True` cannot arrive -- the field validator refuses it -- but the model
         # types the field as `bool` for pydantic's sake, and `Pool`'s narrower

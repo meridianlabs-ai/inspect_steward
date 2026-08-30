@@ -47,10 +47,12 @@ This closes [configuration.md](configuration.md) open question 6.
 
 A run has a shape, and it takes two numbers to say:
 
-| key | means | default |
-|---|---|---|
-| `max_tasks` | how many tasks may be in flight at once, fleet-wide | unbounded — all of them |
-| `max_workers` | how many worker **processes** those are divided into | unbounded — a process per task |
+| key | whose word it is | means | default |
+|---|---|---|---|
+| `max_tasks` | the definition's | how many tasks may be in flight at once, fleet-wide | unbounded — all of them |
+| `max_workers` | `_steward.md`'s | how many worker **processes** those are divided into | unbounded — a process per task |
+
+The ownership column is not decoration: `max_tasks` is a word `eval_set()` knows, so the definition says it and `_steward.md` refuses it, while fanning a run across processes is Steward's invention and has no other home ([workflow.md](workflow.md) §5.9). An unset `max_tasks` means *everything at once* rather than `eval()`'s one-at-a-time, which is the one place the fleet reads inspect's word differently and is stated in §3.1.
 
 **`max_tasks` is the load; `max_workers` is only the packing.** Total concurrent samples is `tasks in flight × max_samples` and nothing else — `max_samples` is per task (§3.1), so a process running four tasks is four times the load of one running one, whether that is four processes or one. Steward owns both factors of the product, which is what makes the fleet's load on a provider deterministic rather than emergent ([workflow.md](workflow.md), *What Steward actually has to solve*). `max_workers` moves neither factor. It buys back per-process startup and costs crash isolation, and that is the whole of what it does.
 
@@ -155,7 +157,9 @@ This was the most consequential thing to get right, because the docs treated all
 
 The first row is the surprise, and it is what makes packing cheap. Because `max_samples` is per *task*, a worker gets precisely the semaphore each of its tasks would have had inside a single-process `eval_set()` run — so there is nothing to divide, whether it holds one task or fifty, and passing a definition's value through unchanged preserves its meaning exactly. It also discharges the constraint §1.2 used to carry: a batch may span models freely, because no task's limit depends on what it is sharing a process with.
 
-What differs between Steward and `eval_set()` is *task* parallelism, and there Steward now writes the number rather than inheriting one. A worker's selection carries `max_tasks` equal to the size of its batch, unconditionally. That is not a preference: in selection mode `eval_set()` never reaches its own defaulting, so an unset value falls through to `eval()`'s rule — one task at a time for a single model, the model count for several — and a packed worker would run its batch sequentially with nobody having chosen that. The fleet-wide bound is `Pool.max_tasks` (§2.2); this is only that process's share of it.
+What differs between Steward and `eval_set()` is *task* parallelism, and there Steward now writes the number rather than inheriting one. A worker's selection carries `max_tasks` equal to the size of its batch, unconditionally. That is not a preference: in selection mode `eval_set()` never reaches its own defaulting, so an unset value falls through to `eval()`'s rule — one task at a time for a single model, the model count for several — and a packed worker would run its batch sequentially with nobody having chosen that.
+
+**The fleet-wide bound is the definition's `max_tasks`, and the two uses of the word must not be confused.** `resolve_max_tasks` reads it from the manifest — the command line first, then the definition, then unbounded — and it governs how many *batches* reconcile keeps in flight. It is never written into a worker: the number in a selection document is that process's own batch size, so the fleet number exists only in reconcile and a worker only ever learns its share. Reading the definition's value this way is also the one place the fleet reads an inspect word differently, and deliberately: unset means everything at once here, where `eval()` would run one at a time, because a fleet exists to run wide and silence is no preference rather than a preference for sequential.
 
 ### 3.2 `max_samples` — set explicitly, so it can be steered
 

@@ -22,7 +22,7 @@ from .turn import (
     "--max-tasks",
     type=click.IntRange(min=1),
     default=None,
-    help="Tasks in flight at once for this turn (overrides _steward.md).",
+    help="Tasks in flight at once for this turn (overrides the definition).",
 )
 @click.option(
     "--max-samples",

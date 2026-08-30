@@ -62,6 +62,8 @@ class Pool:
     """What the operator asked of the worker pool.
 
     Two knobs that shape the run, and they are about different things. `max_tasks` is *how much runs at once* — the fleet's concurrency, and with `max_samples` its whole load on a provider. `max_workers` is *how many processes that is divided into*, which costs startup and buys crash isolation and changes nothing about how much is in flight. Both are unbounded by default, so a run with neither set puts every task in flight in a process of its own (scheduling.md, *The worker pool*).
+
+    **What this carries is what the *operator* asked for, which is not the same as what is in force.** Only `max_workers` and `stall_after` resolve here, because `_steward.md` is their source. The two knobs the definition can also express — `max_tasks` and `max_samples` — carry the command line's value or `None`, and their chains finish in `resolve_max_tasks` and `resolve_max_samples`, which have the manifest to ask.
     """
 
     max_workers: int | None = None
@@ -71,9 +73,11 @@ class Pool:
     """
 
     max_tasks: int | None = None
-    """How many tasks may be in flight at once across the whole fleet, or `None` for all of them.
+    """Fleet width from the command line, or `None` for no operator preference.
 
-    Distinct from the `max_tasks` Steward writes into a worker's selection, which is that one process's share of this. A definition's own `max_tasks` never reaches a worker, because the selection override is written unconditionally — so this key contradicts nothing the definition can say.
+    `None` rather than a number for the same reason `max_samples` is: *no preference* yields to whatever the definition asked for, and a number is an instruction that does not. See `resolve_max_tasks`.
+
+    Distinct from the `max_tasks` Steward writes into a worker's selection, which is that one process's share of the fleet's width rather than the width itself.
     """
 
     max_samples: int | None = None
@@ -383,6 +387,7 @@ def reconcile(
 
     running = inflight.running_identifiers
     max_samples = resolve_max_samples(manifest, pool)
+    width = resolve_max_tasks(manifest, pool)
 
     pending: list[SpawnTask] = []
     stalled: list[str] = []
@@ -400,6 +405,7 @@ def reconcile(
         else pour(
             pending,
             pool=pool,
+            max_tasks=width,
             tasks_running=inflight.running_tasks,
             workers_running=len(inflight.running),
         )
@@ -438,6 +444,7 @@ def reconcile(
             stalled=stalled,
             archiving=len(archiving),
             pool=pool,
+            max_tasks=width,
             paused=paused,
         ),
     )
@@ -447,6 +454,7 @@ def pour(
     pending: list[SpawnTask],
     *,
     pool: Pool,
+    max_tasks: int | None,
     tasks_running: int,
     workers_running: int,
 ) -> Poured:
@@ -460,18 +468,15 @@ def pour(
 
     Args:
         pending: Tasks needing work, in spawn order.
-        pool: The run's shape.
+        pool: The run's shape. Only `max_workers` is read from it — fleet width arrives resolved, since its sources are the command line and the definition rather than anything `Pool` carries alone.
+        max_tasks: Fleet width in force, from `resolve_max_tasks`, or `None` for unbounded.
         tasks_running: Tasks already in flight, which `max_tasks` counts against.
         workers_running: Processes already alive, which `max_workers` counts against.
 
     Returns:
         One tuple of tasks per process to spawn, the tasks left waiting, and what they are waiting on.
     """
-    placeable = (
-        len(pending)
-        if pool.max_tasks is None
-        else max(0, pool.max_tasks - tasks_running)
-    )
+    placeable = len(pending) if max_tasks is None else max(0, max_tasks - tasks_running)
     batch, queued = pending[:placeable], pending[placeable:]
     if not batch:
         # nothing may start: either `max_tasks` is spent, or there was nothing
@@ -718,6 +723,33 @@ def resolve_max_samples(manifest: Manifest, pool: Pool) -> int:
     return ramp[0] if ramp is not None else DEFAULT_MAX_SAMPLES
 
 
+def resolve_max_tasks(manifest: Manifest, pool: Pool) -> int | None:
+    """Fleet width: how many tasks may be in flight at once, or `None` for all of them.
+
+    The `max_samples` chain, one key over — the command line, then the definition, then Steward's default — and it lives here for the same reason: `_steward.md` is not a source, so the file has nothing to say and `resolve_pool` has no manifest to ask.
+
+    **`max_tasks` is inspect's word, so the definition owns it.** An earlier version made this a `_steward.md` key, justified by the reaches-the-runtime test: a definition's value never survives to a worker, because the selection document overrides it unconditionally with that worker's own batch size, so the file contradicted nothing. The test was sound and the key was still confusing — `eval_set()` knows the word, and somebody writing it there watched it do nothing while a same-named key lived in the policy file. The simpler rule is worth the migration: **inspect's words go in the definition; `_steward.md` holds only words `eval_set()` does not know** (execution.md, item 17).
+
+    One divergence from `eval_set()` worth stating rather than hiding: unset means *everything at once* here, where `eval()`'s own rule is one task at a time for a single model. A fleet exists to run wide, and a definition that says nothing has expressed no preference rather than a preference for sequential.
+
+    **The resolved number is used at reconcile and nowhere else.** It bounds how many batches are in flight; it is never written into a worker, which is told only its own share.
+
+    Args:
+        manifest: Captured desired state.
+        pool: What the operator asked for.
+
+    Returns:
+        Tasks in flight allowed, or `None` for unbounded.
+    """
+    if pool.max_tasks is not None:
+        return pool.max_tasks
+
+    # options is free-form and deserialized, so a manifest written by another
+    # version can carry anything here; a definition that set nothing carries None
+    requested: Any = manifest.options.get("max_tasks")
+    return requested if isinstance(requested, int) and requested > 0 else None
+
+
 def resolve_samples_ramp(manifest: Manifest, pool: Pool) -> tuple[int, int] | None:
     """The range the tuning loop may explore, or `None` where the setpoint is pinned.
 
@@ -777,6 +809,7 @@ def _summarize(
     stalled: list[str],
     archiving: int,
     pool: Pool,
+    max_tasks: int | None,
     paused: bool,
 ) -> Summary:
     states = {state.value: 0 for state in TaskState}
@@ -804,7 +837,7 @@ def _summarize(
         archiving=archiving,
         unreadable=len(observed.unreadable),
         max_workers=pool.max_workers,
-        max_tasks=pool.max_tasks,
+        max_tasks=max_tasks,
         blocked=blocked,
         capture_rss=capture_rss,
         paused=paused,

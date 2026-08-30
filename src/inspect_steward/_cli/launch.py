@@ -111,7 +111,7 @@ _LABELS = {
     "--max-tasks",
     type=click.IntRange(min=1),
     default=None,
-    help="Tasks in flight at once for the first turn (overrides _steward.md).",
+    help="Tasks in flight at once for the first turn (overrides the definition).",
 )
 @click.option(
     "--max-samples",
