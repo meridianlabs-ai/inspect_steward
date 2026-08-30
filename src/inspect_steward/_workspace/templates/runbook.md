@@ -135,6 +135,11 @@ an open decision, and it is not yours.
 
 ## Context is the real budget
 
+- **Take the log directory from the summary, never from the workspace.** The
+  `Logs` line in `status.md` is where this run's results are, and it is often
+  not `logs/` here — a definition can name its own, and a machine can put every
+  run under a shared root. Anything you point at `logs/` on the assumption that
+  it exists will find nothing rather than fail.
 - **Never read a full eval log.** Use `header_only=True` for status and counts;
   `read_eval_log_sample_summaries` or `samples_df` for per-sample data. A full
   read pulls the whole archive for what the header already has.

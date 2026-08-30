@@ -63,6 +63,14 @@ def status_markdown(
             "",
         ]
     )
+    if result.log_dir is not None:
+        # in full rather than shortened, because the audience for this line is
+        # somebody about to paste it into `samples_df` or `inspect view` -- and
+        # because it is frequently not under the workspace at all, which is the
+        # case that made it worth a line (`TendResult.log_dir`). Not in
+        # `echo_turn`: a terminal reader is standing in the workspace and the
+        # compact output is for what changed
+        lines.extend([f"**Logs** `{result.log_dir}`", ""])
     lines.extend(_items(result, for_agent=for_agent))
     lines.extend(
         [

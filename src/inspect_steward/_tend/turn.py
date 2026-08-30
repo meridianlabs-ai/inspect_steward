@@ -231,6 +231,14 @@ class TendResult:
     Computed for both dispositions and executed by one, exactly like the actions: a `status` shows the step a clean window has earned without taking it, which is the preview contract everything else here honours.
     """
 
+    log_dir: str | None = None
+    """Where this run's results are, as the launch that committed the manifest resolved it.
+
+    **Reported because it stopped being guessable.** For as long as `logs/` was the near-universal answer, a reader who needed the directory could assume it; a definition naming its own was the exception. A `log_root` makes the workspace's `logs/` the exception instead — there is no such directory at all — while the runbook goes on telling an agent to reach for `samples_df` and `read_eval_log_sample_summaries` without saying where. The alternative was pointing the agent at `.steward/manifest.json`, which would make a private file part of the contract with the one directory Steward documents as safe to delete.
+
+    `None` only on a result assembled by hand, which makes no claim about a directory.
+    """
+
 
 def tend(
     workspace: Workspace,
@@ -676,6 +684,7 @@ def _turn(
         executed=execute,
         progress=progress,
         tuning=plan,
+        log_dir=log_dir,
     )
     if not execute:
         return _projected(result, observed, inflight, history)

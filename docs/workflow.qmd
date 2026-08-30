@@ -200,6 +200,8 @@ Over everything sits one verdict:
 
 🏁 is deliberately not ✅. A finished run owes the most consequential decision in the workflow, and reporting it as all-clear is how a sweep sits unread for a week.
 
+Beneath the verdict sits a **Logs** line naming this run's log directory. Take it from there rather than assuming `logs/` — under a [log root](#where-your-logs-go) there is no `logs/` in the workspace at all, and a `samples_df` pointed at one would find nothing rather than complain. It is in `steward status --json` too.
+
 Under the verdict come four sections, in this order:
 
 - **what needs a decision** — the open items, under a heading that says whose they are.

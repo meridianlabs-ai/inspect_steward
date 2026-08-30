@@ -601,7 +601,7 @@ Three attempts at one key is worth naming as a pattern rather than as three mist
 
 **Delivers** a definition that names no log directory, which is now the one worth writing.
 
-- **Scope.** The three-rung resolution (the definition's `log_dir`, then a machine's `log_root`, then the workspace's `logs/`), collapsed into one `resolve_log_dir` in `_workspace/layout.py` from two identical copies; `log_root` in all three spellings; the resolved directory recorded on the manifest and read back by every tend; the `evalset.py` placeholder saying to omit `log_dir`.
+- **Scope.** The three-rung resolution (the definition's `log_dir`, then a machine's `log_root`, then the workspace's `logs/`), collapsed into one `resolve_log_dir` in `_workspace/layout.py` from two identical copies; `log_root` in all three spellings; the resolved directory recorded on the manifest, read back by every tend, and **reported** in `status.md` and `status --json`, which nothing did before; the `evalset.py` placeholder saying to omit `log_dir`.
 - **Refs.** workflow §2.1a, §5.9 *Inspect's words*; config item 4.
 - **Upstream.** `eval_set(log_dir: str | None = None)`, resolved where `eval()` resolves it. Two lines, and the third rung was unreachable without them.
 - **Done when** a run under `STEWARD_LOG_ROOT` is still tended correctly by a scheduler that inherits no environment, and changing the root is reported as a relocation rather than followed.

@@ -349,6 +349,10 @@ def test_a_tend_reads_the_directory_the_launch_recorded(
 
     assert result.summary.states["complete"] == 1
     assert not workspace.logs.exists()
+    # and the summary says where, because nothing else does: the runbook sends
+    # an agent to `samples_df`, and there is no `logs/` here to guess at
+    assert result.log_dir == str(under_a_root)
+    assert f"**Logs** `{under_a_root}`" in workspace.status.read_text(encoding="utf-8")
 
 
 def test_a_manifest_committed_before_the_field_resolves_as_it_always_did(
