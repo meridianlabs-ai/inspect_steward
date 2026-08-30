@@ -158,11 +158,16 @@ nothing depends on a conversation this session did not have.
 Tend ramps sample concurrency on its own; your part is oversight, not the
 arithmetic. Unless a `max_samples` is pinned somewhere, every task starts at
 the ramp's floor and climbs one step per clean window — limiter saturated, no
-rate-limit pushback, no new errors, retries not surging, CPU with headroom — and on
-sustained pushback tend cuts the connection ceiling at once and steps sample
+rate-limit pushback, no new errors, retries not surging, CPU with headroom — and
+on sustained pushback tend cuts the connection ceiling at once and steps sample
 concurrency back down. Every move is a journal action, so your next collect
 shows it as history (`ramped <task> 60→80 — ...`), and the tuning block under
 the status table shows each task's level and whatever gates its next step.
+
+**A Hawk config always pins it**, because Hawk's infra config sets `max_samples`
+itself. So a Hawk run shows no ramp actions and no tuning block, and that is the
+loop obeying the config rather than a loop that has stopped working. Do not
+retune around it: the number is the run owner's to change, in the Hawk config.
 
 - **When a ramp action coincides with something you dislike** — errors or
   anomalies rising, pushback the cut is not containing, CPU climbing — run

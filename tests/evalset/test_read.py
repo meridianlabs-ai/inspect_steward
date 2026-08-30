@@ -5,6 +5,7 @@ import pytest
 from inspect_ai._eval.evalset import TASK_IDENTIFIER_VERSION
 from inspect_steward import Manifest, ReadEvalSetError, read_eval_set
 from inspect_steward._evalset.manifest import MANIFEST_VERSION
+from inspect_steward._schedule import Pool, resolve_samples_ramp
 
 from ._hawk import requires_hawk
 
@@ -144,6 +145,13 @@ def test_read_eval_set_hawk(tmp_path: Path) -> None:
     assert manifest.options["log_dir"].startswith("logs/")
     assert not (tmp_path / "logs").exists()
     assert not (FIXTURES / "logs").exists()
+
+    # hawk's infra config supplies a max_samples of its own (1000, and this
+    # fixture sets none), which Steward reads as the definition expressing a
+    # setpoint -- so a hawk run is pinned and never ramps. Asserted as the
+    # property rather than the number, because the number is hawk's to change
+    # and only its *presence* is what the documentation promises on
+    assert resolve_samples_ramp(manifest, Pool()) is None
 
 
 def test_read_eval_set_flow_args(tmp_path: Path) -> None:

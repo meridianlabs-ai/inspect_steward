@@ -45,8 +45,10 @@ When nobody pins one, sample concurrency is not a fixed default — it is discov
 | Source | Meaning |
 |----|----|
 | `steward tend --max-samples` | an operator typed a number for this run: pinned, nothing outranks it, and it holds for the rest of the run rather than the turn |
-| the definition's `max_samples` | the eval author's preference: pinned, honored as written |
+| the definition's `max_samples` | the eval's own preference: pinned, honored as written |
 | the ramp | nobody expressed a preference, so tasks start at `40` and Steward tunes from there |
+
+The middle row is whatever your definition passes to `eval_set()`, which includes anything the framework running it sets on your behalf. [Hawk](hawk.qmd#hawk-sets-the-concurrency-so-the-ramp-does-not-run) always supplies a `max_samples` (default `1000`), so **Hawk eval sets are always pinned and never ramp** — set the value you want in the Hawk config. Flow specs and plain `eval_set()` definitions leave it unset unless you write one, so they ramp.
 
 ## The ramp
 

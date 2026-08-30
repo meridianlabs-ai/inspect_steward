@@ -55,6 +55,29 @@ Steward also overrides `log_dir` and the eval-set id through the selection each
 worker reads, because Hawk exposes no log-directory option: a local run
 synthesizes a fresh `logs/<random job id>/` relative to the working directory.
 
+### Hawk sets the concurrency, so the ramp does not run
+
+Hawk's infra config always supplies `max_samples` — the default is `1000` — and
+Steward honors it exactly as it honors any other definition's explicit value:
+the setpoint is **pinned**, and the [sample-concurrency ramp](concurrency.qmd#the-ramp)
+does not apply. `samples_ramp` in `_steward.md` has nothing to govern under a
+Hawk config and is ignored there.
+
+That is Hawk's policy to set, and Steward's job is to run what the config asks
+for rather than to second-guess it. What it means in practice is worth knowing
+before a large run, because the number is per task and Steward runs a poolful:
+
+|  |  |
+|----|----|
+| `max_samples` | pinned from the infra config (default `1000`) — no ramp, no discovery |
+| `max_sandboxes` | from the infra config, which computes one; bounds containers per process |
+| `max_tasks` | Hawk's value is not used — fleet width is `_steward.md`'s (see [Concurrency](concurrency.qmd)) |
+: {tbl-colwidths="[25,75]"}
+
+If you want a different sample concurrency, set it in the Hawk config where the
+rest of your infra settings live. `steward tend --max-samples N` also outranks
+it for a run, and — as everywhere — pins rather than ramps.
+
 ## What fan-out costs
 
 `--direct` means *install into the current interpreter* rather than *skip
