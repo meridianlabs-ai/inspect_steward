@@ -169,9 +169,9 @@ See the [Workspace](workspace.qmd) article for details on all available options.
 
 ## Learning More
 
-- [Concurrency](concurrency.qmd) — how tasks are scheduled across processes, and how a fleet's load on model providers is controlled.
-- [Error Handling](errors.qmd) — the two error tiers, what is retried automatically, and who decides what happens after.
-- [The Workspace](workspace.qmd) — what is in the workspace, what is durable, and what you may safely delete.
-- [The Agent Runbook](runbook.qmd) — what an agent supervising your run may do, and the operating instructions Steward ships to it.
+- [Workspace](workspace.qmd): Run defininion and a record of actions taken and things observed.
+- [Concurrency](concurrency.qmd): Options for tuning the parallelism of steward runs.
+- [Error Handling](errors.qmd): How errors and retries are handled and dipatched.
+- [Agent Runbook](runbook.qmd): Operating instructions for agents supervising runs.
 
 Platform-specific notes are in [Inspect Flow](flow.qmd) and [Inspect Hawk](hawk.qmd), and the complete CLI and Python API are in the [Reference](reference/index.qmd).
