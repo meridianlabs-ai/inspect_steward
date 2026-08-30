@@ -28,6 +28,9 @@ from pathlib import Path
 from typing import Any, cast
 
 import yaml
+
+# the overrides model is a versioned wire format, deliberately not public API
+from inspect_ai._eval.eval_set_overrides import EvalSetOverrides
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_validator
 
 from .._schedule import DEFAULT_STALL_AFTER, Pool
@@ -49,6 +52,18 @@ DEFAULT_TEND_INTERVAL = 600
 """Seconds between scheduled tends where nobody said otherwise.
 
 Ten minutes, because the cost of a turn is bounded by what it reads and the cost of *missing* one is a fleet sitting idle for the whole interval. Short enough that an empty slot is refilled while somebody is still awake to care; long enough that a settled directory of two thousand logs is not re-read every minute.
+"""
+
+ALIASES: dict[str, str] = {
+    f"{PREFIX}{field.upper()}": field
+    for field in EvalSetOverrides.model_fields
+    if field != "log_dir"
+}
+"""Names under the prefix that are inspect's words rather than Steward's.
+
+A scoped alias of an `INSPECT_EVAL_*` variable, resolved by `overrides.py` and not by this module — the settings here and the overrides there are two vocabularies that share one namespace, and only the namespace is common. Defined on this side of the pair because this is the module that polices the prefix, and because a name that is neither a setting nor an alias has to be refused by something that knows both.
+
+`log_dir` is excluded: a run's logs go where the fleet is watched from, so there is no scope at which somebody else decides.
 """
 
 SUPERSEDED = "_steward.md"
@@ -268,7 +283,8 @@ def read_directives(path: Path) -> Directives:
         return Directives.model_validate(settings)
     except ValidationError as ex:
         raise DirectivesError(
-            f"{path.name} is not valid: {_explain(ex, environment)}"
+            f"{path.name} is not valid: "
+            f"{explain(ex, {key: f'{PREFIX}{key.upper()}' for key in environment})}"
         ) from ex
 
 
@@ -294,7 +310,7 @@ def parse_setting(key: str, value: str) -> Any:
     try:
         return getattr(Directives.model_validate({key: loaded}), key)
     except ValidationError as ex:
-        raise DirectivesError(_explain(ex)) from ex
+        raise DirectivesError(explain(ex)) from ex
 
 
 def _file(path: Path) -> dict[str, Any]:
@@ -336,11 +352,11 @@ def _environment(environ: Mapping[str, str]) -> dict[str, Any]:
 
     It sits between the file and the command line because that is what the three spellings mean: the file is what this project wants, a variable is what this machine or this shell wants, and a flag is what this invocation wants. Narrower wins.
 
-    **An unrecognised `STEWARD_*` variable is refused rather than ignored**, which is the same posture the file takes toward an unknown key and exists for the same failure: a misspelled `STEWARD_SAMPLE_RAMP` that sits inert is a setting someone believes is in force. That makes the prefix a namespace Steward has to be careful with — `RESERVED` names the variables under it that are not settings at all.
+    **An unrecognised `STEWARD_*` variable is refused rather than ignored**, which is the same posture the file takes toward an unknown key and exists for the same failure: a misspelled `STEWARD_SAMPLE_RAMP` that sits inert is a setting someone believes is in force. That makes the prefix a namespace Steward has to be careful with, and two kinds of name under it are skipped rather than read: `RESERVED` names the worker markers, which are not settings at all, and `ALIASES` names inspect's words, which `overrides.py` resolves against a different model.
     """
     settings: dict[str, Any] = {}
     for name in sorted(environ):
-        if not name.startswith(PREFIX) or name in RESERVED:
+        if not name.startswith(PREFIX) or name in RESERVED or name in ALIASES:
             continue
         key = name.removeprefix(PREFIX).lower()
         if key in REFUSED:
@@ -480,17 +496,20 @@ def _refuse(settings: dict[str, Any], *, name: str) -> None:
             )
 
 
-def _explain(error: ValidationError, environment: Mapping[str, Any] = {}) -> str:
+def explain(error: ValidationError, sources: Mapping[str, str] = {}) -> str:
     """A validation failure as one clause per offending key.
 
     Three departures from pydantic's own wording, all because the default describes the mechanism rather than the mistake. *Extra inputs are not permitted* becomes a sentence about the key. A **type** failure names what arrived, which is the whole value of validating strictly: someone who wrote `max_workers: yes` needs to see `True` to understand that YAML rewrote it, and *should be a valid integer* on its own does not tell them.
 
-    And a key the environment supplied is named as the variable it came from. Same reasoning one level out: an author staring at a file that does not contain the offending value needs to be told where it does come from, or the message sends them to the wrong place.
+    And a key the environment supplied is named as the variable it came from. Same reasoning one level out: an author staring at a file that does not contain the offending value needs to be told where it does come from, or the message sends them to the wrong place. `sources` carries the variable name rather than deriving it, because inspect's spellings are data (`overrides.py`) and only the caller knows which one was read.
     """
     clauses: list[str] = []
     for item in error.errors():
-        key = ".".join(str(part) for part in item["loc"])
-        named = f"{PREFIX}{key.upper()}" if key in environment else key
+        location = item["loc"]
+        key = ".".join(str(part) for part in location)
+        # keyed on the field rather than the whole path: a union member fails as
+        # `epochs.int`, and the reader needs the name they can act on
+        named = sources.get(str(location[0]) if location else "", key)
         message = item["msg"].replace("Input should be", "should be", 1)
         if item["type"] == "extra_forbidden":
             clauses.append(f"`{named}` is not a setting Steward knows")
@@ -500,4 +519,6 @@ def _explain(error: ValidationError, environment: Mapping[str, Any] = {}) -> str
             clauses.append(f"`{named}` {message}, not {item['input']!r}")
         else:
             clauses.append(f"`{named}` {message}")
-    return "; ".join(clauses)
+    # a union field fails once per member, and two clauses naming the same
+    # variable is the mechanism showing through rather than the mistake
+    return "; ".join(dict.fromkeys(clauses))

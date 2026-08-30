@@ -690,11 +690,12 @@ def _attempt(observation: TaskObservation, inflight: InFlight) -> int:
 
 
 def resolve_max_samples(manifest: Manifest, pool: Pool) -> int:
-    """Sample concurrency for a worker: four sources, most specific first.
+    """Sample concurrency for a worker: five sources, most specific first.
 
     | | |
     |---|---|
-    | the **operator's** `Pool.max_samples` | somebody typed a number for this run, so nothing outranks it |
+    | the **shell's** `Pool.max_samples` | `STEWARD_MAX_SAMPLES` or `INSPECT_EVAL_MAX_SAMPLES` in the environment this turn ran in, so nothing outranks it |
+    | the **run's** override | what `steward launch` resolved, carried in the manifest so a 02:00 tend reads the same number the launch did |
     | the **definition's** `max_samples` | how many samples a task should run at once is a property of the eval, and its author knows the workload |
     | the **ramp's floor** | a range was written, or the default one applies — the floor is where every task starts |
     | `DEFAULT_MAX_SAMPLES` | ramping was switched off and nobody said what to pin instead |
@@ -712,6 +713,8 @@ def resolve_max_samples(manifest: Manifest, pool: Pool) -> int:
     """
     if pool.max_samples is not None:
         return pool.max_samples
+    if manifest.overrides is not None and manifest.overrides.max_samples is not None:
+        return manifest.overrides.max_samples
 
     # options is free-form and deserialized, so a manifest written by another
     # version can carry anything here; a definition that set nothing carries None
@@ -726,7 +729,9 @@ def resolve_max_samples(manifest: Manifest, pool: Pool) -> int:
 def resolve_max_tasks(manifest: Manifest, pool: Pool) -> int | None:
     """Fleet width: how many tasks may be in flight at once, or `None` for all of them.
 
-    The `max_samples` chain, one key over — the command line, then the definition, then Steward's default — and it lives here for the same reason: `_steward.yaml` is not a source, so the file has nothing to say and `resolve_pool` has no manifest to ask.
+    The `max_samples` chain, one key over — this shell's `STEWARD_MAX_TASKS`, then the run's own override, then the definition, then unbounded — and it lives here for the same reason: `_steward.yaml` is not a source, so the file has nothing to say and `resolve_pool` has no manifest to ask.
+
+    **The run's override is in the manifest and the definition's value is in `options`, and the two are deliberately different fields.** `options` records what the definition asked for, so that a runner can see what it is displacing; `overrides` records what this run replaced it with. Reading only the first would silently ignore a `steward launch --max-tasks`, and reading only the second would lose the definition's value the moment nobody overrode it.
 
     **`max_tasks` is inspect's word, so the definition owns it.** An earlier version made this a `_steward.yaml` key, justified by the reaches-the-runtime test: a definition's value never survives to a worker, because the selection document overrides it unconditionally with that worker's own batch size, so the file contradicted nothing. The test was sound and the key was still confusing — `eval_set()` knows the word, and somebody writing it there watched it do nothing while a same-named key lived in the policy file. The simpler rule is worth the migration: **inspect's words go in the definition; `_steward.yaml` holds only words `eval_set()` does not know** (execution.md, item 17).
 
@@ -743,6 +748,8 @@ def resolve_max_tasks(manifest: Manifest, pool: Pool) -> int | None:
     """
     if pool.max_tasks is not None:
         return pool.max_tasks
+    if manifest.overrides is not None and manifest.overrides.max_tasks is not None:
+        return manifest.overrides.max_tasks
 
     # options is free-form and deserialized, so a manifest written by another
     # version can carry anything here; a definition that set nothing carries None
@@ -753,7 +760,7 @@ def resolve_max_tasks(manifest: Manifest, pool: Pool) -> int | None:
 def resolve_samples_ramp(manifest: Manifest, pool: Pool) -> tuple[int, int] | None:
     """The range the tuning loop may explore, or `None` where the setpoint is pinned.
 
-    An explicit `max_samples` anywhere — the command line or the definition — pins the value and switches the policy off entirely, which is what lets `samples_ramp` live in `_steward.yaml` without ever contradicting a definition: the key governs only Steward's own exploration, and the moment anybody expresses a setpoint there is nothing left for it to govern. An author who wants a custom start *and* a ramp writes the start as the range's floor.
+    An explicit `max_samples` anywhere — this shell, the run's own override, or the definition — pins the value and switches the policy off entirely, which is what lets `samples_ramp` live in `_steward.yaml` without ever contradicting a definition: the key governs only Steward's own exploration, and the moment anybody expresses a setpoint there is nothing left for it to govern. An author who wants a custom start *and* a ramp writes the start as the range's floor.
 
     When pinned, the signal still runs — a persistently clean, saturated window against a pinned setpoint becomes a `tuning_proposal` item rather than a move, because the pin is somebody's and only they may move it (`_tend.tuning`).
 
@@ -765,6 +772,8 @@ def resolve_samples_ramp(manifest: Manifest, pool: Pool) -> tuple[int, int] | No
         The (floor, ceiling) to explore, or `None` where nothing may be moved.
     """
     if pool.max_samples is not None:
+        return None
+    if manifest.overrides is not None and manifest.overrides.max_samples is not None:
         return None
     requested: Any = manifest.options.get("max_samples")
     if isinstance(requested, int) and requested > 0:

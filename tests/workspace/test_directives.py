@@ -508,7 +508,7 @@ def test_a_coerced_value_is_refused_by_the_variable_that_carried_it(
     ("name", "says"),
     [
         pytest.param("STEWARD_SAMPLE_RAMP", "not a setting", id="a_typo"),
-        pytest.param("STEWARD_MAX_SAMPLES", "eval_set()", id="a_key_owned_elsewhere"),
+        pytest.param("STEWARD_LOG_DIRR", "not a setting", id="a_near_miss"),
     ],
 )
 def test_an_unrecognised_variable_is_refused_rather_than_ignored(

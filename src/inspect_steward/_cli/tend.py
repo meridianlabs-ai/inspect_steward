@@ -15,18 +15,6 @@ from .turn import (
 @click.command("tend")
 @shape_options
 @click.option(
-    "--max-tasks",
-    type=click.IntRange(min=1),
-    default=None,
-    help="Tasks in flight at once for this turn (overrides the definition).",
-)
-@click.option(
-    "--max-samples",
-    type=click.IntRange(min=1),
-    default=None,
-    help="Sample concurrency per task, pinned for the run (overrides the definition, and disables the ramp).",
-)
-@click.option(
     "--no-break-claim",
     is_flag=True,
     default=False,
@@ -43,8 +31,6 @@ def tend_command(
     max_workers: int | None,
     stall_after: int | None,
     samples_ramp: tuple[int, int] | bool | None,
-    max_tasks: int | None,
-    max_samples: int | None,
     no_break_claim: bool,
     output_json: bool,
 ) -> None:
@@ -59,8 +45,6 @@ def tend_command(
         result = tend(
             workspace,
             max_workers=max_workers,
-            max_tasks=max_tasks,
-            max_samples=max_samples,
             stall_after=stall_after,
             samples_ramp=samples_ramp,
             break_stale=not no_break_claim,

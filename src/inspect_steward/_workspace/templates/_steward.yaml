@@ -17,7 +17,9 @@
 #
 # Only words `eval_set()` does not know belong here. Anything inspect knows —
 # log_dir, model, max_samples, max_tasks, epochs, limits — is refused by name,
-# because your definition is the single source of truth for those.
+# because your definition is the single source of truth for those. For one run
+# you can still say them inspect's way: `steward launch --epochs 2 --limit 5`,
+# or INSPECT_EVAL_EPOCHS / STEWARD_EPOCHS in the shell.
 #
 # Uncomment what you want. Anything left commented out uses Steward's default.
 #

@@ -23,9 +23,11 @@ from pathlib import Path
 import pytest
 from click.testing import CliRunner, Result
 from inspect_steward._cli.main import steward
+from inspect_steward._cli.options import PASSTHROUGH
 from inspect_steward._evalset.manifest import Manifest, read_manifest, write_manifest
 from inspect_steward._workspace import (
     LAUNCHED,
+    VARIABLES,
     Claim,
     Workspace,
     acquire,
@@ -153,6 +155,106 @@ def test_the_turn_settings_typed_at_launch_reach_the_launch(
     assert result.exit_code == 0, result.output
     armed = read_armed(read_journal(workspace.journal).events)
     assert armed is not None and armed.interval == 1800
+
+
+def test_inspects_words_reach_the_capture_and_the_manifest(
+    workspace: Workspace, capture: FakeCapture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A launch flag, a scoped alias, and inspect's own variable, narrowest first.
+
+    Reaching the *capture* is the assertion that matters. `epochs` and `limit`
+    decide how many samples a task has, so an enumeration made without them
+    describes a run that is not happening — and every convergence check Steward
+    performs is `samples × epochs` against a landed log.
+    """
+    monkeypatch.setenv("INSPECT_EVAL_EPOCHS", "2")
+    monkeypatch.setenv("STEWARD_EPOCHS", "3")
+    monkeypatch.setenv("INSPECT_EVAL_MAX_SANDBOXES", "6")
+
+    assert run("--no-timer", "--limit", "5").exit_code == 0
+
+    (call,) = capture.calls
+    assert call.overrides is not None
+    # the flag, then the alias over inspect's own, then inspect's own alone
+    assert call.overrides.limit == 5
+    assert call.overrides.epochs == 3
+    assert call.overrides.max_sandboxes == 6
+    # and the manifest is where every later tend reads them, since neither a
+    # flag nor a shell export survives to the 02:00 turn
+    assert committed(workspace).overrides == call.overrides
+
+
+def test_a_run_that_overrides_nothing_records_nothing(
+    workspace: Workspace, capture: FakeCapture
+) -> None:
+    """Silence is not an empty document — the definition's own values stand."""
+    assert run("--no-timer").exit_code == 0
+
+    (call,) = capture.calls
+    assert call.overrides is None
+    assert committed(workspace).overrides is None
+
+
+def test_a_meaningless_override_is_refused_at_the_door(
+    workspace: Workspace, capture: FakeCapture
+) -> None:
+    """The same refusal the variable earns, because it is the same parser."""
+    result = run("--no-timer", "--epochs", "yes")
+
+    assert result.exit_code == 2
+    assert capture.calls == []
+
+
+def test_the_log_directory_is_not_inspects_to_move(
+    workspace: Workspace, capture: FakeCapture, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """`INSPECT_LOG_DIR` is refused rather than honoured or ignored.
+
+    Honouring it would put a worker's logs where no tend reads, so every task
+    would land and then read as never started; ignoring it would do the right
+    thing while telling the operator nothing about why their variable did not
+    take. Refused before the capture, like the credentials check.
+    """
+    monkeypatch.setenv("INSPECT_LOG_DIR", "s3://somewhere/else")
+
+    result = run("--no-timer")
+
+    assert result.exit_code == 1
+    assert "INSPECT_LOG_DIR" in result.output
+    assert capture.calls == []
+
+
+def test_the_passthrough_flags_are_generated_and_belong_to_launch_alone() -> None:
+    """Every overridable argument gets a flag naming every variable it answers to, and only the command that shapes a run has them.
+
+    Generated rather than written out, so a field added upstream appears here
+    without anybody noticing it had to — which is also why this asserts the
+    whole set rather than a sample of it.
+
+    The variables are asserted too, because a spelling that works and is not
+    documented is indistinguishable from one that does not work. The four
+    negated ones are the case that would go missing quietly: they are the only
+    inspect spelling those fields have.
+    """
+    launch_help = CliRunner().invoke(steward, ["launch", "--help"]).output
+    tend_help = CliRunner().invoke(steward, ["tend", "--help"]).output
+
+    for field, variable in VARIABLES.items():
+        flag = f"--{field.replace('_', '-')}"
+        if field == "log_dir":
+            assert flag not in launch_help
+            continue
+        assert flag in launch_help, field
+        assert flag not in tend_help, field
+        for name in (
+            f"STEWARD_{field.upper()}",
+            *variable.inspect,
+            *((variable.negated,) if variable.negated else ()),
+        ):
+            assert name in launch_help, name
+    # under their own heading, because thirty-seven of them would otherwise bury
+    # the six a person types
+    assert PASSTHROUGH in launch_help
 
 
 def test_the_startup_memory_bound_is_printed_once(

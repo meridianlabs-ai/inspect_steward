@@ -6,6 +6,7 @@ from typing import Any
 
 # the capture models are a versioned wire format, deliberately not public API
 from inspect_ai._eval.eval_set_manifest import EvalSetCaptureTask
+from inspect_ai._eval.eval_set_overrides import EvalSetOverrides
 from pydantic import BaseModel
 
 from .detect import DefinitionType
@@ -67,7 +68,15 @@ class Manifest(BaseModel):
     """The definition this manifest was read from."""
 
     options: dict[str, Any]
-    """Informational `eval_set()` options (e.g. `log_dir`, `retry_attempts`, `limit`)."""
+    """Informational `eval_set()` options as the *definition* passed them (e.g. `log_dir`, `retry_attempts`, `limit`)."""
+
+    overrides: EvalSetOverrides | None = None
+    """Inspect's words as this run said them, or `None` where the run is the definition's own.
+
+    **The durable copy, and the only one.** A run's overrides are resolved once, at launch, from flags and the environment — and neither survives to the 02:00 tend that spawns the next worker. They cannot live in `.steward/` either, which this design tells people they may delete. So they are captured *with* the manifest, by the same subprocess that honoured them, and every later tend reads them back out of the committed file: the enumeration and the fleet cannot disagree, because the fleet's copy is the one the enumeration was made under.
+
+    `MANIFEST_VERSION` deliberately did not move for this, on the same reasoning `capture_rss` did not: a field added with a default whose absence means *the definition's own values* is not a schema a reader has to guess at.
+    """
 
     tasks: list[ManifestTask]
     """Resolved tasks in the eval set."""

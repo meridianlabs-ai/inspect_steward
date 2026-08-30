@@ -171,7 +171,6 @@ def test_a_workspace_that_never_launched_is_told_to(
     "argv",
     [
         pytest.param(["tend", "--max-workers", "0"], id="a_fleet_of_none"),
-        pytest.param(["tend", "--max-samples", "-1"], id="negative_concurrency"),
         pytest.param(["status", "--max-workers", "0"], id="previewed_against_none"),
     ],
 )

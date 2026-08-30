@@ -549,13 +549,16 @@ def test_no_committed_manifest_says_what_to_run(tmp_path: Path) -> None:
 
 
 def test_the_observation_carries_the_settings_a_later_turn_reads_back(
-    tmp_path: Path,
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     done = SynthTask("done")
     workspace, _ = prepared(tmp_path, [done])
     write_log(workspace.logs, done)
 
-    turn(workspace, max_workers=4, max_samples=7)
+    # sample concurrency is inspect's word, so it arrives as inspect's variable
+    # scoped to this tool rather than as a flag Steward minted for it
+    monkeypatch.setenv("STEWARD_MAX_SAMPLES", "7")
+    turn(workspace, max_workers=4)
 
     (recorded,) = observations(workspace)
     assert recorded["settings"] == {
@@ -569,31 +572,41 @@ def test_the_observation_carries_the_settings_a_later_turn_reads_back(
     assert recorded["drift"] is False
 
 
-def test_a_sample_pin_outlives_the_turn_that_set_it(tmp_path: Path) -> None:
-    # unlike the pool flags, --max-samples decides a regime rather than a
+def test_a_sample_pin_outlives_the_turn_that_set_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # unlike the pool settings, max_samples decides a regime rather than a
     # quantity: a pin that lapsed would leave the next tend ramping a level
-    # nobody authorized and spawning the queue at the ramp's floor
+    # nobody authorized and spawning the queue at the ramp's floor. And the
+    # source is a shell variable, which the 02:00 tend does not inherit -- so
+    # without the journal read-back the pin would last exactly one turn
     done = SynthTask("done")
     workspace, _ = prepared(tmp_path, [done])
     write_log(workspace.logs, done)
 
-    turn(workspace, max_workers=4, max_samples=7)
+    monkeypatch.setenv("STEWARD_MAX_SAMPLES", "7")
+    turn(workspace, max_workers=4)
+    monkeypatch.delenv("STEWARD_MAX_SAMPLES")
     turn(workspace)
 
     _, second = observations(workspace)
     assert second["settings"]["max_samples"] == 7
-    # the pool flags do lapse, which is the contrast that makes the pin one
+    # the pool settings do lapse, which is the contrast that makes the pin one
     assert second["settings"]["max_workers"] is None
 
 
-def test_a_samples_ramp_range_releases_a_recorded_pin(tmp_path: Path) -> None:
+def test_a_samples_ramp_range_releases_a_recorded_pin(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
     # the way back: `_steward.yaml` holds standing wishes, and a range there is
     # the one instruction that cannot mean anything but *ramp this run*
     done = SynthTask("done")
     workspace, _ = prepared(tmp_path, [done])
     write_log(workspace.logs, done)
 
-    turn(workspace, max_samples=7)
+    monkeypatch.setenv("STEWARD_MAX_SAMPLES", "7")
+    turn(workspace)
+    monkeypatch.delenv("STEWARD_MAX_SAMPLES")
     workspace.directives.write_text("samples_ramp: [40, 100]\n")
     turn(workspace)
 

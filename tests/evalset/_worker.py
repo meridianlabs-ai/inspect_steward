@@ -15,11 +15,11 @@ import subprocess
 from dataclasses import dataclass
 from pathlib import Path
 
+from inspect_ai._eval.eval_set_overrides import EvalSetOverrides
 from inspect_ai._eval.eval_set_selection import (
     EVAL_SET_SELECTION_VERSION,
     INSPECT_EVAL_SET_SELECTION,
     EvalSetSelection,
-    EvalSetSelectionOverrides,
     EvalSetSelectionTask,
 )
 from inspect_ai.log import EvalLog, list_eval_logs, read_eval_log
@@ -71,9 +71,7 @@ def selection(
             )
             for identifier in identifiers
         ],
-        overrides=EvalSetSelectionOverrides(
-            log_dir=str(log_dir), max_samples=max_samples
-        ),
+        overrides=EvalSetOverrides(log_dir=str(log_dir), max_samples=max_samples),
     )
 
 

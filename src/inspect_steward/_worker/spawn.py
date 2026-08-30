@@ -22,11 +22,14 @@ from pathlib import Path
 from typing import Any
 
 from inspect_ai._eval.eval_set_manifest import INSPECT_EVAL_SET_CAPTURE
+from inspect_ai._eval.eval_set_overrides import (
+    EvalSetOverrides,
+    merge_eval_set_overrides,
+)
 from inspect_ai._eval.eval_set_selection import (
     EVAL_SET_SELECTION_VERSION,
     INSPECT_EVAL_SET_SELECTION,
     EvalSetSelection,
-    EvalSetSelectionOverrides,
     EvalSetSelectionTask,
 )
 from inspect_ai._eval.evalset import eval_set_id_for_log_dir
@@ -107,6 +110,12 @@ class Fleet:
     args: dict[str, Any] | None = None
     """Arguments for the definition (flow spec function args only)."""
 
+    overrides: EvalSetOverrides | None = None
+    """Inspect's own eval-set arguments for this run, as the committed manifest records them.
+
+    Carried into every worker's selection so that the fleet runs what the manifest was enumerated under. It comes from the manifest rather than from this turn's environment for the reason the manifest exists: an 02:00 tend inherits no shell, and a worker running two epochs where the manifest counted one would make every progress figure wrong without failing anything.
+    """
+
     def spawn(self, action: SpawnWorker) -> SpawnedWorker:
         """Spawn a detached worker to run a share of the eval set.
 
@@ -153,7 +162,10 @@ class Fleet:
         # path unreadable on the other side of a boundary it cannot negotiate
         selection.write_text(
             worker_selection(
-                action, eval_set_id=self.eval_set_id, log_dir=self.log_dir
+                action,
+                eval_set_id=self.eval_set_id,
+                log_dir=self.log_dir,
+                overrides=self.overrides,
             ).model_dump_json(exclude_none=True, indent=2),
             encoding="utf-8",
         )
@@ -215,16 +227,23 @@ class Fleet:
 
 
 def worker_selection(
-    action: SpawnWorker, *, eval_set_id: str, log_dir: str
+    action: SpawnWorker,
+    *,
+    eval_set_id: str,
+    log_dir: str,
+    overrides: EvalSetOverrides | None = None,
 ) -> EvalSetSelection:
     """Build the selection document for one worker.
 
     There is no upstream writer — the models are a wire format external runners build — so the version is declared from the installed inspect. That cannot skew: a worker is this interpreter.
 
+    **The run's overrides and this worker's are one container, merged here.** Inspect would accept a run-wide document by environment variable as readily, and Steward does not use it: a worker's overrides then live in two places, one of them a file under `.steward/` that this design tells people they may delete. Merging into the selection leaves exactly one document per worker, written from the manifest the fleet is converging on.
+
     Args:
         action: The tasks to run.
         eval_set_id: Eval set id to stamp into the worker's logs.
         log_dir: Log directory for the worker.
+        overrides: Inspect's arguments for the run, from the committed manifest. This worker's three own values are applied over them.
 
     Returns:
         The selection.
@@ -249,18 +268,22 @@ def worker_selection(
         # always present rather than conditional: `log_dir` is what puts a
         # worker's logs where Steward is watching, so there is no Steward worker
         # that wants the definition's directory
-        overrides=EvalSetSelectionOverrides(
-            log_dir=log_dir,
-            max_samples=action.max_samples,
-            # likewise unconditional, and for a sharper reason: every other
-            # override left unset falls back to what the definition passed, but
-            # `eval_set()` fills `max_tasks` in below the selection branch, so
-            # an unset one falls through to `eval()`'s rule instead -- one task
-            # at a time for a single model, the model count for several. A
-            # packed worker would run its batch sequentially with nobody having
-            # chosen that. The whole batch, because how much runs at once is
-            # bounded fleet-wide by the pour, not here
-            max_tasks=len(action.tasks),
+        overrides=merge_eval_set_overrides(
+            overrides,
+            EvalSetOverrides(
+                log_dir=log_dir,
+                max_samples=action.max_samples,
+                # likewise unconditional, and for a sharper reason: every other
+                # override left unset falls back to what the definition passed,
+                # but `eval_set()` fills `max_tasks` in below the selection
+                # branch, so an unset one falls through to `eval()`'s rule
+                # instead -- one task at a time for a single model, the model
+                # count for several. A packed worker would run its batch
+                # sequentially with nobody having chosen that. The whole batch,
+                # because how much runs at once is bounded fleet-wide by the
+                # pour, not here
+                max_tasks=len(action.tasks),
+            ),
         ),
     )
 

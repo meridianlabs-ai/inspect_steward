@@ -13,6 +13,7 @@ from pathlib import Path
 
 import pytest
 from inspect_ai._eval.eval_set_manifest import INSPECT_EVAL_SET_CAPTURE
+from inspect_ai._eval.eval_set_overrides import EvalSetOverrides
 from inspect_ai._eval.eval_set_selection import (
     EVAL_SET_SELECTION_VERSION,
     read_eval_set_selection,
@@ -47,6 +48,32 @@ def test_the_selection_document_is_one_inspect_accepts(tmp_path: Path) -> None:
     path = tmp_path / "selection.json"
     path.write_text(built.model_dump_json(exclude_none=True))
     assert read_eval_set_selection(str(path)) == built
+
+
+def test_a_worker_inherits_the_runs_overrides_and_keeps_its_own(
+    tmp_path: Path,
+) -> None:
+    """One container per worker, merged from the run's and this worker's.
+
+    Inspect would take a run-wide document by environment variable as readily,
+    and Steward does not use it: a worker's overrides would then live in two
+    places, one of them a file under `.steward/` this design tells people they
+    may delete. The three values that differ between workers are applied over
+    the run's, because they are the ones a run cannot know.
+    """
+    built = worker_selection(
+        action("id-a", "id-b"),
+        eval_set_id=EVAL_SET_ID,
+        log_dir="s3://bucket/logs",
+        overrides=EvalSetOverrides(epochs=3, max_tasks=99, log_dir="s3://elsewhere"),
+    )
+
+    assert built.overrides is not None
+    # the run's, which no worker has a reason to disagree with
+    assert built.overrides.epochs == 3
+    # and this worker's, which are the whole point of a per-worker container
+    assert built.overrides.max_tasks == 2
+    assert built.overrides.log_dir == "s3://bucket/logs"
 
 
 def test_a_packed_selection_names_every_task_and_its_own_concurrency(

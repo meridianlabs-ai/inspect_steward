@@ -12,6 +12,11 @@ handed in. A real capture hashes the file it just executed, so drift is `False`
 immediately after a launch and flips when somebody edits the file — a fake
 returning a fixed hash would make every launch's own first turn report drift.
 
+**The overrides document is read here too**, for the same reason: a real
+capture honours it and records it in the manifest, which is where every later
+tend reads the run's overrides from. A fake that dropped it would leave the
+whole passthrough path untested on this side of the seam.
+
 Not named `test_*`, so pytest does not collect it.
 """
 
@@ -21,6 +26,10 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from inspect_ai._eval.eval_set_overrides import (
+    INSPECT_EVAL_SET_OVERRIDES,
+    EvalSetOverrides,
+)
 from inspect_steward._evalset.detect import DefinitionType
 from inspect_steward._evalset.manifest import Manifest, definition_hash
 
@@ -33,6 +42,7 @@ class Captured:
     cwd: Path | None
     args: dict[str, Any] | None
     type: DefinitionType | None
+    overrides: EvalSetOverrides | None
 
 
 @dataclass
@@ -56,19 +66,27 @@ class FakeCapture:
         timeout: float | None = None,
     ) -> Manifest:
         path = Path(definition)
+        document = (env or {}).get(INSPECT_EVAL_SET_OVERRIDES)
+        overrides = (
+            EvalSetOverrides.model_validate_json(Path(document).read_bytes())
+            if document is not None
+            else None
+        )
         self.calls.append(
             Captured(
                 definition=path,
                 cwd=Path(cwd) if cwd is not None else None,
                 args=args,
                 type=type,
+                overrides=overrides,
             )
         )
         return self.manifest.model_copy(
             update={
                 "source": self.manifest.source.model_copy(
                     update={"content_hash": definition_hash(path)}
-                )
+                ),
+                "overrides": overrides,
             }
         )
 

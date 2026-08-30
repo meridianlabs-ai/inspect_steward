@@ -75,7 +75,7 @@ before a large run, because the number is per task and Steward runs a poolful:
 : {tbl-colwidths="[25,75]"}
 
 If you want a different sample concurrency, set it in the Hawk config where the
-rest of your infra settings live. `steward tend --max-samples N` also outranks
+rest of your infra settings live. `steward launch --max-samples N` also outranks
 it for a run, and — as everywhere — pins rather than ramps.
 
 ## What fan-out costs

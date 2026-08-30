@@ -18,7 +18,13 @@ Everything else in Steward converges toward a manifest somebody else committed. 
 import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any
+
+from inspect_ai._eval.eval_set_overrides import (
+    INSPECT_EVAL_SET_OVERRIDES,
+    EvalSetOverrides,
+)
 
 from .._evalset.archive import archive_dir, restore_log
 from .._evalset.detect import DefinitionType
@@ -43,13 +49,16 @@ from .._timer import (
 from .._worker import Stop, StopRequest, resolve_inflight, stop_workers
 from .._workspace import (
     LAUNCHED,
+    LOG_DIR,
     Claim,
+    DirectivesError,
     Held,
     Workspace,
     acquire,
     append_event,
     ensure_gitignore,
     read_directives,
+    read_overrides,
     resolve_interval,
     resolve_log_store,
     steward_log,
@@ -106,9 +115,8 @@ def launch(
     timer: bool = True,
     env_check: bool = True,
     log_store: str | bool | None = None,
+    overrides: dict[str, Any] | None = None,
     max_workers: int | None = None,
-    max_tasks: int | None = None,
-    max_samples: int | None = None,
     stall_after: int | None = None,
     samples_ramp: tuple[int, int] | bool | None = None,
     tend_interval: int | None = None,
@@ -125,9 +133,8 @@ def launch(
         timer: Arm a timer. `False` launches unsupervised and records that it did.
         env_check: Refuse to arm when a scheduled tend would not inherit this shell's credentials. Checked **before** the capture, so a Hawk config does not spend five minutes resolving packages on the way to a refusal.
         log_store: Log store for this run — a path or `auto` — overriding `_steward.yaml`. `False` declines the one the file or the environment configured; `None` defers to them. **Recorded and otherwise inert**: nothing reads a store until publication exists (step 33), so a path is recorded rather than resolved.
+        overrides: Inspect's own eval-set arguments for this run, already parsed, keyed as `EvalSetOverrides` spells them. Merged over what `STEWARD_*` and `INSPECT_EVAL_*` say and honoured by the capture, so the manifest describes the run that will happen (`_workspace.overrides`).
         max_workers: Worker processes for the first turn, overriding `_steward.yaml`. `None` expresses no preference and defers to the file, which itself defaults to a process per task — it does not request that width.
-        max_tasks: Tasks in flight at once for the first turn, overriding the definition's `max_tasks`. `None` defers to it.
-        max_samples: Sample concurrency for the first turn.
         stall_after: Fruitless respawns before a task is given up on, overriding `_steward.yaml`.
         samples_ramp: The ramp's envelope, overriding `_steward.yaml`.
         tend_interval: Seconds between scheduled tends, overriding `_steward.yaml`. Already parsed — the flag is validated at the door.
@@ -147,6 +154,7 @@ def launch(
     directives = read_directives(workspace.directives)
     interval = resolve_interval(directives, tend_interval=tend_interval)
     store = resolve_log_store(directives, log_store=log_store)
+    inspect_overrides = _overrides(overrides)
 
     # before the capture and before the claim, because both of the things below
     # are cheap and one of them is a refusal. A five-minute Hawk capture that
@@ -182,9 +190,8 @@ def launch(
             timer=timer,
             interval=interval,
             log_store=store,
+            overrides=inspect_overrides,
             max_workers=max_workers,
-            max_tasks=max_tasks,
-            max_samples=max_samples,
             stall_after=stall_after,
             samples_ramp=samples_ramp,
         )
@@ -201,9 +208,8 @@ def _launch(
     timer: bool,
     interval: int,
     log_store: str | None,
+    overrides: EvalSetOverrides | None,
     max_workers: int | None,
-    max_tasks: int | None,
-    max_samples: int | None,
     stall_after: int | None,
     samples_ramp: tuple[int, int] | bool | None,
 ) -> Launch:
@@ -216,6 +222,7 @@ def _launch(
         type=type
         if type is not None
         else (committed.source.type if committed else None),
+        overrides=overrides,
     )
     _refuse_scanners(manifest)
 
@@ -271,8 +278,6 @@ def _launch(
     turn = tend(
         workspace,
         max_workers=max_workers,
-        max_tasks=max_tasks,
-        max_samples=max_samples,
         stall_after=stall_after,
         samples_ramp=samples_ramp,
         claim=claim,
@@ -298,6 +303,7 @@ def _capture(
     *,
     args: dict[str, Any] | None,
     type: DefinitionType | None,
+    overrides: EvalSetOverrides | None,
 ) -> Manifest:
     """Execute the definition and read the eval set out of it.
 
@@ -310,6 +316,8 @@ def _capture(
     The path *recorded* is relative to the workspace root wherever the definition lives inside one, because `_tend.turn` resolves a relative one against the root. Absolute would work and would break the first time somebody moves or copies the workspace; relative to the shell's cwd would break immediately.
 
     So the manifest's `source.path` is rewritten after the capture rather than steered by the argument. `read_eval_set` keeps the simpler contract — *the path you hand me is the path I read and the path I record* — and the one caller with a reason to want them different is the one that states the reason.
+
+    **The overrides go to capture rather than only to the workers**, and that is what makes the manifest describe the run. `epochs` and `limit` decide how many samples a task has, so an enumeration made without them would report per-task counts for a run nobody asked for — and every convergence check Steward performs is `samples × epochs` against a landed log. The document is a temporary file because the durable copy is the manifest capture writes: inspect records what it was given, so the fleet's later reads come from the artifact the enumeration was made under rather than from a second file that could drift from it.
     """
     absolute = definition.resolve()
     try:
@@ -319,10 +327,18 @@ def _capture(
         # by several workspaces — and can only be named absolutely
         recorded = absolute
 
-    try:
-        manifest = read_eval_set(absolute, args=args, type=type, cwd=workspace.root)
-    except (ValueError, ReadEvalSetError) as ex:
-        raise LaunchError(str(ex)) from ex
+    with TemporaryDirectory(prefix="steward-overrides-") as scratch:
+        env: dict[str, str] = {}
+        if overrides is not None:
+            document = Path(scratch) / "overrides.json"
+            document.write_text(overrides.model_dump_json(exclude_none=True))
+            env[INSPECT_EVAL_SET_OVERRIDES] = str(document)
+        try:
+            manifest = read_eval_set(
+                absolute, args=args, type=type, cwd=workspace.root, env=env
+            )
+        except (ValueError, ReadEvalSetError) as ex:
+            raise LaunchError(str(ex)) from ex
 
     return manifest.model_copy(
         update={"source": manifest.source.model_copy(update={"path": str(recorded)})}
@@ -506,6 +522,26 @@ def _supervise(
                 f"disarm`"
             ),
         )
+
+
+def _overrides(given: dict[str, Any] | None) -> EvalSetOverrides | None:
+    """Inspect's words for this run, resolved once and carried by the manifest.
+
+    The flag, then `STEWARD_X`, then inspect's own variable, then the definition — the same shape as every Steward setting, one vocabulary over (`_workspace.overrides`). Resolved here rather than per turn because a run's shape is decided when it is launched: `tend` and `status` recompute Steward's own settings every turn and never re-decide what the eval set *is*.
+
+    **`INSPECT_LOG_DIR` is refused rather than ignored.** Every other variable here is honoured because Steward is standing in for the CLI that documents it, and this one contradicts the answer Steward has already given: the run's logs go where the fleet is watched from. Honouring it would move a worker's output somewhere no tend reads, so every task would land and then read as never started; ignoring it would do the right thing while telling the operator nothing.
+    """
+    if os.environ.get(LOG_DIR, "").strip():
+        raise LaunchError(
+            f"{LOG_DIR} is set, and Steward decides where a run's logs go — the "
+            f"fleet is watched from that directory, so a worker writing "
+            f"elsewhere is a worker no tend can see. Set `log_dir` in your "
+            f"definition instead, and unset {LOG_DIR} for this shell."
+        )
+    try:
+        return read_overrides(os.environ, given or {})
+    except DirectivesError as ex:
+        raise LaunchError(str(ex)) from ex
 
 
 def _log_dir(workspace: Workspace, manifest: Manifest) -> str:

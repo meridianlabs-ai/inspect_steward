@@ -118,6 +118,7 @@ def read_eval_set(
             args=args or {},
         ),
         options=capture.options,
+        overrides=capture.overrides,
         tasks=[
             ManifestTask(**task.model_dump(), key=key)
             for task, key in zip(capture.tasks, keys, strict=True)

@@ -7,6 +7,7 @@ from .create import (
     ensure_gitignore,
 )
 from .directives import (
+    ALIASES,
     DEFAULT_TEND_INTERVAL,
     PREFIX,
     REFUSED,
@@ -58,6 +59,13 @@ from .journal import (
 )
 from .layout import DEFINITION_NAMES, GITIGNORE_ENTRIES, Workspace
 from .log import steward_log
+from .overrides import (
+    LOG_DIR,
+    VARIABLES,
+    Variable,
+    parse_override,
+    read_overrides,
+)
 
 __all__ = [
     "ACKNOWLEDGED",
@@ -81,8 +89,13 @@ __all__ = [
     "DamagedLine",
     "Directives",
     "DirectivesError",
+    "ALIASES",
+    "LOG_DIR",
     "PREFIX",
+    "VARIABLES",
+    "Variable",
     "RESERVED",
+    "parse_override",
     "parse_setting",
     "Held",
     "InitializedEvent",
@@ -109,6 +122,7 @@ __all__ = [
     "read_claim",
     "read_collected",
     "read_directives",
+    "read_overrides",
     "read_journal",
     "read_launched",
     "read_pause",

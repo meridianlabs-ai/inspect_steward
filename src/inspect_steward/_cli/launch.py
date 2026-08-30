@@ -8,7 +8,7 @@ Almost every other surface in Steward is written for a reader who is not there: 
 import dataclasses
 import json
 from pathlib import Path
-from typing import NoReturn
+from typing import Any, NoReturn
 
 import click
 
@@ -16,7 +16,15 @@ from .._evalset.detect import DefinitionType
 from .._launch import Change, Delta, Launch, LaunchError, launch
 from .._util.duration import format_duration
 from .._workspace import Held, Workspace
-from .options import Setting, overrides, shape_options, tend_interval_option
+from .options import (
+    PassthroughCommand,
+    Setting,
+    collect_overrides,
+    overrides,
+    passthrough_options,
+    shape_options,
+    tend_interval_option,
+)
 from .tasks import parse_args
 from .turn import TURN_ERRORS, echo_turn, find_workspace
 
@@ -30,7 +38,7 @@ _LABELS = {
 """Verb and explanation per row. The archive rows share a verb and differ in their reason, because *what it does* and *why* are separately useful: the verb is what the gate is about, and the reason is what tells somebody whether they meant it."""
 
 
-@click.command("launch")
+@click.command("launch", cls=PassthroughCommand)
 @click.argument(
     "definition",
     type=click.Path(exists=True, dir_okay=False, path_type=Path),
@@ -112,18 +120,6 @@ _LABELS = {
 @shape_options
 @tend_interval_option
 @click.option(
-    "--max-tasks",
-    type=click.IntRange(min=1),
-    default=None,
-    help="Tasks in flight at once for the first turn (overrides the definition).",
-)
-@click.option(
-    "--max-samples",
-    type=click.IntRange(min=1),
-    default=None,
-    help="Sample concurrency per task, pinned for the run (overrides the definition, and disables the ramp).",
-)
-@click.option(
     "--no-break-claim",
     is_flag=True,
     default=False,
@@ -136,6 +132,7 @@ _LABELS = {
     default=False,
     help="Output the delta and the first turn as JSON.",
 )
+@passthrough_options
 def launch_command(
     definition: Path | None,
     definition_args: tuple[str, ...],
@@ -150,10 +147,9 @@ def launch_command(
     stall_after: int | None,
     samples_ramp: tuple[int, int] | bool | None,
     tend_interval: int | None,
-    max_tasks: int | None,
-    max_samples: int | None,
     no_break_claim: bool,
     output_json: bool,
+    **passthrough: Any,
 ) -> None:
     """Start a run: capture the definition, commit it, arm a timer, tend once.
 
@@ -188,9 +184,8 @@ def launch_command(
             timer=timer,
             env_check=env_check,
             log_store=False if no_log_store else log_store,
+            overrides=collect_overrides(passthrough),
             max_workers=max_workers,
-            max_tasks=max_tasks,
-            max_samples=max_samples,
             stall_after=stall_after,
             samples_ramp=samples_ramp,
             tend_interval=tend_interval,

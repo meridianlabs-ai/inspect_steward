@@ -71,12 +71,13 @@ Selection is the execution counterpart to capture. Both are environment-variable
 |---|---|
 | `INSPECT_EVAL_SET_CAPTURE` | Path to write a manifest. `eval_set()` resolves tasks, writes the manifest, and exits the process without running anything. |
 | `INSPECT_EVAL_SET_SELECTION` | Path to a selection document. `eval_set()` resolves tasks, runs only the selected ones through `eval()`, and skips all eval-set orchestration. |
+| `INSPECT_EVAL_SET_OVERRIDES` | Path to a run-wide overrides document, read in **both** modes. Steward points the capture at one and merges the same values into every selection, so the manifest describes the run the fleet is having. |
 
-The selection document (`inspect_ai._eval.eval_set_selection`, schema version 4):
+The selection document (`inspect_ai._eval.eval_set_selection`, schema version 6):
 
 ```jsonc
 {
-  "version": 4,
+  "version": 6,
   "eval_set_id": "swe-sweep-2026-08",   // Steward-assigned; stamped into every log
   "tasks": [
     {
@@ -85,14 +86,16 @@ The selection document (`inspect_ai._eval.eval_set_selection`, schema version 4)
     }
   ],
   "overrides": {                        // all optional; omitted keeps the definition's
-    "log_dir": "s3://…/logs",
-    "max_samples": 12,
-    "limit": 5,
-    "max_sandboxes": 8,
-    "max_tasks": 1                      // except this one — see below
+    "log_dir": "s3://…/logs",           // Steward's, always
+    "max_samples": 12,                  // this worker's ramp level
+    "max_tasks": 1,                     // this worker's batch size — see below
+    "epochs": 2,                        // …and whatever the run overrode
+    "limit": 5
   }
 }
 ```
+
+**Every identity-neutral `eval_set()` argument may appear in `overrides`** — the container is no longer a curated five, and the bound is the rule §12 item 4 records: an argument is overridable iff `task_identifier()` ignores it. Steward writes the run's own values into the run-wide document and merges each worker's three (`log_dir`, `max_samples`, `max_tasks`) over them, so a worker receives exactly one container and no second file it could lose. `.steward/` is a directory this design tells people they may delete, and a worker whose overrides lived there would silently run something else if they did.
 
 **Three fields are the protocol; the rest are knobs, and they live in a container.** `version`, `eval_set_id`, and `tasks` are what a selection *is*. Everything else adjusts how one worker is operated, and at version 4 there are five of them — enough that leaving them beside the protocol fields reads as one flat bag of unrelated things. `overrides` is a `extra="forbid"` sub-model like its parent, so a misspelled key is still refused rather than dropped.
 
@@ -942,7 +945,15 @@ The fix is not machinery. **A separate key for the supervisor** removes it entir
 2. **Selection mode** — `INSPECT_EVAL_SET_SELECTION`, including the resume path and the mutual exclusion with capture. *Landed* (`_eval/eval_set_selection.py`, plus the branch in `eval_set()`).
 3. **Error-handling overrides** — *landed, as part of worker mode.* `fail_on_error=False` and task-retry-off are applied by selection mode itself, and the definition's requested values are recorded in the capture manifest's `options`. This deliberately avoids routing them through the overrides channel: they are not tunable policy, they are what selection mode *means*.
 
-4. **Operational overrides in the selection document** — *landed.* A selection carries an `EvalSetSelectionOverrides` container holding `log_dir`, `max_samples`, `limit` (item 8), and `max_sandboxes` (item 9); omitting any of them keeps the definition's value. This deliberately avoided a third env var: overrides only matter in selection mode, and the selection document is already a versioned channel the worker reads.
+4. **Operational overrides in the selection document** — *landed, then generalised twice.* A selection carries an `EvalSetOverrides` container; omitting any field keeps the definition's value.
+
+   **The surface is now derived rather than curated (schema version 6).** It began as five fields — `log_dir`, `max_samples`, `limit` (item 8), `max_sandboxes` (item 9), `max_tasks` (item 15) — chosen one at a time as each was wanted, which made the bound arbitrary. Inspect already computes the principled one, in `task_identifier()`: **an eval-set argument is overridable iff the identifier ignores it.** That is the line that matters rather than a taste about which knobs are "operational" — override something identity-bearing and a worker computes an identifier the capture manifest never recorded, so its log is written under a name nothing looks for and its task reads as never started forever. An exhaustiveness test now fails by name when an `eval_set()` parameter lands in neither half, which is what stops the list being curated again.
+
+   Three consequences are recorded upstream rather than left to be discovered. The rule **inherits whatever the identity set gets wrong** — `sandbox` and `model_base_url` are identity-neutral today and both plausibly change results, which the rule exposes rather than creates. Identity-neutral is **not the same as free**, which is what forced the second generalisation below. And not everything neutral **fits on a wire**: `approval` takes callables and `Epochs` carries reducer objects, so the serializable arms travel and the rest cannot be said from outside the process.
+
+   **Overrides are also no longer selection-only.** `INSPECT_EVAL_SET_OVERRIDES` names a run-wide document read in capture mode too, because `epochs` and `limit` change how many samples a task has: a selection that overrode them without capture seeing the same values would leave every per-task count in the manifest describing a run that is not happening, and every convergence check Steward performs is `samples × epochs` against a landed log. The capture manifest gained an `overrides` field to record what it honoured (version 2), and its `options` is now unambiguously what the *definition* asked for — a runner knows what it set and cannot otherwise learn what it displaced.
+
+   This still avoids a third *worker* env var: a worker reads one selection document, into which Steward merges the run's overrides and its own.
 
    **The container arrived at version 3**, with items 8 and 9 riding the bump those two required anyway. The container is `extra="forbid"` like its parent, so typo safety is unchanged, and `_FIELD_MIN_VERSION` collapsed to `{"overrides": 3}` — the container *is* the version-3 field, which simplified the gate rather than renaming it. It was a **clean break rather than a migration**: nothing was shipped, Steward is the sole writer of a selection document, and no deployment read version 1 or 2 — so the two existing fields moved rather than being kept as accepted legacy, with no dual shape and no version floor. The honest accounting is that a container saves no version bumps (`extra="forbid"` already refuses an unknown key; the bump buys *"upgrade inspect-ai"* instead of *"unknown field"*, which is wanted regardless). What it fixes is that `version`, `eval_set_id`, and `tasks` are the protocol and the rest are knobs, and at version 3 there are four of them.
 

@@ -18,6 +18,7 @@ They cannot drift, because they are the same code path with one flag. That is wo
 **An interrupted turn is reconciled by the next one**, and that is a requirement rather than a hope. There is no resume path here and no partial-turn state to recover: the next turn re-reads the log directory and the process table and decides again from what it finds. Every write is ordered so that being interrupted before it costs a repeat rather than a corruption.
 """
 
+import os
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -86,6 +87,7 @@ from .._workspace import (
     read_directives,
     read_journal,
     read_launched,
+    read_overrides,
     read_pause,
     read_raised,
     read_ramp_holds,
@@ -229,8 +231,6 @@ def tend(
     workspace: Workspace,
     *,
     max_workers: int | None = None,
-    max_tasks: int | None = None,
-    max_samples: int | None = None,
     stall_after: int | None = None,
     samples_ramp: tuple[int, int] | bool | None = None,
     break_stale: bool = True,
@@ -241,8 +241,6 @@ def tend(
     Args:
         workspace: The workspace to tend.
         max_workers: Worker processes for this turn, overriding `_steward.yaml`. `None` expresses no preference and defers to the file, which itself defaults to a process per task — it does not request that width, so a workspace that sets the key cannot be widened back to unbounded for one turn.
-        max_tasks: Tasks in flight at once for this turn, overriding the definition's `max_tasks`. `None` defers to it.
-        max_samples: Sample concurrency for this turn, overriding the definition.
         stall_after: Fruitless respawns before a task is given up on, overriding `_steward.yaml`.
         samples_ramp: The ramp's envelope for this turn, overriding `_steward.yaml`. A narrower range brings running tasks back inside it.
         break_stale: Kill a wedged claim holder and take the claim from it.
@@ -264,8 +262,6 @@ def tend(
             manifest,
             claim,
             max_workers=max_workers,
-            max_tasks=max_tasks,
-            max_samples=max_samples,
             stall_after=stall_after,
             samples_ramp=samples_ramp,
         )
@@ -280,8 +276,6 @@ def tend(
             manifest,
             held,
             max_workers=max_workers,
-            max_tasks=max_tasks,
-            max_samples=max_samples,
             stall_after=stall_after,
             samples_ramp=samples_ramp,
         )
@@ -293,8 +287,6 @@ def _tend(
     claim: Claim,
     *,
     max_workers: int | None,
-    max_tasks: int | None,
-    max_samples: int | None,
     stall_after: int | None,
     samples_ramp: tuple[int, int] | bool | None,
 ) -> TendResult:
@@ -308,8 +300,6 @@ def _tend(
         workspace,
         history,
         max_workers=max_workers,
-        max_tasks=max_tasks,
-        max_samples=max_samples,
         stall_after=stall_after,
         samples_ramp=samples_ramp,
         execute=True,
@@ -340,8 +330,6 @@ def status(
     workspace: Workspace,
     *,
     max_workers: int | None = None,
-    max_tasks: int | None = None,
-    max_samples: int | None = None,
     stall_after: int | None = None,
     samples_ramp: tuple[int, int] | bool | None = None,
 ) -> TendResult:
@@ -354,8 +342,6 @@ def status(
     Args:
         workspace: The workspace to report on.
         max_workers: Worker processes to preview against.
-        max_tasks: Task concurrency to preview against.
-        max_samples: Sample concurrency to preview against.
         stall_after: Respawn patience to preview against.
         samples_ramp: Ramp envelope to preview against.
 
@@ -372,8 +358,6 @@ def status(
         workspace,
         history,
         max_workers=max_workers,
-        max_tasks=max_tasks,
-        max_samples=max_samples,
         stall_after=stall_after,
         samples_ramp=samples_ramp,
         execute=False,
@@ -1060,6 +1044,7 @@ def _fleet(workspace: Workspace, manifest: Manifest, log_dir: str) -> Fleet:
         # a definition's relative paths resolve the same way every turn
         cwd=workspace.root,
         args=manifest.source.args or None,
+        overrides=manifest.overrides,
     )
 
 
@@ -1082,8 +1067,6 @@ def _settings(
     history: _History,
     *,
     max_workers: int | None,
-    max_tasks: int | None,
-    max_samples: int | None,
     stall_after: int | None,
     samples_ramp: tuple[int, int] | bool | None,
     execute: bool,
@@ -1094,17 +1077,20 @@ def _settings(
 
     **Falling back needs somewhere to fall back to.** With no `observation` in the journal there is no last known good, and running on Steward's own defaults would silently discard whatever the operator wrote — the one outcome worse than stopping. So the first turn after a bad edit refuses, and every turn after a good one degrades.
 
-    **`--max-samples` is the one flag that outlives its turn**, which `_pin` argues.
+    **Inspect's words come from the environment here, not from a flag.** `max_tasks` and `max_samples` are `eval_set()`'s and Steward has no spelling of its own for either, so a turn learns them the way an `inspect eval` in the same shell would (`_workspace.overrides`). The run-wide values a launch resolved are not read here at all: they are in the committed manifest, and `resolve_max_tasks` consults them below the environment where the precedence puts them.
+
+    **A `STEWARD_MAX_SAMPLES` outlives its turn**, which `_pin` argues. It is also read in the same breath as the file, so a value neither can parse degrades this turn rather than stopping the fleet.
     """
     try:
         directives = read_directives(workspace.directives)
+        overrides = read_overrides(os.environ)
     except DirectivesError as ex:
         if (last := history.pool) is None:
             raise
         pool = Pool(
             max_workers=max_workers if max_workers is not None else last.max_workers,
-            max_tasks=max_tasks if max_tasks is not None else last.max_tasks,
-            max_samples=max_samples if max_samples is not None else last.max_samples,
+            max_tasks=last.max_tasks,
+            max_samples=last.max_samples,
             samples_ramp=(
                 samples_ramp
                 if isinstance(samples_ramp, tuple) or samples_ramp is False
@@ -1134,8 +1120,13 @@ def _settings(
         pool=resolve_pool(
             directives,
             max_workers=max_workers,
-            max_tasks=max_tasks,
-            max_samples=_pin(max_samples, directives, history, samples_ramp),
+            max_tasks=overrides.max_tasks if overrides else None,
+            max_samples=_pin(
+                overrides.max_samples if overrides else None,
+                directives,
+                history,
+                samples_ramp,
+            ),
             stall_after=stall_after,
             samples_ramp=samples_ramp,
         ),
@@ -1165,12 +1156,12 @@ def _pin(
 ) -> int | None:
     """The sample-concurrency pin in force, which may have been set on an earlier turn.
 
-    `--max-workers` and `--max-tasks` are settings for one turn and leave no residue: each turn recomputes the fleet from scratch, so a flag that lapses simply stops applying. `--max-samples` is not like that. It decides a *regime* rather than a quantity — a value pins the setpoint and switches the ramp off entirely (`resolve_samples_ramp`) — and that regime persists in the workers it spawned. A pin that lapsed after one turn would leave the next tend reading a level nobody was ramping, climbing it, and spawning the queue at the ramp's floor instead: the operator's number overridden twice, by a default they never chose, while nobody was watching.
+    `--max-workers` and `max_tasks` are settings for one turn and leave no residue: each turn recomputes the fleet from scratch, so a value that lapses simply stops applying. `max_samples` is not like that. It decides a *regime* rather than a quantity — a value pins the setpoint and switches the ramp off entirely (`resolve_samples_ramp`) — and that regime persists in the workers it spawned. A pin that lapsed after one turn would leave the next tend reading a level nobody was ramping, climbing it, and spawning the queue at the ramp's floor instead: the operator's number overridden twice, by a default they never chose, while nobody was watching.
 
-    So the pin is recorded like everything else a turn ran under, and read back here. **The way out is a `samples_ramp` *range***, however it is spelled — in the file, in `STEWARD_SAMPLES_RAMP`, or on the command line. All three say *ramp this run*, which is the one instruction that could mean nothing else. `false` does not release it in any spelling: that agrees with the pin rather than contradicting it, and would only substitute Steward's floor for the operator's number.
+    So the pin is recorded like everything else a turn ran under, and read back here. That matters precisely because the source is a variable: an operator's export reaches the tend they typed and not the 02:00 one, where a launch's own override is durable in the manifest and needs no help. **The way out is a `samples_ramp` *range***, however it is spelled — in the file, in `STEWARD_SAMPLES_RAMP`, or on the command line. All three say *ramp this run*, which is the one instruction that could mean nothing else. `false` does not release it in any spelling: that agrees with the pin rather than contradicting it, and would only substitute Steward's floor for the operator's number.
 
     Args:
-        given: What this invocation's `--max-samples` said, or `None`.
+        given: What this shell's `STEWARD_MAX_SAMPLES` or `INSPECT_EVAL_MAX_SAMPLES` said, or `None`. Not what the *run* said: a launch's own value is in the committed manifest, which every turn reads anyway, so there is nothing about it for the journal to remember.
         directives: The parsed `_steward.yaml` and environment, for the release.
         history: The journal, for what an earlier turn recorded.
         samples_ramp: What this invocation's `--samples-ramp` said, or `None`. Outranks the file for the release, the same way it outranks it everywhere else.
