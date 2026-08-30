@@ -154,6 +154,12 @@ depends on machinery that does not exist yet — the anomaly list and
 what is true and what you missed. Everything you need is in the workspace, so
 nothing depends on a conversation this session did not have.
 
+One caveat on the second of those: every setting, `policies` included, can also
+arrive from a `STEWARD_*` environment variable, which outranks the file and is
+not in the workspace at all. `steward status` reports the standing rules
+actually in force, so read the file for the reasoning behind them and `status`
+for what is set.
+
 ## Tuning inside the envelope
 
 Tend ramps sample concurrency on its own; your part is oversight, not the

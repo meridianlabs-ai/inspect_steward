@@ -121,6 +121,12 @@ def echo_turn(result: TendResult, *, table: bool = True) -> None:
         # renderings cannot disagree about what the window supported
         click.echo(f"tuning: {line}" if index == 0 else f"  {line}")
 
+    for index, rule in enumerate(result.policies):
+        # said here because `_steward.yaml` is no longer the only place they can
+        # come from: an agent told to read the file would be reading half of
+        # them on a machine that exports STEWARD_POLICIES
+        click.echo(f"standing rules: {rule}" if index == 0 else f"  {rule}")
+
     for line in _machinery(result):
         click.echo(line)
 

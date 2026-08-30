@@ -4,15 +4,18 @@ Three claims, and they are the whole point of the file: the settings are execute
 """
 
 from pathlib import Path
+from typing import Any
 
 import pytest
 from inspect_steward._schedule import DEFAULT_STALL_AFTER
 from inspect_steward._workspace import (
     DEFAULT_TEND_INTERVAL,
     REFUSED,
+    RESERVED,
     Directives,
     DirectivesError,
     create_workspace,
+    parse_setting,
     read_directives,
     resolve_interval,
     resolve_pool,
@@ -274,10 +277,12 @@ def test_the_tend_interval_resolves_most_specific_first(
     cli: str | None, text: str, expected: int, tmp_path: Path
 ) -> None:
     # the `max_workers` chain rather than the `max_samples` one: how often to
-    # converge is a standing property of the host, so the file is a real source
+    # converge is a standing property of the host, so the file is a real source.
+    # The flag arrives parsed, by the same parser the file's value went through
     directives = read_directives(written(tmp_path, text))
+    given = parse_setting("tend_interval", cli) if cli is not None else None
 
-    assert resolve_interval(directives, interval=cli) == expected
+    assert resolve_interval(directives, tend_interval=given) == expected
 
 
 @pytest.mark.parametrize(
@@ -355,3 +360,158 @@ def test_the_ramp_reaches_the_pool_and_defaults_to_none(tmp_path: Path) -> None:
     assert resolve_pool(envelope).samples_ramp == (60, 300)
     assert resolve_pool(Directives()).samples_ramp is None
     assert resolve_pool(Directives(samples_ramp=False)).samples_ramp is False
+
+
+# --- the environment -------------------------------------------------------
+
+ENVIRONMENT: list[tuple[str, str, str, str, Any]] = [
+    ("a ceiling", "STEWARD_MAX_WORKERS", "4", "max_workers", 4),
+    ("patience", "STEWARD_STALL_AFTER", "7", "stall_after", 7),
+    ("a ramp range", "STEWARD_SAMPLES_RAMP", "[60, 300]", "samples_ramp", (60, 300)),
+    ("a ramp switched off", "STEWARD_SAMPLES_RAMP", "false", "samples_ramp", False),
+    ("an interval", "STEWARD_TEND_INTERVAL", "30m", "tend_interval", 1800),
+    (
+        "a rule",
+        "STEWARD_POLICIES",
+        "never past eight.",
+        "policies",
+        "never past eight.",
+    ),
+    (
+        "a list of rules",
+        "STEWARD_POLICIES",
+        "[first., second.]",
+        "policies",
+        ["first.", "second."],
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("name", "value", "key", "expected"),
+    [(name, value, key, expected) for _, name, value, key, expected in ENVIRONMENT],
+    ids=[case for case, _, _, _, _ in ENVIRONMENT],
+)
+def test_every_setting_can_arrive_from_the_environment(
+    name: str,
+    value: str,
+    key: str,
+    expected: Any,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # the environment is the file, one key at a time -- same yaml.safe_load, so
+    # a range, a boolean, and a duration all mean there what they mean there
+    monkeypatch.setenv(name, value)
+
+    assert getattr(read_directives(tmp_path / "_steward.yaml"), key) == expected
+
+
+def test_the_environment_reaches_a_workspace_with_no_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # the arrangement a machine-level variable exists to serve, and the one an
+    # early return for the absent file would have quietly broken
+    monkeypatch.setenv("STEWARD_MAX_WORKERS", "6")
+
+    assert read_directives(tmp_path / "_steward.yaml").max_workers == 6
+
+
+def test_the_environment_outranks_the_file(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # narrower scope wins: the file is what this project wants, a variable is
+    # what this machine or this shell wants
+    monkeypatch.setenv("STEWARD_MAX_WORKERS", "2")
+
+    assert read_directives(written(tmp_path, "max_workers: 8\n")).max_workers == 2
+
+
+def test_an_exported_but_empty_variable_is_unset(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # refusing a shell profile that exports an empty value would be refusing a
+    # correct setup -- the same reading `_timer.env` gives a credential
+    monkeypatch.setenv("STEWARD_MAX_WORKERS", "")
+
+    assert read_directives(written(tmp_path, "max_workers: 8\n")).max_workers == 8
+
+
+def test_a_coerced_value_is_refused_by_the_variable_that_carried_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # the coercion hazard on a third surface, and the message has to name the
+    # variable: an author staring at a file that does not contain the value
+    # would otherwise be sent to the wrong place
+    monkeypatch.setenv("STEWARD_MAX_WORKERS", "yes")
+
+    with pytest.raises(DirectivesError) as caught:
+        read_directives(tmp_path / "_steward.yaml")
+
+    assert "STEWARD_MAX_WORKERS" in str(caught.value)
+    assert "not True" in str(caught.value)
+
+
+@pytest.mark.parametrize(
+    ("name", "says"),
+    [
+        pytest.param("STEWARD_SAMPLE_RAMP", "not a setting", id="a_typo"),
+        pytest.param("STEWARD_MAX_SAMPLES", "eval_set()", id="a_key_owned_elsewhere"),
+    ],
+)
+def test_an_unrecognised_variable_is_refused_rather_than_ignored(
+    name: str, says: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # a misspelled variable that sits inert is a setting somebody believes is
+    # in force, which is the whole failure the strict posture exists to prevent
+    monkeypatch.setenv(name, "40")
+
+    with pytest.raises(DirectivesError, match=says):
+        read_directives(tmp_path / "_steward.yaml")
+
+
+@pytest.mark.parametrize("name", sorted(RESERVED))
+def test_stewards_own_worker_markers_are_not_read_as_settings(
+    name: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # they are in the environment of exactly the processes that would otherwise
+    # refuse them, so the namespace rule has to know its own internals
+    monkeypatch.setenv(name, "something")
+
+    assert read_directives(tmp_path / "_steward.yaml") == Directives()
+
+
+SETTING: list[tuple[str, str, str, Any]] = [
+    ("a ceiling", "max_workers", "4", 4),
+    ("a ramp range", "samples_ramp", "[40, 300]", (40, 300)),
+    ("a ramp switched off", "samples_ramp", "false", False),
+    ("an interval", "tend_interval", "10m", 600),
+]
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "expected"),
+    [(key, value, expected) for _, key, value, expected in SETTING],
+    ids=[case for case, _, _, _ in SETTING],
+)
+def test_a_setting_typed_on_the_command_line_is_read_as_the_file_would(
+    key: str, value: str, expected: Any
+) -> None:
+    # one parser for all three spellings, which is what keeps them from being
+    # three parsers that agree by coincidence
+    assert parse_setting(key, value) == expected
+
+
+@pytest.mark.parametrize(
+    ("key", "value", "says"),
+    [
+        pytest.param("samples_ramp", "true", "how far", id="a_meaningless_ramp"),
+        pytest.param("tend_interval", "10", "unit", id="a_bare_number"),
+        pytest.param("max_workers", "yes", "not True", id="coerced"),
+    ],
+)
+def test_a_meaningless_value_on_the_command_line_earns_the_files_refusal(
+    key: str, value: str, says: str
+) -> None:
+    with pytest.raises(DirectivesError, match=says):
+        parse_setting(key, value)

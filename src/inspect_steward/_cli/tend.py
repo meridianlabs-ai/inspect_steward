@@ -1,6 +1,7 @@
 import click
 
 from .._tend import Refused, tend
+from .options import shape_options
 from .turn import (
     TURN_ERRORS,
     echo_refused,
@@ -12,12 +13,7 @@ from .turn import (
 
 
 @click.command("tend")
-@click.option(
-    "--max-workers",
-    type=click.IntRange(min=1),
-    default=None,
-    help="Worker processes for this turn, or unset for a process per task (overrides _steward.yaml).",
-)
+@shape_options
 @click.option(
     "--max-tasks",
     type=click.IntRange(min=1),
@@ -45,6 +41,8 @@ from .turn import (
 )
 def tend_command(
     max_workers: int | None,
+    stall_after: int | None,
+    samples_ramp: tuple[int, int] | bool | None,
     max_tasks: int | None,
     max_samples: int | None,
     no_break_claim: bool,
@@ -63,6 +61,8 @@ def tend_command(
             max_workers=max_workers,
             max_tasks=max_tasks,
             max_samples=max_samples,
+            stall_after=stall_after,
+            samples_ramp=samples_ramp,
             break_stale=not no_break_claim,
         )
     except TURN_ERRORS as ex:

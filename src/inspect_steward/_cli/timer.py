@@ -21,7 +21,7 @@ from .._timer import (
     installed,
     unavailable_credentials,
 )
-from .._util.duration import DurationError, format_duration
+from .._util.duration import format_duration
 from .._workspace import (
     Directives,
     DirectivesError,
@@ -30,6 +30,7 @@ from .._workspace import (
     read_directives,
     resolve_interval,
 )
+from .options import tend_interval_option
 from .turn import find_workspace
 
 
@@ -39,11 +40,7 @@ def timer_command() -> None:
 
 
 @timer_command.command("arm")
-@click.option(
-    "--interval",
-    default=None,
-    help="How often to tend, e.g. `10m`. Overrides `_steward.yaml`.",
-)
+@tend_interval_option
 @click.option(
     "--scheduler",
     "name",
@@ -59,13 +56,13 @@ def timer_command() -> None:
     flag_value=False,
     help="Arm even though a scheduled tend would not inherit this shell's credentials.",
 )
-def arm_command(interval: str | None, name: str | None, env_check: bool) -> None:
+def arm_command(tend_interval: int | None, name: str | None, env_check: bool) -> None:
     """Install a timer that tends this workspace on a schedule.
 
     Idempotent: an existing timer is removed first, so re-arming at a new interval or under a different scheduler leaves exactly one.
     """
     workspace = find_workspace()
-    seconds = _interval(workspace, interval)
+    seconds = _interval(workspace, tend_interval)
 
     # before anything below names `.env`, because a workspace created before that
     # entry existed does not have it and nothing re-runs `init` -- so telling
@@ -182,9 +179,9 @@ def _directives(workspace: Workspace) -> Directives:
         raise click.ClickException(str(ex)) from ex
 
 
-def _interval(workspace: Workspace, interval: str | None) -> int:
-    """What this workspace should tend at: the flag, then `_steward.yaml`, then the default."""
-    try:
-        return resolve_interval(_directives(workspace), interval=interval)
-    except DurationError as ex:
-        raise click.ClickException(str(ex)) from ex
+def _interval(workspace: Workspace, tend_interval: int | None) -> int:
+    """What this workspace should tend at: the flag, then `_steward.yaml` or its variable, then the default.
+
+    The flag arrives already parsed — `Setting` does that at the door, so a duration with no unit costs a usage error rather than reaching here.
+    """
+    return resolve_interval(_directives(workspace), tend_interval=tend_interval)

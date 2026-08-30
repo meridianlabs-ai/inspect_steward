@@ -145,13 +145,14 @@ However, evaluation runs don't always proceed without a hitch! Steward has sever
 
 The agent will notify you when any of these conditions exist and will help you resolve them as required.
 
-## Eval Policy
+## Steward Options
 
 Steward writes a `_steward.yaml` file to your workspace which can be used to tune the behavior of the monitor and agent. The settings at the top are what Steward acts on by itself; `policies` is free-form text the agent consults when making decisions. For example:
 
 ```{.yaml filename="_steward.yaml"}
-max_workers: 8
+tend_interval: 10m
 stall_after: 3
+max_workers: 8
 
 policies:
   - If more than 10% of the samples in a task error out, pause the run
@@ -164,38 +165,7 @@ policies:
     a re-run.
 ```
 
-Write `policies` as a list like this, or as one block of prose — Steward carries the text and never interprets it, so whichever reads better for the person picking up your project is the right one.
-
-#### Concurrency
-
-|  |  |
-|----|----|
-| `max_workers` | How many processes tasks are divided into (default: one per task, for maximum fault isolation). |
-| `samples_ramp` | The range Steward may discover sample concurrency in (default: `[40, 200]`). |
-| `tend_interval` | How often the background monitor checks the run (default: `10m`). |
-
-A fleet's demand on a provider is `max_tasks` × `max_samples`, and **both of
-those belong to your definition** — they are words `eval_set()` knows, so
-`_steward.yaml` refuses them and points you there. `max_tasks` caps how many tasks
-run at once (unset, all of them). `max_samples` Steward honors as written when
-you set it; when you leave it unset it **discovers** the value — tasks start at
-40 and the monitor ramps each one toward 200 while the provider shows no
-rate-limit pushback, backing off at once when it does. That range is the one
-concurrency setting that does live in `_steward.yaml`, because a range to discover
-a setpoint within is not something a definition can express.
-
-See the [Concurrency](concurrency.qmd) article for more details on scheduling and execution policy.
-
-#### Errors
-
-|  |  |
-|----|----|
-| `stall_after` | How many failed attempts before Steward stops re-launching a task and reports it instead (default: 2). |
-
-By default, Steward automatically retries samples 3 times (`retry_on_error=3`). Modify your eval set configuration directly to change this default. Note that Steward always runs tasks to completion (`continue_on_fail` is forced on). If you want a run to stop when error rates climb, express that as a policy rule instead (e.g. the 10% example above).
-
-See the [Error Handling](errors.qmd) article for more details on error handling and recovery.
-
+See the [Workspace](workspace.qmd) article for details on all available options.
 
 ## Learning More
 

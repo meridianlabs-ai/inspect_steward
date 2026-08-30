@@ -23,10 +23,13 @@ from inspect_ai.dataset import Sample
 from inspect_ai.scorer import exact
 from inspect_ai.solver import Generate, TaskState, generate, solver
 
-FAULT = "STEWARD_FAULT"
-"""`<point>:<behaviour>` — `pre`/`run`/`post` against `hang`/`crash`/`exit:<n>`."""
+FAULT = "FAULTY_EVALSET_FAULT"
+"""`<point>:<behaviour>` — `pre`/`run`/`post` against `hang`/`crash`/`exit:<n>`.
 
-FAULT_DIR = "STEWARD_FAULT_DIR"
+Named for this fixture rather than for Steward, and that is not cosmetic: `STEWARD_*` is a namespace Steward polices, refusing anything under it that is not one of its settings. These variables are this file's own protocol with the tests that drive it, so they belong outside it — the rename was what the refusal caught.
+"""
+
+FAULT_DIR = "FAULTY_EVALSET_DIR"
 """Where the `reached` and `go` markers live. Outside the workspace, so a fault can delete `.steward/` without taking the markers with it."""
 
 ORPHANED = 97

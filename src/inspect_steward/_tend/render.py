@@ -90,6 +90,7 @@ def status_markdown(
     lines.extend(_progress(result))
     lines.extend(_live(result))
     lines.extend(_tuning(result))
+    lines.extend(_policies(result))
     lines.extend(_happened(result, since=since))
     return "\n".join(lines)
 
@@ -128,6 +129,18 @@ def _tuning(result: "TendResult") -> list[str]:
         out.extend(f"- {line}" for line in lines[1:])
         out.append("")
     return out
+
+
+def _policies(result: "TendResult") -> list[str]:
+    """This human's standing rules, as they are actually in force.
+
+    Reported because the file is no longer the only place they can come from: `STEWARD_POLICIES` carries them too, so an agent told to *read `_steward.yaml`* would be reading half of them on a machine that sets one. Steward never interprets these — they appear here exactly as written, and what to do about them is the reader's judgement.
+
+    Silent where there are none, which is the default workspace. An empty section under a heading reads as *there are rules and you cannot see them*, which is worse than no heading at all.
+    """
+    if not result.policies:
+        return []
+    return ["## standing rules", "", *(f"- {rule}" for rule in result.policies), ""]
 
 
 def _shape(summary: Summary) -> str:

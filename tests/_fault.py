@@ -70,8 +70,8 @@ def arm(monkeypatch: pytest.MonkeyPatch, tmp_path: Path, fault: str) -> Fault:
     """
     directory = tmp_path / "fault"
     directory.mkdir(parents=True, exist_ok=True)
-    monkeypatch.setenv("STEWARD_FAULT", fault)
-    monkeypatch.setenv("STEWARD_FAULT_DIR", str(directory))
+    monkeypatch.setenv("FAULTY_EVALSET_FAULT", fault)
+    monkeypatch.setenv("FAULTY_EVALSET_DIR", str(directory))
     return Fault(dir=directory, point=fault.partition(":")[0])
 
 

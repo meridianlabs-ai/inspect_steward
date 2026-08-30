@@ -1,16 +1,12 @@
 import click
 
 from .._tend import status, status_markdown
+from .options import shape_options
 from .turn import TURN_ERRORS, echo_turn, find_workspace, turn_json
 
 
 @click.command("status")
-@click.option(
-    "--max-workers",
-    type=click.IntRange(min=1),
-    default=None,
-    help="Worker processes to preview against (overrides _steward.yaml).",
-)
+@shape_options
 @click.option(
     "--max-tasks",
     type=click.IntRange(min=1),
@@ -39,6 +35,8 @@ from .turn import TURN_ERRORS, echo_turn, find_workspace, turn_json
 )
 def status_command(
     max_workers: int | None,
+    stall_after: int | None,
+    samples_ramp: tuple[int, int] | bool | None,
     max_tasks: int | None,
     max_samples: int | None,
     output_format: str,
@@ -55,6 +53,8 @@ def status_command(
             max_workers=max_workers,
             max_tasks=max_tasks,
             max_samples=max_samples,
+            stall_after=stall_after,
+            samples_ramp=samples_ramp,
         )
     except TURN_ERRORS as ex:
         raise click.ClickException(str(ex)) from ex

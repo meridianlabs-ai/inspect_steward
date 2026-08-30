@@ -86,19 +86,28 @@ A fleet's demand on a model provider is the product of the knobs above: `max_tas
 
 The total is still worth computing before a large run — the ramp's ceiling bounds where discovery can take it, and `max_tasks × 200` is the number the default envelope authorizes. Within one process, inspect's adaptive connection controllers manage the connection pool on their own (AIMD, exactly as TCP shares a link); when a ramp is active Steward raises their scaling ceiling to the ramp's ceiling so the two do not fight, and the ramp moves only the *bounds* while the controllers move within them.
 
-## Overriding for a single run
+## One setting, three spellings
 
-Every knob has a one-run CLI override that outranks the standing configuration without touching any file:
+Every setting Steward owns can be said three ways, and they resolve most specific first — **flag, then variable, then file, then default**:
+
+| | |
+|----|----|
+| `max_workers: 8` in `_steward.yaml` | what this project wants |
+| `STEWARD_MAX_WORKERS=8` | what this machine or this shell wants |
+| `steward tend --max-workers 8` | what this invocation wants |
+
+That holds for all of them, with no exceptions to remember: `max_workers`, `stall_after`, `samples_ramp`, `tend_interval`, and `policies`. All three spellings go through one parser, so a value that is refused in the file is refused the same way and with the same message everywhere else — `STEWARD_MAX_WORKERS=yes` fails naming the `True` that YAML made of it, exactly as `max_workers: yes` does.
+
+Two details worth knowing. `--tend-interval` appears on `steward launch` and `steward timer arm` but not on `tend` or `status`, because those run a single turn and have no cadence to set. And a `STEWARD_*` name Steward does not recognise is **refused**, not ignored — a misspelled `STEWARD_SAMPLE_RAMP` that sat inert would be a setting you believed was in force.
+
+Inspect's knobs are not in this table, and that is the ownership rule rather than an omission: `max_tasks` and `max_samples` belong to your definition, and Steward has no spelling of its own for either.
 
 ```bash
 steward tend --max-tasks 4        # fleet width, this turn
-steward tend --max-workers 2      # process packing, this turn
 steward tend --max-samples 20     # pin per-task sample concurrency, for the run
 ```
 
-Standing values belong in `_steward.yaml` (`max_workers`, `samples_ramp`, `stall_after`, `tend_interval`) or your definition (`max_tasks`, `max_samples`); the CLI is for the run where conditions differ.
-
-**Two of the three lapse; `--max-samples` does not.** Fleet width and process packing are recomputed from scratch every turn, so a flag that is not repeated simply stops applying. Sample concurrency is different, because a value there does not just set a number — it pins the setpoint and switches the ramp off. So the pin is remembered for the rest of the run, and the way to release it is to write a range in `_steward.yaml`:
+**Fleet width lapses; `--max-samples` does not.** `max_tasks` is recomputed from scratch every turn, so a flag that is not repeated simply stops applying. Sample concurrency is different, because a value there does not just set a number — it pins the setpoint and switches the ramp off. So the pin is remembered for the rest of the run, and the way to release it is a `samples_ramp` **range**, in whichever spelling suits:
 
 ```{.yaml}
 samples_ramp: [40, 200]   # ramp again, whatever an earlier --max-samples pinned

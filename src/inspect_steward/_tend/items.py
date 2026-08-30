@@ -483,6 +483,10 @@ def _drift(result: "TendResult") -> list[Item]:
 
 
 def _degraded(result: "TendResult") -> list[Item]:
+    """Settings that would not parse, whichever spelling carried them.
+
+    Worded around *the settings* rather than around the file, because a `STEWARD_*` variable can fail this way too and naming the file would send the reader to a document that is perfectly fine. The reason carries the specifics, and it already names the variable where one is at fault.
+    """
     if result.degraded is None:
         return []
     return [
@@ -493,8 +497,8 @@ def _degraded(result: "TendResult") -> list[Item]:
             level=Level.ATTENTION,
             subject="_steward.yaml",
             summary=(
-                f"_steward.yaml could not be read, so this turn ran on the "
-                f"settings the last one recorded ({result.degraded})"
+                f"this workspace's settings could not be read, so this turn ran "
+                f"on the ones the last turn recorded ({result.degraded})"
             ),
         )
     ]

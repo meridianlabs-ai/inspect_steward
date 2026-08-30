@@ -16,6 +16,7 @@ from .._evalset.detect import DefinitionType
 from .._launch import Change, Delta, Launch, LaunchError, launch
 from .._util.duration import format_duration
 from .._workspace import Held, Workspace
+from .options import shape_options, tend_interval_option
 from .tasks import parse_args
 from .turn import TURN_ERRORS, echo_turn, find_workspace
 
@@ -101,12 +102,8 @@ _LABELS = {
         "now; read when signoff can publish to it."
     ),
 )
-@click.option(
-    "--max-workers",
-    type=click.IntRange(min=1),
-    default=None,
-    help="Worker processes for the first turn, or unset for a process per task (overrides _steward.yaml).",
-)
+@shape_options
+@tend_interval_option
 @click.option(
     "--max-tasks",
     type=click.IntRange(min=1),
@@ -142,6 +139,9 @@ def launch_command(
     env_check: bool,
     store: str | None,
     max_workers: int | None,
+    stall_after: int | None,
+    samples_ramp: tuple[int, int] | bool | None,
+    tend_interval: int | None,
     max_tasks: int | None,
     max_samples: int | None,
     no_break_claim: bool,

@@ -215,6 +215,9 @@ class TendResult:
     Where `summary` counts what Steward is doing, this is what the *run* is doing — the question anybody opening a status view actually has. Sample counts and the live columns come from different places (the log header and the worker's own socket), which is why it is assembled here rather than inside `reconcile`.
     """
 
+    policies: list[str] = field(default_factory=list[str])
+    """Standing rules in force, from `_steward.yaml` or `STEWARD_POLICIES`. Reported so that an agent reading the file alone is not missing half of them."""
+
     tuning: TuningPlan = field(default_factory=TuningPlan)
     """What this turn's window supports retuning, and the account of why.
 
@@ -228,6 +231,8 @@ def tend(
     max_workers: int | None = None,
     max_tasks: int | None = None,
     max_samples: int | None = None,
+    stall_after: int | None = None,
+    samples_ramp: tuple[int, int] | bool | None = None,
     break_stale: bool = True,
     claim: Claim | None = None,
 ) -> TendResult | Refused:
@@ -238,6 +243,8 @@ def tend(
         max_workers: Worker processes for this turn, overriding `_steward.yaml`. `None` expresses no preference and defers to the file, which itself defaults to a process per task — it does not request that width, so a workspace that sets the key cannot be widened back to unbounded for one turn.
         max_tasks: Tasks in flight at once for this turn, overriding the definition's `max_tasks`. `None` defers to it.
         max_samples: Sample concurrency for this turn, overriding the definition.
+        stall_after: Fruitless respawns before a task is given up on, overriding `_steward.yaml`.
+        samples_ramp: The ramp's envelope for this turn, overriding `_steward.yaml`. A narrower range brings running tasks back inside it.
         break_stale: Kill a wedged claim holder and take the claim from it.
         claim: A claim the caller already holds, to run this turn under instead of taking one. For `launch`, whose whole composition — capture, commit, arm, tend — is one span of single-writer work: a launch that released before its own first turn would be refused by it, or worse, would let a timer firing in the gap spawn workers for tasks the commit had just orphaned. Released by the caller, not here, because the caller's work is not over.
 
@@ -252,23 +259,44 @@ def tend(
     manifest = _manifest(workspace)
 
     if claim is not None:
-        return _tend(workspace, manifest, claim, max_workers, max_tasks, max_samples)
+        return _tend(
+            workspace,
+            manifest,
+            claim,
+            max_workers=max_workers,
+            max_tasks=max_tasks,
+            max_samples=max_samples,
+            stall_after=stall_after,
+            samples_ramp=samples_ramp,
+        )
 
     outcome = acquire(workspace.claim, command="tend", break_stale=break_stale)
     if isinstance(outcome, Held):
         return Refused(held=outcome)
 
     with outcome as held:
-        return _tend(workspace, manifest, held, max_workers, max_tasks, max_samples)
+        return _tend(
+            workspace,
+            manifest,
+            held,
+            max_workers=max_workers,
+            max_tasks=max_tasks,
+            max_samples=max_samples,
+            stall_after=stall_after,
+            samples_ramp=samples_ramp,
+        )
 
 
 def _tend(
     workspace: Workspace,
     manifest: Manifest,
     claim: Claim,
+    *,
     max_workers: int | None,
     max_tasks: int | None,
     max_samples: int | None,
+    stall_after: int | None,
+    samples_ramp: tuple[int, int] | bool | None,
 ) -> TendResult:
     """One turn, with the claim already in hand however it got there."""
     # inside the claim, because resolving these can *write* — a degraded
@@ -282,6 +310,8 @@ def _tend(
         max_workers=max_workers,
         max_tasks=max_tasks,
         max_samples=max_samples,
+        stall_after=stall_after,
+        samples_ramp=samples_ramp,
         execute=True,
     )
     if claim.broke is not None:
@@ -312,6 +342,8 @@ def status(
     max_workers: int | None = None,
     max_tasks: int | None = None,
     max_samples: int | None = None,
+    stall_after: int | None = None,
+    samples_ramp: tuple[int, int] | bool | None = None,
 ) -> TendResult:
     """Report where the run stands, and what the next turn would do.
 
@@ -324,6 +356,8 @@ def status(
         max_workers: Worker processes to preview against.
         max_tasks: Task concurrency to preview against.
         max_samples: Sample concurrency to preview against.
+        stall_after: Respawn patience to preview against.
+        samples_ramp: Ramp envelope to preview against.
 
     Returns:
         What a turn would see and do.
@@ -340,6 +374,8 @@ def status(
         max_workers=max_workers,
         max_tasks=max_tasks,
         max_samples=max_samples,
+        stall_after=stall_after,
+        samples_ramp=samples_ramp,
         execute=False,
     )
     manifest = _manifest(workspace)
@@ -532,6 +568,12 @@ class _Settings:
     Not something a turn acts on, and deliberately the *expressed* preference rather than the resolved one — it exists to be compared against what is actually armed, and a comparison against Steward's own default would report drift from a number nobody wrote.
     """
 
+    policies: list[str] = field(default_factory=list[str])
+    """The standing rules in force, from whichever source expressed them.
+
+    Carried rather than acted on, and reported rather than interpreted. It exists because `policies` can now arrive from `STEWARD_POLICIES` as readily as from the file, which makes *open `_steward.yaml`* an incomplete instruction for an agent — so the turn has to be able to say what is actually in force. A block scalar arrives as one entry, since splitting somebody's paragraphs on their behalf would be interpreting them.
+    """
+
 
 def _turn(
     workspace: Workspace,
@@ -618,6 +660,7 @@ def _turn(
         definition_hash=drift.digest,
         manifest_digest=manifest_digest(manifest),
         degraded_at=settings.degraded_at,
+        policies=settings.policies,
         supervision=Supervision(
             armed=history.armed,
             ever_armed=history.ever_armed,
@@ -1041,6 +1084,8 @@ def _settings(
     max_workers: int | None,
     max_tasks: int | None,
     max_samples: int | None,
+    stall_after: int | None,
+    samples_ramp: tuple[int, int] | bool | None,
     execute: bool,
 ) -> _Settings:
     """What to operate under, degrading to the last known good where it must.
@@ -1060,8 +1105,12 @@ def _settings(
             max_workers=max_workers if max_workers is not None else last.max_workers,
             max_tasks=max_tasks if max_tasks is not None else last.max_tasks,
             max_samples=max_samples if max_samples is not None else last.max_samples,
-            samples_ramp=last.samples_ramp,
-            stall_after=last.stall_after,
+            samples_ramp=(
+                samples_ramp
+                if isinstance(samples_ramp, tuple) or samples_ramp is False
+                else last.samples_ramp
+            ),
+            stall_after=stall_after if stall_after is not None else last.stall_after,
         )
         if execute:
             steward_log(
@@ -1086,31 +1135,53 @@ def _settings(
             directives,
             max_workers=max_workers,
             max_tasks=max_tasks,
-            max_samples=_pin(max_samples, directives, history),
+            max_samples=_pin(max_samples, directives, history, samples_ramp),
+            stall_after=stall_after,
+            samples_ramp=samples_ramp,
         ),
         degraded=None,
         interval=directives.tend_interval,
+        policies=_policies(directives),
     )
 
 
-def _pin(given: int | None, directives: Directives, history: _History) -> int | None:
+def _policies(directives: Directives) -> list[str]:
+    """The standing rules as a list, however they were written.
+
+    One entry for a block of prose and one per item for a list, because those are the two shapes the key accepts and neither should be reshaped into the other. Splitting a paragraph on blank lines would be a guess about where one rule ends, which is exactly the interpreting this layer does not do.
+    """
+    if directives.policies is None:
+        return []
+    if isinstance(directives.policies, str):
+        return [directives.policies]
+    return list(directives.policies)
+
+
+def _pin(
+    given: int | None,
+    directives: Directives,
+    history: _History,
+    samples_ramp: tuple[int, int] | bool | None = None,
+) -> int | None:
     """The sample-concurrency pin in force, which may have been set on an earlier turn.
 
     `--max-workers` and `--max-tasks` are settings for one turn and leave no residue: each turn recomputes the fleet from scratch, so a flag that lapses simply stops applying. `--max-samples` is not like that. It decides a *regime* rather than a quantity — a value pins the setpoint and switches the ramp off entirely (`resolve_samples_ramp`) — and that regime persists in the workers it spawned. A pin that lapsed after one turn would leave the next tend reading a level nobody was ramping, climbing it, and spawning the queue at the ramp's floor instead: the operator's number overridden twice, by a default they never chose, while nobody was watching.
 
-    So the pin is recorded like everything else a turn ran under, and read back here. **The way out is `_steward.yaml`**, and only a range: writing `samples_ramp: [x, y]` says *ramp this run* in the file that holds standing wishes, which is the one instruction that could mean nothing else. `samples_ramp: false` does not release it — that agrees with the pin rather than contradicting it, and would only substitute Steward's floor for the operator's number.
+    So the pin is recorded like everything else a turn ran under, and read back here. **The way out is a `samples_ramp` *range***, however it is spelled — in the file, in `STEWARD_SAMPLES_RAMP`, or on the command line. All three say *ramp this run*, which is the one instruction that could mean nothing else. `false` does not release it in any spelling: that agrees with the pin rather than contradicting it, and would only substitute Steward's floor for the operator's number.
 
     Args:
         given: What this invocation's `--max-samples` said, or `None`.
-        directives: The parsed `_steward.yaml`, for the release.
+        directives: The parsed `_steward.yaml` and environment, for the release.
         history: The journal, for what an earlier turn recorded.
+        samples_ramp: What this invocation's `--samples-ramp` said, or `None`. Outranks the file for the release, the same way it outranks it everywhere else.
 
     Returns:
         The pinned setpoint, or `None` to leave the chain to the definition and the ramp.
     """
     if given is not None:
         return given
-    if isinstance(directives.samples_ramp, tuple):
+    ramp = samples_ramp if samples_ramp is not None else directives.samples_ramp
+    if isinstance(ramp, tuple):
         return None
     return history.pool.max_samples if history.pool is not None else None
 

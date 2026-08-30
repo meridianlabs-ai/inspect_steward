@@ -94,7 +94,7 @@ def armed(workspace: Workspace) -> object:
 def test_arming_records_what_it_installed(
     workspace: Workspace, crontab: FakeCrontab
 ) -> None:
-    code, output = run("timer", "arm", "--interval", "30m", "--scheduler", "cron")
+    code, output = run("timer", "arm", "--tend-interval", "30m", "--scheduler", "cron")
 
     assert code == 0, output
     assert "every 30m" in output
@@ -120,8 +120,8 @@ def test_the_interval_comes_from_steward_md_when_no_flag_says_otherwise(
 def test_arming_twice_records_one_timer(
     workspace: Workspace, crontab: FakeCrontab
 ) -> None:
-    run("timer", "arm", "--interval", "30m", "--scheduler", "cron")
-    run("timer", "arm", "--interval", "1h", "--scheduler", "cron")
+    run("timer", "arm", "--tend-interval", "30m", "--scheduler", "cron")
+    run("timer", "arm", "--tend-interval", "1h", "--scheduler", "cron")
 
     recorded = read_armed(read_journal(workspace.journal).events)
     assert recorded is not None and recorded.interval == 3600
@@ -150,9 +150,13 @@ def test_a_scheduler_that_cannot_run_here_is_refused_rather_than_substituted(
 
 
 def test_an_interval_without_a_unit_is_refused(workspace: Workspace) -> None:
-    code, output = run("timer", "arm", "--interval", "10")
+    # at the door, like every other value that cannot mean anything: exit 2 and
+    # a line of help rather than a command that got partway in. The refusal is
+    # the file's own -- one parser for all three spellings -- so the sentence
+    # about units is the same one `tend_interval: 10` earns
+    code, output = run("timer", "arm", "--tend-interval", "10")
 
-    assert code == 1
+    assert code == 2
     assert "unit" in output
     assert armed(workspace) is None
 
@@ -216,7 +220,7 @@ def test_arming_an_older_workspace_closes_the_gitignore_gap(
     ignore = workspace.root / ".gitignore"
     ignore.write_text("logs/\nlogs-archive/\n.steward/\n", encoding="utf-8")
 
-    code, output = run("timer", "arm", "--interval", "30m", "--scheduler", "cron")
+    code, output = run("timer", "arm", "--tend-interval", "30m", "--scheduler", "cron")
 
     assert code == 0, output
     assert ".env" in output
@@ -235,7 +239,7 @@ def test_disarming_will_not_claim_nothing_is_armed_when_it_cannot_tell(
     error as *nothing was armed* would print exactly that while the timer goes on
     tending every interval — and leave nothing able to find it again.
     """
-    run("timer", "arm", "--interval", "30m", "--scheduler", "cron")
+    run("timer", "arm", "--tend-interval", "30m", "--scheduler", "cron")
     workspace.journal.unlink()
     workspace.journal.mkdir()
 
@@ -259,7 +263,7 @@ def test_a_timer_the_journal_cannot_record_is_removed_again(
     """
     workspace.journal.chmod(0o444)
 
-    code, output = run("timer", "arm", "--interval", "30m", "--scheduler", "cron")
+    code, output = run("timer", "arm", "--tend-interval", "30m", "--scheduler", "cron")
 
     assert code == 1
     assert "journal" in output
@@ -279,7 +283,7 @@ def test_the_timer_log_outlives_a_cleared_cache(workspace: Workspace) -> None:
     That is the one direction this must not fail in, and unlike a pause it is not
     even visible afterwards.
     """
-    run("timer", "arm", "--interval", "30m", "--scheduler", "cron")
+    run("timer", "arm", "--tend-interval", "30m", "--scheduler", "cron")
     shutil.rmtree(workspace.state)
 
     assert workspace.timer_log.parent.exists()
@@ -294,7 +298,7 @@ def test_the_timer_log_outlives_a_cleared_cache(workspace: Workspace) -> None:
 def test_disarming_removes_what_arming_recorded(
     workspace: Workspace, crontab: FakeCrontab
 ) -> None:
-    run("timer", "arm", "--interval", "30m", "--scheduler", "cron")
+    run("timer", "arm", "--tend-interval", "30m", "--scheduler", "cron")
 
     code, output = run("timer", "disarm")
 
@@ -326,7 +330,7 @@ def test_status_reports_a_timer_the_scheduler_no_longer_holds(
 ) -> None:
     # the journal is what every turn trusts, so this is the run believing it is
     # supervised while it is not
-    run("timer", "arm", "--interval", "30m", "--scheduler", "cron")
+    run("timer", "arm", "--tend-interval", "30m", "--scheduler", "cron")
     crontab.text = ""  # somebody ran `crontab -e` and cleared it
 
     code, output = run("timer", "status")
@@ -339,7 +343,7 @@ def test_status_reports_a_timer_the_scheduler_no_longer_holds(
 def test_status_reports_an_interval_the_workspace_no_longer_asks_for(
     workspace: Workspace,
 ) -> None:
-    run("timer", "arm", "--interval", "30m", "--scheduler", "cron")
+    run("timer", "arm", "--tend-interval", "30m", "--scheduler", "cron")
     workspace.directives.write_text("tend_interval: 5m\n", encoding="utf-8")
 
     code, output = run("timer", "status")
@@ -349,7 +353,7 @@ def test_status_reports_an_interval_the_workspace_no_longer_asks_for(
 
 
 def test_status_as_json_is_a_document(workspace: Workspace) -> None:
-    run("timer", "arm", "--interval", "30m", "--scheduler", "cron")
+    run("timer", "arm", "--tend-interval", "30m", "--scheduler", "cron")
 
     code, output = run("timer", "status", "--json")
 
@@ -450,7 +454,7 @@ def test_a_paused_run_does_not_blame_the_ceiling(pending: Workspace) -> None:
 def test_the_unsupervised_item_can_be_acknowledged(pending: Workspace) -> None:
     # "I am driving this one by hand" is a real answer, and without it a run
     # somebody deliberately unarmed reports itself every time they look
-    run("timer", "arm", "--interval", "30m", "--scheduler", "cron")
+    run("timer", "arm", "--tend-interval", "30m", "--scheduler", "cron")
     run("timer", "disarm")
     assert "no timer is armed" in run("status")[1]
 

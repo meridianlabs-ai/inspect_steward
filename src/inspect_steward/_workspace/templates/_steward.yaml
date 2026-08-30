@@ -20,6 +20,11 @@
 # because your definition is the single source of truth for those.
 #
 # Uncomment what you want. Anything left commented out uses Steward's default.
+#
+# Every one of these can also be said two other ways, for the times a project
+# setting is not what you want: `STEWARD_MAX_WORKERS=4 steward tend` for this
+# shell or this machine, and `steward tend --max-workers 4` for one invocation.
+# The flag wins over the variable, and the variable wins over this file.
 
 # tend_interval: 10m      # how often a scheduled tend runs (always with a unit)
 # max_workers: 8          # pack the run into this many worker processes
@@ -30,6 +35,8 @@
 #
 # Free-form. Write a list of rules, or one block of prose — Steward carries the
 # text and never interprets it, so say whatever a person would need to hear.
+# `STEWARD_POLICIES` works here too; `steward status` reports whatever is in
+# force, from either source.
 #
 # What is worth writing down:
 #

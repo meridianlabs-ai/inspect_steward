@@ -40,7 +40,6 @@ from .._timer import (
     explain_env,
     unavailable_credentials,
 )
-from .._util.duration import DurationError
 from .._worker import Stop, StopRequest, resolve_inflight, stop_workers
 from .._workspace import (
     LAUNCHED,
@@ -115,6 +114,9 @@ def launch(
     max_workers: int | None = None,
     max_tasks: int | None = None,
     max_samples: int | None = None,
+    stall_after: int | None = None,
+    samples_ramp: tuple[int, int] | bool | None = None,
+    tend_interval: int | None = None,
     break_stale: bool = True,
 ) -> Launch | Held:
     """Capture a definition, commit it as desired state, arm a timer, and tend once.
@@ -131,6 +133,9 @@ def launch(
         max_workers: Worker processes for the first turn, overriding `_steward.yaml`. `None` expresses no preference and defers to the file, which itself defaults to a process per task — it does not request that width.
         max_tasks: Tasks in flight at once for the first turn, overriding the definition's `max_tasks`. `None` defers to it.
         max_samples: Sample concurrency for the first turn.
+        stall_after: Fruitless respawns before a task is given up on, overriding `_steward.yaml`.
+        samples_ramp: The ramp's envelope, overriding `_steward.yaml`.
+        tend_interval: Seconds between scheduled tends, overriding `_steward.yaml`. Already parsed — the flag is validated at the door.
         break_stale: Kill a wedged claim holder and take the claim from it.
 
     Returns:
@@ -141,7 +146,7 @@ def launch(
         DirectivesError: `_steward.yaml` could not be parsed. Launching against settings nobody can read is the one place degrading would be wrong — a tend degrades because a fleet must keep converging, and a launch has nothing to keep going.
         ManifestError: What is committed is not a manifest. A launch is exactly the command that replaces it, so this reports rather than overwrites: the delta would otherwise be computed against nothing and propose archiving a directory full of real results.
     """
-    interval = _interval(workspace)
+    interval = _interval(workspace, tend_interval)
     resolved = _store(store)
 
     # before the capture and before the claim, because both of the things below
@@ -181,6 +186,8 @@ def launch(
             max_workers=max_workers,
             max_tasks=max_tasks,
             max_samples=max_samples,
+            stall_after=stall_after,
+            samples_ramp=samples_ramp,
         )
 
 
@@ -198,6 +205,8 @@ def _launch(
     max_workers: int | None,
     max_tasks: int | None,
     max_samples: int | None,
+    stall_after: int | None,
+    samples_ramp: tuple[int, int] | bool | None,
 ) -> Launch:
     """The launch itself, with the claim in hand for the whole of it."""
     committed = _committed(workspace)
@@ -265,6 +274,8 @@ def _launch(
         max_workers=max_workers,
         max_tasks=max_tasks,
         max_samples=max_samples,
+        stall_after=stall_after,
+        samples_ramp=samples_ramp,
         claim=claim,
     )
     return Launch(
@@ -498,15 +509,16 @@ def _supervise(
         )
 
 
-def _interval(workspace: Workspace) -> int:
+def _interval(workspace: Workspace, tend_interval: int | None) -> int:
     """How often this workspace asks to be tended.
 
-    From `_steward.yaml` or Steward's default, and deliberately not from a flag: an interval is a standing property of a workspace rather than a property of one launch, which is the argument that put it in that file in the first place (plan.md §9). Somebody who wants a different one for a single run arms it themselves.
+    The flag, then `_steward.yaml` or its variable, then Steward's default. `launch` carries the flag because a launch is the one command that *installs* a timer — `tend` and `status` run a single turn and have no cadence to set, which is what the rule means by a flag on every command that can act on the setting.
+
+    This deliberately had no flag for several steps, on the argument that an interval is a standing property of a workspace rather than of one launch. That describes the usual case rather than a reason the operator could not have a different one for the exceptional launch, and it left the setting reachable only by arming the timer separately afterwards.
     """
-    try:
-        return resolve_interval(read_directives(workspace.directives))
-    except DurationError as ex:
-        raise LaunchError(str(ex)) from ex
+    return resolve_interval(
+        read_directives(workspace.directives), tend_interval=tend_interval
+    )
 
 
 def _store(store: str | None) -> str | None:

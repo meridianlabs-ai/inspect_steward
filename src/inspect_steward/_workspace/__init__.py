@@ -8,9 +8,12 @@ from .create import (
 )
 from .directives import (
     DEFAULT_TEND_INTERVAL,
+    PREFIX,
     REFUSED,
+    RESERVED,
     Directives,
     DirectivesError,
+    parse_setting,
     read_directives,
     resolve_interval,
     resolve_pool,
@@ -77,6 +80,9 @@ __all__ = [
     "DamagedLine",
     "Directives",
     "DirectivesError",
+    "PREFIX",
+    "RESERVED",
+    "parse_setting",
     "Held",
     "InitializedEvent",
     "JournalEvent",

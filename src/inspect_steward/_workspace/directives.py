@@ -22,6 +22,8 @@ The cost of the format is here rather than hidden. When the prose sat below a fe
 That §5.3 rejected markdown-with-front-matter for `journal.jsonl` is not in tension with this, and is in fact the argument that eventually removed the fence here too. Its case was that block-delimited formats fail *globally* — one mistyped `---` swallows the remainder of a file — which is disqualifying for an append-only log of thousands of machine-written entries and merely unhelpful for one human-authored file read at startup. What settled it is that the fence was never buying anything: the prose below it was already a value Steward carried rather than a document it parsed, so making that explicit costs one failure mode and removes a delimiter nobody needed to learn.
 """
 
+import os
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Any, cast
 
@@ -30,6 +32,18 @@ from pydantic import BaseModel, ConfigDict, Field, ValidationError, field_valida
 
 from .._schedule import DEFAULT_STALL_AFTER, Pool
 from .._util.duration import parse_duration
+
+PREFIX = "STEWARD_"
+"""Every environment variable that changes what Steward does, and nothing else.
+
+One namespace, so *is this Steward's?* is answerable by looking. The cost is that Steward's own internals have to stay out of it or be named in `RESERVED`.
+"""
+
+RESERVED = frozenset({"STEWARD_WORKER", "STEWARD_TASK"})
+"""Variables under the prefix that are not settings.
+
+Both are markers Steward writes into a worker's environment and reads back off the process table (`_worker.inflight`), so they are always present in exactly the processes that would otherwise refuse them as typos.
+"""
 
 DEFAULT_TEND_INTERVAL = 600
 """Seconds between scheduled tends where nobody said otherwise.
@@ -202,22 +216,65 @@ class Directives(BaseModel):
 
 
 def read_directives(path: Path) -> Directives:
-    """Read a workspace's directives.
+    """Read a workspace's directives, from the file and the environment.
 
     Args:
         path: `_steward.yaml`. Need not exist.
 
     Returns:
-        What the file said. All defaults when it is absent or empty — an absent file is a workspace that expressed no preferences, not an error.
+        What the workspace asked for. All defaults where neither source said anything — an absent file is a workspace that expressed no preferences, not an error.
 
     Raises:
-        DirectivesError: The file is not valid YAML, is not a mapping, names a key that belongs elsewhere, or the workspace still holds a `_steward.md` under the old format.
+        DirectivesError: Either source names a key that belongs elsewhere or one Steward does not know, a value does not validate, the file is not valid YAML or not a mapping, or the workspace still holds a `_steward.md` under the old format.
+    """
+    settings = _file(path)
+    environment = _environment(os.environ)
+    settings.update(environment)
+    _refuse(settings, name=path.name)
+
+    try:
+        return Directives.model_validate(settings)
+    except ValidationError as ex:
+        raise DirectivesError(
+            f"{path.name} is not valid: {_explain(ex, environment)}"
+        ) from ex
+
+
+def parse_setting(key: str, value: str) -> Any:
+    """One setting typed on the command line, read exactly as the file's would be.
+
+    The third spelling, and it goes through the same two steps the other two do — `yaml.safe_load` for what the text means, then the field's own validation for whether it is allowed. That is what keeps `--samples-ramp '[40, 300]'`, `samples_ramp: [40, 300]`, and `STEWARD_SAMPLES_RAMP='[40, 300]'` from being three parsers that agree by coincidence, and it is why `--samples-ramp true` is refused with the same sentence about saying nothing about how far.
+
+    Args:
+        key: The setting's name, as `_steward.yaml` spells it.
+        value: What was typed.
+
+    Returns:
+        The validated value, ready for `resolve_pool` or `resolve_interval`.
+
+    Raises:
+        DirectivesError: The text is not valid YAML, or the value is not allowed for this setting.
+    """
+    try:
+        loaded: Any = yaml.safe_load(value)
+    except yaml.YAMLError as ex:
+        raise DirectivesError(f"`{value}` is not a valid value: {ex}") from ex
+    try:
+        return getattr(Directives.model_validate({key: loaded}), key)
+    except ValidationError as ex:
+        raise DirectivesError(_explain(ex)) from ex
+
+
+def _file(path: Path) -> dict[str, Any]:
+    """What the file said, as a mapping to overlay the environment onto.
+
+    A mapping rather than `Directives` on every path, including the three that say nothing — absent, empty, all comments. Returning parsed settings early would mean a workspace with no file ignored its environment, which is the one arrangement a machine-level variable exists to serve.
     """
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
         _superseded(path)
-        return Directives()
+        return {}
     except OSError as ex:
         raise DirectivesError(f"{path.name} could not be read: {ex}") from ex
     except UnicodeDecodeError as ex:
@@ -232,19 +289,44 @@ def read_directives(path: Path) -> Directives:
         raise DirectivesError(f"{path.name} is not valid YAML: {ex}") from ex
 
     if loaded is None:
-        return Directives()
+        return {}
     if not isinstance(loaded, dict):
         raise DirectivesError(
             f"{path.name} must be a mapping of settings, not {type(loaded).__name__}"
         )
+    return cast(dict[str, Any], loaded)
 
-    settings = cast(dict[str, Any], loaded)
-    _refuse(settings, name=path.name)
 
-    try:
-        return Directives.model_validate(settings)
-    except ValidationError as ex:
-        raise DirectivesError(f"{path.name} is not valid: {_explain(ex)}") from ex
+def _environment(environ: Mapping[str, str]) -> dict[str, Any]:
+    """What the environment said, as the same mapping the file produces.
+
+    **The environment is the file, one key at a time.** Each value goes through `yaml.safe_load` and joins the mapping the file built, so strict validation, the refusal table, and the errors that name what arrived all apply to it unchanged — `STEWARD_MAX_WORKERS=yes` fails exactly the way `max_workers: yes` fails, and for the same reason. Nothing here validates; it only decides which variables are Steward's and what their text means.
+
+    It sits between the file and the command line because that is what the three spellings mean: the file is what this project wants, a variable is what this machine or this shell wants, and a flag is what this invocation wants. Narrower wins.
+
+    **An unrecognised `STEWARD_*` variable is refused rather than ignored**, which is the same posture the file takes toward an unknown key and exists for the same failure: a misspelled `STEWARD_SAMPLE_RAMP` that sits inert is a setting someone believes is in force. That makes the prefix a namespace Steward has to be careful with — `RESERVED` names the variables under it that are not settings at all.
+    """
+    settings: dict[str, Any] = {}
+    for name in sorted(environ):
+        if not name.startswith(PREFIX) or name in RESERVED:
+            continue
+        key = name.removeprefix(PREFIX).lower()
+        if key in REFUSED:
+            raise DirectivesError(
+                f"{name} is not Steward's to set — `{key}` belongs in {REFUSED[key]}"
+            )
+        if key not in Directives.model_fields:
+            raise DirectivesError(f"{name} is not a setting Steward knows")
+        # an exported-but-empty variable is unset, the same reading `_timer.env`
+        # gives a credential: refusing a shell profile that exports an empty
+        # value would be refusing a correct setup
+        if not (value := environ[name]).strip():
+            continue
+        try:
+            settings[key] = yaml.safe_load(value)
+        except yaml.YAMLError as ex:
+            raise DirectivesError(f"{name} is not a valid value: {ex}") from ex
+    return settings
 
 
 def resolve_pool(
@@ -253,33 +335,40 @@ def resolve_pool(
     max_workers: int | None = None,
     max_tasks: int | None = None,
     max_samples: int | None = None,
+    stall_after: int | None = None,
+    samples_ramp: tuple[int, int] | bool | None = None,
 ) -> Pool:
     """Resolve what the operator asked of the worker pool.
 
-    Three chains, and the differences between them are the rules made visible:
+    Two shapes of chain, and the difference between them is the ownership rule made visible:
 
     | | |
     |---|---|
-    | `max_workers` | the CLI, then `_steward.yaml`, then unbounded |
-    | `stall_after` | `_steward.yaml`, then the default — there is no flag, because patience is a standing property rather than something to retype each turn |
+    | `max_workers` | the CLI, then `_steward.yaml` (or its variable), then unbounded |
+    | `stall_after` | the CLI, then `_steward.yaml`, then the default |
+    | `samples_ramp` | the CLI, then `_steward.yaml`, then the default range |
     | `max_tasks` | the CLI, then **the definition**, then unbounded — the file is not a source |
     | `max_samples` | the CLI, then **the definition**, then the default — the file is not a source |
-    | `samples_ramp` | `_steward.yaml`, then the default range — no flag, because an envelope is a standing property of the workspace, and the CLI's `--max-samples` is how one run opts out of it |
 
     The last two chains continue inside `resolve_max_tasks` and `resolve_max_samples`, which is why their CLI values pass straight through rather than being filled in here: *no preference* yields to whatever the definition asked for, and a number is an instruction that does not. Both are words `eval_set()` knows, so the definition owns them and this file refuses them by name.
+
+    The first three are Steward's own words, and every one of them can be said three ways — in the file, in a `STEWARD_*` variable, or on the command line — with no exceptions to remember. `stall_after` and `samples_ramp` were flagless for several steps on the argument that a standing property should not be retyped each turn, which described the author's usual case rather than a reason the operator could not have one for the exceptional turn.
 
     `max_workers` has no default to fall back to, which is not an omission: `None` is the answer, and it means *do not bound this* — a run nobody shaped runs everything, in a process each.
 
     Args:
-        directives: What the workspace's `_steward.yaml` said.
+        directives: What the workspace's `_steward.yaml` and environment said.
         max_workers: Process count from the command line, or `None`.
         max_tasks: Task concurrency from the command line, or `None`.
         max_samples: Sample concurrency from the command line, or `None`.
+        stall_after: Respawn patience from the command line, or `None`.
+        samples_ramp: Ramp envelope from the command line, or `None`.
 
     Returns:
         What the operator asked for, for `reconcile`.
     """
-    ramp = directives.samples_ramp
+    ramp = samples_ramp if samples_ramp is not None else directives.samples_ramp
+    patience = stall_after if stall_after is not None else directives.stall_after
     return Pool(
         max_workers=max_workers if max_workers is not None else directives.max_workers,
         max_tasks=max_tasks,
@@ -288,31 +377,26 @@ def resolve_pool(
         # types the field as `bool` for pydantic's sake, and `Pool`'s narrower
         # `Literal[False]` is the honest type downstream
         samples_ramp=ramp if isinstance(ramp, tuple) or ramp is False else None,
-        stall_after=(
-            directives.stall_after
-            if directives.stall_after is not None
-            else DEFAULT_STALL_AFTER
-        ),
+        stall_after=patience if patience is not None else DEFAULT_STALL_AFTER,
     )
 
 
-def resolve_interval(directives: Directives, *, interval: str | None = None) -> int:
+def resolve_interval(
+    directives: Directives, *, tend_interval: int | None = None
+) -> int:
     """Resolve how often this workspace should tend.
 
-    The `max_workers` chain, one key over: the command line, then `_steward.yaml`, then the default. An interval is a standing property of the host, so the file is a real source for it — unlike `max_samples`, whose source is the definition.
+    The `max_workers` chain, one key over: the command line, then `_steward.yaml` or its variable, then the default. An interval is a standing property of the host, so the file is a real source for it — unlike `max_samples`, whose source is the definition.
 
     Args:
-        directives: What the workspace's `_steward.yaml` said.
-        interval: A duration from the command line, e.g. `10m`, or `None`.
+        directives: What the workspace's `_steward.yaml` and environment said.
+        tend_interval: Seconds from the command line, already parsed, or `None`.
 
     Returns:
         Seconds between tends.
-
-    Raises:
-        DurationError: `interval` is not a duration.
     """
-    if interval is not None:
-        return parse_duration(interval)
+    if tend_interval is not None:
+        return tend_interval
     if directives.tend_interval is not None:
         return directives.tend_interval
     return DEFAULT_TEND_INTERVAL
@@ -344,21 +428,24 @@ def _refuse(settings: dict[str, Any], *, name: str) -> None:
             )
 
 
-def _explain(error: ValidationError) -> str:
+def _explain(error: ValidationError, environment: Mapping[str, Any] = {}) -> str:
     """A validation failure as one clause per offending key.
 
-    Two departures from pydantic's own wording, both because the default describes the mechanism rather than the mistake. *Extra inputs are not permitted* becomes a sentence about the key. And a **type** failure names what arrived, which is the whole value of validating strictly: someone who wrote `max_workers: yes` needs to see `True` to understand that YAML rewrote it, and *should be a valid integer* on its own does not tell them.
+    Three departures from pydantic's own wording, all because the default describes the mechanism rather than the mistake. *Extra inputs are not permitted* becomes a sentence about the key. A **type** failure names what arrived, which is the whole value of validating strictly: someone who wrote `max_workers: yes` needs to see `True` to understand that YAML rewrote it, and *should be a valid integer* on its own does not tell them.
+
+    And a key the environment supplied is named as the variable it came from. Same reasoning one level out: an author staring at a file that does not contain the offending value needs to be told where it does come from, or the message sends them to the wrong place.
     """
     clauses: list[str] = []
     for item in error.errors():
         key = ".".join(str(part) for part in item["loc"])
+        named = f"{PREFIX}{key.upper()}" if key in environment else key
         message = item["msg"].replace("Input should be", "should be", 1)
         if item["type"] == "extra_forbidden":
-            clauses.append(f"`{key}` is not a setting Steward knows")
+            clauses.append(f"`{named}` is not a setting Steward knows")
         elif not key:
             clauses.append(item["msg"])
         elif item["type"].endswith("_type"):
-            clauses.append(f"`{key}` {message}, not {item['input']!r}")
+            clauses.append(f"`{named}` {message}, not {item['input']!r}")
         else:
-            clauses.append(f"`{key}` {message}")
+            clauses.append(f"`{named}` {message}")
     return "; ".join(clauses)
