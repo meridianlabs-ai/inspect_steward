@@ -60,11 +60,11 @@ from .journal import (
 from .layout import DEFINITION_NAMES, GITIGNORE_ENTRIES, Workspace
 from .log import steward_log
 from .overrides import (
+    ALIASED,
     LOG_DIR,
-    VARIABLES,
-    Variable,
     parse_override,
     read_overrides,
+    spellings,
 )
 
 __all__ = [
@@ -92,8 +92,8 @@ __all__ = [
     "ALIASES",
     "LOG_DIR",
     "PREFIX",
-    "VARIABLES",
-    "Variable",
+    "ALIASED",
+    "spellings",
     "RESERVED",
     "parse_override",
     "parse_setting",

@@ -75,7 +75,7 @@ class Manifest(BaseModel):
 
     **The durable copy, and the only one.** A run's overrides are resolved once, at launch, from flags and the environment — and neither survives to the 02:00 tend that spawns the next worker. They cannot live in `.steward/` either, which this design tells people they may delete. So they are captured *with* the manifest, by the same subprocess that honoured them, and every later tend reads them back out of the committed file: the enumeration and the fleet cannot disagree, because the fleet's copy is the one the enumeration was made under.
 
-    `MANIFEST_VERSION` deliberately did not move for this, on the same reasoning `capture_rss` did not: a field added with a default whose absence means *the definition's own values* is not a schema a reader has to guess at.
+    `MANIFEST_VERSION` deliberately did not move for this, and the `capture_rss` reasoning only half covers it. That argument is about a *new* reader meeting an old manifest, where an absent field means *not measured* and nothing is lost. The other direction is not so comfortable: an **older** reader meeting this field drops it silently, accepts the manifest as version 1, and tends the run on the definition's own values — a different eval than the one that was captured, with nothing said. What makes that acceptable is only that no such reader exists in the wild; the package is unreleased. The moment one does, this field is the reason to bump.
     """
 
     tasks: list[ManifestTask]

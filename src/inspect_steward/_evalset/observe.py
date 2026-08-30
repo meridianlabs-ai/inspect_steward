@@ -17,7 +17,7 @@ import asyncio
 from dataclasses import dataclass, field
 from enum import StrEnum
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any, cast
 
 # task_identifier is the pairing mechanism eval_set() itself uses; it is
 # versioned rather than public, which is why the manifest records its version
@@ -97,6 +97,14 @@ class LogAttempt:
 
     headline_name: str | None = None
     """Which metric `headline` is, as `<score>/<metric>`."""
+
+    selection: dict[str, Any] = field(default_factory=dict[str, Any])
+    """Which samples this log ran — `limit`, `sample_id` and `sample_shuffle`, from `eval.config`, whichever were set.
+
+    **Which samples ran, where `total_samples` only says how many.** All three are identity-neutral, so a run that changes one produces logs the manifest still pairs with its tasks — and a `(0, 5)` limit changed to `(5, 10)`, or a reshuffle, keeps the count identical too. Carried so `_reshaped` can tell *these five samples* from *five samples*.
+
+    A mapping rather than a tuple because this survives a round trip through the attempt cache, where a tuple would come back a list and compare unequal to the one just read.
+    """
 
     limits: dict[str, int] = field(default_factory=dict[str, int])
     """The per-sample budgets this log ran under, from `eval.config` — `turns`, `messages`, `tokens`, `time`, `working`, `cost`, whichever were set.
@@ -217,6 +225,12 @@ class IncompleteReason(StrEnum):
 
     NO_RESULTS = "no_results"
     """Claims success but carries no results at all."""
+
+    RESHAPED = "reshaped"
+    """Succeeded, and answers a different question than the run is now asking — a different dataset slice, a different sample selection, a different shuffle.
+
+    The one incompleteness that is not about the log falling short. `task_identifier` ignores `limit`, `sample_id` and `sample_shuffle` on purpose, so that raising a limit resumes rather than orphaning what has run; the cost is that *changing which samples* run is invisible to it, and a count check cannot see it either once the counts agree. Without this a re-launch that reshuffles a limited run reports nothing to do and signs off on the previous subset.
+    """
 
 
 @dataclass(frozen=True)
@@ -361,7 +375,7 @@ def observe_tasks(manifest: Manifest, logs: ObservedLogs) -> ObservedTasks:
     Returns:
         One observation per manifest task, in manifest order, followed by one per identifier found in the directory that the manifest does not name.
     """
-    tasks = [_observe_task(task, logs) for task in manifest.tasks]
+    tasks = [_observe_task(manifest, task, logs) for task in manifest.tasks]
 
     named = {task.identifier for task in manifest.tasks}
     tasks.extend(
@@ -379,7 +393,9 @@ def observe_tasks(manifest: Manifest, logs: ObservedLogs) -> ObservedTasks:
     return ObservedTasks(tasks=tasks, unreadable=logs.unreadable)
 
 
-def _observe_task(task: ManifestTask, logs: ObservedLogs) -> TaskObservation:
+def _observe_task(
+    manifest: Manifest, task: ManifestTask, logs: ObservedLogs
+) -> TaskObservation:
     required = task.samples * task.epochs
     current = logs.current(task.identifier)
     if current is None:
@@ -390,7 +406,7 @@ def _observe_task(task: ManifestTask, logs: ObservedLogs) -> TaskObservation:
             required_samples=required,
         )
 
-    reason = _incomplete_reason(current, required)
+    reason = _incomplete_reason(current, required) or _reshaped(manifest, current)
     return TaskObservation(
         identifier=task.identifier,
         state=TaskState.COMPLETE if reason is None else TaskState.INCOMPLETE,
@@ -400,6 +416,39 @@ def _observe_task(task: ManifestTask, logs: ObservedLogs) -> TaskObservation:
         superseded=logs.superseded(task.identifier),
         required_samples=required,
     )
+
+
+SELECTION = ("limit", "sample_id", "sample_shuffle")
+"""The `eval_set()` arguments that decide *which* samples run, rather than how many.
+
+All three are identity-neutral and all three are recorded in a log's own config, which is what makes the comparison in `_reshaped` both necessary and possible. `epochs` is not here because the count check already covers it, and `sandbox` and `model_base_url` are not here because a log does not record them in a form that compares — they are the gap `eval_set_overrides` documents as inherited from task identity, and closing it belongs upstream rather than in a count check.
+"""
+
+
+def _reshaped(manifest: Manifest, attempt: LogAttempt) -> IncompleteReason | None:
+    """Whether the log answers the question the run is now asking.
+
+    Compares the run's *effective* selection — the override where there is one, the definition's own value otherwise — against what the log recorded running with. Both halves matter: an override is how a re-launch changes the slice, and `options` is how an edit to the definition does, and neither moves the identifier.
+
+    Silent where the manifest cannot say. A manifest captured before `options` recorded a field has nothing to compare, and inventing a mismatch there would re-run a settled run on upgrade.
+    """
+    for name in SELECTION:
+        override = getattr(manifest.overrides, name, None)
+        wanted = override if override is not None else manifest.options.get(name)
+        if _selection(wanted) != _selection(attempt.selection.get(name)):
+            return IncompleteReason.RESHAPED
+    return None
+
+
+def _selection(value: Any) -> tuple[str, ...] | None:
+    """One selection value, comparable across a round trip through JSON.
+
+    A `(0, 5)` limit is a tuple in a manifest and a list in a log header, and a `sample_id` is a scalar or a list depending on how it was said. Neither difference is a change to what runs.
+    """
+    if isinstance(value, (list, tuple)):
+        items: list[Any] = list(cast(list[Any], value))
+        return tuple(str(item) for item in items)
+    return None if value is None else (str(value),)
 
 
 def _incomplete_reason(
@@ -443,6 +492,15 @@ def _attempt(info: EvalLogInfo, header: EvalLog) -> LogAttempt:
         mtime=info.mtime,
         headline=headline,
         headline_name=headline_name,
+        selection={
+            name: value
+            for name, value in (
+                ("limit", header.eval.config.limit),
+                ("sample_id", header.eval.config.sample_id),
+                ("sample_shuffle", header.eval.config.sample_shuffle),
+            )
+            if value is not None
+        },
         limits=_limits(header),
     )
 

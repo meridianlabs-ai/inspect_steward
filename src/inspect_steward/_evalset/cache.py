@@ -22,7 +22,7 @@ from inspect_ai.log import EvalLogInfo
 
 from .observe import LogAttempt
 
-CACHE_VERSION = 2
+CACHE_VERSION = 3
 """Bumped when `LogAttempt` changes shape. A cache written by another version is discarded rather than migrated — it is derived data, and rebuilding it costs one turn."""
 
 RUNNING = "started"

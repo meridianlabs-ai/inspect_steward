@@ -110,12 +110,18 @@ class SynthTask:
 
 
 def _eval_spec(
-    task: SynthTask, *, created: str = CREATED, epochs: int | None = None
+    task: SynthTask,
+    *,
+    created: str = CREATED,
+    epochs: int | None = None,
+    selection: dict[str, Any] | None = None,
 ) -> EvalSpec:
     """The one place a synthetic task becomes an `EvalSpec`.
 
     `epochs` overrides what the log ran with, so a test can put a 1-epoch log
-    under a 3-epoch manifest task.
+    under a 3-epoch manifest task. `selection` does the same for `limit`,
+    `sample_id` and `sample_shuffle` — which samples ran, as distinct from how
+    many.
     """
     return EvalSpec(
         created=created,
@@ -131,7 +137,7 @@ def _eval_spec(
         # is checked against all of them
         config=EvalConfig(
             epochs=epochs if epochs is not None else task.epochs
-        ).model_copy(update=task.limits),
+        ).model_copy(update={**task.limits, **(selection or {})}),
     )
 
 
@@ -194,6 +200,7 @@ def write_log(
     format: LogFormat = "json",
     scores: dict[str, dict[str, float]] | None = None,
     headline: HeadlineMetric | None = None,
+    selection: dict[str, Any] | None = None,
 ) -> Path:
     """Write one log for a task.
 
@@ -210,6 +217,7 @@ def write_log(
         format: `json` for a document, `eval` for a real zip.
         scores: Scorer name to metric name to value, e.g. `{"exact": {"accuracy": 0.75}}`.
         headline: Which of `scores` the task declared as its headline, as scoring resolves it onto `results.headline`. `None` leaves the log undeclared, where a reader falls back to the first metric of the first score.
+        selection: `limit`, `sample_id` and `sample_shuffle` the log ran with — which samples, rather than how many.
 
     Returns:
         Path the log was written to.
@@ -239,7 +247,7 @@ def write_log(
 
     log = EvalLog(
         status=status,
-        eval=_eval_spec(task, created=created, epochs=epochs),
+        eval=_eval_spec(task, created=created, epochs=epochs, selection=selection),
         plan=EvalPlan(),
         results=results,
         # a log that never finished has no completion time, exactly as the

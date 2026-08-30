@@ -4,23 +4,27 @@
 
 **A Steward run is an `inspect eval-set` invocation with a longer lifetime**, and that is what closes the gap without reopening the rule. Reading the environment that CLI documents completes a contract Steward stands in for; minting `steward tend --max-samples` was Steward inventing a synonym for a word it had refused a week earlier. So inspect's words arrive as inspect's variables, are passed to inspect's own overrides document unchanged, and Steward is the transport rather than the author.
 
-**Every one also has a `STEWARD_*` alias, and the difference is scope rather than taste.** Inspect's variable is broad by construction: exported in a shell it reaches every `inspect eval` there, and written into a workspace `.env` it reaches every direct inspect run in that directory. `STEWARD_MAX_SAMPLES` is the same knob said quietly — narrowed to this tool — which is the narrowness the removed flag had and the variable alone would lose. It wins where both are set, because a narrower instruction is the more specific one.
+**Inspect reads its own variables, and that is not a delegation of convenience.** `resolve_eval_env` upstream is the single reader of `INSPECT_*`, because those names are click *inputs* rather than values: an option's type, its callback, and a normalisation block in the command body all run before a value reaches `eval_set()`. A reading built here from the field names agreed with `inspect eval` about two thirds of the time and failed silently the rest — `INSPECT_EVAL_LIMIT=10-20` refused where inspect accepts it, `INSPECT_EVAL_SAMPLE_ID=a,b` quietly becoming one id, and `INSPECT_EVAL_SCORE_DISPLAY` meaning the *opposite* of what its name says. Steward now asks upstream what the environment says and does not have an opinion of its own.
 
-**The names are data, not a rule.** `log_shared` answers to two variables, `log_format` to two others, `log_level` and `display` drop the `EVAL_` infix entirely, and four fields have only a *negated* variable because inspect's CLI spells them as `--no-` flags. Deriving `INSPECT_EVAL_{FIELD}` would be right about two thirds of the time, which is the worst possible accuracy for something that fails silently. `VARIABLES` is therefore written out, and `test_overrides.py` asserts its keys are exactly `EvalSetOverrides`' fields so a field added upstream cannot arrive unmapped.
+**Steward's half is the `STEWARD_*` alias, and the difference is scope rather than taste.** Inspect's variable is broad by construction: exported in a shell it reaches every `inspect eval` there, and written into a workspace `.env` it reaches every direct inspect run in that directory. `STEWARD_MAX_SAMPLES` is the same knob said quietly — narrowed to this tool — which is the narrowness the removed flag had and the variable alone would lose. It wins where both are set, because a narrower instruction is the more specific one. Aliases go through Steward's own parser, the one `_steward.yaml` and every flag use, so a value refused in one Steward spelling is refused in all of them.
 
-**`log_dir` is Steward's alone.** It has no alias and no inspect spelling here, because a run's log directory is where the fleet is watched from — a worker writing somewhere else is a worker whose logs no tend reads. `INSPECT_LOG_DIR` is refused at launch rather than ignored, for the reason every unread setting is.
+**`log_dir` is Steward's alone.** It has no alias and no flag, because a run's log directory is where the fleet is watched from — a worker writing somewhere else is a worker whose logs no tend reads. `INSPECT_LOG_DIR` is refused at launch rather than ignored, for the reason every unread setting is; upstream declines to read it too, for its own version of the same reason.
 """
 
 from collections.abc import Mapping
-from typing import Any, NamedTuple
+from typing import Any
 
 import yaml
 
-# the overrides model is a versioned wire format, deliberately not public API
+# the overrides model and its environment reader are a versioned wire format
+# and its parser, deliberately not public API
+from inspect_ai._eval.eval_set_env import ENV_VARIABLES, resolve_eval_env
 from inspect_ai._eval.eval_set_overrides import (
     EvalSetOverrides,
     check_eval_set_overrides,
+    merge_eval_set_overrides,
 )
+from inspect_ai._util.error import PrerequisiteError
 from pydantic import ValidationError
 
 from .directives import PREFIX, DirectivesError, explain
@@ -28,71 +32,31 @@ from .directives import PREFIX, DirectivesError, explain
 LOG_DIR = "INSPECT_LOG_DIR"
 """Inspect's log directory variable, refused rather than read.
 
-Every other variable here is honoured because Steward is standing in for the CLI that documents it. This one is not, because Steward has already answered the question it asks: the run's logs go where the fleet is watched from, and a variable that quietly moved them would leave every tend reading an empty directory and respawning work that is running.
+Every other variable is honoured because Steward is standing in for the CLI that documents it. This one is not, because Steward has already answered the question it asks: the run's logs go where the fleet is watched from, and a variable that quietly moved them would leave every tend reading an empty directory and respawning work that is running.
+"""
+
+ALIASED: tuple[str, ...] = tuple(
+    field for field in EvalSetOverrides.model_fields if field != "log_dir"
+)
+"""Every override field that gets a `STEWARD_*` alias and a `launch` flag.
+
+Derived from the model rather than listed, so a field added upstream is sayable here on the next release without anybody noticing it had to. `log_dir` is the one exclusion, and it is excluded because Steward decides it.
 """
 
 
-class Variable(NamedTuple):
-    """How one override field is spelled outside Steward."""
+def spellings(field: str) -> tuple[str, ...]:
+    """Every variable this field answers to, narrowest first.
 
-    inspect: tuple[str, ...] = ()
-    """Inspect's own variable names, most specific first. Empty where inspect has no positive spelling."""
+    Steward's alias, then whatever inspect's CLI binds — which is upstream's answer rather than a copy of it, so help text cannot claim a variable that does not work or miss one that does.
 
-    negated: str | None = None
-    """Inspect's negated variable, where its CLI spells the field as a `--no-` flag. Set, it means `false`."""
+    Args:
+        field: The field's name, as `EvalSetOverrides` spells it.
 
-
-VARIABLES: dict[str, Variable] = {
-    # --- where output goes ---------------------------------------------------
-    # `log_dir` is Steward's; see LOG_DIR above
-    "log_dir": Variable(),
-    "log_format": Variable(("INSPECT_LOG_FORMAT", "INSPECT_EVAL_LOG_FORMAT")),
-    "log_samples": Variable(negated="INSPECT_EVAL_NO_LOG_SAMPLES"),
-    "log_realtime": Variable(negated="INSPECT_EVAL_NO_LOG_REALTIME"),
-    "log_images": Variable(("INSPECT_EVAL_LOG_IMAGES",)),
-    "log_model_api": Variable(("INSPECT_EVAL_LOG_MODEL_API",)),
-    "log_refusals": Variable(("INSPECT_EVAL_LOG_REFUSALS",)),
-    "log_buffer": Variable(("INSPECT_EVAL_LOG_BUFFER",)),
-    "log_shared": Variable(("INSPECT_LOG_SHARED", "INSPECT_EVAL_LOG_SHARED")),
-    "log_level": Variable(("INSPECT_LOG_LEVEL",)),
-    "log_level_transcript": Variable(("INSPECT_LOG_LEVEL_TRANSCRIPT",)),
-    # --- how much of the dataset runs ----------------------------------------
-    "limit": Variable(("INSPECT_EVAL_LIMIT",)),
-    "sample_id": Variable(("INSPECT_EVAL_SAMPLE_ID",)),
-    "sample_shuffle": Variable(("INSPECT_EVAL_SAMPLE_SHUFFLE",)),
-    "epochs": Variable(("INSPECT_EVAL_EPOCHS",)),
-    # --- how fast it runs ----------------------------------------------------
-    "max_samples": Variable(("INSPECT_EVAL_MAX_SAMPLES",)),
-    "max_tasks": Variable(("INSPECT_EVAL_MAX_TASKS",)),
-    "max_subprocesses": Variable(("INSPECT_EVAL_MAX_SUBPROCESSES",)),
-    "max_sandboxes": Variable(("INSPECT_EVAL_MAX_SANDBOXES",)),
-    "max_dataset_memory": Variable(("INSPECT_EVAL_MAX_DATASET_MEMORY",)),
-    "generate_config": Variable(("INSPECT_EVAL_GENERATE_CONFIG",)),
-    # --- what the run is made of, other than the evaluation ------------------
-    "model_base_url": Variable(("INSPECT_EVAL_MODEL_BASE_URL",)),
-    "model_cost_config": Variable(("INSPECT_EVAL_MODEL_COST_CONFIG",)),
-    "sandbox": Variable(("INSPECT_EVAL_SANDBOX",)),
-    "sandbox_cleanup": Variable(negated="INSPECT_EVAL_NO_SANDBOX_CLEANUP"),
-    "sandbox_prebuilt": Variable(("INSPECT_EVAL_SANDBOX_PREBUILT",)),
-    "checkpoint": Variable(("INSPECT_EVAL_CHECKPOINT",)),
-    "approval": Variable(("INSPECT_EVAL_APPROVAL",)),
-    # --- what happens when something goes wrong -------------------------------
-    "retry_on_error": Variable(("INSPECT_EVAL_RETRY_ON_ERROR",)),
-    "score_on_error": Variable(("INSPECT_EVAL_SCORE_ON_ERROR",)),
-    "debug_errors": Variable(("INSPECT_DEBUG_ERRORS",)),
-    # --- what the run reports -------------------------------------------------
-    "score": Variable(negated="INSPECT_EVAL_NO_SCORE"),
-    "score_display": Variable(("INSPECT_EVAL_SCORE_DISPLAY",)),
-    "tags": Variable(("INSPECT_EVAL_TAGS",)),
-    "metadata": Variable(("INSPECT_EVAL_METADATA",)),
-    "notification": Variable(("INSPECT_EVAL_NOTIFICATION",)),
-    "display": Variable(("INSPECT_DISPLAY",)),
-    "trace": Variable(("INSPECT_EVAL_TRACE",)),
-}
-"""Every overridable `eval_set()` argument, and what inspect calls it in the environment.
-
-Keys are exactly `EvalSetOverrides.model_fields`, asserted by a test rather than trusted — a field added upstream that nobody maps here would be an override Steward silently cannot pass on.
-"""
+    Returns:
+        Variable names, `STEWARD_*` first.
+    """
+    variable = ENV_VARIABLES.get(field)
+    return (f"{PREFIX}{field.upper()}", *(variable.names if variable else ()))
 
 
 def read_overrides(
@@ -100,7 +64,7 @@ def read_overrides(
 ) -> EvalSetOverrides | None:
     """Resolve inspect's words for this run, most specific first.
 
-    The command line, then `STEWARD_X`, then inspect's own variable, then silence — which leaves the definition's value in place, since an omitted field is what *keep what the definition chose* looks like all the way down.
+    The command line, then `STEWARD_X`, then inspect's own variables as inspect itself reads them, then silence — which leaves the definition's value in place, since an omitted field is what *keep what the definition chose* looks like all the way down.
 
     Args:
         environ: The environment to read.
@@ -112,47 +76,40 @@ def read_overrides(
     Raises:
         DirectivesError: A value is not valid YAML, or is not allowed for its field.
     """
+    # inspect's own reading of its own names, translated into Steward's error
+    # type so that a bad `INSPECT_EVAL_*` degrades a tend exactly as a bad
+    # `_steward.yaml` does rather than escaping as an unhandled exception
+    try:
+        inspect_side = resolve_eval_env(environ)
+    except PrerequisiteError as ex:
+        raise DirectivesError(_message(ex)) from ex
+
     settings: dict[str, Any] = {}
     sources: dict[str, str] = {}
-    for field, variable in VARIABLES.items():
-        # the alias first, then inspect's own: the narrower instruction is the
-        # more specific one, and an exported INSPECT_EVAL_* reaches every direct
-        # `inspect eval` in the shell where a STEWARD_* reaches only this
-        for name in (f"{PREFIX}{field.upper()}", *variable.inspect):
-            if (value := _value(environ, name)) is not None:
-                settings[field] = _loaded(name, value)
-                sources[field] = name
-                break
-        else:
-            # a negated variable is only ever `false`, and only where inspect's
-            # CLI has no positive spelling to read instead
-            if variable.negated and _value(environ, variable.negated) is not None:
-                settings[field] = False
-                sources[field] = variable.negated
+    for field in ALIASED:
+        name = f"{PREFIX}{field.upper()}"
+        if (value := _value(environ, name)) is not None:
+            settings[field] = _loaded(name, value)
+            sources[field] = name
     settings.update(
         {field: value for field, value in given.items() if value is not None}
     )
-    if not settings:
-        return None
 
-    try:
-        overrides = EvalSetOverrides.model_validate(settings)
-    except ValidationError as ex:
-        raise DirectivesError(explain(ex, sources)) from ex
-
-    # the second half of the check, and it has to be separate: a range of two
-    # equal numbers is a well-typed empty slice, so the model accepts it and
-    # only inspect knows it means nothing
-    if (found := check_eval_set_overrides(overrides)) is not None:
-        field, detail = found
-        raise DirectivesError(f"{sources.get(field, field)} has {detail}")
-    return overrides
+    steward_side = _validated(settings, sources) if settings else None
+    if inspect_side is None:
+        return steward_side
+    if steward_side is None:
+        return inspect_side
+    # narrower over broader, field by field
+    return merge_eval_set_overrides(inspect_side, steward_side)
 
 
 def parse_override(field: str, value: str) -> Any:
-    """One override typed on the command line, read exactly as its variable would be.
+    """One override typed on the command line, read as `_steward.yaml` reads a setting.
 
-    The same two steps every spelling of every setting goes through — `yaml.safe_load` for what the text means, then the field's own validation for whether it is allowed — so `--epochs yes` is refused here rather than reaching a worker as `True`.
+    The same two steps every *Steward* spelling goes through — `yaml.safe_load` for what the text means, then the field's own validation for whether it is allowed — so `--epochs yes` is refused here rather than reaching a worker as `True`.
+
+    Deliberately not inspect's CLI syntax. `--limit 10-20` is inspect's spelling of a range and `--limit '[10, 20]'` is Steward's, and a flag on `steward launch` sits beside `--samples-ramp '[40, 200]'` rather than beside `inspect eval`. The value is the same either way; only the surface a person is typing at differs.
 
     Args:
         field: The field's name, as `EvalSetOverrides` spells it.
@@ -175,6 +132,29 @@ def parse_override(field: str, value: str) -> Any:
     return getattr(overrides, field)
 
 
+def _validated(
+    settings: dict[str, Any], sources: dict[str, str]
+) -> EvalSetOverrides | None:
+    try:
+        overrides = EvalSetOverrides.model_validate(settings)
+    except ValidationError as ex:
+        raise DirectivesError(explain(ex, sources)) from ex
+
+    # the second half of the check, and it has to be separate: a range of two
+    # equal numbers is a well-typed empty slice, so the model accepts it and
+    # only inspect knows it means nothing
+    if (found := check_eval_set_overrides(overrides)) is not None:
+        field, detail = found
+        raise DirectivesError(f"{sources.get(field, field)} has {detail}")
+    return overrides
+
+
+def _message(ex: PrerequisiteError) -> str:
+    """Inspect's refusal, without the console markup its own display strips."""
+    text = str(ex).replace("[bold]", "").replace("[/bold]", "")
+    return text.removeprefix("ERROR: ")
+
+
 def _value(environ: Mapping[str, str], name: str) -> str | None:
     """A variable's text, treating exported-but-empty as unset.
 
@@ -192,9 +172,9 @@ def _loaded(name: str, value: str) -> Any:
 
 
 __all__ = [
+    "ALIASED",
     "LOG_DIR",
-    "VARIABLES",
-    "Variable",
     "parse_override",
     "read_overrides",
+    "spellings",
 ]

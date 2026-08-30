@@ -16,11 +16,12 @@ import click
 from inspect_ai._eval.eval_set_overrides import EvalSetOverrides
 
 from .._workspace import (
+    ALIASED,
     PREFIX,
-    VARIABLES,
     DirectivesError,
     parse_override,
     parse_setting,
+    spellings,
 )
 
 
@@ -101,7 +102,9 @@ def shape_options[F: Callable[..., Any]](f: F) -> F:
 class Override(click.ParamType):
     """One of inspect's eval-set arguments typed on Steward's command line.
 
-    `Setting`'s twin, one vocabulary over: the same `yaml.safe_load` plus the field's own validation, so `--epochs yes` is refused here rather than reaching a worker as `True`, and a value refused on the command line is refused identically in `STEWARD_EPOCHS` and `INSPECT_EVAL_EPOCHS`.
+    `Setting`'s twin, one vocabulary over: the same `yaml.safe_load` plus the field's own validation, so `--epochs yes` is refused here rather than reaching a worker as `True`, and a value refused on the command line is refused identically in `STEWARD_EPOCHS`.
+
+    Inspect's own variables are read by inspect (`resolve_eval_env`) and follow its CLI's syntax rather than this one — `INSPECT_EVAL_LIMIT=10-20` where this takes `--limit '[10, 20]'`. Same value, different surface, and each surface consistent with the rest of itself.
     """
 
     name = "value"
@@ -130,17 +133,15 @@ Separate from Steward's own, because the distinction is the whole rule: above th
 
 
 def passthrough_options[F: Callable[..., Any]](f: F) -> F:
-    """Inspect's eval-set arguments, one flag each, generated from the override map.
+    """Inspect's eval-set arguments, one flag each, generated from the overrides model.
 
     **Not the synonym problem returning.** `steward tend --max-samples` was Steward minting its own spelling of a word it refused elsewhere, applied per turn, with Steward deciding what it meant. These are inspect's own options, named as inspect names them, taking their help text from inspect's own field docstrings, and written verbatim into the overrides document. Steward is the transport.
 
-    **Generated rather than written out**, so the flag set cannot drift from the model: a field added upstream appears here on the next release without anybody noticing it had to. The name, the type, and the help are all read from the map and the model — there is no third copy of any of them.
+    **Generated rather than written out**, so the flag set cannot drift from the model: a field added upstream appears here on the next release without anybody noticing it had to. The name, the type, the help, and the variables the help names are all read from upstream — there is no second copy of any of them here.
 
     **On `launch` alone.** These are run-wide and persist for the run, which is what the manifest records them for; `tend` and `status` recompute Steward's own settings each turn and never re-decide the run's shape.
     """
-    for field in reversed(list(VARIABLES)):
-        if field == "log_dir":
-            continue
+    for field in reversed(ALIASED):
         f = click.option(
             f"--{field.replace('_', '-')}",
             f"override_{field}",
@@ -187,7 +188,7 @@ def collect_overrides(parameters: Mapping[str, Any]) -> dict[str, Any]:
     """
     return {
         field: parameters[f"override_{field}"]
-        for field in VARIABLES
+        for field in ALIASED
         if parameters.get(f"override_{field}") is not None
     }
 
@@ -197,14 +198,11 @@ def _passthrough_help(field: str) -> str:
 
     The first sentence of the field's docstring: the rest is reasoning for a reader of the model, and a `--help` entry has room for the claim alone.
 
-    A field inspect spells only as a `--no-` flag gets its negated variable named apart from the rest, because it is not another way of saying the same thing — set, it means `false` whatever it is set to. Listed beside the others it would read as a spelling that takes a value; omitted entirely it would tell a reader inspect has no variable for the field, which is worse.
+    The variables come from `spellings`, which asks upstream rather than keeping a list — so a `--help` entry cannot promise a variable that does not work, and cannot miss one that does. A field inspect declines to read from the environment at all (`notification`, and `log_images` where only `eval-retry` binds one) is left naming its `STEWARD_*` alias alone, which is the truth for it.
     """
     described = EvalSetOverrides.model_fields[field].description or ""
     sentence = described.split("\n", 1)[0].strip()
-    variable = VARIABLES[field]
-    spellings = ", ".join((f"{PREFIX}{field.upper()}", *variable.inspect))
-    negated = f" ({variable.negated} to turn it off)" if variable.negated else ""
-    return f"{sentence} Also {spellings}{negated}."
+    return f"{sentence} Also {', '.join(spellings(field))}."
 
 
 def tend_interval_option[F: Callable[..., Any]](f: F) -> F:

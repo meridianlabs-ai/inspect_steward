@@ -26,8 +26,8 @@ from inspect_steward._cli.main import steward
 from inspect_steward._cli.options import PASSTHROUGH
 from inspect_steward._evalset.manifest import Manifest, read_manifest, write_manifest
 from inspect_steward._workspace import (
+    ALIASED,
     LAUNCHED,
-    VARIABLES,
     Claim,
     Workspace,
     acquire,
@@ -35,6 +35,7 @@ from inspect_steward._workspace import (
     read_armed,
     read_journal,
     read_launched,
+    spellings,
 )
 
 from .._logs import DEFINITION, SynthTask, synth_manifest, write_log
@@ -232,25 +233,19 @@ def test_the_passthrough_flags_are_generated_and_belong_to_launch_alone() -> Non
     whole set rather than a sample of it.
 
     The variables are asserted too, because a spelling that works and is not
-    documented is indistinguishable from one that does not work. The four
-    negated ones are the case that would go missing quietly: they are the only
-    inspect spelling those fields have.
+    documented is indistinguishable from one that does not work — and they are
+    taken from `spellings`, so this checks that the help says what upstream
+    actually reads rather than what a list here claims.
     """
     launch_help = CliRunner().invoke(steward, ["launch", "--help"]).output
     tend_help = CliRunner().invoke(steward, ["tend", "--help"]).output
 
-    for field, variable in VARIABLES.items():
+    assert "--log-dir" not in launch_help
+    for field in ALIASED:
         flag = f"--{field.replace('_', '-')}"
-        if field == "log_dir":
-            assert flag not in launch_help
-            continue
         assert flag in launch_help, field
         assert flag not in tend_help, field
-        for name in (
-            f"STEWARD_{field.upper()}",
-            *variable.inspect,
-            *((variable.negated,) if variable.negated else ()),
-        ):
+        for name in spellings(field):
             assert name in launch_help, name
     # under their own heading, because thirty-seven of them would otherwise bury
     # the six a person types

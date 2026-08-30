@@ -11,6 +11,7 @@ from importlib import resources
 from pathlib import Path
 
 from .._evalset.detect import DefinitionType
+from .directives import refuse_superseded
 from .journal import append_event
 from .layout import GITIGNORE_ENTRIES, Workspace
 
@@ -73,9 +74,18 @@ def create_workspace(
         What was created, kept, updated, or skipped.
 
     Raises:
+        DirectivesError: If the workspace still holds an unconverted `_steward.md`.
         OSError: If the workspace cannot be written.
     """
     workspace = Workspace.at(root)
+    # before anything is written, and only where the new file is absent: that
+    # is the state an unconverted workspace is in, and completing it with an
+    # empty `_steward.yaml` would bury the author's standing rules under a file
+    # that parses as "no rules" -- and make the refusal in `read_directives`
+    # unreachable from then on. A workspace holding both files has already been
+    # converted by somebody and is not in trouble
+    if not workspace.directives.exists():
+        refuse_superseded(workspace.directives)
     workspace.root.mkdir(parents=True, exist_ok=True)
     report = CreateReport(workspace=workspace)
 

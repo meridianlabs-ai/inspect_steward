@@ -16,6 +16,7 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from inspect_ai._eval.eval_set_overrides import EvalSetOverrides
 from inspect_steward._evalset.observe import (
     IncompleteReason,
     ObservedLogs,
@@ -274,3 +275,78 @@ def test_scan_output_underneath_the_log_dir_is_not_a_log(tmp_path: Path) -> None
     write_log(tmp_path / "scans" / "scan_id=abc", SynthTask("scanned"))
 
     assert list(observe_logs(tmp_path).attempts) == [TASK.identifier]
+
+
+RESHAPING: list[tuple[str, dict[str, Any], dict[str, Any], IncompleteReason | None]] = [
+    ("nobody selected anything", {}, {}, None),
+    ("the same slice", {"limit": 3}, {"limit": 3}, None),
+    ("the same range, listed either way", {"limit": (0, 5)}, {"limit": [0, 5]}, None),
+    ("a slice where there was none", {"limit": 3}, {}, IncompleteReason.RESHAPED),
+    ("no slice where there was one", {}, {"limit": 3}, IncompleteReason.RESHAPED),
+    (
+        "a different range of the same size",
+        {"limit": (5, 10)},
+        {"limit": [0, 5]},
+        IncompleteReason.RESHAPED,
+    ),
+    (
+        "a reshuffle",
+        {"limit": 3, "sample_shuffle": 42},
+        {"limit": 3, "sample_shuffle": 7},
+        IncompleteReason.RESHAPED,
+    ),
+    (
+        "different ids",
+        {"sample_id": ["a", "b"]},
+        {"sample_id": ["a", "c"]},
+        IncompleteReason.RESHAPED,
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("wanted", "ran", "expected"),
+    [(wanted, ran, expected) for _, wanted, ran, expected in RESHAPING],
+    ids=[case for case, _, _, _ in RESHAPING],
+)
+def test_a_log_answering_a_different_question_is_incomplete(
+    wanted: dict[str, Any],
+    ran: dict[str, Any],
+    expected: IncompleteReason | None,
+    tmp_path: Path,
+) -> None:
+    """The gap a sample count cannot see, and neither can an identifier.
+
+    `limit`, `sample_id` and `sample_shuffle` are all outside
+    `task_identifier` on purpose — that is what lets a raised limit resume
+    rather than orphan what has run. The cost is that changing *which* samples
+    run keeps the identifier and can keep the count, so a re-launch that
+    reshuffles a limited run would otherwise report nothing to do and sign the
+    previous subset off as the answer.
+    """
+    task = SynthTask("probe", samples=3)
+    write_log(tmp_path, task, total=3, selection=ran)
+    manifest = synth_manifest([task], **wanted)
+
+    observed = observe_tasks(manifest, observe_logs(tmp_path))
+
+    (only,) = observed.tasks
+    assert only.reason == expected
+    assert only.state == (
+        TaskState.COMPLETE if expected is None else TaskState.INCOMPLETE
+    )
+
+
+def test_an_override_outranks_the_definition_in_the_comparison(tmp_path: Path) -> None:
+    # `options` is what the definition passed and `overrides` is what this run
+    # replaced it with, so the log has to be measured against the second where
+    # there is one -- otherwise every overridden run reads as reshaped forever
+    task = SynthTask("probe", samples=3)
+    write_log(tmp_path, task, total=3, selection={"limit": 3})
+    manifest = synth_manifest([task], limit=(0, 9)).model_copy(
+        update={"overrides": EvalSetOverrides(limit=3)}
+    )
+
+    (only,) = observe_tasks(manifest, observe_logs(tmp_path)).tasks
+
+    assert only.reason is None

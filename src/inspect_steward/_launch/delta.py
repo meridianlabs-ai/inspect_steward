@@ -18,9 +18,10 @@ A launch captures a fresh manifest and commits it as desired state. The delta is
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from enum import StrEnum
+from typing import Any
 
 from .._evalset.manifest import Manifest, ManifestTask
-from .._evalset.observe import ObservedLogs
+from .._evalset.observe import SELECTION, ObservedLogs
 from .._schedule import RunningWorker
 
 
@@ -73,6 +74,22 @@ class Relocation:
 
 
 @dataclass(frozen=True)
+class Reshaped:
+    """The run would ask for different samples than its results were produced from.
+
+    Not a row, for the same reason a relocation is not: every task can be identical and unaffected, and what changed is the *slice* underneath all of them. `limit`, `sample_id` and `sample_shuffle` are all identity-neutral, so nothing above notices — a `(0, 5)` limit changed to `(5, 10)` keeps every identifier and every sample count, and reports as *nothing to change* while quietly signing the previous subset off as the answer.
+
+    **Reported rather than gated.** A relocation is usually an accident of an edited `log_dir`; this is somebody typing `--limit` and meaning it. Nothing leaves `logs/` either — the superseded attempts stay where they are, as they do for any re-run — so `--accept-archive` would be both unnecessary and the wrong word. What was missing was the sentence, not the consent.
+    """
+
+    fields: tuple[str, ...]
+    """Which of `limit`, `sample_id`, `sample_shuffle` differ, in that order."""
+
+    affected: int
+    """Tasks holding results that would be run again."""
+
+
+@dataclass(frozen=True)
 class TaskChange:
     """One task, and what launching would do to it."""
 
@@ -106,6 +123,9 @@ class Delta:
 
     relocated: Relocation | None = None
     """The log directory moved, or `None` where it did not. Not additive — see the module docstring."""
+
+    reshaped: Reshaped | None = None
+    """The dataset slice changed under identical identifiers, or `None` where it did not."""
 
     def of(self, change: Change) -> list[TaskChange]:
         """The rows of one kind, in order.
@@ -171,7 +191,7 @@ class Delta:
     @property
     def empty(self) -> bool:
         """Whether launching would change nothing at all — a re-launch of an unedited definition."""
-        return not self.changes and self.relocated is None
+        return not self.changes and self.relocated is None and self.reshaped is None
 
 
 _ORDER = {
@@ -228,7 +248,45 @@ def compute_delta(
         changes=changes,
         first=old is None,
         relocated=_relocation(wanted, logs, stranded, running),
+        reshaped=_reshaped(new, old, wanted, logs),
     )
+
+
+def _reshaped(
+    new: Manifest,
+    old: Manifest | None,
+    wanted: Mapping[str, ManifestTask],
+    logs: ObservedLogs,
+) -> Reshaped | None:
+    """Whether the run's dataset slice moved out from under its results.
+
+    Compares the two manifests' *effective* selection — the override where there is one, the definition's own value otherwise — because either can move it and neither moves an identifier. `observe` reaches the same conclusion per task, from the logs themselves, and is what actually re-runs them; this exists so that `launch` says so at the moment somebody types it rather than leaving them to notice a full re-run at the next tend.
+
+    Args:
+        new: The manifest just captured.
+        old: The committed manifest, or `None` on a first launch.
+        wanted: The captured manifest's tasks by identifier.
+        logs: The run's log directory.
+
+    Returns:
+        What changed and what it costs, or `None` where nothing did.
+    """
+    if old is None:
+        return None
+    changed = tuple(
+        name for name in SELECTION if _selected(new, name) != _selected(old, name)
+    )
+    if not changed:
+        return None
+    return Reshaped(
+        fields=changed,
+        affected=sum(1 for identifier in wanted if logs.attempts.get(identifier)),
+    )
+
+
+def _selected(manifest: Manifest, name: str) -> Any:
+    override = getattr(manifest.overrides, name, None)
+    return override if override is not None else manifest.options.get(name)
 
 
 def _relocation(

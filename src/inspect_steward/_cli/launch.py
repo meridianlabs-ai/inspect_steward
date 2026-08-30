@@ -297,6 +297,17 @@ def delta_lines(delta: Delta, *, root: Path | None = None) -> list[str]:
                 f"    {_plural(len(moved.workers), 'worker')} still writing to "
                 f"the old one would be stopped"
             )
+    if (slice := delta.reshaped) is not None:
+        # also above the table, and for the same reason: every row can be empty
+        # while this one re-runs the whole set. Without it a launch that changed
+        # which samples run reports "nothing to change", because nothing the
+        # rows are about did
+        lines.append(f"  the samples change: {', '.join(slice.fields)}")
+        if slice.affected:
+            lines.append(
+                f"    {_plural(slice.affected, 'task')} with results would run "
+                f"again, and the results they have would be superseded"
+            )
     for change, (verb, reason) in _LABELS.items():
         rows = delta.of(change)
         if not rows:

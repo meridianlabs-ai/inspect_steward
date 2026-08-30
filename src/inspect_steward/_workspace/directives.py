@@ -321,7 +321,7 @@ def _file(path: Path) -> dict[str, Any]:
     try:
         text = path.read_text(encoding="utf-8")
     except FileNotFoundError:
-        _superseded(path)
+        refuse_superseded(path)
         return {}
     except OSError as ex:
         raise DirectivesError(f"{path.name} could not be read: {ex}") from ex
@@ -470,10 +470,18 @@ def resolve_log_store(
     return resolved if isinstance(resolved, str) else None
 
 
-def _superseded(path: Path) -> None:
+def refuse_superseded(path: Path) -> None:
     """Refuse a workspace that still holds the old file, rather than running as if it said nothing.
 
-    Only reached when `_steward.yaml` is absent, so a workspace that has been converted never pays for this. The failure it prevents is the quiet one: an unconverted workspace parses perfectly — as a workspace with no directives at all — and every standing rule in it stops applying with nothing said. Silence is the wrong answer to a file somebody wrote on purpose.
+    Call only where `_steward.yaml` is absent, which the two callers each establish their own way — a workspace that has been converted never pays for this, and one that kept the old file beside a converted new one is not in trouble. The failure it prevents is the quiet one: an unconverted workspace parses perfectly — as a workspace with no directives at all — and every standing rule in it stops applying with nothing said. Silence is the wrong answer to a file somebody wrote on purpose.
+
+    **`steward init` is the second caller, and needs this more than reading does.** `init` completes a partial workspace by writing what is missing, and `_steward.yaml` missing is exactly the state an unconverted workspace is in — so without this, init writes an empty one, the refusal below stops being reachable *forever*, and the standing rules the author wrote are lost with nothing said. A read at least fails loudly the first time.
+
+    Args:
+        path: The `_steward.yaml` that is absent.
+
+    Raises:
+        DirectivesError: The superseded `_steward.md` is there instead.
     """
     old = path.with_name(SUPERSEDED)
     if old.exists():

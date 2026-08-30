@@ -452,3 +452,45 @@ def test_a_worker_named_by_both_a_relocation_and_an_archive_row_is_stopped_once(
     assert [row.worker for row in delta.of(Change.REMOVED)] == ["echo_bbb_1"]
     assert delta.relocated is not None
     assert delta.stopping == ["echo_bbb_1"]
+
+
+def test_a_changed_slice_is_reported_even_though_no_row_moves(tmp_path: Path) -> None:
+    """The launch that used to say *nothing to change* while re-running the set.
+
+    `limit` is identity-neutral, so both manifests name the same task with the
+    same sample count and every row above is silent. What changed is which
+    three samples — which `observe` catches per task from the logs themselves,
+    and which this says at the moment somebody types it rather than leaving
+    them to notice a full re-run at the next tend.
+    """
+    logs = tmp_path / "logs"
+    write_log(logs, ADDITION)
+
+    delta = compute_delta(
+        synth_manifest([ADDITION], limit=(5, 10)),
+        synth_manifest([ADDITION], limit=(0, 5)),
+        logs=observe_logs(str(logs)),
+        archived=empty(),
+        running=[],
+    )
+
+    assert not delta.changes
+    assert not delta.empty
+    assert delta.reshaped is not None
+    assert delta.reshaped.fields == ("limit",)
+    assert delta.reshaped.affected == 1
+    # nothing leaves logs/, so this is not the gate's business
+    assert delta.additive
+
+
+def test_an_unchanged_slice_is_still_nothing_to_change(tmp_path: Path) -> None:
+    delta = compute_delta(
+        synth_manifest([ADDITION], limit=3),
+        synth_manifest([ADDITION], limit=3),
+        logs=empty(),
+        archived=empty(),
+        running=[],
+    )
+
+    assert delta.reshaped is None
+    assert delta.empty

@@ -14,6 +14,7 @@ from inspect_steward._evalset.detect import DefinitionType
 from inspect_steward._workspace import (
     GITIGNORE_ENTRIES,
     CreateReport,
+    DirectivesError,
     Outcome,
     Workspace,
     create_workspace,
@@ -122,3 +123,44 @@ def test_claude_points_at_agents(tmp_path: Path) -> None:
         workspace.agents.read_text(),
         "@AGENTS.md\n",
     )
+
+
+def test_an_unconverted_workspace_is_refused_rather_than_completed(
+    tmp_path: Path,
+) -> None:
+    """The one case where `init` adding a missing file destroys something.
+
+    `init` completing a partial workspace is the whole point of it, and
+    `_steward.yaml` missing is exactly the state an unconverted workspace is
+    in. Writing the template there buries the author's standing rules under a
+    file that parses as *no rules* — and takes the refusal in `read_directives`
+    with it, since that only fires while the new file is absent. So this is the
+    one file `init` refuses over instead of supplying.
+    """
+    (tmp_path / "_steward.md").write_text(
+        "---\nmax_workers: 8\n---\n", encoding="utf-8"
+    )
+
+    with pytest.raises(DirectivesError, match="_steward.md"):
+        create_workspace(tmp_path, git=False)
+
+    # and nothing was written on the way to refusing, so the directory is still
+    # the one the author had rather than half a workspace
+    assert not (tmp_path / "_steward.yaml").exists()
+    assert not (tmp_path / "AGENTS.md").exists()
+
+
+def test_a_converted_workspace_is_completed_as_usual(tmp_path: Path) -> None:
+    # a leftover _steward.md beside a real _steward.yaml is somebody's backup,
+    # and init has nothing to decide about it
+    (tmp_path / "_steward.md").write_text(
+        "---\nmax_workers: 8\n---\n", encoding="utf-8"
+    )
+    (tmp_path / "_steward.yaml").write_text("max_workers: 2\n", encoding="utf-8")
+
+    report = create_workspace(tmp_path, git=False)
+
+    assert outcomes(report)["_steward.yaml"] == Outcome.KEPT
+    assert (tmp_path / "_steward.yaml").read_text(
+        encoding="utf-8"
+    ) == "max_workers: 2\n"
