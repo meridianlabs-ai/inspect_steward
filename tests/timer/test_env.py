@@ -182,10 +182,45 @@ def test_a_setting_inspect_reads_for_itself_is_named_too(tmp_path: Path) -> None
     assert "INSPECT_EVAL_MODEL" in message
 
 
-def test_a_notification_url_is_treated_as_the_token_it_carries(tmp_path: Path) -> None:
+CHANNELS = ["INSPECT_EVAL_NOTIFICATION", "STEWARD_NOTIFICATION"]
+
+
+@pytest.mark.parametrize("name", CHANNELS)
+def test_a_notification_url_is_treated_as_the_token_it_carries(name: str) -> None:
     # `slack://xoxb-.../...` is a bearer token with a scheme in front of it, and
-    # the name matches none of the credential suffixes. Steward deliberately
-    # never reads it as a value, which is why nothing else would notice it go
-    assert credentials({"INSPECT_EVAL_NOTIFICATION": "slack://xoxb-secret/C123"}) == {
-        "INSPECT_EVAL_NOTIFICATION"
-    }
+    # the name matches none of the credential suffixes. Both spellings, because
+    # they configure each other: an arming shell that exports either and a
+    # `.env` that names neither is a 02:00 turn that cannot reach anybody --
+    # which is the failure notification exists to prevent, arriving through the
+    # one door notification cannot watch
+    assert credentials({name: "slack://xoxb-secret/C123"}) == {name}
+
+
+@pytest.mark.parametrize("name", CHANNELS)
+def test_a_channel_the_scheduler_would_not_inherit_is_refused(
+    name: str, tmp_path: Path
+) -> None:
+    env_file = tmp_path / ".env"
+    env_file.write_text("OPENAI_API_KEY=sk-real\n", encoding="utf-8")
+
+    missing = unavailable_credentials(env_file, {name: "slack://xoxb-secret/C123"})
+
+    assert missing == [name]
+    assert name in explain(missing, env_file)
+
+
+@pytest.mark.parametrize("name", CHANNELS)
+def test_either_spelling_in_the_env_file_covers_the_other(
+    name: str, tmp_path: Path
+) -> None:
+    # the two names are one capability: either configures Steward and its fleet
+    # alike, so a shell holding one and a `.env` holding the other is a 02:00
+    # turn that can reach somebody -- and refusing it refuses over a difference
+    # that has stopped existing by the time it would matter
+    other = next(spelling for spelling in CHANNELS if spelling != name)
+    env_file = tmp_path / ".env"
+    env_file.write_text(f"{other}=slack://xoxb-secret/C123\n", encoding="utf-8")
+
+    exported = {name: "slack://xoxb-different/C456"}
+
+    assert unavailable_credentials(env_file, exported) == []

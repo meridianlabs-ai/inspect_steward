@@ -15,6 +15,7 @@ from inspect_ai._eval.eval_set_overrides import EvalSetOverrides
 from inspect_steward._workspace import (
     ALIASED,
     LOG_DIR,
+    STEWARDS,
     DirectivesError,
     parse_override,
     read_overrides,
@@ -25,14 +26,21 @@ from inspect_steward._workspace import (
 def test_every_overridable_argument_can_be_said_to_steward() -> None:
     # derived from the model rather than listed, so a field added upstream is
     # sayable on the next release without anybody noticing it had to
-    assert set(ALIASED) == set(EvalSetOverrides.model_fields) - {"log_dir"}
+    assert set(ALIASED) == set(EvalSetOverrides.model_fields) - STEWARDS
+
+
+@pytest.mark.parametrize("field", sorted(STEWARDS))
+def test_stewards_own_words_get_no_alias(field: str) -> None:
+    # each of these is a property of the deployment rather than of the eval, so
+    # there is no scope at which somebody else decides it -- no alias, no
+    # generated flag, and a Steward setting carrying all three spellings instead
+    assert field not in ALIASED
+    assert field in EvalSetOverrides.model_fields
 
 
 def test_the_log_directory_is_stewards_alone() -> None:
-    # the run's logs go where the fleet is watched from, so there is no scope at
-    # which somebody else decides -- no alias, no flag, and the one variable
-    # that would say it refused at launch rather than read
-    assert "log_dir" not in ALIASED
+    # the one whose inspect variable a launch refuses rather than reads: logs
+    # going where the fleet is not watched from is invisible until morning
     assert LOG_DIR == "INSPECT_LOG_DIR"
     assert read_overrides({LOG_DIR: "s3://elsewhere"}) is None
 

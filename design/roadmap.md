@@ -76,7 +76,7 @@ What M2 deliberately lacks: it does not notice anything. Tasks run, logs land, a
 3. **The tuning policy** — the growth signal, the envelope, the asymmetric ratchet. Only the judgement is here; the mechanism landed in M2 because `pause` and adjudication needed it anyway.
 4. **`steward.log` and the sync**, with the two ages.
 5. **Anomalies** — the three levels (instance, class computed from exception type plus raising frame, proposal grouped across classes), the state machine, per-class ruling records, precedent. One data model, so it is built at once.
-6. **Notification**, with the four kinds. Depends on **upstream item 7** or on Steward carrying Apprise itself.
+6. **Notification**, with the six kinds. **Built** ([plan.md](plan.md) step 24), taken ahead of anomalies since the channel's shape constrains the lifecycle. **Upstream item 7 is withdrawn**: `build_apprise` stays private and is imported, and `apprise` is a proper dependency, so Steward carries the send itself — which it wanted anyway, to control the dialect per target.
 7. **Adjudication actions, and the stuck sample** — `invalidate_samples` plus respawn-with-`resume`, and the live counterpart: a sample that stopped moving while nothing failed, surfaced with the directive that would free it. Both are Steward acting on the run under a ruling or a pre-authorization, which is why they are one step.
 8. **`signoff`**, `anomalies.md`, the gate latch, and curation into `logs-archive/`.
 
@@ -108,7 +108,7 @@ Scanning is the largest piece and the most valuable — three steps in [plan.md]
 
 | item | needed by | if it does not land |
 |---|---|---|
-| 7 — notification outside an eval | **M3** | smaller than it looked: `build_apprise` / `init_apprise` are importable from `inspect_ai.util._notify`, the same reach-around Steward already does for `_eval.evalset` and `_cli.main`, so nothing is duplicated. The ask is *make them public*, not *unblock us* |
+| 7 — notification outside an eval | ~~M3~~ **withdrawn** | private was correct. `build_apprise` / `init_apprise` are importable from `inspect_ai.util._notify`, the same reach-around Steward already does for `_eval.evalset` and `_cli.main`, and what is wanted is the credential discipline rather than a second copy of the URL parsing. `notify()` itself is unusable anyway — it passes no `body_format`, so a target that declares markdown is handed whatever the caller wrote, and Steward renders per family |
 | 8 — dataset `limit` override | ~~M4 (smoke)~~ **landed** | schema version 3; the smoke's remaining half is Steward-side |
 | 5 — early pruning | ~~M2 **at scale**~~ **landed** | schema version 5, matching on `(registry_name, args_hash)`. Per-worker memory no longer scales with the manifest — measured flat at ~0.27 GiB across a set whose un-pruned worker grew 0.33 → 0.52 GiB. Steward's half (emitting the facets, and the measured projection that replaced the interim guard) is [plan.md](plan.md) step 18 |
 | 9, 10 — `max_sandboxes` override and sandbox type in the manifest | M2 **on Docker** — 9 landed, 10 half | the override and `options["max_sandboxes"]` are in at schema version 3; the per-task sandbox type is not, and it is what decides which tasks share a budget. Until then k8s and unsandboxed evals are unaffected, and on a Docker host the fleet still asks for `workers × 2 × cores` containers — the one failure mode with no backpressure signal |
@@ -117,7 +117,7 @@ Scanning is the largest piece and the most valuable — three steps in [plan.md]
 | 14 — the headline metric in the log header | ~~never blocking~~ **landed** | `Task(headline_metric=…)` declares it, `EvalResults.headline` resolves it, and the fallback is the first metric of the first score. Steward's half is done — `LogAttempt.headline` reads it, and the interim convention step 13a shipped is retired |
 | 12, 13 — ACP on in worker mode, and the parked state on the control channel | ~~**M3**~~ **landed** | a detached worker has no path to a human: `approver: human` and `ask_user` land as errored samples in successful logs. Only definitions that ask for human interaction are affected, and they are affected completely. The two must land together — 12 without 13 replaces a loud errored sample with an invisible stall ([plan.md](plan.md) step 20) |
 
-**Two items touch M3, and both have workarounds** — Steward can reach Apprise through a private import, and it can compute supersession itself. Nothing blocks M2 except at scale or on Docker, which is worth knowing: the runner can be built and proven before any of this lands.
+**One item still touches M3** — Steward can compute supersession itself; the notification ask was withdrawn rather than worked around. Nothing blocks M2 except at scale or on Docker, which is worth knowing: the runner can be built and proven before any of this lands.
 
 ## 6. How Hawk meshes
 

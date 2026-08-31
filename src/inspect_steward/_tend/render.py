@@ -21,7 +21,7 @@ from .._schedule import Summary
 from .._util.duration import format_duration
 from .._util.jsonl import utc_now
 from .items import HEADINGS, by_owner, verdict_line
-from .progress import LIVE_ONLY, short_keys
+from .progress import LIVE_ONLY, compact, short_keys
 
 if TYPE_CHECKING:
     # the turn imports this module to write its file, so the type it passes can
@@ -192,14 +192,23 @@ def _progress(result: "TendResult") -> list[str]:
 
     short = short_keys(rows)
     live = any(row.live for row in rows)
+    # not gated on `live` with the other two: what is still to run is known
+    # whether or not a worker is answering, and most of a sweep has none
+    queued = any(row.queued for row in rows)
     scored = any(row.headline is not None for row in rows)
     budgeted = any(row.budget is not None for row in rows)
 
     header = ["task", "samples", "done"]
     align = ["---", "---:", "---:"]
     if live:
-        header += ["running", "queued", "connections"]
-        align += ["---:", "---:", "---:"]
+        header += ["running"]
+        align += ["---:"]
+    if queued:
+        header += ["queued"]
+        align += ["---:"]
+    if live:
+        header += ["connections"]
+        align += ["---:"]
     if budgeted:
         header += ["limit"]
         align += ["---:"]
@@ -223,19 +232,21 @@ def _progress(result: "TendResult") -> list[str]:
             f"{round(row.fraction * 100)}%",
         ]
         if live:
+            cells += [str(row.running) if row.running else ""]
+        if queued:
+            cells += [str(row.queued) if row.queued else ""]
+        if live:
             connections = ""
             if row.connections is not None:
                 in_use, limit = row.connections
                 connections = f"{in_use}/{limit}" if limit is not None else str(in_use)
-            cells += [
-                str(row.running) if row.running else "",
-                str(row.queued) if row.queued else "",
-                connections,
-            ]
+            cells += [connections]
         if budgeted:
             budget = row.budget
             cells += [
-                f"{budget.used}/{budget.limit} {budget.name}" if budget else "",
+                f"{compact(budget.used)}/{compact(budget.limit)} {budget.name}"
+                if budget
+                else "",
             ]
         if scored:
             cells += [f"{row.headline:.3g}" if row.headline is not None else ""]

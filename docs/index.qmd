@@ -54,7 +54,7 @@ Inspect Steward is a system for automated execution and supervision of long-runn
 ::: {.overview-bullets}
 - Evaluation runs are fully unattended by design, but can escalate to humans when required.
 - Opinionated defaults for error handling keep tasks running, with an agent driven workflow for error resolution and retry.
-- Slack notifications to keep operators apprised of status and pending decisions.
+- Slack, email, or webhook notifications to keep operators apprised of status and pending decisions.
 - Works with `eval_set()` as well as with execution frameworks like [Inspect Flow](https://meridianlabs-ai.github.io/inspect_flow/) and [Inspect Hawk](https://hawk.metr.org).
 :::
 ::::
@@ -108,11 +108,13 @@ The agent will launch all of the tasks, setup a background monitoring process, a
 ::: {.callout-note}
 #### Notifications
 
-To be notified when things required your attention, we strongly recommend you also configure [Inspect Notifications](https://inspect.aisi.org.uk/intervention.html#notifications) by setting an `INSPECT_EVAL_NOTIFICATION` environment variable. For example in your `.env` file:
+To be notified when things require your attention, we strongly recommend you also configure a notification channel. Put it in `_steward.yaml`, or — to keep the token out of your repository — in your `.env` file:
 
 ```{.ini}
-INSPECT_EVAL_NOTIFICATION=slack://{OAuthToken}/
+STEWARD_NOTIFICATION=slack://{OAuthToken}/{ChannelID}
 ```
+
+Anything [Apprise](https://github.com/caronc/apprise) understands works: Slack, email, SMS, a webhook, or a config file naming several. It configures your workers too, so a sample waiting on your approval reaches the same place. See [Getting told](workflow.qmd#getting-told).
 :::
 
 The run depends on neither you nor the agent staying connected. When you come back, ask how it's going:

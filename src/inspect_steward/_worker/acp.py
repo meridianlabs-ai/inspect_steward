@@ -1,13 +1,12 @@
-"""The command that reaches a running worker's human channel.
+"""Which running workers have a human channel to reach.
 
-A detached worker binds an ACP server as well as its control channel — Steward's control-channel reads are `live.py`'s business, and this is the other socket. It is how a person answers an approval or an `ask_user` question in a process with no terminal, and Steward's whole part in that is **naming the command**: resolve the worker's socket from the discovery directory and print `inspect acp --server <socket>`.
+A detached worker binds an ACP server as well as its control channel — Steward's control-channel reads are `live.py`'s business, and this is the other socket. It is how a person answers an approval or an `ask_user` question in a process with no terminal, and Steward's part in that is to know **whether there is anything to reach**: a pid with a socket in the discovery directory can be attached to, and a pid without one cannot.
 
-**No ACP client of its own, deliberately.** Answering an approval is authority over what an eval measures, and that belongs to the human (agent.md §6) — so Steward detects the wait and hands over the address, and inspect's own TUI does the talking. The consequence worth noticing is that the command is not special to a parked worker: any live worker can be attached to this way, which is the standing answer to *a detached run cannot be watched*.
+**No ACP client of its own, deliberately.** Answering an approval is authority over what an eval measures, and that belongs to the human (agent.md §6) — so Steward detects the wait and inspect's own TUI does the talking. The consequence worth noticing is that attaching is not special to a parked worker: any live worker can be reached this way, which is the standing answer to *a detached run cannot be watched*.
 
-`--server` is used rather than `--eval-id` because a pid is what Steward knows about a worker it spawned, and the flag bypasses discovery entirely — so the command keeps working from a shell whose `inspect` would otherwise have to pick among a machine's worth of running evals.
+**And the address is not passed on, only its existence.** The command Steward names is the bare `inspect acp`, because that is the one that works: its picker lists every eval discovery can find and floats the samples waiting on a person to the top, which is precisely the sort a reader of a park needs. `--server` bypasses discovery, which upstream documents as the way to reach a *remote* machine or to override what was found — and it takes a path that is per-pid, so a respawn between the item being raised and somebody reading it leaves a command that connects to nothing.
 """
 
-import shlex
 from pathlib import Path
 
 from inspect_ai.agent._acp.discovery import list_discovered_evals
@@ -28,11 +27,3 @@ def acp_sockets() -> dict[int, Path]:
         for entry in list_discovered_evals()
         if entry.pid and entry.target.socket_path is not None
     }
-
-
-def attach_command(socket: Path) -> str:
-    """The shell command that attaches a person to a worker's ACP server.
-
-    Quoted where it has to be, because the default path is one macOS produces with a space in it — `~/Library/Application Support/inspect_ai/acp/<pid>.sock`. A command printed for somebody to paste is wrong if pasting it does not work.
-    """
-    return f"inspect acp --server {shlex.quote(str(socket))}"

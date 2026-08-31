@@ -273,7 +273,7 @@ PARKS: list[tuple[str, LiveParked, str]] = [
     (
         "several",
         LiveParked(approvals=2, questions=1, functions=("bash", "python")),
-        "3 samples waiting on a person — 2 approvals (bash, python) and 1 question",
+        "3 samples waiting on a person: 2 approvals (bash, python) and 1 question",
     ),
 ]
 
@@ -331,7 +331,7 @@ def test_a_park_carries_the_command_that_reaches_it(
     publish(os.getpid(), socket)
     workspace = parked_run(tmp_path, monkeypatch, LiveParked(approvals=1))
 
-    assert items(workspace)[PARKED].action == f"inspect acp --server {socket}"
+    assert items(workspace)[PARKED].action == "inspect acp"
 
 
 def test_a_park_on_a_worker_with_no_acp_server_still_reports_the_wait(

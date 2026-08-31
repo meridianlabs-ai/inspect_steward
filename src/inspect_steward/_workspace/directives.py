@@ -54,16 +54,26 @@ DEFAULT_TEND_INTERVAL = 600
 Ten minutes, because the cost of a turn is bounded by what it reads and the cost of *missing* one is a fleet sitting idle for the whole interval. Short enough that an empty slot is refilled while somebody is still awake to care; long enough that a settled directory of two thousand logs is not re-read every minute.
 """
 
+STEWARDS: frozenset[str] = frozenset({"log_dir", "notification"})
+"""Override fields that are Steward's word rather than inspect's, and so get no alias.
+
+Two names that belong to `eval_set()` everywhere else and to Steward here. Both qualify on the same test: the answer is a property of the **deployment** rather than of the eval, so there is no scope at which somebody else decides it — and each has a Steward setting carrying all three spellings in its place.
+
+`log_dir`, because a run's logs go where the fleet is watched from. A variable that quietly moved them would leave every tend reading an empty directory while its workers wrote somewhere else.
+
+`notification`, because Steward's channel and the fleet's are one channel. The setting resolves a value that reaches a worker two ways at once — exported as `INSPECT_EVAL_NOTIFICATION` so `build_apprise` can read it, and applied as the `notification` override so the worker's `eval_set()` asks it to. A second, independent spelling of the same field would let those two disagree, and the shape of that disagreement is a fleet that silently never notifies.
+"""
+
 ALIASES: dict[str, str] = {
     f"{PREFIX}{field.upper()}": field
     for field in EvalSetOverrides.model_fields
-    if field != "log_dir"
+    if field not in STEWARDS
 }
 """Names under the prefix that are inspect's words rather than Steward's.
 
 A scoped alias of an `INSPECT_EVAL_*` variable, resolved by `overrides.py` and not by this module — the settings here and the overrides there are two vocabularies that share one namespace, and only the namespace is common. Defined on this side of the pair because this is the module that polices the prefix, and because a name that is neither a setting nor an alias has to be refused by something that knows both.
 
-`log_dir` is excluded: a run's logs go where the fleet is watched from, so there is no scope at which somebody else decides.
+`STEWARDS` is excluded, so `STEWARD_NOTIFICATION` reaches the settings below rather than the overrides beside them.
 """
 
 SUPERSEDED = "_steward.md"
@@ -94,15 +104,16 @@ REFUSED: dict[str, str] = {
         f"{_DEFINITION}, which is now where fleet width comes from — and move it "
         f"rather than deleting it, since unset means every task at once"
     ),
-    "notify": "the INSPECT_EVAL_NOTIFICATION environment variable",
-    "notification": "the INSPECT_EVAL_NOTIFICATION environment variable",
+    "notify": "`notification`, which is what it is called here",
     "store": "`log_store`, which is what it is now called",
 }
 """Keys that belong somewhere else, and where.
 
 Everything above the notification rows is the definition's, and configuration.md establishes the definition as the single source of truth for what an eval set *is* — a second file beside it saying otherwise is the drift this whole rule exists to prevent. `max_samples` is here rather than in the model because the definition can express it and two other layers move it at runtime.
 
-The last three are reference-only *by design* upstream, so that credentials stay out of source, shell history, process listings, and eval logs. Accepting them here would break a discipline Steward otherwise inherits for free. Note the distinction this draws: a notification **URL** is refused; notification **policy** — kinds, cadence, quiet hours — is Steward's alone and becomes a key when there is something to read it.
+`notify` and `store` are renames rather than relocations: both keys used to exist here under those names and both still exist under others, so pointing at the new name is the whole message.
+
+**The notification channel used to be refused here and is now `notification` below**, which reverses the position this table took. The old rule was inherited from upstream, where notification config is reference-only so that credentials stay out of source, shell history, process listings, and eval logs — and the half of it Steward keeps is that nothing ever *prints* or *propagates* the value (`status` renders policies alone; `_workspace.sync` omits this key from the copy it writes beside the logs). What changed is the judgement about the file itself: an unattended run that cannot reach a person is the failure the whole design exists to prevent, and making the channel sayable in the one place that survives to 02:00 is worth more than the discipline of refusing it. A workspace that would rather not commit one writes `.env` or the variable, which is what the template recommends.
 """
 
 
@@ -202,6 +213,41 @@ class Directives(BaseModel):
         # DurationError is a ValueError, so a bad unit arrives as a field error
         # naming the value, like every other refusal in this file
         return parse_duration(value)
+
+    notification: str | bool | None = Field(default=None)
+    """Where Steward posts what it cannot decide, `false` for nowhere, or `None` for no preference.
+
+    An Apprise target: one URL, several separated by commas, or a path to an Apprise config file — whatever `INSPECT_EVAL_NOTIFICATION` itself accepts, so there is one format to learn rather than one per spelling.
+
+    **The channel is a property of the deployment, which is what admits it** — `STEWARDS` states the test, and the same test excludes this field from the overrides beside it. One value serves two consumers: Steward posts to it, and it reaches every worker as `INSPECT_EVAL_NOTIFICATION` plus the `notification` override that makes a worker's `eval_set()` read it.
+
+    **A URL here is committed, and that is a real cost accepted rather than overlooked.** `_steward.yaml` is tracked; `.env` and the variable are not, and the template says so. What the design keeps from the reference-only discipline it is departing from is that the value never *travels*: `status` renders policies alone, and `_workspace.sync` replaces this key before writing the copy that lands beside the logs, which is the one path that would otherwise put a token in an object store.
+
+    **`false` silences Steward and not the fleet.** A worker's notifications are blocking human-in-the-loop moments — `ask_user()`, the human approver — and the opposite semantics on the same pipe (workflow.md §11.4). Silencing those would hang a sample with nobody told, which is a worse failure than the noise being declined.
+    """
+
+    @field_validator("notification", mode="before")
+    @classmethod
+    def _notification(cls, value: object) -> object:
+        """A target, or `false`. Shaped like its siblings and refused the same way.
+
+        `true` is refused where inspect *accepts* it, which is the one place the two vocabularies deliberately differ: to inspect it means *read the variable*, and here the variable is already one of this key's own three spellings, so it would say nothing about where.
+        """
+        if value is True:
+            raise ValueError(
+                "should be an Apprise URL, a config file, or `false` to post "
+                "nowhere — `true` says nothing about where"
+            )
+        if isinstance(value, str) and not value.strip():
+            raise ValueError(
+                "should be an Apprise URL, a config file, or `false` — not an "
+                "empty value"
+            )
+        if value == "none":
+            raise ValueError(
+                "is `false` now, since `none` reads as a target called none"
+            )
+        return value
 
     log_root: str | bool | None = Field(default=None)
     """The root this machine keeps eval logs under, `false` for none, or `None` for no preference.
@@ -503,6 +549,30 @@ def resolve_interval(
     if directives.tend_interval is not None:
         return directives.tend_interval
     return DEFAULT_TEND_INTERVAL
+
+
+def declared_notification(environ: Mapping[str, str]) -> str | bool | None:
+    """`STEWARD_NOTIFICATION` alone, for a caller that has no `Directives` to ask.
+
+    **Only for the path where `_steward.yaml` would not parse**, which is also one of the conditions most worth notifying somebody about — so the channel has to be resolvable without the file that would normally carry it. Everything else goes through `read_directives`, where this variable arrives as a field like every other.
+
+    Never raises, for the same reason: this is reached because something already failed, and a second failure on the way to reporting the first is how a broken workspace goes silent. A value the field would refuse reads here as *no preference*, leaving `INSPECT_EVAL_NOTIFICATION` to answer.
+
+    Args:
+        environ: The environment to read, normally `os.environ`.
+
+    Returns:
+        A target, `False` where the operator declined, or `None` where the variable is unset, empty, or unusable.
+    """
+    if not (raw := environ.get(f"{PREFIX}NOTIFICATION", "")).strip():
+        return None
+    try:
+        # through the shared parser rather than beside it, so the one validator
+        # answers here too -- a second reading of the same variable is a second
+        # set of rules waiting to disagree with the first
+        return cast("str | bool | None", parse_setting("notification", raw))
+    except DirectivesError:
+        return None
 
 
 def resolve_log_root(

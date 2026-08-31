@@ -40,6 +40,7 @@ from .._evalset.observe import (
     observe_logs,
     observe_tasks,
 )
+from .._notify import establish_channel
 from .._schedule import (
     Action,
     ArchiveLog,
@@ -81,6 +82,7 @@ from .._workspace import (
     Workspace,
     acquire,
     append_event,
+    declared_notification,
     read_acks,
     read_armed,
     read_claim,
@@ -92,6 +94,7 @@ from .._workspace import (
     read_pause,
     read_raised,
     read_ramp_holds,
+    read_undelivered,
     resolve_log_dir,
     resolve_pool,
     steward_log,
@@ -101,6 +104,7 @@ from .._workspace import (
 )
 from .history import Happened, happened
 from .items import Item, Supervision, Verdict, tend_items, verdict
+from .notify import notify_turn
 from .progress import Progress, live_totals, task_progress
 from .render import status_markdown
 from .tuning import (
@@ -185,6 +189,16 @@ class TendResult:
     resolved: list[str] = field(default_factory=list[str])
     """Item ids the previous turn had and this one does not — closed, acknowledged, or simply over."""
 
+    finished: list[str] = field(default_factory=list[str])
+    """Identifiers of tasks complete now that the previous turn did not have complete.
+
+    The third diff, beside `appeared` and `resolved`, and the one that is not about items: it is what a `progress` notification names. Batched by the turn rather than fired per task, because the tend is already the clock — a sweep that finishes five tasks in one interval is one message naming five (`_notify.post.Kind.PROGRESS`).
+
+    Empty on the first turn that records a completion set at all, since there is nothing to diff against and *everything already finished* is not news.
+
+    Identifiers rather than the keys a reader recognises, for the reason `_finished` gives: this is diffed against a record an earlier turn wrote, and a display key is computed against whatever else was on screen at the time.
+    """
+
     spawned: list[str] = field(default_factory=list[str])
     reaped: list[str] = field(default_factory=list[str])
     archived: list[str] = field(default_factory=list[str])
@@ -247,6 +261,7 @@ def tend(
     stall_after: int | None = None,
     samples_ramp: tuple[int, int] | bool | None = None,
     sync: str | bool | None = None,
+    notification: str | bool | None = None,
     break_stale: bool = True,
     claim: Claim | None = None,
 ) -> TendResult | Refused:
@@ -258,6 +273,7 @@ def tend(
         stall_after: Fruitless respawns before a task is given up on, overriding `_steward.yaml`.
         samples_ramp: The ramp's envelope for this turn, overriding `_steward.yaml`. A narrower range brings running tasks back inside it.
         sync: Where to propagate the workspace this turn, overriding `_steward.yaml`. `False` propagates nowhere; `None` defers to the file, which itself defaults to the log directory.
+        notification: Where Steward posts this turn, overriding `_steward.yaml`. `False` silences Steward and never the fleet; `None` defers to the file, then to `INSPECT_EVAL_NOTIFICATION`. Settled before anything spawns, because it is also the channel every worker this turn starts will inherit (`_notify.channel`).
         break_stale: Kill a wedged claim holder and take the claim from it.
         claim: A claim the caller already holds, to run this turn under instead of taking one. For `launch`, whose whole composition — capture, commit, arm, tend — is one span of single-writer work: a launch that released before its own first turn would be refused by it, or worse, would let a timer firing in the gap spawn workers for tasks the commit had just orphaned. Released by the caller, not here, because the caller's work is not over.
 
@@ -280,6 +296,7 @@ def tend(
             stall_after=stall_after,
             samples_ramp=samples_ramp,
             sync=sync,
+            notification=notification,
         )
 
     outcome = acquire(workspace.claim, command="tend", break_stale=break_stale)
@@ -295,6 +312,7 @@ def tend(
             stall_after=stall_after,
             samples_ramp=samples_ramp,
             sync=sync,
+            notification=notification,
         )
 
 
@@ -307,6 +325,7 @@ def _tend(
     stall_after: int | None,
     samples_ramp: tuple[int, int] | bool | None,
     sync: str | bool | None = None,
+    notification: str | bool | None = None,
 ) -> TendResult:
     """One turn, with the claim already in hand however it got there."""
     # inside the claim, because resolving these can *write* — a degraded
@@ -321,6 +340,7 @@ def _tend(
         stall_after=stall_after,
         samples_ramp=samples_ramp,
         sync=sync,
+        notification=notification,
         execute=True,
     )
     if claim.broke is not None:
@@ -409,6 +429,12 @@ class _History:
     acknowledged: dict[str, Ack]
     """Items somebody has disposed of, by id."""
 
+    complete: frozenset[str] | None = None
+    """Display keys the most recent turn recorded as complete, or `None` where no turn recorded a set at all.
+
+    **Absent and empty are different, and conflating them costs one wrong notification.** A run tended by a Steward that predates this key has no recorded set, and reading that as *nothing was complete* would make every already-finished task read as finishing this turn — one post naming two hundred tasks, on the first turn after an upgrade. `None` says *not known*, which suppresses the diff for exactly that turn and records a set for the next one.
+    """
+
     raised: dict[str, Raised] = field(default_factory=dict[str, "Raised"])
     """Items the agent has handed to their owner, by id. Marked rather than removed — see `items.tend_items`."""
 
@@ -463,21 +489,29 @@ def _history(workspace: Workspace) -> _History:
     ramp_levels, last_step = read_ramp_record(events)
     pool: Pool | None = None
     previous: frozenset[str] | None = None
+    complete: frozenset[str] | None = None
     since: float | None = None
     for event in reversed(events):
         if event.type != OBSERVATION:
             continue
         if previous is None:
             previous = frozenset(_strings(event.payload.get("items")))
+            complete = _recorded(event.payload.get("complete"))
             since = _elapsed(event.ts)
         if pool is None:
             pool = _pool(event.payload.get("settings"))
         if pool is not None:
             break
 
+    # what a failed post is still owed, taken off the baseline so that the next
+    # diff produces it again. An edge is consumed by the observation that
+    # records it, which is what stops a condition repeating -- and which would
+    # otherwise make one unreachable minute at 2am cost the gate permanently
+    owed_items, owed_complete = read_undelivered(events)
     return _History(
         pool=pool,
-        previous=previous if previous is not None else frozenset(),
+        previous=(previous if previous is not None else frozenset[str]()) - owed_items,
+        complete=None if complete is None else complete - owed_complete,
         acknowledged=read_acks(events),
         raised=read_raised(events),
         collected=read_collected(events),
@@ -556,6 +590,28 @@ def _strings(value: object) -> list[str]:
     return [entry for entry in cast(list[object], value) if isinstance(entry, str)]
 
 
+def _recorded(value: object) -> frozenset[str] | None:
+    """The same, keeping *the key was not there* distinct from *it was empty*.
+
+    `_strings` answers what a payload said; this answers whether it said anything, which is the question a diff has to ask before it can trust its own left-hand side (`_History.complete`).
+    """
+    if not isinstance(value, list):
+        return None
+    return frozenset(_strings(cast(object, value)))
+
+
+def _finished(progress: Progress) -> list[str]:
+    """Identifiers of the tasks that are complete, sorted.
+
+    One definition used by both the diff and the record it is diffed against, so the two cannot come to disagree about what *finished* counts as. An orphan is not in it: its state is `ORPHANED` whatever its log says, and a log the current definition does not ask for is not this run's task finishing.
+
+    **Identifiers rather than display keys, because this outlives the turn that wrote it.** A display key is computed against the tasks on screen and `ManifestTask.key` says so: relaunching with a task that collides on name gives an already-complete `swe_bench` the longer key `swe_bench@openai/gpt-5`, which the next diff reads as a task that finished tonight. The identifier is what does not move. The rendering maps back to display keys, since nobody wants to read a digest at 2am (`_notify._lines`).
+    """
+    return sorted(
+        row.identifier for row in progress.rows if row.state is TaskState.COMPLETE
+    )
+
+
 @dataclass(frozen=True)
 class _Settings:
     """What this turn is operating under, and whether that is the file's own answer."""
@@ -580,6 +636,18 @@ class _Settings:
     Unresolved, because resolving it needs the log directory and that is `_turn`'s to compute. `None` here means *no preference*, which resolves to the log directory rather than to nowhere.
     """
 
+    notification: str | bool | None = None
+    """Where Steward's own spellings say to post, `False` for nowhere, or `None` where they say nothing.
+
+    Unresolved, like `sync` and for the same reason: the fourth rung is `INSPECT_EVAL_NOTIFICATION`, and reading it belongs to `_notify.channel`, which owns both directions of the reflexive relationship. Carried through a degraded turn too — a `_steward.yaml` that will not parse is among the conditions most worth telling somebody about, and the channel must not be the second casualty of the same file.
+    """
+
+    channel: str | bool | None = None
+    """What the *workspace* says, whatever a flag said about Steward posting.
+
+    The two come apart in exactly one case and it is the one that matters: `--no-notification` beside a `notification:` in `_steward.yaml` silences Steward and must still reach the fleet, because a worker's notifications are blocking prompts (`_notify.channel.establish_channel`). Everywhere else this is the same value as `notification`.
+    """
+
     policies: list[str] = field(default_factory=list[str])
     """The standing rules in force, from whichever source expressed them.
 
@@ -598,6 +666,14 @@ def _turn(
     broke: Held | None,
 ) -> TendResult:
     """Both dispositions, differing only in whether the actions are carried out."""
+    # first, because it is what puts the channel into the environment every
+    # worker this turn spawns inherits -- and because the two halves have to be
+    # settled together: a fleet posting somewhere Steward is not is the silent
+    # divergence `_notify.channel` exists to prevent. Harmless on a `status`,
+    # which mutates only its own environment and posts nothing
+    channel = establish_channel(
+        workspace, notification=settings.notification, fleet=settings.channel
+    )
     drift = _drifted(workspace, manifest)
     log_dir = _log_dir(workspace, manifest)
 
@@ -737,6 +813,10 @@ def _turn(
     )
     _write_status(workspace, result)
     _sync(workspace, settings, log_dir)
+    # last, after the file a post's footer sends its reader to has been written
+    # and propagated -- and never at the cost of the turn, which has already
+    # happened by the time anything is said about it
+    notify_turn(workspace, result, channel)
     return result
 
 
@@ -867,6 +947,11 @@ def _projected(
         ),
         appeared=sorted(current - history.previous),
         resolved=sorted(history.previous - current),
+        finished=(
+            sorted(frozenset(_finished(result.progress)) - history.complete)
+            if history.complete is not None
+            else []
+        ),
     )
 
 
@@ -1101,6 +1186,7 @@ def _settings(
     samples_ramp: tuple[int, int] | bool | None,
     execute: bool,
     sync: str | bool | None = None,
+    notification: str | bool | None = None,
 ) -> _Settings:
     """What to operate under, degrading to the last known good where it must.
 
@@ -1169,6 +1255,24 @@ def _settings(
             sync=sync
             if sync is not None
             else (directives.sync if directives is not None else None),
+            # and the channel most of all, since a file that will not parse is
+            # one of the things worth being told about. Where the *file* is what
+            # failed the variable is read on its own, so the one spelling that
+            # could not have been damaged by the edit still answers
+            notification=(
+                notification
+                if notification is not None
+                else (
+                    directives.notification
+                    if directives is not None
+                    else declared_notification(os.environ)
+                )
+            ),
+            channel=(
+                directives.notification
+                if directives is not None
+                else declared_notification(os.environ)
+            ),
         )
 
     return _Settings(
@@ -1189,6 +1293,10 @@ def _settings(
         interval=directives.tend_interval,
         policies=_policies(directives),
         sync=sync if sync is not None else directives.sync,
+        notification=notification
+        if notification is not None
+        else directives.notification,
+        channel=directives.notification,
     )
 
 
@@ -1295,6 +1403,9 @@ def _record(
         # the ids rather than the items: this is what the *next* turn diffs
         # against, and a rendered summary is not something to diff
         items=[item.id for item in result.items],
+        # the same, for tasks. `states` counts them, and a count cannot tell one
+        # task finishing while another is reset apart from nothing happening
+        complete=_finished(result.progress),
         # what this turn ran under, which is what a later turn reads back when
         # `_steward.yaml` will not parse
         settings={

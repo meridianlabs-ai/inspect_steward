@@ -7,6 +7,7 @@ Almost every other surface in Steward is written for a reader who is not there: 
 
 import dataclasses
 import json
+import os
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -14,8 +15,9 @@ import click
 
 from .._evalset.detect import DefinitionType
 from .._launch import Change, Delta, Launch, LaunchError, launch
+from .._notify import INSPECT_NOTIFICATION, usable_channel
 from .._util.duration import format_duration
-from .._workspace import Held, Workspace
+from .._workspace import DirectivesError, Held, Workspace, read_directives
 from .options import (
     PassthroughCommand,
     Setting,
@@ -146,6 +148,26 @@ _LABELS = {
     default=False,
     help="Run against no log store, whatever this project or machine configured.",
 )
+@click.option(
+    "--notification",
+    type=Setting("notification"),
+    default=None,
+    metavar="URL|PATH",
+    help=(
+        "Where to post what this run cannot decide — an Apprise URL, several "
+        "separated by commas, or an Apprise config file. Reaches every worker "
+        f"too. {overrides('notification')}"
+    ),
+)
+@click.option(
+    "--no-notification",
+    is_flag=True,
+    default=False,
+    help=(
+        "Post nothing about this run. Silences Steward only — a worker waiting "
+        "on a person still asks."
+    ),
+)
 @shape_options
 @tend_interval_option
 @sync_options
@@ -176,6 +198,8 @@ def launch_command(
     no_log_root: bool,
     log_store: str | bool | None,
     no_log_store: bool,
+    notification: str | bool | None,
+    no_notification: bool,
     max_workers: int | None,
     stall_after: int | None,
     samples_ramp: tuple[int, int] | bool | None,
@@ -219,9 +243,19 @@ def launch_command(
             "--no-log-store asks for no store, and --log-store names one. "
             "Pass whichever you meant."
         )
+    if no_notification and notification is not None:
+        raise click.UsageError(
+            "--no-notification asks to post nowhere, and --notification names "
+            "a channel. Pass whichever you meant."
+        )
 
     workspace = find_workspace()
     resolved = definition or _own_definition(workspace)
+    # **before the launch, because the launch settles the channel into this
+    # process's own environment.** Asking afterwards would find whatever
+    # `--notification` exported and report a durable channel where there is one
+    # good for a single turn
+    durable = _durable_channel(workspace)
 
     try:
         result = launch(
@@ -237,6 +271,7 @@ def launch_command(
             env_check=env_check,
             log_root=False if no_log_root else log_root,
             log_store=False if no_log_store else log_store,
+            notification=False if no_notification else notification,
             # `{}` and `None` differ here exactly as they do for `args`
             overrides={} if no_overrides else given_overrides,
             max_workers=max_workers,
@@ -256,11 +291,72 @@ def launch_command(
         click.echo(_launch_json(result))
     else:
         _echo_launch(result, workspace.root)
+        if result.committed and not no_notification:
+            if durable is None:
+                _echo_no_channel(one_launch=notification is not None)
+            elif isinstance(durable, str) and not usable_channel(workspace, durable):
+                _echo_unusable_channel()
 
     if not result.committed:
         # after the delta rather than instead of it, and an error rather than a
         # note: a refusal that exits zero is a refusal a script does not notice
         raise click.ClickException(_refusal(result.delta))
+
+
+def _durable_channel(workspace: Workspace) -> str | bool | None:
+    """What a scheduled tend will find: a channel, `False` for declined, or `None`.
+
+    **The question is about a *scheduled* tend, which is why the flag does not count.** `--notification` shapes this launch's own turn and nothing after it: a timer inherits no environment, so the value is gone by the next fire. Asking `establish_channel` what is set right now would answer for this process, and after the launch has run that includes what the flag exported — so this is called before the launch and reads only the two spellings that survive it.
+
+    **The target rather than a yes**, because a declaration is not a channel: a mistyped URL and a config file that has moved are both non-empty strings that reach nobody, and the caller checks (`usable_channel`). A declined workspace answers `False` and is asked nothing further — somebody who wrote `notification: false` has already said what they want.
+    """
+    try:
+        directives = read_directives(workspace.directives)
+    except (DirectivesError, OSError):
+        # unreachable in practice, since `launch` raises on an unreadable file
+        # before it commits. Treated as answered rather than guessed at: the
+        # file is where the answer would have been, and this line's whole
+        # content is a claim about it
+        return False
+    if directives.notification is not None:
+        return directives.notification
+    return os.environ.get(INSPECT_NOTIFICATION, "").strip() or None
+
+
+def _echo_no_channel(*, one_launch: bool) -> None:
+    """One line, where a run has just been launched and nothing will reach a person.
+
+    **The one feature whose absence is silent by construction**, which is what earns it a line nothing else here gets: a run with no channel behaves exactly like a run with one until the night it needs somebody, and then it behaves exactly like a run that is going fine. Everything else worth saying at launch is already visible in what the launch printed.
+
+    Launch only, and never an item. A note repeated every ten minutes is the nagging that trains a reader to ignore the channel this is advertising — and an operator who wrote `notification: false` has answered the question, so they do not hear it at all.
+
+    Args:
+        one_launch: Whether `--notification` was given. It is not silence, so the line says what is actually wrong: the channel lapses with the invocation, and the scheduled turns are the ones nobody is watching.
+    """
+    if one_launch:
+        click.echo(
+            "\n--notification applies to this launch only — a scheduled tend "
+            "inherits no environment, so later turns will reach nobody. Put it "
+            "in _steward.yaml or .env to make it stick."
+        )
+        return
+    click.echo(
+        "\nnothing will reach you if this run needs a person — set "
+        "notification in _steward.yaml, or STEWARD_NOTIFICATION in .env, "
+        "to an Apprise URL (slack://…, mailto://…)"
+    )
+
+
+def _echo_unusable_channel() -> None:
+    """One line, where a channel is configured and resolves to nothing.
+
+    **The same failure as no channel at all, arriving with a setting that says otherwise** — which makes it the worse of the two, because the operator has already done the thing they would be told to do. A mistyped scheme, a config file that has been renamed, a YAML file with nothing left in it after a bad edit: all three build an Apprise instance holding no targets, and nothing else says so until the night it matters.
+    """
+    click.echo(
+        "\nthe notification setting resolves to no usable targets, so nothing "
+        "will reach you if this run needs a person — check the URL, or the "
+        "Apprise config file it names"
+    )
 
 
 def _own_definition(workspace: Workspace) -> Path:

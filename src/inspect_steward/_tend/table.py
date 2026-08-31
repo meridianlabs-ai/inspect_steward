@@ -3,10 +3,10 @@
 One line per task, columns right-aligned on their own widths so the numbers stack. The shape follows the one this replaced:
 
 ```
-⚙ sec_bench_pro[default]@openai/gpt-5   37/183  20%  83r  63q  52/80c  115/300t  0.65
+⚙ sec_bench_pro[default]@openai/gpt-5   37/183  20%  83r  63q  52/80c  115/300 t  0.65
 ```
 
-Read left to right it is: what state the task is in, which task, how much of it is done, how much is moving right now, how hard the model pool is working, how close the leading sample is to the limit that will stop it, and what it is scoring. Every column is omitted when it has nothing to say — a finished task has no running samples, a task with no declared limit has no budget column — so a settled campaign renders as a quiet list rather than a field of zeroes.
+Read left to right it is: what state the task is in, which task, how much of it is done, how much is moving right now, how much is still to come, how hard the model pool is working, how far into its budget a typical sample is, and what it is scoring. Every column is omitted when it has nothing to say — a finished task has no running samples and nothing left to queue, a task with no declared limit has no budget column — so a settled campaign renders as a quiet list rather than a field of zeroes.
 
 **Widths are computed per render rather than fixed.** Display keys vary from `addition` to a sweep entry with three arguments and a model, and a column padded for the worst case wastes the terminal on every other line.
 """
@@ -56,7 +56,6 @@ def progress_table(progress: Progress, *, width: int = 0) -> list[str]:
 
 def _cells(row: TaskProgress, key: str, width: int) -> tuple[str, ...]:
     """One row's columns, already formatted, before they are padded to a width."""
-    budget = row.budget
     name = key[:width] if width and len(key) > width else key
     return (
         f"{glyph(row)} {name}",
@@ -65,9 +64,20 @@ def _cells(row: TaskProgress, key: str, width: int) -> tuple[str, ...]:
         f"{row.running}r" if row.running else "",
         f"{row.queued}q" if row.queued else "",
         _connections(row),
-        f"{budget.used}/{budget.limit}{budget.suffix}" if budget else "",
-        f"{row.headline:.2f}" if row.headline is not None else "",
+        _outcome(row),
     )
+
+
+def _outcome(row: TaskProgress) -> str:
+    """The last column: how far a running task is into its budget, or what a finished one scored.
+
+    **One column, because no row ever has both.** A budget is usage against a limit and usage comes from a worker, so it exists exactly while a task is running; a headline metric is computed at scoring time, so it exists exactly once one has finished. Two columns for two states of the same row cost every line the width of whichever it is not in — which on the narrow table is the difference between a task name and a truncated one.
+
+    Read down the column it is *where each task has got to*, which is the same question either way.
+    """
+    if row.budget is not None:
+        return row.budget.text
+    return f"{row.headline:.2f}" if row.headline is not None else ""
 
 
 def _connections(row: TaskProgress) -> str:

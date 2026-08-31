@@ -1,16 +1,16 @@
-"""Getting from a worker's pid to the command that reaches its human channel.
+"""Whether a worker's pid has a human channel bound to it.
 
 Against the real discovery directory — inspect's own writer, inspect's own
 reader, and the pid of the process running the test, which is the one pid that
 is certainly alive. What is not here is an ACP conversation: Steward has no
-client and never answers, so the whole of its part is resolving an address.
+client and never answers, so the whole of its part is knowing that somebody
+else could.
 """
 
 import os
-import shlex
 from pathlib import Path
 
-from inspect_steward._worker import acp_sockets, attach_command
+from inspect_steward._worker import acp_sockets
 
 from .._acp import Publish, publish
 
@@ -26,17 +26,6 @@ def test_a_worker_s_socket_is_found_by_its_pid(
     publish(os.getpid(), socket)
 
     assert acp_sockets()[os.getpid()] == socket
-    assert attach_command(socket) == f"inspect acp --server {socket}"
-
-
-def test_a_command_a_person_pastes_survives_a_path_with_a_space() -> None:
-    # the default socket path on macOS has one -- `~/Library/Application
-    # Support/inspect_ai/acp/<pid>.sock` -- so the unquoted form was a command
-    # that read correctly and did not run
-    command = attach_command(Path("/a b/acp/1.sock"))
-
-    assert command == "inspect acp --server '/a b/acp/1.sock'"
-    assert shlex.split(command)[-1] == "/a b/acp/1.sock"
 
 
 def test_a_worker_with_no_acp_server_is_simply_absent(

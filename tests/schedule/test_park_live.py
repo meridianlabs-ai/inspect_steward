@@ -24,7 +24,6 @@ would be testing inspect's client, which is the piece Steward deliberately does
 not have.
 """
 
-import shlex
 import socket as socketlib
 from pathlib import Path
 
@@ -84,19 +83,15 @@ def test_a_worker_waiting_on_an_approval_is_reported_with_the_way_to_answer_it(
     # request; the arguments are the model's own words
     assert "is waiting on an approval for echo" in item.summary
 
-    # and the address is real: the pid Steward spawned resolves to a socket
-    # something is listening on
-    assert item.action is not None
-    assert item.action.startswith("inspect acp --server ")
+    # the bare verb, offered because the pid Steward spawned really does have
+    # a socket something is listening on -- the address is what proves there is
+    # anything to reach, not what the reader is asked to paste
+    assert item.action == "inspect acp"
     published = {
         entry.pid: entry.target.socket_path for entry in list_discovered_evals()
     }
     ((pid, path),) = published.items()
-    assert (
-        path is not None
-        and item.action == f"inspect acp --server {shlex.quote(str(path))}"
-    )
-    assert path.exists()
+    assert path is not None and path.exists()
     with socketlib.socket(socketlib.AF_UNIX, socketlib.SOCK_STREAM) as client:
         client.settimeout(5)
         client.connect(str(path))

@@ -11,6 +11,7 @@ from .items import (
     verdict,
     verdict_line,
 )
+from .notify import notify_failure, notify_turn, turn_post
 from .progress import LIVE_ONLY, Budget, Live, Progress, TaskProgress, task_progress
 from .render import status_markdown
 from .table import progress_table
@@ -60,6 +61,8 @@ __all__ = [
     "TuningPlan",
     "Verdict",
     "by_owner",
+    "notify_failure",
+    "notify_turn",
     "observation_payload",
     "plan_tuning",
     "progress_table",
@@ -71,6 +74,7 @@ __all__ = [
     "task_progress",
     "tend",
     "tend_items",
+    "turn_post",
     "verdict",
     "verdict_line",
 ]

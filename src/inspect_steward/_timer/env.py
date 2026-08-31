@@ -33,12 +33,21 @@ KNOWN = frozenset(
         "OPENAI_API_KEY",
         "ANTHROPIC_API_KEY",
         "INSPECT_EVAL_NOTIFICATION",
+        "STEWARD_NOTIFICATION",
     }
 )
 """Credential variables whose names the pattern would miss. `AWS_ACCESS_KEY_ID` ends in neither a key nor a token, and an S3 `log_dir` is the case that made the environment check worth building.
 
-`INSPECT_EVAL_NOTIFICATION` is here because it holds an Apprise URL, and an Apprise URL is a bearer token with a scheme in front of it — `slack://xoxb-.../...`. Steward deliberately never reads it as a value (`eval_set_env.NOT_FROM_ENV`), which is exactly why the check has to: nothing else in Steward will ever notice it is about to disappear."""
+**Both spellings of the channel are here, and both have to be.** Each holds an Apprise URL, and an Apprise URL is a bearer token with a scheme in front of it — `slack://xoxb-.../...`. They also configure each other (`_notify.channel`), so an arming shell that exports either and a `.env` that names neither is a run whose 02:00 turn cannot reach anybody — the failure notification exists to prevent, arriving through the one door notification cannot watch. `notification` in `_steward.yaml` is the third spelling and needs no entry: a committed file is still there at 02:00, which is the whole reason the key exists."""
 
+
+CHANNEL = frozenset({"INSPECT_EVAL_NOTIFICATION", "STEWARD_NOTIFICATION"})
+"""The two spellings of the notification channel, which are one capability.
+
+**Compared as one, because resolution treats them as one.** Either name puts a channel in front of Steward *and* its fleet (`_notify.channel`), so a shell holding one and a `.env` holding the other is a workspace whose 02:00 turn can reach somebody — and refusing to arm it would be refusing over a difference that does not exist at the point it would matter. The check is about a capability going missing, not about a name.
+
+Identity is not the question either, here or anywhere else in this module: a `.env` naming a *different* `OPENAI_API_KEY` than the shell also passes, because what cannot be known is which one the run should use and what can be known is whether one will be there.
+"""
 
 AMBIENT = frozenset(
     {
@@ -102,7 +111,12 @@ def unavailable(env_file: Path, environ: Mapping[str, str]) -> list[str]:
         The names, sorted. Empty when a timer would run with everything this shell has.
     """
     ambient = {name for name in AMBIENT if environ.get(name, "").strip()}
-    return sorted((credentials(environ) | ambient) - dotenv_names(env_file))
+    defined = dotenv_names(env_file)
+    # either spelling of the channel covers both, since either one configures
+    # both halves of the system -- see `CHANNEL`
+    if defined & CHANNEL:
+        defined = defined | CHANNEL
+    return sorted((credentials(environ) | ambient) - defined)
 
 
 def explain(missing: list[str], env_file: Path) -> str:

@@ -1,4 +1,4 @@
-from .acp import acp_sockets, attach_command
+from .acp import acp_sockets
 from .ctl import (
     ABSENT,
     AUTHOR,
@@ -85,7 +85,6 @@ __all__ = [
     "Unavailable",
     "WorkerScan",
     "acp_sockets",
-    "attach_command",
     "list_tasks",
     "cancel_task",
     "process_usage",

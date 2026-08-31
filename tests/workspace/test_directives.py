@@ -90,7 +90,11 @@ REJECTED: list[tuple[str, str, str]] = [
     ("prose where settings belong", "never spend over $200.\n", "a mapping"),
     ("a key the definition owns", "log_dir: out/\n", "eval_set()"),
     ("sample concurrency", "max_samples: 40\n", "eval_set()"),
-    ("a notification url", "notify: slack://tok@chan\n", "INSPECT_EVAL_NOTIFICATION"),
+    # `notification` itself is Steward's own key now; `notify` is the near miss
+    ("the channel under the wrong name", "notify: slack://t@c\n", "`notification`"),
+    ("a channel that says nothing", "notification: true\n", "says nothing about"),
+    ("a channel spelled as a word", "notification: none\n", "is `false` now"),
+    ("an empty channel", 'notification: ""\n', "not an empty value"),
     ("a typo", "max_wokrers: 8\n", "not a setting Steward knows"),
     ("a meaningless ceiling", "max_workers: 0\n", "greater than 0"),
     ("a ceiling that is not a number", "max_workers: lots\n", "max_workers"),

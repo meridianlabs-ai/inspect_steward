@@ -10,7 +10,7 @@ State is derived from this file rather than stored beside it (workflow.md, *Stat
 from collections import Counter
 from dataclasses import dataclass
 from pathlib import Path
-from typing import cast
+from typing import Any, cast
 
 from .._util.jsonl import (
     DamagedLine,
@@ -152,6 +152,26 @@ LAUNCHED = "launched"
 What it buys is one item's correctness. `unsupervised` is gated on a timer having been armed, deliberately, so a workspace nobody armed stays quiet rather than nagging somebody sitting at the terminal typing `steward tend` (`_tend.items`). `launch --no-timer` falls in the gap that leaves: the operator asked to run unsupervised, execution.md §8.3 requires that to *look* unsupervised, and with nothing recorded the run looks exactly like a hand-driven experiment nobody promised to schedule. So a launch writes itself down, and the item asks *did anyone launch this* as well as *did anyone arm it*.
 
 Carries `tasks`, `definition`, and `timer` — the scheduler armed, or `None` where the launch was told not to arm one.
+"""
+
+NOTIFIED = "notified"
+"""Journal event: a post went out about something no diff would latch.
+
+**Not written for every post**, which would be a second answer to a question the observation already answers. Steward's ordinary triggers are edges — an item is in this turn's list and not the previous one's, a task is complete now and was not before — so the diff is what stops them repeating, and recording each one would only give the two records a chance to disagree.
+
+A turn that *raises* has no edge to stand on. It never reaches its observation, so the next failure is indistinguishable from this one, and a `_steward.yaml` that has been malformed since Tuesday would post every ten minutes all night — the noise fatigue notification exists to avoid, produced by the feature meant to prevent silence. This is what makes that one post per distinct failure instead, re-armed by the next turn that actually runs.
+
+Carries `kind` and `subject`, the latter a fingerprint of what was said so that a *different* failure is still heard.
+"""
+
+UNDELIVERED = "undelivered"
+"""Journal event: a post about this turn's edge did not reach anybody.
+
+**The counterweight to every trigger being a diff.** An edge is consumed by the observation that records it — the item is in this turn's list, so it is not new next turn — and that is exactly what stops a condition being reported every ten minutes. It also means a post that *failed* has spent the only chance its news had: a notifier unreachable for one minute at 2am loses the gate, or the park, permanently, and the next turn sees a run in which nothing changed.
+
+So a turn that could not deliver writes down what it was carrying, and the next turn subtracts that from the baseline it diffs against (`read_undelivered`). The edge is therefore retained rather than retried — the following turn recomputes a post from the current state and includes what was owed, which is right for a message that describes a moment rather than a queue of moments.
+
+Carries `items` (the ids that appeared) and `complete` (the display keys that finished). Read only back to the most recent `OBSERVATION`, since a turn that delivered records a baseline that already accounts for everything before it.
 """
 
 JournalEvent = Event
@@ -497,6 +517,60 @@ def read_launched(events: list[JournalEvent]) -> str | None:
         if event.type == LAUNCHED:
             launched = event.ts
     return launched
+
+
+def read_notified(events: list[JournalEvent]) -> set[str]:
+    """Fold a journal down to what has been posted since the last turn that ran.
+
+    **The window is the most recent `OBSERVATION`, not the whole file**, and that is the latch's release. A turn reaching its observation is the run working again; the next failure after that is news, and posting it is the whole point. Without the window a workspace that broke, was fixed, and broke again the same way would go quiet on the second break — a latch that silences the case it exists to report.
+
+    Args:
+        events: Events in file order, as `read_journal` returns them.
+
+    Returns:
+        The `subject` of every `NOTIFIED` event after the most recent observation.
+    """
+    subjects: set[str] = set()
+    for event in reversed(events):
+        if event.type == OBSERVATION:
+            break
+        if event.type == NOTIFIED and isinstance(
+            subject := event.payload.get("subject"), str
+        ):
+            subjects.add(subject)
+    return subjects
+
+
+def read_undelivered(
+    events: list[JournalEvent],
+) -> tuple[frozenset[str], frozenset[str]]:
+    """Fold a journal down to the edge a failed post is still owed.
+
+    The window is the most recent `OBSERVATION` for the reason `read_notified`'s is: a turn that reached its observation recorded a baseline covering everything before it, so an older `UNDELIVERED` has already been accounted for or superseded. In practice there is at most one, written by the same turn that recorded the observation just above it.
+
+    Args:
+        events: Events in file order, as `read_journal` returns them.
+
+    Returns:
+        Item ids and completed display keys that were not delivered, to be subtracted from the baseline the next diff runs against.
+    """
+    items: set[str] = set()
+    complete: set[str] = set()
+    for event in reversed(events):
+        if event.type == OBSERVATION:
+            break
+        if event.type != UNDELIVERED:
+            continue
+        items |= set(_listed(event.payload.get("items")))
+        complete |= set(_listed(event.payload.get("complete")))
+    return frozenset(items), frozenset(complete)
+
+
+def _listed(value: object) -> list[str]:
+    """The strings in a payload list, over a payload that may hold anything."""
+    if not isinstance(value, list):
+        return []
+    return [one for one in cast(list[Any], value) if isinstance(one, str)]
 
 
 def summarize(events: list[JournalEvent]) -> JournalSummary:

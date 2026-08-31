@@ -47,6 +47,8 @@ def live(
     queued: int = 0,
     turns: int = 0,
     messages: int = 0,
+    tokens: int = 0,
+    token_limit: int | None = None,
     connections: tuple[int, int | None] = (0, None),
     parked: LiveParked | None = None,
     unavailable: str | None = None,
@@ -60,7 +62,12 @@ def live(
                 samples=LiveSamples(
                     total=total, completed=completed, in_flight=in_flight, queued=queued
                 ),
-                usage=LiveUsage(turns=turns, messages=messages),
+                usage=LiveUsage(
+                    turns=turns,
+                    messages=messages,
+                    tokens=tokens,
+                    token_limit=token_limit,
+                ),
                 connections=LiveConnections(in_use=in_use, limit=limit),
                 parked=parked or LiveParked(),
                 unavailable=unavailable,
@@ -166,22 +173,6 @@ def test_the_budget_column_reports_whichever_limit_is_in_force(
     assert row.budget.used == max(turns, messages)
 
 
-def test_the_budget_shown_is_the_one_closest_to_stopping_a_sample(
-    tmp_path: Path,
-) -> None:
-    # a task declaring two limits is not asking a reader to pick, and the one
-    # that matters is whichever will be reached first
-    task = SynthTask(
-        "probe", samples=10, limits={"message_limit": 100, "turn_limit": 20}
-    )
-    write_log(tmp_path, task, status="started")
-
-    (row,) = rows(tmp_path, [task], live(task, in_flight=1, messages=10, turns=18)).rows
-
-    assert row.budget is not None
-    assert (row.budget.name, row.budget.used, row.budget.limit) == ("turns", 18, 20)
-
-
 def test_a_settled_task_shows_no_budget_at_all(tmp_path: Path) -> None:
     # usage comes from the worker, so a finished task has a limit and nothing to
     # put against it -- and `0/30` would say *spent none of thirty*, which is a
@@ -249,6 +240,102 @@ def test_a_column_nothing_has_to_say_is_dropped(tmp_path: Path) -> None:
     # holds its width open -- the row is the key and the two counts, full stop
     assert line.split()[-2:] == ["10/10", "100%"]
     assert line == line.rstrip()
+
+
+QUEUES = [
+    ("never started", None, 10),
+    ("finished", 10, 0),
+    ("finished with errors", 4, 0),
+]
+
+
+@pytest.mark.parametrize(
+    ("case", "completed", "queued"), QUEUES, ids=[case for case, _, _ in QUEUES]
+)
+def test_what_is_still_to_run_is_a_queue_with_or_without_a_worker(
+    tmp_path: Path, case: str, completed: int | None, queued: int
+) -> None:
+    # most of a sweep has no worker at any moment, and a queue column that
+    # appears only for the tasks that happen to have one comes and goes between
+    # posts -- what the reader wants from it is the same either way
+    if completed is not None:
+        write_log(tmp_path, TASK, total=10, completed=completed)
+
+    (row,) = rows(tmp_path, [TASK], LiveFleet()).rows
+
+    assert row.queued == queued
+
+
+def test_a_worker_s_own_queue_outranks_the_derived_one(tmp_path: Path) -> None:
+    # the derivation exists for the rows nothing is answering for; where a
+    # worker is, it knows what it has admitted and what it has not
+    write_log(tmp_path, TASK, status="started", total=10, completed=1)
+
+    (row,) = rows(
+        tmp_path, [TASK], live(TASK, completed=6, total=10, in_flight=3, queued=1)
+    ).rows
+
+    assert row.queued == 1
+
+
+def test_the_budget_column_is_the_first_limit_in_order_not_the_closest(
+    tmp_path: Path,
+) -> None:
+    # a column that reports turns this turn and tokens the next is not a column
+    # a reader can follow, so the choice is fixed rather than by whichever
+    # happens to be nearest its ceiling
+    task = SynthTask(
+        "probe", samples=10, limits={"turn_limit": 300, "token_limit": 1000}
+    )
+    write_log(tmp_path, task, status="started", total=10, completed=1)
+
+    (row,) = rows(
+        tmp_path, [task], live(task, total=10, in_flight=2, turns=6, tokens=990)
+    ).rows
+
+    assert row.budget is not None
+    assert row.budget.name == "turns"
+    assert row.budget.text == "6/300t"
+
+
+def test_the_token_ceiling_comes_from_the_worker_where_one_is_answering(
+    tmp_path: Path,
+) -> None:
+    # `inspect ctl config` retunes a token limit mid-run, and a formula limit's
+    # ceiling only means anything beside the metering rule the worker applies
+    task = SynthTask("probe", samples=10, limits={"token_limit": 1_000_000})
+    write_log(tmp_path, task, status="started", total=10, completed=1)
+
+    (row,) = rows(
+        tmp_path,
+        [task],
+        live(task, total=10, in_flight=2, tokens=1_100_000, token_limit=10_000_000),
+    ).rows
+
+    assert row.budget is not None
+    # and eight digits against seven is a cell wider than the rest of the row
+    assert row.budget.text == "1.1M/10Mtk"
+
+
+def test_one_column_holds_the_budget_or_the_score_and_never_both(
+    tmp_path: Path,
+) -> None:
+    # usage comes from a worker and a metric comes from scoring, so no row ever
+    # has both -- two columns would cost every line the width of whichever it
+    # is not in, which on the narrow table is a task name
+    running = SynthTask("running", samples=10, limits={"turn_limit": 300})
+    done = SynthTask("done", samples=10)
+    write_log(tmp_path, running, status="started")
+    write_log(
+        tmp_path, done, total=10, completed=10, scores={"exact": {"accuracy": 0.75}}
+    )
+
+    lines = progress_table(
+        rows(tmp_path, [running, done], live(running, in_flight=2, turns=115))
+    )
+
+    assert lines[0].split()[-1] == "115/300t"
+    assert lines[1].split()[-1] == "0.75"
 
 
 def test_a_live_row_carries_every_column(tmp_path: Path) -> None:

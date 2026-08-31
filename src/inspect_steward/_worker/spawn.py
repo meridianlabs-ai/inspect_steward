@@ -37,6 +37,7 @@ from inspect_ai._util.file import safe_filename
 
 from .._evalset.command import DefinitionCommand, definition_command
 from .._evalset.detect import DefinitionType
+from .._notify import INSPECT_NOTIFICATION
 from .._schedule import SpawnWorker
 from .inflight import STEWARD_TASK, STEWARD_WORKER, record_intent, record_launched
 
@@ -283,6 +284,19 @@ def worker_selection(
                 # because how much runs at once is bounded fleet-wide by the
                 # pour, not here
                 max_tasks=len(action.tasks),
+                # **the half of the channel that exporting a variable does not
+                # buy.** `build_apprise(True)` reads
+                # `INSPECT_EVAL_NOTIFICATION`, but a worker's `eval_set()` only
+                # calls it when its own `notification` argument is truthy — so
+                # a fleet handed the value and not this one is a fleet that
+                # never notifies, silently, while Steward posts normally.
+                # Conditional on the variable rather than on a setting, because
+                # that is what `_notify.channel` has already settled: present
+                # for a channel from either vocabulary, absent when there is
+                # none, and absent leaves whatever the definition chose
+                notification=True
+                if os.environ.get(INSPECT_NOTIFICATION, "").strip()
+                else None,
             ),
         ),
     )

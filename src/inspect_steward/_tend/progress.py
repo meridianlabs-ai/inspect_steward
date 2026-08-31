@@ -12,7 +12,6 @@ from dataclasses import dataclass, field
 
 from .._evalset.display import KeyParts, ShortKeys, shorten_keys
 from .._evalset.observe import (
-    LIMITS,
     LogAttempt,
     ObservedTasks,
     TaskObservation,
@@ -24,17 +23,28 @@ from .._worker import LiveFleet, LiveParked, LiveTask, ProcessUsage, process_usa
 SUFFIX = {
     "turns": "t",
     "messages": "m",
-    "tokens": "k",
+    "tokens": "tk",
     "time": "s",
     "working": "w",
     "cost": "$",
 }
-"""One character per budget, so a limit column says which limit it is showing without a header."""
+"""What a budget is labelled with, so a limit column says which limit it is showing without a header.
+
+`tk` rather than `k` for tokens, because the counts are abbreviated and `10Mk` reads as a unit prefix rather than as a noun.
+"""
+
+ORDER = ("turns", "tokens", "messages", "cost", "working", "time")
+"""Which budget a row shows when a task declared several, most telling first.
+
+**One column, not one per limit.** A task declaring a turn limit and a token limit is not asking a reader to pick between two numbers, and a table wide enough for six of them is a table nobody reads on a phone.
+
+The order is by how directly the budget describes the *work*: turns and tokens are what an agent spends, messages is a proxy for turns, and the three at the end are wall-clock and money — real ceilings, but ones that say more about the machine than about the task. Ordered rather than chosen by whichever is closest to tripping, because a column that changes which limit it reports between one turn and the next is not a column a reader can follow.
+"""
 
 
 @dataclass(frozen=True)
 class Budget:
-    """A per-sample limit and how close the leading sample is to it."""
+    """A per-sample limit and how far the typical running sample has got against it."""
 
     name: str
     used: int
@@ -47,6 +57,28 @@ class Budget:
     @property
     def fraction(self) -> float:
         return self.used / self.limit if self.limit else 0.0
+
+    @property
+    def text(self) -> str:
+        """The cell, as a table renders it — `122/200t`, `1.1M/10Mtk`.
+
+        Flush against the number, like `83r` and `63q` in the columns to its left. The whole cell is one quantity and the space made it read as two.
+        """
+        if self.name in ("time", "working"):
+            return f"{self.used}/{self.limit}{self.suffix}"
+        return f"{compact(self.used)}/{compact(self.limit)}{self.suffix}"
+
+
+def compact(value: int) -> str:
+    """A count short enough for a column: `122`, `48k`, `1.1M`.
+
+    Token budgets run to seven and eight digits, and a cell reading `1143820/10000000` costs more width than the rest of the row together while being harder to compare against the limit beside it than `1.1M/10M` is.
+    """
+    for unit, scale in (("M", 1_000_000), ("k", 1_000)):
+        if value >= scale:
+            scaled = value / scale
+            return f"{scaled:.1f}{unit}" if scaled < 10 else f"{round(scaled)}{unit}"
+    return str(value)
 
 
 @dataclass(frozen=True)
@@ -72,14 +104,16 @@ class TaskProgress:
 
     errored: int = 0
     running: int = 0
+
     queued: int = 0
+    """Samples not started yet — the worker's own count where one is answering, and what the counts leave over where none is."""
 
     headline: float | None = None
     headline_name: str | None = None
     """The metric in the score column, and which metric it is. Declared by the task where it says — see `LogAttempt.headline`."""
 
     budget: Budget | None = None
-    """The per-sample limit worth showing, and its usage. `None` when the task declared none, or when nothing is running to have used any."""
+    """The per-sample limit worth showing, and how far into it a typical running sample is. `None` when the task declared no limit anything can be measured against, or when nothing is running to have spent any."""
 
     connections: tuple[int, int | None] | None = None
     """Model connections in use and the pool's ceiling, for a running task."""
@@ -229,7 +263,7 @@ def _row(task: TaskObservation, live: LiveTask | None) -> TaskProgress:
         total=total,
         errored=errored,
         running=live.samples.in_flight if answered and live is not None else 0,
-        queued=live.samples.queued if answered and live is not None else 0,
+        queued=_queued(task, live if answered else None, completed, total, errored),
         headline=attempt.headline if attempt is not None else None,
         headline_name=attempt.headline_name if attempt is not None else None,
         budget=_budget(attempt, live if answered else None),
@@ -266,30 +300,51 @@ def _counts(
     return 0, required, 0
 
 
+def _queued(
+    task: TaskObservation,
+    live: LiveTask | None,
+    completed: int,
+    total: int,
+    errored: int,
+) -> int:
+    """Samples this task has not started yet.
+
+    **Derived where no worker is answering, rather than left at zero.** A worker reports its own queue and is the better source while there is one, but most of a sweep is not running at any moment — and a table where the queue column appears only for the tasks that happen to have a live worker is a column that comes and goes between one post and the next. What a reader wants from it is the same either way: how much of this is still to come.
+
+    A task nothing will run has no queue. That is a finished task, and an orphan, which has no manifest row asking for it.
+    """
+    if live is not None:
+        return live.samples.queued
+    if task.state in (TaskState.COMPLETE, TaskState.ORPHANED):
+        return 0
+    return max(0, total - completed - errored)
+
+
 def _budget(attempt: LogAttempt | None, live: LiveTask | None) -> Budget | None:
     """The limit worth showing, of however many the task declared.
 
-    **The one closest to being reached**, because that is the one that will stop a sample, and a task declaring both a turn limit and a token limit is not asking a reader to pick.
+    **The first of `ORDER` the task both declared and can be measured against**, which is one column whichever combination it declared.
+
+    **From the header and the worker together.** Turn, message and time ceilings are in the log header, which is where they were launched from and where they stay. The token ceiling comes from the worker where a worker is answering, because that one moves: `inspect ctl config` retunes it mid-run, and a formula limit's ceiling is only meaningful beside the metering rule the worker applies. Cost and working time are declared in the header and reported by nothing, so a task with only those shows no column rather than a ceiling with no progress against it.
 
     **Only while something is running.** Usage comes from the worker, so a settled task has a limit and no number to put against it — and rendering that as `0/30` would say *used none of thirty*, which is a claim rather than a gap. A finished task's budget is not interesting anyway: whatever it spent, it finished.
     """
-    if attempt is None or not attempt.limits or live is None:
+    if live is None:
         return None
 
+    limits = dict(attempt.limits) if attempt is not None else {}
+    if live.usage.token_limit is not None:
+        limits["tokens"] = live.usage.token_limit
     used = {
         "turns": live.usage.turns,
         "messages": live.usage.messages,
         "tokens": live.usage.tokens,
         "time": int(live.usage.seconds),
     }
-    budgets = [
-        Budget(name=name, used=used.get(name, 0), limit=limit)
-        for name in LIMITS
-        if (limit := attempt.limits.get(name)) is not None
-    ]
-    if not budgets:
-        return None
-    return max(budgets, key=lambda budget: budget.fraction)
+    for name in ORDER:
+        if name in used and (limit := limits.get(name)) is not None:
+            return Budget(name=name, used=used[name], limit=limit)
+    return None
 
 
 @dataclass(frozen=True)

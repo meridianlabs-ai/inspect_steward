@@ -119,8 +119,8 @@ who owns the item — `collect` prints that beside each one.
 tool approval or an `ask_user` is waiting for authority over what the eval does,
 which is the human's alone — and it holds its slot, its sandbox and its model
 connections the whole time. So `ack` refuses it whatever reason you give. Raise
-it, pass on the attach command the item carries (`inspect acp --server
-<socket>`, which reaches that worker directly), and leave it open: it clears
+it, pass on the attach command the item carries (`inspect acp`, whose picker
+floats the samples waiting on a person to the top), and leave it open: it clears
 when somebody answers it, and nothing else clears it.
 
 An item comes back if the condition **changes**, because its id encodes the
@@ -201,9 +201,47 @@ retune around it: the number is the run owner's to change, in the Hawk config.
 
 ## When to notify
 
-*Not yet written.* Four kinds; two of them are Steward's alone. A question you
-are blocked on is the most important thing you will send and the easiest to
-leave sitting in the conversation, where nobody is reading it.
+**`steward notify "..."` reaches the human when nobody is reading the
+conversation**, which is most of the night. It is the single most valuable
+thing you do that no trigger could do for you: Steward's own posts are
+arithmetic over what a turn saw, and yours carry an interpretation — *"the
+sonnet arm is failing systematically, I've paused it, here's why"*.
+
+    steward notify "the grader is failing on every sample since 01:40" \
+      --kind stopped \
+      --detail "8 tasks affected, all against the same grader model" \
+      --detail "paused the run; nothing new is being scheduled"
+
+Two kinds are yours:
+
+- **`--kind attention`** (the default) — worth knowing, and work continues.
+- **`--kind stopped`** — nothing progresses until a person answers.
+
+**A question you are blocked on is `stopped`, always.** It is the most
+important thing you will send and the easiest to leave sitting in the
+conversation where nobody is reading it. That is the kind's entire reason for
+existing.
+
+The other four kinds — `progress`, `clear`, `gate`, `signed_off` — are
+Steward's and the command refuses them. Each is either latched, terminal, or
+read off state you do not own, and a hand-sent one is a claim about the run
+that nobody computed.
+
+**Post rather than agonise, and do not batch.** Steward already batches its own
+posts to one per turn, so the noise budget you are spending from is not tight.
+The cost of an unnecessary `attention` is one line in a channel; the cost of a
+skipped `stopped` is a run that waits all night for an answer nobody knew was
+wanted.
+
+**Notifying is not raising, and one does not imply the other.** `steward raise`
+records that an item is with the person who can decide it; `notify` is how you
+actually tell them. Do both when you hand something over — the item stays in
+the summary either way, and the post is what makes somebody look at it.
+
+**With no channel configured the command fails rather than succeeding
+quietly**, so an escalation you thought you made is never one you did not.
+If that happens, say so in the conversation and put it in your writeup; the
+remedy is a `notification` setting and it is the human's to add.
 
 ## Hard stops
 

@@ -1,6 +1,6 @@
 import click
 
-from .._tend import Refused, tend
+from .._tend import Refused, notify_failure, tend
 from .options import shape_options, sync_options
 from .turn import (
     TURN_ERRORS,
@@ -60,6 +60,11 @@ def tend_command(
             break_stale=not no_break_claim,
         )
     except TURN_ERRORS as ex:
+        # above every part of a turn that can fail, which is the point: a
+        # permanent failure fails identically every interval and is otherwise
+        # silent forever, while the message this raises reaches only whoever is
+        # standing at the terminal -- and on the 02:00 turn that is nobody
+        notify_failure(workspace, str(ex))
         raise click.ClickException(str(ex)) from ex
 
     if isinstance(result, Refused):

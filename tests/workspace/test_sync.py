@@ -14,7 +14,9 @@ not how many bytes per second it managed.
 from pathlib import Path
 
 import pytest
+import yaml
 from inspect_steward._workspace import (
+    OMITTED_VALUE,
     Workspace,
     steward_log,
     sync_target,
@@ -281,3 +283,182 @@ def test_a_workspace_with_nothing_to_carry_does_nothing(tmp_path: Path) -> None:
 
     assert report.carried == []
     assert not Path(target(tmp_path)).exists()
+
+
+# --- the one key that does not travel -----------------------------------
+
+
+CHANNEL = "slack://xoxb-secret/C123"
+
+CARRIED = [
+    ("a url", f"notification: {CHANNEL}\n"),
+    ("quoted value", f'notification: "{CHANNEL}"\n'),
+    ("a block scalar nobody should write", f"notification: >\n  {CHANNEL}\n"),
+    # every one of these parses to the same setting, and none of them is the
+    # bare column-zero key a line-based rule looks for
+    ("a quoted key", f'"notification": {CHANNEL}\n'),
+    ("a single-quoted key", f"'notification': {CHANNEL}\n"),
+    ("padding before the colon", f"notification : {CHANNEL}\n"),
+]
+
+
+@pytest.mark.parametrize(
+    ("text",), [(text,) for _, text in CARRIED], ids=[case for case, _ in CARRIED]
+)
+def test_the_channel_is_left_behind_by_the_copy(
+    text: str, workspace: Workspace, tmp_path: Path
+) -> None:
+    # `_steward.yaml` is committed, and this is the one path that would put an
+    # Apprise URL -- a bearer token with a scheme in front of it -- in an object
+    # store. One key Steward defined, found by name, in one file it wrote the
+    # template for: not the heuristic redactor the module argues against
+    workspace.directives.write_text(f"max_workers: 2\n{text}", encoding="utf-8")
+    destination = target(tmp_path)
+
+    sync_workspace(workspace, destination)
+
+    copied = (Path(destination) / "_steward.yaml").read_text(encoding="utf-8")
+    assert CHANNEL not in copied
+    assert OMITTED_VALUE in copied
+    # and the rest of the file is untouched, including the local original
+    assert "max_workers: 2" in copied
+    assert CHANNEL in workspace.directives.read_text(encoding="utf-8")
+
+
+def test_an_indented_mapping_keeps_its_siblings(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    # a YAML block mapping may begin at any indentation. Replacing the key at
+    # column zero would break the mapping, and dropping every indented line
+    # under it would take the rest of the file with it
+    workspace.directives.write_text(
+        f"  max_workers: 2\n  notification: {CHANNEL}\n  stall_after: 3\n",
+        encoding="utf-8",
+    )
+    destination = target(tmp_path)
+
+    sync_workspace(workspace, destination)
+
+    copied = (Path(destination) / "_steward.yaml").read_text(encoding="utf-8")
+    assert CHANNEL not in copied
+    assert "max_workers: 2" in copied and "stall_after: 3" in copied
+    assert yaml.safe_load(copied)["stall_after"] == 3
+
+
+def test_a_shape_the_rewrite_cannot_reach_is_withheld_rather_than_sent(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    """The verification, which is what makes this a guarantee.
+
+    A flow mapping is valid YAML on one line and matches nothing line-shaped.
+    The cost of a miss is a bearer token in an object store, so the scrubbed
+    text is parsed back and a file still carrying a channel does not travel.
+    """
+    workspace.directives.write_text(
+        f"{{max_workers: 2, notification: {CHANNEL}}}\n", encoding="utf-8"
+    )
+    destination = target(tmp_path)
+
+    report = sync_workspace(workspace, destination)
+
+    assert report.withheld == ["_steward.yaml"]
+    assert "_steward.yaml" not in landed(destination)
+    assert "could not be taken out" in workspace.log.read_text(encoding="utf-8")
+
+
+UNPARSEABLE = [
+    ("a key on its own line", f"max_workers: [8\nnotification: {CHANNEL}\n"),
+    # the shape a line-oriented pattern walks straight past, which is why there
+    # is no pattern any more: one unclosed brace and the credential travels
+    ("a flow mapping", f"{{max_workers: 8, notification: {CHANNEL}\n"),
+    ("a channel on one line with the key", f"{{notification: {CHANNEL}}}\nfoo: [\n"),
+    # withheld even though there is nothing in it to leak: an unparseable file
+    # has no authoritative answer, and guessing is what the pattern did
+    ("nothing to leak at all", "max_workers: [8\n"),
+]
+
+
+@pytest.mark.parametrize(
+    "text", [text for _, text in UNPARSEABLE], ids=[case for case, _ in UNPARSEABLE]
+)
+def test_a_file_that_will_not_parse_is_withheld(
+    workspace: Workspace, tmp_path: Path, text: str
+) -> None:
+    # no authoritative answer is available, so the answer is *do not send it*.
+    # A file `read_directives` already rejected is one whose settings a remote
+    # reader could not have acted on anyway
+    workspace.directives.write_text(text, encoding="utf-8")
+    destination = target(tmp_path)
+
+    report = sync_workspace(workspace, destination)
+
+    assert report.withheld == ["_steward.yaml"]
+    assert "_steward.yaml" not in landed(destination)
+
+
+EVADED = [
+    # duplicate keys are legal YAML and the last one wins, so a load answers
+    # *declined* about a file whose first line is still a bearer token
+    ("a decline after a channel", f"notification: {CHANNEL}\nnotification: false\n"),
+    ("a channel after a decline", f"notification: false\nnotification: {CHANNEL}\n"),
+    # no spelling of the setting takes a list, but a file Steward refuses to
+    # read is not thereby a file it may ship
+    ("a list of channels", f"notification: [{CHANNEL}]\n"),
+]
+
+
+@pytest.mark.parametrize(
+    "text", [text for _, text in EVADED], ids=[case for case, _ in EVADED]
+)
+def test_a_channel_the_loaded_mapping_hides_is_still_taken_out(
+    workspace: Workspace, tmp_path: Path, text: str
+) -> None:
+    workspace.directives.write_text(text, encoding="utf-8")
+    destination = target(tmp_path)
+
+    sync_workspace(workspace, destination)
+
+    copied = (Path(destination) / "_steward.yaml").read_text(encoding="utf-8")
+    assert CHANNEL not in copied
+    assert OMITTED_VALUE in copied
+
+
+def test_declining_is_not_a_credential(workspace: Workspace, tmp_path: Path) -> None:
+    # `notification: false` is a setting a remote reader benefits from seeing
+    workspace.directives.write_text("notification: false\n", encoding="utf-8")
+    destination = target(tmp_path)
+
+    report = sync_workspace(workspace, destination)
+
+    assert report.withheld == []
+    copied = (Path(destination) / "_steward.yaml").read_text(encoding="utf-8")
+    assert yaml.safe_load(copied)["notification"] is False
+
+
+def test_a_file_with_no_channel_travels_byte_for_byte(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    destination = target(tmp_path)
+
+    sync_workspace(workspace, destination)
+
+    assert (Path(destination) / "_steward.yaml").read_text(
+        encoding="utf-8"
+    ) == workspace.directives.read_text(encoding="utf-8")
+
+
+def test_a_policy_that_mentions_the_word_is_not_rewritten(
+    workspace: Workspace, tmp_path: Path
+) -> None:
+    # anchored at the top level: an indented `notification:` is somebody's prose
+    workspace.directives.write_text(
+        "policies:\n  - notification: tell me about grader failures\n",
+        encoding="utf-8",
+    )
+    destination = target(tmp_path)
+
+    sync_workspace(workspace, destination)
+
+    copied = (Path(destination) / "_steward.yaml").read_text(encoding="utf-8")
+    assert "tell me about grader failures" in copied
+    assert OMITTED_VALUE not in copied

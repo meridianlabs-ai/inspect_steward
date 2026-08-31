@@ -242,6 +242,24 @@ wheels = [
 ]
 
 [[package]]
+name = "apprise"
+version = "1.13.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "certifi" },
+    { name = "click" },
+    { name = "markdown" },
+    { name = "pyyaml" },
+    { name = "requests" },
+    { name = "requests-oauthlib" },
+    { name = "tzdata", marker = "sys_platform == 'win32'" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/0c/36/80a0e7f99f59902ca5a30051c2034938dc9387eeca7d78f750fb1585c890/apprise-1.13.0.tar.gz", hash = "sha256:9a56964bf3ca004b3e0db98ab8a8d87fad051d8edb377bc166dc4be826666c81", size = 2512349, upload-time = "2026-08-20T14:50:33.404Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/c6/ab/199a88aa1cee354a0e9bc0d9fce9d14969214e3c95b466d75d63756112c5/apprise-1.13.0-py3-none-any.whl", hash = "sha256:cc8f4e2b138a46ff0397f649d73622ab268ddb94a0954399ff318a29a30146c8", size = 1817510, upload-time = "2026-08-20T14:50:31.346Z" },
+]
+
+[[package]]
 name = "argon2-cffi"
 version = "25.1.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1535,6 +1553,7 @@ wheels = [
 name = "inspect-steward"
 source = { editable = "." }
 dependencies = [
+    { name = "apprise" },
     { name = "click" },
     { name = "httpx" },
     { name = "inspect-ai" },
@@ -1591,6 +1610,7 @@ doc = [
 
 [package.metadata]
 requires-dist = [
+    { name = "apprise", specifier = ">=1.9" },
     { name = "click", specifier = ">=8.0" },
     { name = "hawk", extras = ["cli", "runner"], marker = "python_full_version >= '3.13' and extra == 'hawk'", specifier = ">=2.4.0" },
     { name = "httpx", specifier = ">=0.27" },

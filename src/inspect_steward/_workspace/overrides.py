@@ -28,7 +28,7 @@ from inspect_ai._eval.eval_set_overrides import (
 from inspect_ai._util.error import PrerequisiteError
 from pydantic import ValidationError
 
-from .directives import PREFIX, DirectivesError, explain
+from .directives import PREFIX, STEWARDS, DirectivesError, explain
 
 LOG_DIR = "INSPECT_LOG_DIR"
 """Inspect's log directory variable, refused rather than read.
@@ -37,11 +37,11 @@ Every other variable is honoured because Steward is standing in for the CLI that
 """
 
 ALIASED: tuple[str, ...] = tuple(
-    field for field in EvalSetOverrides.model_fields if field != "log_dir"
+    field for field in EvalSetOverrides.model_fields if field not in STEWARDS
 )
 """Every override field that gets a `STEWARD_*` alias and a `launch` flag.
 
-Derived from the model rather than listed, so a field added upstream is sayable here on the next release without anybody noticing it had to. `log_dir` is the one exclusion, and it is excluded because Steward decides it.
+Derived from the model rather than listed, so a field added upstream is sayable here on the next release without anybody noticing it had to. The exclusions are `STEWARDS`, and they are excluded because Steward decides them.
 """
 
 

@@ -66,13 +66,30 @@ TASK: dict[str, object] = {
 
 TASKS: list[object] = [TASK]
 
+
+def sample(
+    turns: int, messages: int, tokens: int, metered: int | None = None
+) -> dict[str, object]:
+    row: dict[str, object] = {
+        "status": "running",
+        "turn_count": turns,
+        "message_count": messages,
+        "total_tokens": tokens,
+        "token_limit_total": 4000,
+    }
+    if metered is not None:
+        row["token_limit_usage"] = metered
+    return row
+
+
 SAMPLES: dict[str, object] = {
     "samples": [
-        {"status": "running", "turn_count": 8, "message_count": 20, "total_tokens": 90},
-        {"status": "running", "turn_count": 3, "message_count": 40, "total_tokens": 10},
-        # a finished sample ran to the limit; it is not what a limit column is
-        # asking about, and letting it in would report a task as nearly stopped
-        # forever after its first long sample
+        sample(2, 10, 20, metered=15),
+        sample(8, 20, 90, metered=50),
+        sample(30, 900, 4000, metered=2600),
+        # a finished sample is not what a limit column is asking about, and
+        # letting it in would report a task as nearly stopped forever after its
+        # first long sample
         {
             "status": "completed",
             "turn_count": 300,
@@ -187,16 +204,41 @@ def test_a_worker_reports_the_counts_its_log_has_not_caught_up_to(
     assert (task.refusals, task.http_retries) == (3, 41)
 
 
-def test_usage_is_the_leading_sample_rather_than_the_mean(sockets: Path) -> None:
-    # a limit column answers *how close is this to tripping*, which the leader
-    # decides -- a mean hides one sample about to be cut off behind ninety that
-    # have just started
+def test_usage_is_the_typical_running_sample_rather_than_the_leader(
+    sockets: Path,
+) -> None:
+    # a limit column answers *where is this run in its budget*, and one hard
+    # sample near its ceiling is the normal shape of a healthy run -- reporting
+    # the leader would read as nearly-stopped whenever any sample is
     with worker(sockets / "w.sock") as target:
         (task,) = read_fleet([target], NO_PACKING).tasks.values()
 
     assert task.usage.turns == 8
-    assert task.usage.messages == 40
-    assert task.usage.tokens == 90
+    assert task.usage.messages == 20
+
+
+def test_token_usage_is_what_the_limit_meters_rather_than_the_total(
+    sockets: Path,
+) -> None:
+    # a token limit may meter output alone or a formula over input and output,
+    # and the worker is the only place that rule is known -- so a total summed
+    # here would be a different number from the one the limit will trip on
+    with worker(sockets / "w.sock") as target:
+        (metered,) = read_fleet([target], NO_PACKING).tasks.values()
+
+    unmetered: Routes = {
+        **WORKER,
+        "/evals/E1/samples": {"samples": [sample(2, 10, 20), sample(8, 20, 90)]},
+    }
+    with worker(sockets / "u.sock", unmetered) as target:
+        (plain,) = read_fleet([target], NO_PACKING).tasks.values()
+
+    assert metered.usage.tokens == 50
+    # the ceiling comes from the same rows, because a live retune moves it
+    assert metered.usage.token_limit == 4000
+    # and where nothing is metered there is no limit to meter against, so the
+    # plain total stands in rather than the column going blank
+    assert plain.usage.tokens == 55
 
 
 def test_connection_pools_are_summed_across_a_task_s_controllers(

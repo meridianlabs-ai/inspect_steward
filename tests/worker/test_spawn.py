@@ -20,6 +20,7 @@ from inspect_ai._eval.eval_set_selection import (
 )
 from inspect_ai.log import list_eval_logs, read_eval_log
 from inspect_steward import read_eval_set
+from inspect_steward._notify import INSPECT_NOTIFICATION
 from inspect_steward._util.jsonl import read_events
 from inspect_steward._worker import resolve_eval_set_id, worker_selection, worker_stem
 
@@ -74,6 +75,32 @@ def test_a_worker_inherits_the_runs_overrides_and_keeps_its_own(
     # and this worker's, which are the whole point of a per-worker container
     assert built.overrides.max_tasks == 2
     assert built.overrides.log_dir == "s3://bucket/logs"
+
+
+def test_a_worker_is_asked_to_notify_only_where_a_channel_is_settled(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The half of the channel that exporting a variable does not buy.
+
+    `build_apprise(True)` reads the variable, but a worker's `eval_set()` only
+    calls it when its own `notification` argument is truthy. A fleet handed the
+    value and not this override is a fleet that never notifies — silently,
+    while Steward posts normally.
+    """
+    monkeypatch.delenv(INSPECT_NOTIFICATION, raising=False)
+    quiet = worker_selection(
+        action("id-a"), eval_set_id=EVAL_SET_ID, log_dir="s3://bucket/logs"
+    )
+    assert quiet.overrides is not None
+    # absent rather than false, which leaves whatever the definition chose
+    assert quiet.overrides.notification is None
+
+    monkeypatch.setenv(INSPECT_NOTIFICATION, "slack://tok/tok/tok")
+    told = worker_selection(
+        action("id-a"), eval_set_id=EVAL_SET_ID, log_dir="s3://bucket/logs"
+    )
+    assert told.overrides is not None
+    assert told.overrides.notification is True
 
 
 def test_a_packed_selection_names_every_task_and_its_own_concurrency(

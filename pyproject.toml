@@ -40,6 +40,13 @@ dependencies = [
     # inspect-ai depends on python-dotenv too, but this is a direct import and a
     # transitive dependency is not a promise.
     "python-dotenv>=1.0",
+    # notification is the gate on autonomy rather than a nicety (workflow.md
+    # §11): an unattended run that cannot reach a person is the failure the
+    # whole design exists to prevent. inspect-ai makes apprise optional because
+    # an eval that never asks a human needs no channel; a supervisor always
+    # might, so a workspace must not be able to configure a channel Steward
+    # then cannot reach.
+    "apprise>=1.9",
 ]
 
 [project.optional-dependencies]

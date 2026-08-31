@@ -395,6 +395,21 @@ def test_the_live_block_replaces_the_startup_bound_and_both_renderings_agree(
     assert "refusals" not in status_markdown(result, header=False)
 
 
+def test_the_tasks_table_says_what_is_still_to_run_with_nothing_running(
+    workspace: Workspace,
+) -> None:
+    # running and connections need a worker to answer for them; what is left to
+    # run does not, and gating all three together hid the queue for exactly the
+    # runs that are all queue -- one waiting task, ten samples, no fleet
+    markdown = status_markdown(turn(workspace), header=False)
+
+    (row,) = [line for line in markdown.splitlines() if "`waiting`" in line]
+    assert "| queued |" in markdown
+    assert "| 10 |" in row
+    # and the two that do need one are still absent
+    assert "| running |" not in markdown and "| connections |" not in markdown
+
+
 def test_markdown_says_when_a_tend_holds_the_claim(workspace: Workspace) -> None:
     # a claim is not an item -- nobody resolves it, and it is gone in seconds --
     # but it is exactly what makes an "as of" misleading, since the tend holding

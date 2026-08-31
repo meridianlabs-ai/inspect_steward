@@ -17,6 +17,7 @@ import asyncio
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
+from statistics import median
 from typing import cast
 
 import httpx
@@ -42,15 +43,25 @@ class LiveSamples:
 
 @dataclass(frozen=True)
 class LiveUsage:
-    """How far the furthest-along sample has got against each per-sample budget.
+    """How far a typical running sample has got against each per-sample budget.
 
-    The **maximum** across running samples rather than the mean, because the question a limit column answers is *how close is this to tripping*, and that is decided by the leader. A mean would hide one sample about to be cut off behind ninety that just started.
+    The **median** across running samples, which answers *where is this run in its budget* — the question a reader deciding whether a limit is set right is actually asking. The maximum answers *is anything about to be cut off*, and one sample near its ceiling is the normal shape of a healthy run: some samples are hard. A column that reads `199/200` whenever a single outlier is near the top says nothing about the other ninety-nine.
+
+    A sample that started a minute ago pulls the median down, and should: it is a running sample and this is what the running samples look like.
     """
 
     turns: int = 0
     messages: int = 0
     tokens: int = 0
+    """Metered against the *token limit* rather than summed, because the two differ whenever a limit meters something narrower than the total — `output`, or a formula over input and output. The worker computes it (`token_limit_usage`), which is the only place the metering rule is known; total tokens stand in where no limit is configured and there is therefore nothing to meter against."""
+
     seconds: float = 0.0
+
+    token_limit: int | None = None
+    """The token ceiling the running samples are actually under, or `None` where they report none.
+
+    A limit rather than a usage, here because it comes off the same rows and is only meaningful beside `tokens`. **The log header's `token_limit` is what the task was launched with**; this is what its samples hold now, which differs after `inspect ctl config` retunes one mid-run. Reading it from the samples is also what makes a formula limit legible, since the ceiling and the metering rule have to agree and only the worker knows both.
+    """
 
 
 @dataclass(frozen=True)
@@ -401,17 +412,39 @@ def _parked(payload: object) -> LiveParked:
 
 
 def _usage(payload: object) -> LiveUsage:
-    """The leading running sample's counts against each per-sample budget."""
-    turns = messages = tokens = 0
-    seconds = 0.0
+    """What the typical running sample has spent against each per-sample budget."""
+    turns: list[int] = []
+    messages: list[int] = []
+    tokens: list[int] = []
+    seconds: list[float] = []
+    ceilings: list[int] = []
     for sample in _running_samples(payload):
-        turns = max(turns, _number(sample.get("turn_count")))
-        messages = max(messages, _number(sample.get("message_count")))
-        tokens = max(tokens, _number(sample.get("total_tokens")))
+        turns.append(_number(sample.get("turn_count")))
+        messages.append(_number(sample.get("message_count")))
+        # the metered figure where a limit is set, the plain total where none
+        # is: `token_limit_usage` is `None` for an unlimited sample
+        metered = sample.get("token_limit_usage")
+        tokens.append(
+            _number(metered if metered is not None else sample.get("total_tokens"))
+        )
         elapsed = sample.get("total_time")
-        if isinstance(elapsed, float | int):
-            seconds = max(seconds, float(elapsed))
-    return LiveUsage(turns=turns, messages=messages, tokens=tokens, seconds=seconds)
+        seconds.append(float(elapsed) if isinstance(elapsed, float | int) else 0.0)
+        if (ceiling := sample.get("token_limit_total")) is not None:
+            ceilings.append(_number(ceiling))
+    return LiveUsage(
+        turns=_median(turns),
+        messages=_median(messages),
+        tokens=_median(tokens),
+        seconds=median(seconds) if seconds else 0.0,
+        # every sample of a task runs under the same ceiling, so the median is
+        # picking a representative rather than reconciling a disagreement
+        token_limit=_median(ceilings) if ceilings else None,
+    )
+
+
+def _median(values: list[int]) -> int:
+    """The middle value, rounded, or zero for nothing to take a middle of."""
+    return round(median(values)) if values else 0
 
 
 def _model(row: dict[str, object], target: LiveTarget) -> str | None:

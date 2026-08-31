@@ -10,17 +10,21 @@ So each tend mirrors the workspace's files into the log directory. Somebody read
 
 **What leaves is transcript-derived, and Steward does not pretend otherwise.** `journal.jsonl` holds error text; an agent's writeup quotes what it read. Usually the destination is the same place as the logs, so the audience is unchanged — but an `.eval` is a zip that needs tooling and a text file is greppable by anyone with read access, and easy extraction is what turns a theoretical exposure into a real one. There is no redactor here, deliberately: one that catches most secrets converts *this holds transcript material* into an implied guarantee that it does not (workflow.md §9.2).
 
+**One key is omitted, and it is not a redactor.** `notification` may hold an Apprise URL, which is a bearer token, and this is the one path that would put one in an object store. What that argument rules out is a *heuristic* pass over arbitrary content; this is one key Steward itself defined, found by name, in one file Steward itself writes the template for. It promises nothing about the rest of the file and the paragraph above still stands (`_omitted`).
+
 **It is advisory and it never raises.** An eval must not fail because a bucket was briefly unreachable, so every failure is recorded and the turn carries on. The bound is a deadline between files rather than a cancellation: bounding one call is the storage client's job and it already does it, and what a deadline buys here is that a slow pipe becomes a reported fact rather than a mysteriously long tend. A tend running long is already answered — the claim is held while a turn runs, so the next timer fire is refused and the interval after that converges.
 
 **Outbound only.** Editing `_steward.yaml` in the bucket does not change the run; two-way sync needs conflict resolution nobody wants for a monitoring channel.
 """
 
 import json
+import re
 import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
 
+import yaml
 from inspect_ai._util.constants import ALL_LOG_FORMATS
 from inspect_ai._util.file import filesystem
 
@@ -65,6 +69,9 @@ class SyncReport:
 
     unfollowed: list[str] = field(default_factory=list[str])
     """Symlinks, left where they are — see the loop in `sync_workspace`."""
+
+    withheld: list[str] = field(default_factory=list[str])
+    """Files held back because a credential could not be taken out of them — see `_omitted`. Empty in every ordinary case."""
 
     failures: list[str] = field(default_factory=list[str])
     """Files that could not be written, with the reason."""
@@ -145,7 +152,13 @@ def sync_workspace(
             report.remaining.extend(later.name for later in carried[index:])
             break
         try:
-            fs.put_file(str(path), f"{target.rstrip('/')}{fs.sep}{path.name}")
+            source = _omitted(workspace, path)
+            if source is None:
+                # a credential is the one thing worth losing a remote reader's
+                # copy over, so this fails closed rather than sending it anyway
+                report.withheld.append(path.name)
+                continue
+            fs.put_file(str(source), f"{target.rstrip('/')}{fs.sep}{path.name}")
         except Exception as ex:
             _failed(
                 workspace,
@@ -162,6 +175,14 @@ def sync_workspace(
             workspace.log,
             f"did not sync {', '.join(report.refused)}: inspect would read "
             f"{'them' if len(report.refused) > 1 else 'it'} as an eval log in {target}",
+        )
+    if report.withheld:
+        steward_log(
+            workspace.log,
+            f"did not sync {', '.join(report.withheld)}: the notification "
+            f"channel could not be taken out of "
+            f"{'them' if len(report.withheld) > 1 else 'it'}, and a channel is "
+            f"a credential — fix the file, or move the value to .env",
         )
     if report.unfollowed:
         steward_log(
@@ -204,6 +225,144 @@ def _carried(workspace: Workspace) -> list[Path]:
         for path in (workspace.log, workspace.timer_log)
         if path.is_symlink() or path.is_file()
     ]
+
+
+OMITTED_VALUE = "omitted by steward: this copy travels to the log store"
+"""What the channel is replaced by in the propagated `_steward.yaml`.
+
+A sentence rather than a blank, because a reader comparing the copy against the original has to be able to tell *nobody set one* from *it was taken out on the way here*.
+"""
+
+OMITTED = f"notification: '{OMITTED_VALUE}'"
+"""The whole replacement line. Still a valid setting, so the copy is still a file that parses."""
+
+_NOTIFICATION = re.compile(
+    r"""^[ \t]*(?:notification|["']notification["'])[ \t]*:""", re.MULTILINE
+)
+"""A `notification` key on a line of its own, quoted or not, at whatever indentation.
+
+**The rewriter, and never the test.** What this finds, `_without_notification` takes out; whether anything is left is decided by a parse, because a pattern standing in for a parse is a pattern somebody's typo can walk around.
+"""
+
+HARMLESS = frozenset({"tag:yaml.org,2002:bool", "tag:yaml.org,2002:null"})
+"""Value tags a `notification` key may carry without carrying a credential.
+
+`false` declines a channel and `null` sets none. Everything else is treated as one — including a list and a mapping, which no spelling of the setting accepts but both of which can hold a URL, and a file Steward refuses to *read* is not thereby a file it may ship.
+"""
+
+
+def _omitted(workspace: Workspace, path: Path) -> Path | None:
+    """The file to upload for this one — itself, unless it is `_steward.yaml`.
+
+    **Line-based rather than a YAML round-trip**, because the file is mostly comments: re-emitting it from a parse would land a copy in the log store that shares none of the original's explanation of itself. The value is replaced in place and any continuation lines under it are dropped, which covers the block scalar nobody should write and one person eventually will.
+
+    **And then verified, which is what makes it a guarantee rather than a pattern that has held so far.** A rewrite driven by a regex is a rewrite that can be evaded — a flow mapping (`{notification: slack://…}`) is valid YAML on one line and matches nothing line-shaped — and the cost of a miss here is a bearer token in an object store. So the scrubbed text is parsed back, and a file still carrying a channel is **withheld rather than sent**. Failing closed is right for this one file: what is lost is a remote reader's copy of settings they can also see in `status.md`, and what is prevented is a credential nobody can recall.
+
+    The scrubbed copy lives under `.steward/`, beside the rest of the machinery, and is overwritten every turn.
+
+    Args:
+        workspace: The workspace being propagated.
+        path: The file about to be uploaded.
+
+    Returns:
+        `path` where nothing needs removing, a temporary file with the channel taken out, or `None` where it could not be taken out and the file must not travel.
+    """
+    if path.name != workspace.directives.name:
+        return path
+    text = path.read_text(encoding="utf-8")
+    if not _carries_channel(text):
+        return path
+    scrubbed_text = _without_notification(text)
+    if _carries_channel(scrubbed_text):
+        return None
+    scrubbed = workspace.state / f"{path.name}.sync"
+    scrubbed.parent.mkdir(parents=True, exist_ok=True)
+    scrubbed.write_text(scrubbed_text, encoding="utf-8")
+    return scrubbed
+
+
+def _carries_channel(text: str) -> bool:
+    """Whether this `_steward.yaml` text still names a notification channel.
+
+    **The parse is the only authority, and text that will not parse answers *yes*.** Loading the document decides exactly, including for shapes no line-based rule sees — and the line-based rule was the hole: `{notification: slack://…` in a file with an unclosed brace fails to load, matches no pattern anchored to the start of a line, and travels to the log store with the credential in it. A pattern standing in for a parse is a pattern somebody's typo can walk around, which for a bearer token is not a fallback but a leak with a schedule.
+
+    So an unparseable file is treated as carrying one whether or not it does. It is a file `read_directives` has already rejected — the run is degraded and reporting why — so a remote reader loses a copy of settings that were not in force anyway.
+
+    **Every pair is read, not the mapping the loader builds from them**, and that is the second hole of the same shape. Duplicate keys are legal YAML and the last one wins, so
+
+    ```yaml
+    notification: slack://xoxb-…/…
+    notification: false
+    ```
+
+    loads to `False` — a declined channel, and a file that would have travelled with the token still on line one. Composing the document exposes both pairs, and any of them naming a value that is not plainly a decline is enough to act on.
+    """
+    try:
+        node = _composed(text)
+    except yaml.YAMLError:
+        return True
+    if not isinstance(node, yaml.MappingNode):
+        return False
+    return any(
+        _is_channel(value)
+        for key, value in node.value
+        if isinstance(key, yaml.ScalarNode) and key.value == "notification"
+    )
+
+
+def _composed(text: str) -> yaml.Node | None:
+    """The document as nodes, one step short of the mapping a load would build.
+
+    The step that is skipped is the one that discards a duplicate key.
+    """
+    loader = yaml.SafeLoader(text)
+    try:
+        return loader.get_single_node()
+    finally:
+        loader.dispose()
+
+
+def _is_channel(value: yaml.Node) -> bool:
+    """Whether one `notification` value has to be taken out before the file travels."""
+    if not isinstance(value, yaml.ScalarNode):
+        return True
+    # the note saying the value was taken out is what this module's own rewrite
+    # leaves behind, and re-reading it as a channel would withhold every file it
+    # had just cleaned
+    return value.tag not in HARMLESS and value.value != OMITTED_VALUE
+
+
+def _without_notification(text: str) -> str:
+    """`_steward.yaml` with the channel replaced by a note saying so.
+
+    Continuation lines under the key are dropped with it, which covers the block scalar nobody should write and one person eventually will. Blank lines are kept, so the copy still reads like the file it came from.
+    """
+    lines: list[str] = []
+    dropping: int | None = None
+    for line in text.splitlines(keepends=True):
+        if dropping is not None:
+            if not line.strip():
+                lines.append(line)
+                continue
+            # **deeper than the key, not merely indented.** A block mapping may
+            # itself be indented, so testing for any leading space would eat
+            # every sibling key below this one and leave a copy of the file
+            # missing most of itself
+            if _indent(line) > dropping:
+                continue
+            dropping = None
+        if _NOTIFICATION.match(line) and not line.lstrip().startswith("#"):
+            # the key's own indentation is kept, or the replacement would break
+            # the mapping it sits in and land an unparseable copy
+            lines.append(f"{' ' * _indent(line)}{OMITTED}\n")
+            dropping = _indent(line)
+            continue
+        lines.append(line)
+    return "".join(lines)
+
+
+def _indent(line: str) -> int:
+    return len(line) - len(line.lstrip())
 
 
 def _refused(path: Path) -> bool:
@@ -281,4 +440,11 @@ def _failed(workspace: Workspace, report: SyncReport, message: str) -> None:
     steward_log(workspace.log, message)
 
 
-__all__ = ["SYNC_BUDGET", "SyncReport", "sync_target", "sync_workspace"]
+__all__ = [
+    "OMITTED",
+    "OMITTED_VALUE",
+    "SYNC_BUDGET",
+    "SyncReport",
+    "sync_target",
+    "sync_workspace",
+]

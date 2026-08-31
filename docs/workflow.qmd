@@ -232,6 +232,47 @@ For the agent, `steward collect` is the front door: the same three sections `sta
 
 What the decisions themselves are about is covered on two other pages: [Error Handling](errors.qmd) for sample errors and stalled tasks, and [Concurrency](concurrency.qmd) for the ramp and its tuning proposals.
 
+## Getting told
+
+Everything above is a file or a command, which means it reaches you only when you go and look. A run you left at 6pm that stopped at 2am is indistinguishable, from where you are, from one that is going fine. So set a channel:
+
+```{.yaml filename="_steward.yaml"}
+notification: slack://{OAuthToken}/
+```
+
+or, keeping the token out of your repository:
+
+```{.ini filename=".env"}
+STEWARD_NOTIFICATION=slack://{OAuthToken}/
+```
+
+It takes anything [Apprise](https://github.com/caronc/apprise) does — one URL, several separated by commas, or a path to an Apprise config file that names them — so Slack, email, SMS, Discord, a desktop notifier, or a webhook all work the same way. `steward launch --notification …` sets it for one run, and `notification: false` declines the whole thing. A launch with no channel prints one line saying so, once — as does a launch whose channel came only from the flag, since that one reaches the launch's own turn and none of the scheduled ones.
+
+**Prefer the file or `.env` over exporting it in your shell.** A scheduled tend at 02:00 inherits almost nothing, and a channel that lives only in the shell you launched from is one the 02:00 turn does not have. `steward launch` refuses to arm a timer when it spots that, the same way it does for an API key.
+
+**One channel, two directions.** Steward posts what a turn found. Your *workers* post what a sample asked — an `ask_user()` question, a tool approval waiting on a human — and those block the sample until somebody answers. Setting `notification` wires both, so there is no arrangement where the fleet is asking and nobody is being told. That is also why `notification: false` and `--no-notification` silence Steward's posts only, and still hand your workers the channel: silencing a blocking approval would hang a sample all night with nobody told. Setting inspect's own `INSPECT_EVAL_NOTIFICATION` instead works too, and Steward will post there.
+
+**What actually fires.** At most one message per tend, whatever changed, because the tend is already the clock:
+
+| | |
+|----|----|
+| something new needs a person | as it appears — once, not every ten minutes |
+| a worker parked on a human decision | as it parks |
+| tasks finished | one message per turn, naming all of them |
+| the decision queue emptied | once |
+| the run reached its gate | once, and again after a re-launch changes the work |
+| a tend that could not run at all | once per distinct reason, until a turn succeeds again |
+
+**What does not fire is the agent's half of the queue.** Some of what a tend finds is routed to the agent rather than to you — an unreadable log, an action that failed — and waking you for those is the channel advertising work you were told not to do. They still show in `status.md`, grouped by owner, where you can go and look on purpose.
+
+They *do* reach you when nobody is picking them up: no `steward collect` in the last two tends, or none ever. An agent's item is only the agent's while there is an agent, and what you have to do about a workspace nothing is attached to is attach something. The message says so rather than making you infer it.
+
+Every message opens with a verdict line and carries the progress table, so the last message in the channel is true modulo whatever you have since answered. Every message is named by the workspace directory it is about, since one channel serves however many runs you have going: `my-sweep: ⚠️ 2 decisions need attention`. It counts what *you* have to act on, where `status` splits the same items into yours and the agent's because one of its readers is the agent. Tasks are named as shortly as the table names them — a model every task shares is said once, under the table, rather than after every name — long lines are trimmed and long lists are counted. `status.md` has the whole of everything, including the exception text behind a log that would not parse. Slack, email, and plain-text targets each get the markup they actually understand; a workspace posting to several gets each rendered properly rather than all reduced to the worst of them.
+
+**The agent has its own verb.** `steward notify "the sonnet arm is failing systematically, I've paused it"` carries judgement rather than a condition, which is the half of this that a trigger cannot produce. It takes `--kind attention` (default) or `--kind stopped`, and `--detail` for supporting lines. The four kinds Steward computes are refused there: a hand-sent claim that the run is finished is a claim nobody computed.
+
+**The value never travels.** Nothing prints it, and the `_steward.yaml` copy that Steward [propagates into the log directory](#the-workspace-follows-its-logs) has the key replaced by a note saying it was left behind — that path ends in an object store, and an Apprise URL is a bearer token. The scrubbed copy is read back before it is sent, and a file the channel could not be taken out of is held back entirely rather than sent as it is, with a line in `steward.log` saying which file and why. What is lost then is a remote reader's copy of settings `status.md` also carries; what is prevented is a credential nobody can recall.
+
 ## Standing rules
 
 `_steward.yaml` is your eval policy, in two halves that live in one file so that a decision and its reasoning stay next to each other. The settings are what Steward executes by itself at 3am; `policies` is free-form text the agent applies when one is in session.

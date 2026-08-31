@@ -35,12 +35,24 @@
 # log_store: auto         # reuse logs already run elsewhere (a path, or false for none)
 # sync: auto              # mirror this workspace into the log directory (a path, or false)
 # log_root: s3://…/runs   # where this machine keeps logs, one directory per workspace
+# notification: apprise.yml  # where to reach you (an Apprise URL, or false for nowhere)
 #
 # log_root is not an exception to the rule above, though it looks like one. It
 # never overrides a log_dir your definition names — it answers the case where
 # your definition names none, which is the one Steward recommends. Usually it
 # belongs in the environment (STEWARD_LOG_ROOT) rather than here, since it is a
 # fact about the machine; put it here when it is a fact about the project.
+#
+# notification is the setting worth not leaving commented out. Without it an
+# overnight run that stops at 2am says so only in files nobody is looking at.
+# It takes one Apprise URL, several separated by commas, or a path to an Apprise
+# config file, and it configures the workers too — a sample waiting on your
+# approval reaches the same place. `notification: false` silences Steward and
+# never those.
+#
+# A URL here is committed. Prefer STEWARD_NOTIFICATION in your .env, or a config
+# file this file only names, and keep the token out of the repository. Steward
+# never prints the value and never syncs it out to the log store.
 
 # --- Standing rules an agent applies ----------------------------------------
 #

@@ -21,7 +21,7 @@ from typing import TYPE_CHECKING
 from .._evalset.observe import ObservedTasks, TaskObservation, TaskState
 from .._schedule import InFlight, attempts_made
 from .._util.duration import format_duration
-from .._worker import LiveParked, acp_sockets, attach_command
+from .._worker import LiveParked, acp_sockets
 from .._workspace import Armed
 
 if TYPE_CHECKING:
@@ -297,12 +297,20 @@ def verdict_line(verdict: Verdict, items: list[Item]) -> str:
     Returns:
         One line, opening with the glyph.
     """
+    return f"{verdict.value} {verdict_text(verdict, items)}"
+
+
+def verdict_text(verdict: Verdict, items: list[Item]) -> str:
+    """The same line without its glyph, for a caller that places one itself.
+
+    Split out for the notification title, where the glyph leads the *workspace name* rather than the sentence — `🛑 my-sweep: the tend could not run` — so that a reader scanning a channel sorts on the first character and still learns which run it was. Here rather than by trimming `verdict_line`, because a renderer that took the glyph off a string by counting characters would be one emoji away from silently mangling the line.
+    """
     if verdict is Verdict.PAUSED:
-        return f"{verdict.value} paused — nothing new is being scheduled"
+        return "paused (nothing new is being scheduled)"
     if verdict is Verdict.CLEAR or not items:
-        return f"{verdict.value} nothing needs you"
+        return "nothing needs you"
     if verdict is Verdict.COMPLETE:
-        return f"{verdict.value} complete — the results are waiting to be accepted"
+        return "complete (the results are waiting to be accepted)"
 
     human = sum(1 for item in items if item.owner is Owner.HUMAN)
     agent = len(items) - human
@@ -314,8 +322,8 @@ def verdict_line(verdict: Verdict, items: list[Item]) -> str:
     counts = ", ".join(parts)
 
     if verdict is Verdict.STOPPED:
-        return f"{verdict.value} nothing is progressing — {counts}"
-    return f"{verdict.value} {counts}"
+        return f"nothing is progressing, {counts}"
+    return counts
 
 
 def by_owner(items: list[Item]) -> list[tuple[Owner, list[Item]]]:
@@ -395,10 +403,18 @@ def _parked(result: "TendResult", lookup: dict[str, TaskObservation]) -> list[It
                 owner=OWNERS[PARKED],
                 level=Level.BLOCKING,
                 subject=row.identifier,
-                summary=f"{row.key} {_waiting(parked)} — nothing in it will "
-                f"progress until somebody answers, and it is holding a worker "
-                f"while it waits",
-                action=attach_command(socket) if socket is not None else None,
+                # *not* "nothing in it will progress until somebody answers",
+                # which is what waiting means: a summary names what a reader
+                # would otherwise have to infer, and that is the one clause they
+                # would not. What they cannot infer is the cost of the wait
+                summary=f"{row.key} {_waiting(parked)}, and it is holding a "
+                f"worker while it waits",
+                # the bare verb, and the socket only as proof there is anything
+                # to reach: `--server` bypasses discovery, which is upstream's
+                # answer for a *remote* machine, and here it would trade a
+                # picker that floats waiting samples to the top for a path that
+                # is per-pid and therefore stale the moment a worker respawns
+                action="inspect acp" if socket is not None else None,
             )
         )
     return items
@@ -424,7 +440,7 @@ def _waiting(parked: LiveParked) -> str:
         parts.append(
             f"{parked.questions} question{'' if parked.questions == 1 else 's'}"
         )
-    return f"has {parked.total} samples waiting on a person — {' and '.join(parts)}"
+    return f"has {parked.total} samples waiting on a person: {' and '.join(parts)}"
 
 
 def _tuning(result: "TendResult") -> list[Item]:
@@ -432,21 +448,21 @@ def _tuning(result: "TendResult") -> list[Item]:
 
     Two conditions with one shape (`_tend.tuning.Proposal`): a pinned setpoint holding a clean, saturated window, and a ramp at its ceiling with pushback still absent. Both mean the binding constraint is a number a person chose, so the owner is the human — and the agent's part is to relay it (`raise`) and to record the ruling for them (`ack`): "seen, happy at 60" is an acknowledgment, and the next level up would be a different item.
 
+    **The summary says what is binding and at what number, and stops.** That it is the human's to decide is what the item's owner already means, and *how* to decide it is the runbook's — repeating either in a sentence that appears in every post and every `status.md` costs a line each time to say something that never varies.
+
     The id carries the level, which is what makes an acknowledgment mean something narrow: capacity at 60 accepted is not capacity at 80 accepted, and a task the human authorizes higher produces a fresh item the first time it holds a clean window at its new bound.
     """
     items: list[Item] = []
     for proposal in result.tuning.proposals:
         if proposal.pinned:
             summary = (
-                f"{proposal.key} has held a clean, saturated window at its pinned "
-                f"max_samples of {proposal.level} for two tends — the provider is "
-                f"showing headroom, and moving a pinned setpoint is yours to decide"
+                f"{proposal.key} is saturated at its pinned max_samples of "
+                f"{proposal.level} and the provider has headroom"
             )
         else:
             summary = (
-                f"{proposal.key} reached the top of its ramp ({proposal.level}) "
-                f"with pushback still absent — the envelope is the binding "
-                f"constraint; raise `samples_ramp` in _steward.yaml to authorize more"
+                f"{proposal.key} is at the top of its samples_ramp "
+                f"({proposal.level}) and pushback is still absent"
             )
         items.append(
             Item(
@@ -518,7 +534,7 @@ def _orphans(result: "TendResult", lookup: dict[str, TaskObservation]) -> list[I
                 subject=identifier,
                 summary=(
                     f"{key} is still running work the definition no longer "
-                    f"asks for — stopping a worker is not a mechanical act"
+                    f"asks for (stopping a worker is not a mechanical act)"
                 ),
             )
         )
@@ -722,7 +738,7 @@ def _signoff(result: "TendResult") -> list[Item]:
             subject=result.manifest_digest or "",
             summary=(
                 f"every task is complete ({summary.tasks} of {summary.tasks}) "
-                f"and nothing further will run — the results are waiting to be "
+                f"and nothing further will run, so the results are waiting to be "
                 f"accepted"
             ),
         )

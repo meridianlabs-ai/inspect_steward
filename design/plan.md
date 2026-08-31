@@ -557,7 +557,7 @@ Three attempts at one key is worth naming as a pattern rather than as three mist
 
 **`reconcile` needed nothing, which was worth proving rather than asserting.** A parked worker's process is alive, so it resolves as `running`, holds its slot and suppresses a respawn; `_stalled` is consulted only for a task that needs spawning. Shipped as a pinning test, because the consequence is load-bearing: enough parked workers stall the fleet, and that is the intended behaviour rather than a bug someone should later "fix".
 
-**The `stopped` notification moved to step 24**, which owns the Apprise wiring and the policy keys — and it costs nothing to defer, because an item id that is stable while a task is parked and gone once somebody answers is exactly the appeared/resolved diff step 24 fires on.
+**The `stopped` notification moved to step 24**, which owns the Apprise wiring and the setting — and it cost nothing to defer, because an item id that is stable while a task is parked and gone once somebody answers is exactly the appeared/resolved diff step 24 fires on. It needed no latch of its own in the end: the item diff *is* the latch.
 
 **§13 q13 stays open, answered narrowly rather than settled.** The item renders the tool function and nothing else — `bash is waiting on an approval` — because a function name is structural where the arguments and an `ask_user` prompt are model-generated text, and this line is relayed verbatim by an agent that then acts on it. What a person needs beyond the name they get by attaching, which is the command the item carries.
 
@@ -622,20 +622,24 @@ Three attempts at one key is worth naming as a pattern rather than as three mist
 
 **The three levels are one data model, so they are one step.** The seam between them is real — instance and class are computed, proposal is the agent's judgement — but it runs *through* the model rather than between two of them, and building the halves separately would mean designing the same thing twice and getting the second attempt subtly out of line with the first.
 
-### Step 24 — Notification ⚠ upstream 7
+### Step 24 — Notification
 
 **Delivers** the channel that reaches an absent human.
 
-- **Scope.** The kinds and which are Steward's alone; Apprise wiring; the notification-policy keys `_steward.yaml` gains; what a failed notification does. Plus the triggers, which step 14 computed and discarded: an item **appearing** in the list, the list **emptying**, and the clock — all three set arithmetic over step 14's item ids, which is what makes them set-based rather than count-based. **Consumes the envelope; produces no kind of its own.** Post assembly is verdict line, then items, then the table at 76 columns.
-- **Refs.** workflow §11, §11.1–11.4; agent §7.
-- **Workaround.** Smaller than it looked. `build_apprise` / `init_apprise` are importable from `inspect_ai.util._notify` — the same reach-around Steward already does for `_eval.evalset`, `_control.discovery`, and `_cli.main` — so nothing is duplicated and upstream item 7 is *make them public* rather than *unblock us*.
-- **Done when** each kind fires from a synthesized condition.
+**Taken ahead of step 23, which is a reordering.** The note below already argued *before adjudication rather than after*; dependencies agree, since the triggers are set arithmetic over step 14's item ids and step 14 landed. Steps 23 and 25 are near-inseparable and are better taken as one conversation.
 
-Before adjudication rather than after, because anomalies need somewhere to escalate and the channel's shape constrains the lifecycle. Building the lifecycle first risks discovering that late.
+- **Scope.** The six kinds and which four are Steward's alone; Apprise wiring and per-family rendering; `notification` as a Steward setting in all three spellings; what a failed notification does. Plus the triggers, which step 14 computed and discarded: an item **appearing**, the list **emptying**, tasks **finishing**, and the gate — all set arithmetic between turns, which is what makes them additive rather than count-based. **Consumes the envelope; produces no kind of its own.** Post assembly is verdict line, then what changed, then the table.
+- **Refs.** workflow §11, §11.1–11.4, §5.9; agent §7.
+- **Upstream.** ⚠ item 7 is **withdrawn**. `build_apprise` / `init_apprise` stay private and are imported — the same reach-around Steward already does for `_eval.evalset`, `_control.discovery`, and `_cli.main`. What is wanted is the credential discipline, not a second copy of the URL parsing, and one import buys it without asking upstream to widen a surface for one caller. `apprise` becomes a proper dependency rather than an extra.
+- **Done when** each kind fires from a synthesized condition, and one manual pass lands in a real Slack workspace — the dialect decisions are the half a stub cannot check.
 
-**Three triggers over two renderings, so the channel reads as a column.** An item appearing posts `stopped` or `attention`; the list emptying and the clock both post `clear`, which makes the all-clear and the periodic digest one message with two triggers. Every post opens with the verdict line, which is also its title — so the last message in the channel is true modulo the reader's own actions, since a queue shrinks because *they* answered something. Additions are set-based rather than count-based: one item resolved and another arriving in the same tend must not read as no change. Batching is automatic, because the tend is the clock and the diff is per-tend.
+**One post per turn, at most, and every trigger contributes to its body.** A turn is one moment and a reader wants one message about it, so the kinds have a precedence — gate, stopped, attention, clear, progress — rather than one post each. Every post opens with the verdict line, which is also its title, so the last message in the channel is true modulo the reader's own actions. Additions are set-based rather than count-based: one item resolved and another arriving in the same tend must not read as no change. Batching is automatic, because the tend is the clock and the diff is per-tend.
 
-**A tend that raises must still notify.** `steward.log` (step 22) covers a *transient* failure, but a permanent one — a malformed `_steward.yaml`, an unreadable log directory, expired credentials — fails identically every interval and is otherwise silent forever. So the notification path must not depend on the parts that can fail.
+**The clock trigger was dropped, and `progress` took its place.** A periodic digest needs a period, and inventing a cadence key beside the tend interval would be a second scheduler. Tasks finishing is the thing a digest was mostly carrying, and it already has an edge to fire on — a diff over the completion set, which the observation now records for the same reason it records item ids.
+
+**The channel is a `_steward.yaml` key, which reverses workflow §5.9's original row.** A scheduled tend inherits almost no environment, so a channel that lives only in a variable is one the 02:00 turn does not have. The value never travels: nothing prints it, and the propagated copy has the key replaced. It is the second carve-out from the overrides table after `log_dir`, and it reaches the fleet two ways at once — exported, *and* as the `notification` override in each worker's selection, without which the fleet is silent while Steward posts.
+
+**A tend that raises must still notify.** `steward.log` (step 22) covers a *transient* failure, but a permanent one — a malformed `_steward.yaml`, an unreadable log directory, expired credentials — fails identically every interval and is otherwise silent forever. So the notification path must not depend on the parts that can fail, and it is the one post with no diff to latch on: a `notified` journal event holds it to one message per distinct reason, released by the next turn that runs.
 
 ### Step 25 — Adjudication actions, and the stuck sample
 

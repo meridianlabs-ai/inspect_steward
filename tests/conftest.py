@@ -33,6 +33,24 @@ def no_worker_outlives_its_test(tmp_path: Path) -> Iterator[None]:
             os.kill(found.pid, signal.SIGKILL)
 
 
+CHANNELS = ("STEWARD_NOTIFICATION", "INSPECT_EVAL_NOTIFICATION")
+"""The two spellings of a notification channel, which no test may inherit."""
+
+
+@pytest.fixture(autouse=True)
+def no_ambient_channel(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the developer's own notification channel out of the suite.
+
+    `pytest-dotenv` loads the repository's `.env` into the session, so a developer who has configured a channel has one set in every test. Two things go wrong, and the second is the serious one.
+
+    The tests that assert Steward *stays silent* fail, because a variable outranks the file by design — so `notification: false` in a fixture's `_steward.yaml` is correctly overridden by a value the test never wrote and cannot see.
+
+    And a test that posts posts **to the real channel**. `establish_channel` falls back to the environment precisely so that declaring the channel inspect's way works, which means a CLI test that resolves one would reach whatever Slack workspace the developer configured. Every test that wants a channel sets its own.
+    """
+    for name in CHANNELS:
+        monkeypatch.delenv(name, raising=False)
+
+
 @pytest.fixture(scope="session")
 def fake_home() -> Iterator[Path]:
     """A home directory short enough to hold a unix socket.

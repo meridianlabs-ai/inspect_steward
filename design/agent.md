@@ -225,9 +225,9 @@ This is the answer to [workflow.md](workflow.md) open question 2 from the other 
 
 **Before the first worker starts, silence is total.** The mechanical notifications all describe a running fleet, so a launch blocked at the smoke gate has no tend, no `status.md`, and nothing posting at all — a failed gate does not announce itself. That is the one window where a stop is completely silent, and it is precisely when someone has launched and walked away. Anything that stops here notifies explicitly.
 
-**Two of the four notification kinds are not the agent's to send.** `attention` and `stopped` carry judgement and are its own; `gate` and `complete` are terminal, made once, and Steward's alone ([workflow.md](workflow.md), *Four kinds*). A blocked question is always `stopped` — that is the kind's entire reason for existing.
+**Four of the six notification kinds are not the agent's to send.** `attention` and `stopped` carry judgement and are its own; `progress`, `clear`, `gate`, and `signed_off` are latched, terminal, or read off state the agent does not own, and are Steward's alone ([workflow.md](workflow.md), *Six kinds*). A blocked question is always `stopped` — that is the kind's entire reason for existing.
 
-**Post freely otherwise.** An unconfigured channel makes `notify()` a silent no-op, so there is nothing to check and nothing accumulates. The cost of an unnecessary `attention` is a line in a channel; the cost of a skipped `stopped` is a night spent waiting for an answer nobody knew was wanted.
+**Post freely otherwise.** The cost of an unnecessary `attention` is a line in a channel; the cost of a skipped `stopped` is a night spent waiting for an answer nobody knew was wanted. An unconfigured channel makes `steward notify` *fail* rather than succeed quietly, which is the one place this differs from Steward's own posts: an agent that believed it had escalated and had not is worse off than one told it could not. Say so in the conversation and in the writeup; the remedy is a `notification` setting and it is the human's to add.
 
 ## 8. Context is the real budget
 
