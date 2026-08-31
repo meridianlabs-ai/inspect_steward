@@ -30,7 +30,7 @@ The existing suite already establishes layers 1 and 2 — `tests/evalset/fixture
 ```
 given: manifest of 6 tasks, 4 logs (2 success, 1 error, 1 started)
        in-flight record naming 1 live pid
-then:  spawn {t3, t5}, archive {}, scan {t1, t2}, anomaly {t4}
+then:  spawn {t3, t5}, archive {}, anomaly {t4}
 ```
 
 No clock, no processes, no cleanup. That is the house style's data-driven rule applied to the component where it pays most, and it is why keeping `reconcile` pure was worth insisting on.

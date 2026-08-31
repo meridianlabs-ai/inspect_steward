@@ -683,31 +683,35 @@ Three attempts at one key is worth naming as a pattern rather than as three mist
 
 Positioned by an external dependency rather than by design. It is an M2-on-Docker concern: the arithmetic belongs in step 5 and the override in step 6. **k8s and unsandboxed evals are unaffected** — `k8s_sandbox` does not override `default_concurrency`, so the base `None` applies and its sandboxes are elastic.
 
-### Step 28 — The scan boundary mode ⚠ upstream
+### Step 28 — Online scanning in the fleet ⚠ upstream 20 + 21 + 22
 
-**Delivers** a third mode at the `eval_set()` boundary, with Steward as the single writer of scan results.
+**Delivers** a scanning definition Steward can run, with scans riding the workers as samples settle and exactly one process ever touching the scan directory's lifecycle.
 
-- **Scope.** How the mode is signalled and what it hands back; taking the scan over with the definition's own `scanner` in hand; what enforces single-writer against a directory that other processes are still landing logs into.
-- **Refs.** exec §4.2, §4.3, §5.7.
-- **Done when** a scan runs over a synthesized log directory and writes exactly one result set.
+- **Scope.** The record-only worker contract (dispatch and buffer, never the bracket; a missing scan dir refuses loudly at startup); capture serializing the scan spec — names, `ScannerSpec`s, config hash, resolved scans location; **the scanner merge** — definition's + Steward's built-in + the operator's, injected through the selection in `ScannerSpec` form, name collisions refused at launch; `launch` laying the directory down from the merged spec before the first spawn, and the verification at re-launch — changed refused, added admitted; **`scan_model`** in three spellings, reflexive with `SCOUT_SCAN_MODEL`, reaching workers as the exported scout spelling; lifting `_refuse_scanners`.
+- **Refs.** exec §4.2, §4.3; §12 items 20–22; inspect_ai's own `design/eval-set-scanners.md`.
+- **Done when** a fleet of workers over a scanning definition lands one row per sample in one scan directory — injected scanners included, under the setting's model — and the finalize-prune hazard is pinned: a worker finishing while a sibling still runs deletes nothing.
 
-Protocol work, and the reason the scanning trio is split: this step is a boundary contract, step 29 is scheduling, step 30 is reporting. They have different dependencies and different failure modes, and one step covering all three would be the largest in the plan by a wide margin.
+**The design pass replaced the boundary mode before it was built.** The original trio ran scans as detached children of the tend — a third `eval_set()` mode over log locations, a drain queue, in-flight accounting — all to keep the scan directory single-writer. The settled design gets single-writer by splitting the contract where the hazards actually sit: the four §4.2 hazards all live in the lifecycle bracket and none in the rows, so workers record (upstream's own per-sample dispatch, currently rejected under selection) and the runner brackets — init at launch from a captured spec, fold and finalize in the tend, no definition ever executed for scanning. Verified in source before settling: recording requires the directory and spec to exist; `FileRecorder.sync`/`status` are static; finalize's orphan cleanup needs scanner *names* only, which `_scan.json` holds; the selection document already carries `eval_set_id`. What the mode would have cost is what this saves: a tend interval of latency on every result, the definition's startup tax per pass (minutes on Hawk), and a second detached-process family. exec §4.2–4.4 and sched §4 rewritten; `INSPECT_EVAL_SET_SCAN` withdrawn unbuilt.
 
-### Step 29 — Scan passes as scheduled work
+### Step 29 — The scan lifecycle in the tend
 
-**Delivers** scans as detached children a tend spawns and reaps.
+**Delivers** results readable mid-run, coverage visible, and the bookkeeping done by the run's one writer.
 
-- **Scope.** Spawned immediately rather than queued behind a core, because a scan is not competing for one; one log at a time, and where that has to bend; eager drain; a crashed pass as an anomaly rather than a retry — so a scan reaches the list **through kind `anomaly`** and gains no kind of its own; how a scan appears in the in-flight accounting.
-- **Refs.** sched §4, §4.1–4.3; exec §4.4.
-- **Done when** a sweep's logs drain through scanning across successive tends, and a killed pass surfaces as an anomaly under step 11's harness.
+- **Scope.** The sync fold and its cadence, with the growing-buffer cost measured before it is engineered around; coverage — recorded rows against landed samples — in `status` and the table; scanner errors classed like sample errors, keyed scanner + exception type, **through step 23's kind `anomaly`** with no kind of their own; the terminal finalize after adjudication and log cleanup settle, and its idempotence across adjudication re-runs.
+- **Refs.** sched §4.1–4.2; exec §4.3, §4.4.
+- **Done when** rows land in `scan_results_df` within a tend of their samples settling; a worker killed between logging and scanning leaves a visible coverage gap that its respawn's resume-scan closes; and the terminal finalize prunes exactly the superseded attempts' rows.
+
+The anomaly half leans on step 23, which is being built in parallel — the classes here are consumers of its model, not new machinery.
 
 ### Step 30 — Scan results as leads
 
 **Delivers** scan output the agent can act on.
 
-- **Scope.** Reporting distributions rather than verdicts; a scan result as a measurement only the agent can read; findings as anomalies that arrive last; collection versus investigation. **Produces step 14's item, kind `scan_finding`** — owner the agent, since a distribution carries no verdict a human could answer.
+- **Scope.** Reporting distributions rather than verdicts; a scan result as a measurement only the agent can read; collection versus investigation; **what Steward's built-in scanner looks for** — its carriage is step 28's merge channel, its substance (the validity / behavioural / infra kinds of workflow §12.6.1) belongs here, beside the leads it produces. **Produces step 14's item, kind `scan_finding`** — owner the agent, since a distribution carries no verdict a human could answer.
 - **Refs.** workflow §12.6, §12.3, §12.5; agent §1.
 - **Done when** a flat distribution and an outlier distribution over the same scanner produce visibly different leads in the tend summary.
+
+One correction this step owns when it lands: workflow §12.3's *findings arrive last* described the drain design. Findings now accumulate with the run and the shortlist can fire mid-campaign; what arrives last is **investigation** — the run's tail is the agent over the results, not the scanner over the logs. The section's consequence stands unchanged: signoff still sits after scan coverage completes and anomalies settle.
 
 One frontend caveat covering all three: **Hawk rejects `scan:` locally**, so none of this has a Hawk path until §8.
 

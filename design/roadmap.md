@@ -84,7 +84,7 @@ The **runbook is deliberately not written here** — it is a set of rules for op
 
 ### 3.3 M4 — close the loop
 
-Scanning is the largest piece and the most valuable — three steps in [plan.md](plan.md), because the boundary mode, the scheduling of passes, and the distribution reporting have different dependencies and different failure modes: a third boundary mode with Steward as single writer, scan passes as detached children a tend spawns and reaps, the distribution reporting that makes results triageable, and `scanning.md` / `analysis.md` mirrored into the log directory. The smoke gate and store publication are small by comparison. Note archiving is **not** here — it moved into M3 with signoff, since curation is part of the attestation rather than a later tidy-up.
+Scanning is the largest piece and the most valuable — three steps in [plan.md](plan.md), because the fleet contract, the tend lifecycle, and the distribution reporting have different dependencies and different failure modes: scans riding the workers online with the runner owning the scan directory's bracket, the sync/coverage/finalize lifecycle in the tend, the distribution reporting that makes results triageable, and `scanning.md` / `analysis.md` mirrored into the log directory. The smoke gate and store publication are small by comparison. Note archiving is **not** here — it moved into M3 with signoff, since curation is part of the attestation rather than a later tidy-up.
 
 ## 4. What is deferred, and why
 

@@ -161,7 +161,7 @@ What qualifies:
 - **Things done to the run** — logs archived with origin and reason, since *Steward never deletes an eval log* is a headline guarantee and this is where it shows its work; pauses and resumes; timer changes; a definition edit accepted by a relaunch.
 - **Things done about load** — rate-limit episodes per model with when and how long, and connection downshifts that did not correct themselves.
 
-Later steps add scan passes that landed and which results look worth a look, and the agent's own judgement calls once there is an agent. Unwritten per-task sections of `scanning.md` and `analysis.md` belong with those, and as **items owned by the agent** rather than as history — unwritten is work outstanding, not something that happened.
+Later steps add scan coverage and which results look worth a look, and the agent's own judgement calls once there is an agent. Unwritten per-task sections of `scanning.md` and `analysis.md` belong with those, and as **items owned by the agent** rather than as history — unwritten is work outstanding, not something that happened.
 
 **Two sources, two temporal characters, and only one of them grows.** Counts derive from the current log directory, which is what observation already reads — archived work is not in it, so they can never report errors from results that no longer exist. Events come from the append-only journal and are genuinely lifetime; that is the only unbounded axis, and the admission test is what bounds it.
 

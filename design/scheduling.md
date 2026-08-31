@@ -275,31 +275,24 @@ As a run drains, capacity frees. The question of what to do with it dissolves, a
 
 **`max_sandboxes` was the one genuine allocation in earlier drafts, and [§3.6](#36-max_sandboxes--a-machine-budget-enforced-as-a-cap-on-the-fleets-sample-setpoints) dissolved it.** The budget is enforced as a cap on the fleet-wide sum of sample setpoints rather than divided into per-worker shares, so completion frees capacity by arithmetic: the finished task's setpoint leaves the sum, and the next clean window lets another task's ramp spend the headroom. There is no share to hand back, no denominator to choose, and no patch to send — the ramp *is* the redistribution. (An earlier version of this section chose an outstanding-tasks denominator precisely so that every repatch was a raise; the asymmetry it was protecting — raise at once, lower only as in-flight work drains — now lives in the ramp's own cut-fast, restore-through-the-gates discipline.)
 
-## 4. Scanning is scheduled work
+## 4. Scanning is not scheduled — it rides the workers
 
-[execution.md](execution.md) establishes what a scan pass *is* — a detached child running the definition in a third mode over a list of log locations, with exactly one alive at a time so the scan directory keeps a single writer. What remains is when to spawn one.
+[execution.md](execution.md) §4.2 settles where scanning happens: in the worker, per sample, as each sample settles, with the runner owning only the lifecycle bracket. That dissolves what this section used to decide. There is no spawn decision, no drain queue, no pass to size — the questions this section answered (spawn immediately? one log or a batch?) were all questions about a scan *process*, and there is no scan process.
 
-### 4.1 Immediately, because a scan is not competing for a core
+What the earlier answers argued for, the new shape delivers by construction rather than by policy. *Spawn immediately, because latency pushes discovery toward signoff where a re-run costs the most* — latency is now zero: a sample's row lands moments after the sample does, and a finding a scanner can see mechanically exists before the run is half over. *A scan takes no worker slot* — there is no slot to take. *The backlog batches itself* — there is no backlog. The one-terminal-pass design this section rejected outright stays rejected, now vacuously.
 
-A scan pass costs a process, which under a worker ceiling looks like it should cost a task its slot. It does not, and the pass should not be scheduled as though it did: a scan's work is reading transcripts and, for model-graded scanners, waiting on model calls. Transcript decompression and JSON parsing are real CPU but brief and bounded per log; the expensive part is I/O-bound. **A scan pass does not consume a worker slot**, and the pool ceiling counts task workers only.
+### 4.1 What is still scheduled: the fold and the finalize
 
-So there is no reason to defer. A pass spawns as soon as there is something unscanned and no pass is running, rather than waiting for a threshold of logs to accumulate. Latency is the whole argument: [workflow.md](workflow.md) shows scan findings arriving last and re-opening runs that read as resolved, so anything that delays them pushes discovery closer to signoff, where a finding that needs a re-run costs the most. Deferring to a single terminal pass is the worst version of this and is rejected outright — it makes signoff block on a long serial job whose output may invalidate it.
+Two short operations remain on the tend, both inside the claim because both are shared-state writes:
 
-### 4.2 One log at a time, and where that has to bend
+- **The sync**, which folds the workers' buffer into the compacted parquets so results are readable mid-run (`scan_results_df` never reads the buffer). Cadence is per tend when the buffer has grown; the re-merge cost grows with the campaign (only a final `complete=True` sync cleans the buffer), which is measured before it is engineered around (execution.md §12 item 22 holds the relief).
+- **The terminal finalize**, after adjudication and log cleanup settle — the ordering constraint execution.md §4.4 states. It is bookkeeping in seconds-to-minutes, not the long serial job the rejected terminal-pass design would have made it.
 
-Each pass covers one log. A crashed pass then costs one log's scan rather than a batch's, progress is exactly countable, the in-flight record names a single log, and a transcript that reliably kills a scanner is isolated to itself instead of blocking everything queued behind it.
+### 4.2 A scanner error is recorded data, not a process failure
 
-**One case forces an exception, and it should be recorded rather than discovered later.** A scan pass has to *be* the definition executed, so every pass pays the definition's startup cost — seconds for a script, ~1.1s for Flow, and for Hawk a `uv pip install` and secrets resolution measured in minutes. Per log, over a large eval set, that is not a tax but a wall. So the rule is one log per pass **when scanning keeps up**, and a pass otherwise takes whatever is unscanned when it starts:
+The failure taxonomy sharpened when the pass disappeared. A scanner that errors on a transcript is captured per `(scanner, transcript)` — a `scan_error` row and an `_errors.jsonl` entry — and the worker's eval is untouched; the design's failure rule applies unchanged in that nothing retries automatically. These class mechanically like sample errors, keyed on scanner name plus exception type ([workflow.md](workflow.md), *A scan result is a measurement*), which preserves — and refines — the distinction the one-log pass was praised for: "scanning is broken" is a class spanning transcripts, "this transcript breaks the scanner" is a class of one, and the evidence now arrives per transcript rather than per pass.
 
-> A pass takes the unscanned logs available at spawn. Under immediate spawning that is one log; if scans run slower than logs land, the backlog batches itself.
-
-This is self-regulating in the direction that matters — the batching only appears where per-pass startup is being paid too often, which is the same condition that makes batching worth it. It preserves one-at-a-time serialization either way, and idempotency means a re-run after a crash skips what already has rows.
-
-### 4.3 A crashed pass is an anomaly, not a retry
-
-A scan pass that dies is reaped like any other detached child, and the design's failure rule applies unchanged: it is recorded and surfaced, not automatically respawned. [workflow.md](workflow.md) already lists a failed scan pass as an anomaly. With one-log passes the evidence is unusually good, because the record names the log that was being scanned when it died — which is the difference between "scanning is broken" and "this transcript breaks the scanner", and only the second is actionable without a human.
-
-The queue is unaffected: an unscanned log stays unscanned and stays counted, so `status` reports coverage honestly rather than reporting a drain that silently skipped something.
+What a dead *worker* leaves is a coverage gap, not a scan failure: samples logged but never scanned are picked up by the respawned worker's resume-scan path, and until then the gap is visible — `status` reports coverage (recorded rows against landed samples) honestly rather than reporting a drain that silently skipped something.
 
 ## 5. Failure is adjudicated, not retried
 
