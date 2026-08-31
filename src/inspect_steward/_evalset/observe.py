@@ -10,7 +10,7 @@ The work splits at the filesystem boundary rather than at the manifest:
 Two properties are borrowed from the journal, because they are properties of anything Steward reads on a schedule and cannot afford to choke on:
 
 - **An unreadable log costs one log, never the directory.** A zip that exists but has not yet been written far enough to have a header is an ordinary transient during worker startup, and a tend that raised on it would be a tend that never ran. Damage is reported with a reason, and the caller decides whether to complain.
-- **Only headers are ever read.** Never a sample, never a summary (agent.md, *Never read a full eval log*).
+- **Only headers are ever read here.** Anomaly classification (`instances.py`) goes below the header — summaries and single samples, at costs its own docstring accounts for — and that module is now where the read discipline is stated whole. What survives intact everywhere is the rule the old absolute was really for: never a transcript, never events, never a whole log (agent.md, *Never read a full eval log*).
 """
 
 import asyncio
@@ -123,6 +123,12 @@ class LogAttempt:
     """The per-sample budgets this log ran under, from `eval.config` — `turns`, `messages`, `tokens`, `time`, `working`, `cost`, whichever were set.
 
     Carried because *usage* comes from the control channel and the *limit* does not: `inspect ctl config` reports retune overrides rather than the task's declared values, so the denominator of a `115/300t` column can only come from here.
+    """
+
+    error_traceback: str | None = None
+    """The traceback of the error that halted the eval, from `header.error`.
+
+    Beside `error` because the two answer different questions: the message is display, the traceback is identity — a task that finished `status="error"` classes on its exception's type and raising frame (`classify.task_error_class`) with no read beyond the header this record already came from.
     """
 
     @property
@@ -595,6 +601,7 @@ def _attempt(info: EvalLogInfo, header: EvalLog) -> LogAttempt:
         status=header.status,
         invalidated=header.invalidated,
         error=header.error.message if header.error is not None else None,
+        error_traceback=header.error.traceback if header.error is not None else None,
         total_samples=results.total_samples if results is not None else 0,
         completed_samples=results.completed_samples if results is not None else 0,
         epochs=header.eval.config.epochs,

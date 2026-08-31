@@ -13,6 +13,7 @@ The two claims the step is held to are the last two tests plus
 a turn interrupted at any point is recovered by the following one.
 """
 
+import json
 import shutil
 from pathlib import Path
 from typing import Any
@@ -27,19 +28,24 @@ from inspect_steward._evalset.manifest import (
 from inspect_steward._evalset.observe import observe_logs
 from inspect_steward._tend import (
     OBSERVATION,
+    Move,
+    Owner,
     Refused,
     TendError,
     TendResult,
+    TuningPlan,
     Verdict,
     status,
     tend,
 )
-from inspect_steward._worker import resolve_inflight
+from inspect_steward._worker import ConfigView, resolve_inflight
 from inspect_steward._workspace import (
+    ACTION,
     PAUSED,
     RESUMED,
     Claim,
     DirectivesError,
+    Held,
     Workspace,
     acquire,
     append_event,
@@ -663,6 +669,7 @@ def test_the_observation_carries_the_settings_a_later_turn_reads_back(
         "max_samples": 7,
         "samples_ramp": None,
         "stall_after": 2,
+        "stuck_after": None,
     }
     assert recorded["states"]["complete"] == 1
     assert recorded["drift"] is False
@@ -911,3 +918,351 @@ def test_a_status_propagates_nothing(tmp_path: Path) -> None:
     status(workspace)
 
     assert "status.md" not in {path.name for path in workspace.logs.iterdir()}
+
+
+# --- the machinery failing ------------------------------------------------
+#
+# A run's failures become items; the machinery's own failures used to become
+# nothing at all -- a silent un-pause, a frozen snapshot, a kill loop with no
+# witness. Each of these is one of those conditions getting a voice.
+
+
+def edges(workspace: Workspace, action: str) -> list[dict[str, Any]]:
+    """Every journalled episode edge of one kind, in file order."""
+    return [
+        event.payload
+        for event in read_journal(workspace.journal).events
+        if event.type == ACTION and event.payload.get("action") == action
+    ]
+
+
+def of_kind(result: TendResult, kind: str) -> list[Any]:
+    return [item for item in result.items if item.kind == kind]
+
+
+def test_an_unreadable_journal_refuses_the_turn(tmp_path: Path) -> None:
+    """Proceeding on an empty history is worse than stopping.
+
+    The journal holds the pause, the acknowledgments, and the last known
+    settings — a turn that shrugged past it would silently un-pause an
+    expensive run and re-open every accepted decision, which is exactly the
+    kind of surprise the refusal costs ten minutes to avoid.
+    """
+    done = SynthTask("done")
+    workspace, _ = prepared(tmp_path, [done])
+    write_log(workspace.logs, done)
+    turn(workspace)
+
+    workspace.journal.chmod(0o000)
+    try:
+        with pytest.raises(TendError, match="pause"):
+            tend(workspace)
+    finally:
+        workspace.journal.chmod(0o644)
+
+    # and once it reads again, the run is simply the run
+    assert isinstance(tend(workspace), TendResult)
+
+
+def test_a_torn_journal_line_becomes_the_agents_item(tmp_path: Path) -> None:
+    """Damage is kept rather than skipped in silence.
+
+    Every fold the turn ran — the pause, the acks, the diff baseline — ran
+    without whatever the torn line said, and the repair (reading the fragment,
+    re-journalling what it meant) is judgement, so the item is the agent's.
+    """
+    done = SynthTask("done")
+    workspace, _ = prepared(tmp_path, [done])
+    write_log(workspace.logs, done)
+    turn(workspace)
+    with workspace.journal.open("a", encoding="utf-8") as f:
+        f.write('{"ts": "2026-08-23T10:00:00Z", "type": "obser\n')
+
+    result = turn(workspace)
+
+    (item,) = of_kind(result, "journal_damage")
+    assert item.owner is Owner.AGENT
+    assert "could not be read" in item.summary
+    # the same tear is the same item, already announced and not again
+    again = turn(workspace)
+    assert [item.id] == [one.id for one in of_kind(again, "journal_damage")]
+    assert item.id not in again.appeared
+
+
+def test_status_md_unwritable_is_an_episode_with_edges(tmp_path: Path) -> None:
+    """The failure whose only natural signal is a file going quietly stale.
+
+    The first failing turn journals the episode's opening edge; the item fires
+    from the journal on the turn after; the first working write closes it.
+    """
+    done = SynthTask("done")
+    workspace, _ = prepared(tmp_path, [done])
+    write_log(workspace.logs, done)
+    turn(workspace)
+
+    workspace.status.unlink()
+    workspace.status.mkdir()  # every rename onto it now fails
+    first = turn(workspace)
+    assert of_kind(first, "status_unwritable") == []
+    second = turn(workspace)
+    (item,) = of_kind(second, "status_unwritable")
+    assert "status.md" in item.summary
+    # the edge was written once, not once per failing turn
+    assert len(edges(workspace, "status_unwritable")) == 1
+
+    workspace.status.rmdir()
+    turn(workspace)  # writes again, closing the episode
+    cleared = turn(workspace)
+    assert of_kind(cleared, "status_unwritable") == []
+    assert len(edges(workspace, "status_unwritable_restored")) == 1
+    assert "could not write status.md" in workspace.log.read_text(encoding="utf-8")
+
+
+def test_a_fresh_sync_failure_is_an_episode_but_not_yet_an_item(
+    tmp_path: Path,
+) -> None:
+    # the propagation already retries every turn, so the episode worth a
+    # person's attention is the one that outlives a retry -- a single slow
+    # bucket write pages nobody
+    done = SynthTask("done")
+    workspace, _ = prepared(tmp_path, [done])
+    write_log(workspace.logs, done)
+    blocked = tmp_path / "bucket"
+    blocked.write_text("a file where a directory must go", encoding="utf-8")
+    workspace.directives.write_text(f"sync: {blocked}\n", encoding="utf-8")
+
+    turn(workspace)
+    fresh = turn(workspace)
+
+    assert of_kind(fresh, "sync_failed") == []
+    # one opening edge, however many turns keep failing
+    assert len(edges(workspace, "sync_failed")) == 1
+
+
+def test_a_sync_episode_that_outlives_an_interval_is_an_item_until_it_recovers(
+    tmp_path: Path,
+) -> None:
+    done = SynthTask("done")
+    workspace, _ = prepared(tmp_path, [done])
+    write_log(workspace.logs, done)
+    healthy = turn(workspace)
+    assert healthy.log_dir is not None
+    # an episode that opened long ago, for the very destination this turn syncs
+    with workspace.journal.open("a", encoding="utf-8") as f:
+        f.write(
+            json.dumps(
+                {
+                    "ts": "2020-01-01T00:00:00.000Z",
+                    "type": "action",
+                    "action": "sync_failed",
+                    "target": healthy.log_dir,
+                }
+            )
+            + "\n"
+        )
+
+    failing = turn(workspace)
+
+    (item,) = of_kind(failing, "sync_failed")
+    assert item.owner is Owner.HUMAN
+    assert healthy.log_dir in item.summary
+    # that same turn synced successfully, which closes the episode
+    recovered = turn(workspace)
+    assert of_kind(recovered, "sync_failed") == []
+    assert item.id in recovered.resolved
+
+
+def test_a_sync_episode_for_a_dropped_target_closes_itself(tmp_path: Path) -> None:
+    # target A failing, then the configuration moves on -- sync pointed
+    # elsewhere, or turned off entirely: nothing will ever write A's restore,
+    # so the turn closes the episode rather than leaving a permanent warning
+    # about a destination nobody configured anymore
+    done = SynthTask("done")
+    workspace, _ = prepared(tmp_path, [done])
+    write_log(workspace.logs, done)
+    turn(workspace)
+    with workspace.journal.open("a", encoding="utf-8") as f:
+        f.write(
+            json.dumps(
+                {
+                    "ts": "2020-01-01T00:00:00.000Z",
+                    "type": "action",
+                    "action": "sync_failed",
+                    "target": str(tmp_path / "old-bucket"),
+                }
+            )
+            + "\n"
+        )
+    workspace.directives.write_text("sync: false\n", encoding="utf-8")
+
+    turn(workspace)
+    cleared = turn(workspace)
+
+    assert of_kind(cleared, "sync_failed") == []
+    assert len(edges(workspace, "sync_restored")) == 1
+
+
+def broke_a_wedge(workspace: Workspace) -> TendResult:
+    """One turn that had to kill a wedged predecessor to take the claim.
+
+    Through `tend(claim=...)`, which is the path a real break takes once
+    `acquire` has done the killing — arranging an actually wedged process is
+    `test_claim.py`'s subject, and what this file owes is what the turn does
+    with the fact.
+    """
+    outcome = acquire(workspace.claim, command="tend")
+    assert isinstance(outcome, Claim)
+    outcome.broke = Held(pid=4242, host="here", command="tend", since=None, stale=True)
+    with outcome:
+        return turn(workspace, claim=outcome)
+
+
+def test_one_wedge_break_is_recovery_and_two_in_a_row_are_a_kill_loop(
+    tmp_path: Path,
+) -> None:
+    done = SynthTask("done")
+    workspace, _ = prepared(tmp_path, [done])
+    write_log(workspace.logs, done)
+
+    first = broke_a_wedge(workspace)
+
+    # one break is the recovery working as designed: journalled, not an item
+    assert of_kind(first, "kill_loop") == []
+    (edge,) = edges(workspace, "claim_broke")
+    assert edge.get("pid") == 4242
+
+    second = broke_a_wedge(workspace)
+
+    (item,) = of_kind(second, "kill_loop")
+    assert item.owner is Owner.HUMAN
+    assert "2 in a row" in item.summary
+
+
+def test_a_loop_of_crashed_breakers_is_seen_and_clears_after_clean_turns(
+    tmp_path: Path,
+) -> None:
+    """The loop's worst shape leaves only the breaks behind.
+
+    A tend that breaks its predecessor and then wedges itself never reaches an
+    observation, so the chain is counted per break — and what ends it is the
+    one thing a loop cannot produce, an observation from a turn that broke
+    nothing. The evidence sits behind one clean observation for one turn (the
+    fold cannot tell a crashed breaker from a breaker that completed), so the
+    item outlives the loop by exactly one turn.
+    """
+    done = SynthTask("done")
+    workspace, _ = prepared(tmp_path, [done])
+    write_log(workspace.logs, done)
+    append_event(workspace.journal, ACTION, action="claim_broke", pid=111)
+    append_event(workspace.journal, ACTION, action="claim_broke", pid=222)
+
+    looping = turn(workspace)
+    (item,) = of_kind(looping, "kill_loop")
+    lingering = turn(workspace)
+    assert [item.id] == [one.id for one in of_kind(lingering, "kill_loop")]
+    cleared = turn(workspace)
+    assert of_kind(cleared, "kill_loop") == []
+
+
+def moved(task: SynthTask) -> TuningPlan:
+    """A plan holding one retune, for wiring straight into a turn."""
+    return TuningPlan(
+        active=True,
+        range=(40, 200),
+        moves=[
+            Move(
+                identifier=task.identifier,
+                key=task.name,
+                task_id="T1",
+                knob="max_samples",
+                to=60,
+                at=40,
+                reason="a clean window",
+            )
+        ],
+    )
+
+
+def test_a_retune_the_cli_refuses_costs_the_move_and_not_the_turn(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A usage error is a defect here, and it must not fail the tend.
+
+    Unwrapped, it did: the whole turn died on it — no observation, no
+    snapshot, no post — every interval, with nothing saying so anywhere but a
+    traceback nobody was standing at.
+    """
+    done = SynthTask("done")
+    workspace, _ = prepared(tmp_path, [done])
+    write_log(workspace.logs, done)
+    plan = moved(done)
+
+    def planned(*args: Any, **kwargs: Any) -> TuningPlan:
+        return plan
+
+    monkeypatch.setattr("inspect_steward._tend.turn.plan_tuning", planned)
+
+    def refuses(*args: Any, **kwargs: Any) -> ConfigView:
+        raise RuntimeError("ctl: unrecognized option")
+
+    monkeypatch.setattr("inspect_steward._tend.turn.task_config", refuses)
+
+    result = turn(workspace)
+
+    (failure,) = [f for f in result.failures if "could not retune done" in f]
+    assert "RuntimeError" in failure
+    assert any(item.kind == "action_failed" for item in result.items)
+    assert "could not retune done" in workspace.log.read_text(encoding="utf-8")
+    # the turn itself happened: observed, recorded, written
+    assert workspace.status.exists()
+    assert len(observations(workspace)) == 1
+
+
+def test_a_retune_that_was_not_filed_is_logged_as_well_as_reported(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # the failures list feeds one turn's items; `steward.log` is where a
+    # reader reconstructs the machinery's night -- the other paths in the loop
+    # already wrote both, and this one silently wrote only the first
+    done = SynthTask("done")
+    workspace, _ = prepared(tmp_path, [done])
+    write_log(workspace.logs, done)
+    plan = moved(done)
+
+    def planned(*args: Any, **kwargs: Any) -> TuningPlan:
+        return plan
+
+    def files_nothing(*args: Any, **kwargs: Any) -> ConfigView:
+        return ConfigView(applied=True, persisted={"max_samples": False})
+
+    monkeypatch.setattr("inspect_steward._tend.turn.plan_tuning", planned)
+    monkeypatch.setattr("inspect_steward._tend.turn.task_config", files_nothing)
+
+    result = turn(workspace)
+
+    assert any("was not recorded in the eval log" in f for f in result.failures)
+    assert "was not recorded in the eval log" in workspace.log.read_text(
+        encoding="utf-8"
+    )
+
+
+def test_status_md_gains_an_errored_column_only_where_something_errored(
+    tmp_path: Path,
+) -> None:
+    flaky, clean = SynthTask("flaky"), SynthTask("clean")
+    workspace, _ = prepared(tmp_path / "errored", [flaky, clean])
+    write_log(workspace.logs, flaky, total=10, completed=7)
+    write_log(workspace.logs, clean, total=10, completed=10)
+
+    turn(workspace)
+
+    written = workspace.status.read_text(encoding="utf-8")
+    assert "| errored |" in written
+    assert "| 3 |" in written
+
+    quiet, _ = prepared(tmp_path / "quiet", [clean])
+    write_log(quiet.logs, clean, total=10, completed=10)
+
+    turn(quiet)
+
+    assert "| errored |" not in quiet.status.read_text(encoding="utf-8")

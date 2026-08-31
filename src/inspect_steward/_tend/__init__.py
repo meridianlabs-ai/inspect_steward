@@ -1,6 +1,8 @@
 from .items import (
+    ANOMALY,
     HEADINGS,
     PARKED,
+    STUCK,
     TUNING_PROPOSAL,
     Item,
     Level,
@@ -13,7 +15,7 @@ from .items import (
 )
 from .notify import notify_failure, notify_turn, turn_post
 from .progress import LIVE_ONLY, Budget, Live, Progress, TaskProgress, task_progress
-from .render import status_markdown
+from .render import anomalies_line, status_markdown
 from .table import progress_table
 from .tuning import (
     Baseline,
@@ -39,10 +41,12 @@ from .turn import (
 
 __all__ = [
     "ACTION",
+    "ANOMALY",
     "HEADINGS",
     "LIVE_ONLY",
     "OBSERVATION",
     "PARKED",
+    "STUCK",
     "TUNING_PROPOSAL",
     "Baseline",
     "Budget",
@@ -60,6 +64,7 @@ __all__ = [
     "TendResult",
     "TuningPlan",
     "Verdict",
+    "anomalies_line",
     "by_owner",
     "notify_failure",
     "notify_turn",

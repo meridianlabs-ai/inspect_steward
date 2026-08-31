@@ -3,10 +3,10 @@
 One line per task, columns right-aligned on their own widths so the numbers stack. The shape follows the one this replaced:
 
 ```
-⚙ sec_bench_pro[default]@openai/gpt-5   37/183  20%  83r  63q  52/80c  115/300 t  0.65
+⚙ sec_bench_pro[default]@openai/gpt-5   37/183  20%  83r  63q  2e  52/80c  115/300t
 ```
 
-Read left to right it is: what state the task is in, which task, how much of it is done, how much is moving right now, how much is still to come, how hard the model pool is working, how far into its budget a typical sample is, and what it is scoring. Every column is omitted when it has nothing to say — a finished task has no running samples and nothing left to queue, a task with no declared limit has no budget column — so a settled campaign renders as a quiet list rather than a field of zeroes.
+Read left to right it is: what state the task is in, which task, how much of it is done, how much is moving right now, how much is still to come, how much has errored, how hard the model pool is working, and how far into its budget a typical sample is — or, for a finished task, what it scored. Every column is omitted when it has nothing to say — a finished task has no running samples and nothing left to queue, an errored count of zero is the ordinary case, a task with no declared limit has no budget column — so a settled campaign renders as a quiet list rather than a field of zeroes.
 
 **Widths are computed per render rather than fixed.** Display keys vary from `addition` to a sweep entry with three arguments and a model, and a column padded for the worst case wastes the terminal on every other line.
 """
@@ -63,6 +63,10 @@ def _cells(row: TaskProgress, key: str, width: int) -> tuple[str, ...]:
         f"{round(row.fraction * 100)}%",
         f"{row.running}r" if row.running else "",
         f"{row.queued}q" if row.queued else "",
+        # errors are a column only where there are any: the count feeds the
+        # anomaly queue (step 23), and until somebody rules on it a reader's
+        # first question is *which tasks* -- which the totals line cannot say
+        f"{row.errored}e" if row.errored else "",
         _connections(row),
         _outcome(row),
     )

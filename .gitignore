@@ -217,6 +217,7 @@ src/inspect_steward/_version.py
 
 # Claude Code
 **/.claude/settings.local.json
+.claude
 
 # Quarto Docs
 /.luarc.json

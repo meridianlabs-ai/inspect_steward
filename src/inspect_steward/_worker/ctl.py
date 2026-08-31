@@ -248,6 +248,62 @@ def task_config(
     return ConfigView.model_validate(result)
 
 
+class RequeueView(BaseModel):
+    """One sample requeue, as the CLI's uniform mutation envelope reports it.
+
+    The envelope is `{target, applied, dry_run, detail}`; `detail` is the server's own result minus its transport `ok` — upstream's `RequeueAccepted`/`RequeueScheduled` shapes (`inspect_ai._control.requeue`). A rejection never reaches this model: the server 409s and the CLI reports it through the error envelope, which `_decode` turns into an `Unavailable("http_error", ...)`.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    applied: bool = False
+    """Whether the requeue actually landed — false on a dry run and on the idempotent no-op."""
+
+    dry_run: bool = False
+
+    detail: dict[str, Any] = {}
+    """The server's result: `changed`, `status`, and the accepted shape's `prior_error`/`attempt`."""
+
+    @property
+    def changed(self) -> bool:
+        """Whether this call scheduled the re-run (`True`) or found it already coming (`False`).
+
+        The distinction the applier records past: both answers mean the target needs no further requeue, so both book as applied — deferring the no-op would re-requeue the re-run's own later failure, which is an unruled re-run.
+        """
+        return self.detail.get("changed") is True
+
+    @property
+    def status(self) -> str:
+        """The server's status word — the prior terminal outcome on an accept, where the re-run stands on a no-op."""
+        value = self.detail.get("status")
+        return value if isinstance(value, str) else ""
+
+
+def requeue_sample(
+    task_id: str, sample_id: str, epoch: int, *, dry_run: bool = False
+) -> RequeueView | Unavailable:
+    """Re-run one errored or cancelled sample inside a live task.
+
+    The warm half of applying a `rerun` ruling (`_tend.rulings`): the sample goes to the back of the task's queue and re-runs under its normal machinery — fresh uuid, prior error seeded as retry history, the log's final counters reflecting the fresh outcome. Idempotent upstream: a target whose re-run is already pending, queued, or running answers `changed: false`, and a completed sample, a finished task, or a stale uuid is a 409 — which arrives here as `Unavailable("http_error", ...)` and means *defer*, never *fail*: the task ordinarily lands within a turn and the invalidation path collects what this one could not reach.
+
+    Args:
+        task_id: The control channel's task selector, from the fleet read.
+        sample_id: The sample, as its log records it.
+        epoch: The epoch, always explicit — a defaulted epoch would silently requeue a different attempt.
+        dry_run: Report what would be re-run without doing it.
+
+    Returns:
+        The mutation envelope, or why there is no answer.
+    """
+    args = ["sample", "requeue", task_id, sample_id, str(epoch), "--json"]
+    if dry_run:
+        args.append("--dry-run")
+    result = _ctl(*args)
+    if isinstance(result, Unavailable):
+        return result
+    return RequeueView.model_validate(result)
+
+
 def _ctl(*args: str, timeout: float = TIMEOUT) -> dict[str, Any] | Unavailable:
     """Run one `inspect ctl` command and decode its JSON.
 

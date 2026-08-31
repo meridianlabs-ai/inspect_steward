@@ -31,7 +31,11 @@
 # tend_interval: 10m      # how often a scheduled tend runs (always with a unit)
 # max_workers: 8          # pack the run into this many worker processes
 # stall_after: 3          # give up respawning a task after this many fruitless tries
+# stuck_after: 5h         # report a sample with no activity for this long (with a unit)
+# stuck_cancel: [bash]    # stuck tool calls the agent may cancel (true for any)
 # samples_ramp: [40, 200] # range to discover sample concurrency in (false to fix it)
+# preauthorized:          # rulings granted in advance: class pattern -> disposition
+#   'error:*APITimeoutError*': rerun
 # log_store: auto         # reuse logs already run elsewhere (a path, or false for none)
 # sync: auto              # mirror this workspace into the log directory (a path, or false)
 # log_root: s3://…/runs   # where this machine keeps logs, one directory per workspace
@@ -75,6 +79,10 @@
 #     a decision you have already made, not making its own.
 #     e.g. "Re-run samples that failed on provider rate limits, up to twice,
 #     without asking."
+#     The machine-readable forms are `preauthorized:` (Steward itself rules and
+#     re-runs matching anomaly classes, recorded `by: policy`) and
+#     `stuck_cancel:` (the agent may cancel a stuck tool call) in the settings
+#     above; write prose here for anything subtler than a pattern.
 #
 #   - The room an agent may move in beneath the settings above, where that
 #     takes judgement rather than a number.

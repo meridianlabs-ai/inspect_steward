@@ -135,6 +135,9 @@ class DepartedWorker:
     pid: int | None = None
     """`None` for a worker that never launched."""
 
+    started: str = ""
+    """When the spawn began, from the in-flight record — what lets a departure with no log say when the attempt it wasted was."""
+
 
 @dataclass(frozen=True)
 class InFlight:
@@ -305,6 +308,9 @@ class Summary:
 
     paused: bool
 
+    rerunning: int = 0
+    """Authorized re-runs among the tasks spawning and queued — invalidated, or covered by a standing `rerun` ruling. The counts line's account of why these go first (scheduling.md §5.5)."""
+
 
 class Blocked(StrEnum):
     """Which of the two bounds is holding the queue back.
@@ -350,6 +356,12 @@ class Reconciliation:
 
     summary: Summary
 
+    warnings: list[str] = field(default_factory=list[str])
+    """Recorded instants the stall guard could not read, named per task.
+
+    `_stalled` treats an unparseable time as *not evidence* — losing a stall rather than inventing one — which is the right refusal and a quiet one: the guard is weaker than it looks for exactly the tasks whose records are damaged, and nothing said so. Reported rather than logged, because this function is pure; an executing turn writes them to `steward.log`, and a `status` discards them with the actions.
+    """
+
 
 def reconcile(
     manifest: Manifest,
@@ -359,6 +371,7 @@ def reconcile(
     pool: Pool,
     paused: bool = False,
     levels: Mapping[str, int] | None = None,
+    ruled: Mapping[str, str] | None = None,
 ) -> Reconciliation:
     """Decide what to do next.
 
@@ -369,6 +382,7 @@ def reconcile(
         pool: The run's shape — how many tasks may be in flight, how many processes to divide them into, and the default sample concurrency.
         paused: Stop scheduling new work. Workers already running finish normally — this is what almost everyone means by pausing a run, and it needs no control channel at all (workflow.md, *What `pause` actually pauses*).
         levels: Where the tuning loop has already climbed each task's sample concurrency, by identifier. A respawn spawns at its task's level rather than restarting at the floor — the climb was earned against measured headroom, and a worker crash does not unmeasure it. Consulted only while a ramp is active, so a pinned run cannot be moved by stale levels.
+        ruled: Tasks a standing `rerun` ruling covers, each with the ruling's instant (ISO), folded by the turn. Two effects, both the ruling's application: the stall guard forgives attempt history at or before the instant — the decision to try again was made by the only party entitled to make one — and the covered tasks sort ahead of fresh work, by queue order rather than preemption (scheduling.md §5.5).
 
     Returns:
         Actions to execute, tasks waiting on a slot, and a summary.
@@ -388,16 +402,34 @@ def reconcile(
     running = inflight.running_identifiers
     max_samples = resolve_max_samples(manifest, pool)
     width = resolve_max_tasks(manifest, pool)
+    ruled = ruled or {}
 
     pending: list[SpawnTask] = []
     stalled: list[str] = []
+    warnings: list[str] = []
     for observation in _spawn_order(observed.tasks):
         if observation.identifier in running:
             continue
-        if _stalled(observation, inflight, pool.stall_after):
+        if _stalled(
+            observation,
+            inflight,
+            pool.stall_after,
+            warnings,
+            ruled_ts=ruled.get(observation.identifier),
+        ):
             stalled.append(observation.identifier)
         else:
             pending.append(_spawn(observation, inflight))
+
+    # authorized re-runs go first: a stable partition, so the queue order does
+    # the promoting and nothing is ever preempted (scheduling.md §5.5). Within
+    # each half the spawn order stands
+    def authorized(task: SpawnTask) -> bool:
+        return task.reason is IncompleteReason.INVALIDATED or task.identifier in ruled
+
+    pending = [task for task in pending if authorized(task)] + [
+        task for task in pending if not authorized(task)
+    ]
 
     poured = (
         Poured(queued=pending)
@@ -433,6 +465,7 @@ def reconcile(
     return Reconciliation(
         actions=actions,
         queued=queued,
+        warnings=warnings,
         summary=_summarize(
             observed,
             running=running,
@@ -446,6 +479,14 @@ def reconcile(
             pool=pool,
             max_tasks=width,
             paused=paused,
+            rerunning=sum(
+                1
+                for task in [
+                    *(task for batch in poured.workers for task in batch),
+                    *queued,
+                ]
+                if authorized(task)
+            ),
         ),
     )
 
@@ -532,7 +573,11 @@ def _attempts(observation: TaskObservation) -> list[LogAttempt]:
 
 
 def _stalled(
-    observation: TaskObservation, inflight: InFlight, stall_after: int
+    observation: TaskObservation,
+    inflight: InFlight,
+    stall_after: int,
+    warnings: list[str],
+    ruled_ts: str | None = None,
 ) -> bool:
     """Whether respawning this task has stopped accomplishing anything.
 
@@ -545,16 +590,32 @@ def _stalled(
     **The two halves merge rather than alternate**, and consulting the record only for a task with no logs at all was a bug: a task whose first attempt lands a partial log and whose next twenty die at import has evidence in both places, and reading only the log would see one attempt that made progress and respawn forever. So the spent attempts that began *after the newest log did* are folded into the same run. That test identifies exactly the attempts that landed nothing, since an attempt that landed a log would be the newest one itself.
 
     **An invalidation clears the history before it, and only that.** Somebody reached in and marked samples for a re-run, which is a decision to try again made by the only party entitled to make one — so nothing that happened before they acted counts against the task any more. What they cannot do is exempt it forever: a retry that dies before landing a replacement leaves the invalidated log current, so *returning* here rather than resetting made the one branch with no ceiling on it, and an import error under an invalidated log respawned every ten minutes for as long as the run lasted. Attempts since the invalidation count normally.
+
+    **A rerun ruling forgives everything at or before it, and only that.** The same shape as the invalidation clause below, reached one layer up: a person (or a standing policy) ruled the class re-runnable, which is a decision to try again by the only party entitled to make one — so the attempts before the ruling stop counting, the first post-ruling attempt starts a fresh progress baseline, and `stall_after` fresh fruitless attempts re-stall (errors.qmd, the cleared-history doctrine). The forgiveness instant is the later of the ruling and the invalidation's own write time, since the applier's invalidation always postdates the ruling it applies.
+
+    **An instant that will not read is reported, never counted.** Every unparseable time here weakens the guard in the lenient direction — losing a stall rather than inventing one — and that used to be silent, so a task whose record was damaged looked exactly like one converging. `warnings` collects one line per skipped instant, for the executing turn to log.
     """
     attempts = _attempts(observation)
     spent = inflight.spent.get(observation.identifier, [])
+
+    if ruled_ts is not None:
+        return _stalled_since_ruling(
+            observation, attempts, spent, stall_after, warnings, ruled_ts
+        )
 
     if observation.reason == IncompleteReason.INVALIDATED:
         # when they acted, as closely as anything records it: invalidating
         # rewrites the log, and nothing else touches a finished one. Without a
         # time there is nothing to count from, so the task gets the benefit
         since = _mtime(observation.current)
-        return since is not None and _after(spent, since) >= stall_after
+        if since is None:
+            warnings.append(
+                f"the invalidated log for {observation.key} has no readable "
+                f"write time, so the stall guard is counting no attempts "
+                f"against it"
+            )
+            return False
+        return _after(spent, since, observation.key, warnings) >= stall_after
 
     if not attempts:
         return len(spent) >= stall_after
@@ -569,20 +630,83 @@ def _stalled(
             fruitless += 1
 
     if (newest := _when(attempts[-1].created)) is not None:
-        fruitless += _after(spent, newest)
+        fruitless += _after(spent, newest, observation.key, warnings)
+    else:
+        warnings.append(
+            f"the newest log for {observation.key} has an unreadable created "
+            f"time ({attempts[-1].created!r}), so crashed attempts since it "
+            f"are not counted toward the stall guard"
+        )
     return fruitless >= stall_after
 
 
-def _after(spent: list[str], instant: datetime) -> int:
+def _stalled_since_ruling(
+    observation: TaskObservation,
+    attempts: list[LogAttempt],
+    spent: list[str],
+    stall_after: int,
+    warnings: list[str],
+    ruled_ts: str,
+) -> bool:
+    """The stall guard for a task a standing `rerun` ruling covers.
+
+    Attempt history — logs and crashed spawns both — at or before the forgiveness instant is cleared entirely, and the ordinary progress rule runs over what is left with a fresh baseline: the first post-ruling attempt competes against nothing, and `stall_after` fresh fruitless attempts re-stall the task exactly as they would a new one.
+    """
+    forgiveness = _when(ruled_ts)
+    if forgiveness is None:
+        warnings.append(
+            f"the rerun ruling instant for {observation.key} ({ruled_ts!r}) is "
+            f"unreadable, so the stall guard is counting no attempts against it"
+        )
+        return False
+    if observation.reason == IncompleteReason.INVALIDATED:
+        # the applier's invalidation postdates the ruling it applies, so the
+        # rewrite's own instant is the later, truer edge of the forgiveness
+        since = _mtime(observation.current)
+        if since is not None and since > forgiveness:
+            forgiveness = since
+
+    fresh: list[LogAttempt] = []
+    for attempt in attempts:
+        when = _when(attempt.created)
+        if when is None:
+            warnings.append(
+                f"a log for {observation.key} has an unreadable created time "
+                f"({attempt.created!r}) and is not counted toward the stall guard"
+            )
+        elif when > forgiveness:
+            fresh.append(attempt)
+
+    best = 0
+    fruitless = 0
+    for attempt in fresh:
+        if attempt.completed_samples > best:
+            best = attempt.completed_samples
+            fruitless = 0
+        else:
+            fruitless += 1
+
+    boundary = _when(fresh[-1].created) if fresh else forgiveness
+    if boundary is not None:
+        fruitless += _after(spent, boundary, observation.key, warnings)
+    return fruitless >= stall_after
+
+
+def _after(spent: list[str], instant: datetime, key: str, warnings: list[str]) -> int:
     """How many of a task's finished attempts began after some instant.
 
     Which is how many of them landed no log, whenever `instant` comes from the newest log there is: an attempt that landed one would be newer than the log it is being compared against.
     """
-    return sum(
-        1
-        for started in spent
-        if (when := _when(started)) is not None and when > instant
-    )
+    count = 0
+    for started in spent:
+        if (when := _when(started)) is None:
+            warnings.append(
+                f"a recorded attempt of {key} has an unreadable start time "
+                f"({started!r}) and is not counted toward the stall guard"
+            )
+        elif when > instant:
+            count += 1
+    return count
 
 
 def _mtime(attempt: LogAttempt | None) -> datetime | None:
@@ -827,6 +951,7 @@ def _summarize(
     pool: Pool,
     max_tasks: int | None,
     paused: bool,
+    rerunning: int = 0,
 ) -> Summary:
     states = {state.value: 0 for state in TaskState}
     reasons = {reason.value: 0 for reason in IncompleteReason}
@@ -857,4 +982,5 @@ def _summarize(
         blocked=blocked,
         capture_rss=capture_rss,
         paused=paused,
+        rerunning=rerunning,
     )

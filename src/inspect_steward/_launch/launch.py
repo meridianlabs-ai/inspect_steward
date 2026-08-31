@@ -138,6 +138,8 @@ def launch(
     max_workers: int | None = None,
     stall_after: int | None = None,
     samples_ramp: tuple[int, int] | bool | None = None,
+    stuck_after: int | None = None,
+    preauthorized: dict[str, str] | bool | None = None,
     tend_interval: int | None = None,
     sync: str | bool | None = None,
     notification: str | bool | None = None,
@@ -160,6 +162,8 @@ def launch(
         max_workers: Worker processes for the first turn, overriding `_steward.yaml`. `None` expresses no preference and defers to the file, which itself defaults to a process per task — it does not request that width.
         stall_after: Fruitless respawns before a task is given up on, overriding `_steward.yaml`.
         samples_ramp: The ramp's envelope, overriding `_steward.yaml`.
+        stuck_after: Seconds of quiet before a running sample is reported stuck, overriding `_steward.yaml`. For this launch's own turn only, like `sync` — a reporting threshold, never a limit.
+        preauthorized: Rulings granted in advance — class patterns to dispositions — overriding `_steward.yaml`. `False` declines every standing grant. For this launch's own turn only, like `sync`.
         tend_interval: Seconds between scheduled tends, overriding `_steward.yaml`. Already parsed — the flag is validated at the door.
         sync: Where to propagate the workspace, overriding `_steward.yaml`. `False` propagates nowhere; `None` defers to the file, which itself defaults to the log directory. For this launch's own turn only — every later tend reads the file again, because unlike the overrides this is not a property of the run.
         notification: Where Steward posts, overriding `_steward.yaml`. `False` silences Steward's own posts and never the fleet's, whose notifications are blocking human-in-the-loop moments. For this launch's own turn only, like `sync` — the durable spelling is the file key, which is the one still there at 02:00.
@@ -223,6 +227,8 @@ def launch(
             max_workers=max_workers,
             stall_after=stall_after,
             samples_ramp=samples_ramp,
+            stuck_after=stuck_after,
+            preauthorized=preauthorized,
             sync=sync,
             notification=notification,
             scan_model=scan_model,
@@ -247,6 +253,8 @@ def _launch(
     max_workers: int | None,
     stall_after: int | None,
     samples_ramp: tuple[int, int] | bool | None,
+    stuck_after: int | None,
+    preauthorized: dict[str, str] | bool | None,
     sync: str | bool | None,
     notification: str | bool | None,
     scan_model: str | bool | None,
@@ -365,6 +373,8 @@ def _launch(
         max_workers=max_workers,
         stall_after=stall_after,
         samples_ramp=samples_ramp,
+        stuck_after=stuck_after,
+        preauthorized=preauthorized,
         sync=sync,
         notification=notification,
         scan_model=scan_model,

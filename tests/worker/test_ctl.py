@@ -19,6 +19,7 @@ from inspect_ai.log import list_eval_logs, read_eval_log
 from inspect_steward import read_eval_set
 from inspect_steward._worker import (
     ConfigView,
+    RequeueView,
     TaskRow,
     Unavailable,
     list_tasks,
@@ -79,6 +80,52 @@ def test_an_outcome_maps_to_one_kind(
     assert isinstance(result, Unavailable)
     assert result.kind == kind
     assert result.detail
+
+
+REQUEUES: list[tuple[str, dict[str, object], bool, str]] = [
+    (
+        "an accepted requeue names the prior outcome",
+        {
+            "target": {"sample_id": "s1", "epoch": 1},
+            "applied": True,
+            "dry_run": False,
+            "detail": {"changed": True, "status": "error", "attempt": 2},
+        },
+        True,
+        "error",
+    ),
+    (
+        "a re-run already coming is a no-op",
+        {
+            "target": {"sample_id": "s1", "epoch": 1},
+            "applied": False,
+            "dry_run": False,
+            "detail": {"changed": False, "status": "queued"},
+        },
+        False,
+        "queued",
+    ),
+    (
+        "a detail this version has not seen costs the fields not the call",
+        {"applied": True, "detail": {"outcome": "?"}},
+        False,
+        "",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("envelope", "changed", "status"),
+    [pytest.param(*case[1:], id=case[0].replace(" ", "_")) for case in REQUEUES],
+)
+def test_a_requeue_envelope_decodes_to_its_two_answers(
+    envelope: dict[str, object], changed: bool, status: str
+) -> None:
+    # a rejection never reaches this model: the server 409s and `_decode`
+    # (covered above) turns the CLI's error envelope into `http_error`
+    view = RequeueView.model_validate(envelope)
+    assert view.changed is changed
+    assert view.status == status
 
 
 def test_a_document_decodes_to_itself() -> None:

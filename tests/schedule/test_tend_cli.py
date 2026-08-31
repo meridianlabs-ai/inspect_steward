@@ -20,7 +20,7 @@ from inspect_steward._tend import Live, status_markdown
 from inspect_steward._workspace import Claim, Workspace, acquire, create_workspace
 
 from .._logs import SynthTask, write_log
-from .test_tend import prepared, turn
+from .test_tend import prepared, settle, turn
 
 
 @pytest.fixture
@@ -352,16 +352,21 @@ def test_status_prints_markdown_on_request_and_not_otherwise(
 
 
 def test_every_rendering_leads_with_the_same_verdict(workspace: Workspace) -> None:
+    # settled, so all three reads see the same state: the spawned worker ran
+    # the EMPTY definition and departed without a log, which anomaly detection
+    # (correctly) reports — the claim here is agreement, not health
     turn(workspace)
+    settle(workspace)
 
     _, text = run("status")
     _, markdown = run("status", "--format", "md")
     code, raw = run("status", "--json")
     document = json.loads(raw)
 
-    assert text.startswith("✅")
-    assert "✅" in markdown
-    assert document["verdict"] == "✅"
+    glyph = document["verdict"]
+    assert glyph == "⚠️"
+    assert text.startswith(glyph)
+    assert glyph in markdown
     assert code == 0
 
 

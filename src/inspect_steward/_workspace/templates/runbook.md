@@ -115,13 +115,18 @@ who owns the item — `collect` prints that beside each one.
   brought it back to you. If you are stuck on an agent-owned item, that is a
   question to ask in the conversation, not a hand-off to record.
 
-**A parked worker is the one item that refuses an ack.** A sample stopped on a
-tool approval or an `ask_user` is waiting for authority over what the eval does,
-which is the human's alone — and it holds its slot, its sandbox and its model
-connections the whole time. So `ack` refuses it whatever reason you give. Raise
-it, pass on the attach command the item carries (`inspect acp`, whose picker
-floats the samples waiting on a person to the top), and leave it open: it clears
-when somebody answers it, and nothing else clears it.
+**A parked worker refuses an ack.** A sample stopped on a tool approval or an
+`ask_user` is waiting for authority over what the eval does, which is the
+human's alone — and it holds its slot, its sandbox and its model connections
+the whole time. So `ack` refuses it whatever reason you give. Raise it, pass on
+the attach command the item carries (`inspect acp`, whose picker floats the
+samples waiting on a person to the top), and leave it open: it clears when
+somebody answers it, and nothing else clears it.
+
+**An anomaly refuses an ack too — it closes through a ruling.** See the next
+section; the dismissal that says *looked, nothing here* is
+`steward rule <class> --disposition dismiss`, recorded with a reason, never a
+wave-past.
 
 An item comes back if the condition **changes**, because its id encodes the
 instance rather than the condition: a task that stalls again at attempt 3 has a
@@ -133,6 +138,89 @@ how much it left out and how to see it. Take those counts literally: `1 raised,
 awaiting a person` under an otherwise empty decisions section means there *is*
 an open decision, and it is not yours.
 
+## A sample that has stopped moving
+
+A **stuck** item names samples that are alive but idle past `stuck_after` —
+nothing failed, nothing is waiting on a person, the task's clock just keeps
+running. One item per task, and it is not an anomaly: nothing is broken and
+there is nothing to rule on. It clears on its own the moment the sample moves.
+
+The remedy is a ladder, cheapest rung first, and the item carries the
+applicable command ready to run:
+
+- **Cancel the pending tool call** (`inspect ctl sample cancel-tool-call ...`)
+  — the call fails inside the sample, which continues and works with the
+  failure. This rung is yours **only when** the human granted it in advance
+  (`stuck_cancel:` in `_steward.yaml`), and the item says so by arriving
+  agent-owned. Run the command it carries, then record what you did:
+  `steward ack <id> --by agent --reason "cancelled bash in <task>"`. This is
+  the narrow `--by agent` exception — something you did yourself — and the
+  recorded reason is what keeps the next session from asking again.
+- **Everything above that is the human's.** Cancelling the sample records an
+  outcome (`--action score|error|cancel` is a judgement about the eval's data),
+  and a requeue discards everything the sample did. Raise the item and pass on
+  the command it carries.
+
+**Ask once.** A cancel is a request, and the feedback is explicit: if it was
+asked and the call has not stopped, the item comes back with `:asked` in its
+id and human-owned — *a cancel was asked and it did not stop*. That is the
+signal to climb a rung, never to repeat the ask.
+
+## Anomalies: from failure to ruling
+
+Failures that mean the same thing share a **class** — an exception type at a
+raising frame (`error:TimeoutError@openai/_client.py:post`), a task that died a
+particular way (`task:no-log-exit:...`), an operator kill (`limit:operator`), a
+task whose every score is zero. A class absorbs instances until somebody rules
+on it; `status` lists what is open with counts, an example message, and any
+prior rulings attached.
+
+Your verbs, in the order a night usually uses them:
+
+```
+steward investigate <class> --note "..."   # mark it worked, so the next session does not redo you
+steward propose <class>... --action <d> --reason "..."   # these classes are one decision
+steward rule <class> --disposition <d> --reason "..." --by <person>   # record the decision
+```
+
+- **Investigate freely.** The note is a hand-off to the next session, not a
+  diary. Prefixes work everywhere a class key does.
+- **Propose freely.** One action per proposal; classes wanting different
+  answers are different proposals. The proposal becomes one consolidated
+  question for the human, answerable whole or in part
+  (`steward rule --proposal <id> [<class>...]`).
+- **A ruling is never yours.** `--by` names the person who decided — you
+  relaying their answer is the ordinary path, and the record still says whose
+  decision it was. The dispositions: `rerun`, `exclude`, `zero`, `score` for
+  errored samples; `accept` (with `--effect`, the sentence the report carries)
+  and `dismiss` for anomaly-level closure. `accept` is refused for `error:`
+  classes — accepting errored samples as-is is exclusion wearing a decision's
+  clothes.
+- **A substrate-flagged class gets no re-run proposal.** Credentials, disk,
+  storage: re-running into broken machinery burns the work twice. Verify first;
+  a person ruling `rerun` directly is that verification.
+
+After a `rerun` ruling the tend carries it out itself: samples in a
+still-running task are requeued in place, and a landed log has exactly the
+ruled samples invalidated so the next turn re-launches it, reusing everything
+else. **There is nothing for you to run** — the window stays open while the
+re-run is in flight (the status says so), resolves itself when its tasks come
+home clean, and the same samples failing again comes back to the human as *the
+ruling's premise did not hold*. A ruling can also arrive from a standing
+`preauthorized:` pattern in `_steward.yaml`; the record then says `by: policy`,
+and it is the same decision made earlier, not yours to make. Recurrence after
+any ruling opens a new generation carrying every prior ruling as precedent — so
+read the precedent lines before proposing; the 11pm decision usually answers
+the 2am question.
+
+Two classes deliberately make less noise than the rest. A `task:` window
+resolves itself once Steward's own respawn brings the task home — leave it
+alone unless it is not healing, in which case the `stalled` item is the real
+question. And a `limit:operator` window (samples an operator killed) asks
+nothing inline at all: the operator knows what they did, so it waits in the
+anomalies block for the signoff conversation. Both still take a ruling any time
+someone wants to give one.
+
 ## Context is the real budget
 
 - **Take the log directory from the summary, never from the workspace.** The
@@ -142,7 +230,9 @@ an open decision, and it is not yours.
   it exists will find nothing rather than fail.
 - **Never read a full eval log.** Use `header_only=True` for status and counts;
   `read_eval_log_sample_summaries` or `samples_df` for per-sample data. A full
-  read pulls the whole archive for what the header already has.
+  read pulls the whole archive for what the header already has. Steward's own
+  detection already read each errored sample once and put the evidence in the
+  anomaly — start an investigation from the evidence, not by re-reading logs.
 - **Transcript analysis goes through a scan**, never a raw log read.
 - **Narrow an anomaly before opening it.**
 
@@ -153,10 +243,11 @@ an open decision, and it is not yours.
 ## Cold pickup
 
 *Partly written.* The full procedure for attaching to a run you did not start
-depends on machinery that does not exist yet — the anomaly list and
-`analysis.md`. What is settled is where it begins: `steward runbook`, then
-`_steward.yaml` for this human's standing rules, then **`steward collect`** for
-what is true and what you missed. Everything you need is in the workspace, so
+still gains `analysis.md`. What is settled is where it begins: `steward
+runbook`, then `_steward.yaml` for this human's standing rules, then
+**`steward collect`** for what is true and what you missed — the anomaly list
+arrives with it, investigation notes and precedent included, so a class the
+last session was working says so. Everything you need is in the workspace, and
 nothing depends on a conversation this session did not have.
 
 One caveat on the second of those: every setting, `policies` included, can also

@@ -5,11 +5,14 @@ from .. import __version__
 from .ack import ack_command
 from .collect import collect_command
 from .init import init_command
+from .investigate import investigate_command
 from .launch import launch_command
 from .notify import notify_command
 from .pause import pause_command, resume_command
+from .propose import propose_command
 from .raise_item import raise_command
 from .ramp import ramp_command
+from .rule import rule_command
 from .runbook import runbook_command
 from .status import status_command
 from .tasks import tasks_command
@@ -31,12 +34,15 @@ def steward() -> None:
 steward.add_command(ack_command)
 steward.add_command(collect_command)
 steward.add_command(init_command)
+steward.add_command(investigate_command)
 steward.add_command(launch_command)
 steward.add_command(notify_command)
 steward.add_command(pause_command)
+steward.add_command(propose_command)
 steward.add_command(raise_command)
 steward.add_command(ramp_command)
 steward.add_command(resume_command)
+steward.add_command(rule_command)
 steward.add_command(runbook_command)
 steward.add_command(status_command)
 steward.add_command(tasks_command)

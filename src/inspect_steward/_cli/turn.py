@@ -19,6 +19,7 @@ from .._tend import (
     Refused,
     TendError,
     TendResult,
+    anomalies_line,
     by_owner,
     progress_table,
     verdict_line,
@@ -95,6 +96,11 @@ def echo_turn(result: TendResult, *, table: bool = True) -> None:
             (summary.archiving, "to archive"),
         )
         click.echo(f"{summary.running} running · next tend: {would or 'nothing to do'}")
+    # one source with the markdown's own line (`render.anomalies_line`), so the
+    # two renderings cannot disagree about what the queue holds
+    if (anomalies := anomalies_line(result.anomalies)) is not None:
+        click.echo(anomalies)
+
     if summary.queued:
         # a paused run queues everything, and saying it waits on a slot would
         # name the limit as the reason when the reason is the pause -- which

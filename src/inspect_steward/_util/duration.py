@@ -4,6 +4,7 @@ One interval reaches Steward from two directions — `_steward.yaml`'s `tend_int
 """
 
 import re
+from datetime import datetime, timezone
 
 _DURATION = re.compile(r"^(\d+)\s*(s|m|h)$", re.IGNORECASE)
 
@@ -38,6 +39,52 @@ def parse_duration(text: str) -> int:
     if seconds == 0:
         raise DurationError(f"'{text}' is zero, which is not an interval")
     return seconds
+
+
+def seconds_since(ts: str) -> float | None:
+    """Seconds from a recorded instant until now, or `None` where it cannot be read.
+
+    Unparseable rather than absent: a record written by a version that stamped its timestamps differently is history, not damage, and the caller's answer to *how long since* is then *unknown* rather than *forever*. A naive timestamp is unreadable for the same reason — subtracting it from UTC would be comparing two clocks nobody synchronized.
+
+    Args:
+        ts: A recorded instant, UTC ISO-8601 (`Z` or explicit offset).
+
+    Returns:
+        Seconds elapsed, or `None`.
+    """
+    try:
+        recorded = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if recorded.tzinfo is None:
+        return None
+    return (datetime.now(timezone.utc) - recorded).total_seconds()
+
+
+def is_after(instant: str, boundary: str) -> bool:
+    """Whether one recorded instant is strictly after another, honestly false when either does not parse.
+
+    The anomaly machinery's ordering primitive: an attempt against a ruling, a log against a spawn. Unlike `seconds_since`, a naive timestamp is read as UTC — the instants compared here come from eval headers, which carry an offset in practice, and a best-effort ordering of a legacy stamp beats refusing to order at all.
+
+    Args:
+        instant: The instant asked about, ISO-8601.
+        boundary: The instant it must follow, ISO-8601.
+
+    Returns:
+        `True` only when both parse and `instant` is later.
+    """
+    left, right = _instant(instant), _instant(boundary)
+    return left is not None and right is not None and left > right
+
+
+def _instant(value: str) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    return parsed if parsed.tzinfo is not None else parsed.replace(tzinfo=timezone.utc)
 
 
 def format_duration(seconds: int) -> str:

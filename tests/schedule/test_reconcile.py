@@ -7,6 +7,7 @@ ObservedLogs(log_dir=...))` and touches nothing at all. That is what keeping
 """
 
 import os
+from dataclasses import replace
 from datetime import datetime
 from pathlib import Path
 from typing import Any
@@ -691,6 +692,66 @@ def test_a_stall_survives_the_two_timestamp_formats(tmp_path: Path) -> None:
     assert spawns(result) == []
 
 
+def test_an_unreadable_attempt_start_is_reported_rather_than_silently_dropped(
+    tmp_path: Path,
+) -> None:
+    """The guard's leniency stops being invisible.
+
+    An instant that will not parse is *not evidence* — the right refusal, since
+    inventing a stall is worse than losing one — but a task whose record is
+    damaged then looks exactly like one converging, and nothing said so.
+    """
+    manifest = synth_manifest([TASK])
+    attempts(tmp_path, TASK, [4])
+
+    result = reconcile(
+        manifest,
+        InFlight(spent={TASK.identifier: ["whenever", *crashes(1)]}),
+        observe_tasks(manifest, observe_logs(tmp_path)),
+        pool=POOL,
+    )
+
+    assert any("whenever" in warning for warning in result.warnings)
+    # and the guard stayed lenient: one countable crash is not a stall
+    assert len(spawns(result)) == 1
+
+
+def test_an_unreadable_log_time_is_reported_rather_than_exempting_the_task(
+    tmp_path: Path,
+) -> None:
+    # a log written by something with a different idea of a timestamp -- no
+    # fixture can write one, since the header validates its own `created`, so
+    # the observation is damaged by hand. The crashes cannot be ordered
+    # against it and none of them count, which the warning is the only
+    # account of
+    manifest = synth_manifest([TASK])
+    write_log(tmp_path, TASK, total=4, completed=4)
+    observed = observe_tasks(manifest, observe_logs(tmp_path))
+    (observation,) = observed.tasks
+    assert observation.current is not None
+    observed = replace(
+        observed,
+        tasks=[
+            replace(
+                observation, current=replace(observation.current, created="whenever")
+            )
+        ],
+    )
+
+    result = reconcile(
+        manifest,
+        InFlight(spent={TASK.identifier: crashes(2)}),
+        observed,
+        pool=POOL,
+    )
+
+    assert any(
+        "whenever" in warning and "stall guard" in warning
+        for warning in result.warnings
+    )
+    assert len(spawns(result)) == 1
+
+
 def invalidate(log_dir: Path, task: SynthTask, *, at: str) -> None:
     """The newest log, marked invalidated, its file stamped when that happened.
 
@@ -767,6 +828,101 @@ def test_an_invalidation_forgives_the_past_and_not_the_future(
     )
 
     assert (spawns(result) == []) == stalled
+
+
+# --- a rerun ruling's forgiveness, and its place in the queue -------------
+
+RULED_AT = "2026-08-23T21:00:00+00:00"
+
+
+def test_a_rerun_ruling_clears_the_stall_behind_it(tmp_path: Path) -> None:
+    # the ruling is the decision to try again, made by the only party entitled
+    # to make one -- the invalidation clause reached one layer up, and the
+    # forgiveness that lets the applier's respawn actually happen
+    manifest = synth_manifest([TASK])
+    attempts(tmp_path, TASK, [4, 4, 4])
+    observed = observe_tasks(manifest, observe_logs(tmp_path))
+
+    held = reconcile(manifest, InFlight(), observed, pool=POOL)
+    forgiven = reconcile(
+        manifest,
+        InFlight(),
+        observed,
+        pool=POOL,
+        ruled={TASK.identifier: RULED_AT},
+    )
+
+    assert spawns(held) == []
+    assert held.summary.stalled == [TASK.identifier]
+    assert len(spawns(forgiven)) == 1
+    assert forgiven.summary.stalled == []
+
+
+@pytest.mark.parametrize(
+    ("since", "stalled"),
+    [(since, stalled) for _, since, stalled in CLEARED],
+    ids=[case for case, _, _ in CLEARED],
+)
+def test_a_ruling_forgives_the_past_and_not_the_future(
+    since: int, stalled: bool, tmp_path: Path
+) -> None:
+    # the same consumed-forgiveness property the invalidation table pins: the
+    # first post-ruling attempt starts fresh, and `stall_after` fresh
+    # fruitless attempts re-stall
+    manifest = synth_manifest([TASK])
+    attempts(tmp_path, TASK, [4, 4, 4])
+
+    result = reconcile(
+        manifest,
+        InFlight(spent={TASK.identifier: crashes(since, since=22)}),
+        observe_tasks(manifest, observe_logs(tmp_path)),
+        pool=POOL,
+        ruled={TASK.identifier: RULED_AT},
+    )
+
+    assert (spawns(result) == []) == stalled
+
+
+def test_an_authorized_rerun_goes_first_by_sorting_not_preemption(
+    tmp_path: Path,
+) -> None:
+    # a stable partition of the pending queue: authorized first, manifest
+    # order preserved within each half -- one code path, no second scheduler
+    ordinary, authorized = SynthTask("ordinary"), SynthTask("authorized")
+    manifest = synth_manifest([ordinary, authorized])
+
+    result = reconcile(
+        manifest,
+        InFlight(),
+        nothing_run(manifest),
+        pool=Pool(max_tasks=1),
+        ruled={authorized.identifier: RULED_AT},
+    )
+
+    assert keys(planned(result)) == [manifest.tasks[1].key]
+    assert [task.key for task in result.queued] == [manifest.tasks[0].key]
+    assert result.summary.rerunning == 1
+
+
+def test_an_invalidated_task_is_authorized_without_a_ruling(
+    tmp_path: Path,
+) -> None:
+    # only a ruling invalidates, so INVALIDATED is read as authorization in
+    # its own right -- the crash-recovery case where the ruling's window has
+    # already resolved but the respawn has not happened yet
+    fresh, reopened = SynthTask("fresh"), SynthTask("reopened")
+    manifest = synth_manifest([fresh, reopened])
+    invalidate(tmp_path, reopened, at=RULED_AT)
+
+    result = reconcile(
+        manifest,
+        InFlight(),
+        observe_tasks(manifest, observe_logs(tmp_path)),
+        pool=POOL,
+    )
+
+    assert keys(planned(result))[0] == manifest.tasks[1].key
+    assert result.summary.rerunning == 1
 
 
 def test_a_stalled_task_frees_the_slot_it_was_holding(tmp_path: Path) -> None:

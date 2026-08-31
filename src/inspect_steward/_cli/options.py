@@ -67,8 +67,27 @@ def overrides(key: str) -> str:
 def shape_options[F: Callable[..., Any]](f: F) -> F:
     """The settings that shape one turn, on every command that runs or previews one.
 
-    `--max-workers` and `--stall-after` are integers; `--samples-ramp` is a range or `false`.
+    `--max-workers` and `--stall-after` are integers; `--samples-ramp` is a range or `false`; `--stuck-after` is a duration with a unit; `--preauthorized` is a mapping.
     """
+    f = click.option(
+        "--preauthorized",
+        type=Setting("preauthorized"),
+        default=None,
+        help=(
+            "Rulings granted in advance: class patterns to dispositions, e.g. "
+            "`{'error:ReadTimeout@*': rerun}`, or `false` to decline every "
+            f"standing grant for this turn. {overrides('preauthorized')}"
+        ),
+    )(f)
+    f = click.option(
+        "--stuck-after",
+        type=Setting("stuck_after"),
+        default=None,
+        help=(
+            "Quiet time before a running sample is reported stuck, with a "
+            f"unit, e.g. `5h`. {overrides('stuck_after')}"
+        ),
+    )(f)
     f = click.option(
         "--samples-ramp",
         type=Setting("samples_ramp"),

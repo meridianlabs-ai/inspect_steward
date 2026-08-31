@@ -25,6 +25,8 @@ def status_command(
     max_workers: int | None,
     stall_after: int | None,
     samples_ramp: tuple[int, int] | bool | None,
+    stuck_after: int | None,
+    preauthorized: dict[str, str] | bool | None,
     output_format: str,
     output_json: bool,
 ) -> None:
@@ -39,6 +41,8 @@ def status_command(
             max_workers=max_workers,
             stall_after=stall_after,
             samples_ramp=samples_ramp,
+            stuck_after=stuck_after,
+            preauthorized=preauthorized,
         )
     except TURN_ERRORS as ex:
         raise click.ClickException(str(ex)) from ex

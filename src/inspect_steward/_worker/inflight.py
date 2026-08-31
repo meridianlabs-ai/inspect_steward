@@ -197,6 +197,7 @@ def resolve_inflight(
                     identifiers=entry.identifiers,
                     host=host,
                     pid=entry.pid,
+                    started=entry.started,
                 )
             )
             for identifier in entry.identifiers:

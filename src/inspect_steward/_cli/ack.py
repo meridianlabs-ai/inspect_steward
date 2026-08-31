@@ -15,7 +15,7 @@ from pathlib import Path
 
 import click
 
-from .._tend import PARKED, TendResult, status
+from .._tend import ANOMALY, PARKED, TendResult, status
 from .._workspace import ACKNOWLEDGED, append_event, read_acks, read_journal
 from .items import match_item
 from .turn import TURN_ERRORS, find_workspace
@@ -108,9 +108,25 @@ def _nothing_matched(journal: Path, item: str, result: TendResult) -> str:
         )
 
     named = [entry for entry in result.items if entry.id.startswith(item)]
-    # the two kinds that cannot be acknowledged are unacknowledgeable for
-    # opposite reasons, and telling somebody the wrong one is worse than saying
-    # nothing: a park is the most standing condition there is
+    # the kinds that cannot be acknowledged are unacknowledgeable for different
+    # reasons, and telling somebody the wrong one is worse than saying nothing:
+    # a park is the most standing condition there is, and an anomaly has its
+    # own closing verb
+    if any(entry.kind == ANOMALY for entry in named):
+        matched = next(entry for entry in named if entry.kind == ANOMALY)
+        # a proposal item's subject is the proposal id, not a class key, so
+        # the remediation must take the --proposal form to parse at all
+        command = (
+            f"steward rule --proposal {matched.subject}"
+            if matched.subject.startswith("prop-")
+            else f"steward rule '{matched.subject}'"
+        )
+        return (
+            f"'{item}' is an anomaly, and an anomaly closes through a ruling "
+            f"rather than an acknowledgment — `{command} "
+            f"--disposition dismiss --reason ... --by ...` "
+            f"is the ruling that says you looked and there is nothing here"
+        )
     if any(entry.kind == PARKED for entry in named):
         return (
             f"'{item}' is a worker waiting on a person, and only answering it "
