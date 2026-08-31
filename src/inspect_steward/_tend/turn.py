@@ -25,8 +25,11 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from .._anomaly.fold import Pending, absorb, as_events, read_anomalies
+from .._anomaly.model import Anomalies
 from .._evalset.archive import archive_log
 from .._evalset.cache import read_attempt_cache, write_attempt_cache
+from .._evalset.instances import read_classed_cache, write_classed_cache
 from .._evalset.manifest import (
     Manifest,
     definition_hash,
@@ -53,6 +56,7 @@ from .._schedule import (
     reconcile,
     resolve_samples_ramp,
 )
+from .._util.duration import seconds_since
 from .._worker import (
     Fleet,
     LiveFleet,
@@ -72,6 +76,7 @@ from .._workspace import (
     Armed,
     Claim,
     Collected,
+    DamagedLine,
     Directives,
     DirectivesError,
     Held,
@@ -101,7 +106,9 @@ from .._workspace import (
     sync_target,
     sync_workspace,
     truncate_log,
+    utc_now,
 )
+from .detect import detect, task_health
 from .history import Happened, happened
 from .items import Item, Supervision, Verdict, tend_items, verdict
 from .notify import notify_turn
@@ -253,6 +260,39 @@ class TendResult:
     `None` only on a result assembled by hand, which makes no claim about a directory.
     """
 
+    journal_damage: list[DamagedLine] = field(default_factory=list[DamagedLine])
+    """Journal lines this turn's history read could not turn into events.
+
+    Every fold the turn ran — the pause, the acks, the diff baseline — ran without whatever these lines said, so the damage is a caveat on this turn's own answers and not merely a fact about a file. It becomes the agent's item (`items.JOURNAL_DAMAGE`); the honest repair is reading the lines and re-journalling what they meant, which is judgement.
+    """
+
+    status_failing: str | None = None
+    """When `status.md` stopped being writable, or `None` while it writes.
+
+    From the journal's episode record rather than from this turn's own attempt, which happens after the items are computed — so a fresh failure surfaces on the next turn, and a restored one clears the same way. The episode's opening instant, which is what keys the item.
+    """
+
+    sync_failing: dict[str, str] = field(default_factory=dict[str, str])
+    """Destinations the workspace has stopped propagating to, each with when it stopped. The same episode mechanics as `status_failing`, per target."""
+
+    breaks: int = 0
+    """Consecutive turns that each had to break a wedged claim, this one included.
+
+    One is recovery working as designed. Two or more is a tend that wedges deterministically — killed and reincarnated every interval, each incarnation destroying the evidence of the last — which is the kill loop `items.KILL_LOOP` names (execution.md §9).
+    """
+
+    breaks_since: str | None = None
+    """When the current run of breaks began, or `None` where there is none. What keys the item, so a later, separate loop is a new question."""
+
+    anomalies: Anomalies = field(default_factory=Anomalies)
+    """Every anomaly window, open and settled, with this turn's census already absorbed.
+
+    For a tend, the state the journal now holds; for a `status`, the state it *would* hold — the same fold over the same pending events, which is what makes the preview honest. What the items, the signoff gate, and the anomalies section all read.
+    """
+
+    anomaly_pending: list[Pending] = field(default_factory=list[Pending])
+    """The window events this turn's census implies. A tend has appended them by the time it returns; a `status` leaves them unwritten — which is why a deciding verb persists its targets' share (`_cli.anomalies.persist_windows`) before its decision, so a ruling never lands against a window the journal does not hold."""
+
 
 def tend(
     workspace: Workspace,
@@ -353,6 +393,18 @@ def _tend(
             f"broke a wedged claim held by pid {claim.broke.pid} "
             f"({claim.broke.command or 'unknown command'}, held since "
             f"{claim.broke.since or 'an unrecorded time'})",
+        )
+        # and in the journal too, because one break is recovery and a run of
+        # them is the kill loop -- which only a fold across turns can see, and
+        # `steward.log` is truncated. After the history read, deliberately: a
+        # turn's own break is `claim.broke`, and counting it twice would fire
+        # the loop item on the second break's first occurrence
+        append_event(
+            workspace.journal,
+            ACTION,
+            action="claim_broke",
+            pid=claim.broke.pid,
+            command=claim.broke.command,
         )
     return _turn(
         workspace,
@@ -477,15 +529,41 @@ class _History:
     last_step: dict[str, float] = field(default_factory=dict[str, float])
     """When each task's setpoint last moved, for the spacing gate."""
 
+    damage: list[DamagedLine] = field(default_factory=list[DamagedLine])
+    """Lines the journal read could not turn into events. Kept rather than discarded, because every fold above ran without whatever these lines said — and that is a fact about this turn's answers, not merely about the file (`items.JOURNAL_DAMAGE`)."""
+
+    status_failing: str | None = None
+    """When `status.md` stopped being writable, or `None` while it writes. The episode's opening edge, as `_write_status` journalled it — what tells this turn whether a failure is news and a success is a recovery."""
+
+    sync_failing: dict[str, str] = field(default_factory=dict[str, str])
+    """Destinations the propagation has stopped reaching, each with when it stopped. The same episode mechanics as `status_failing`, per target."""
+
+    breaks: int = 0
+    """Consecutive turns that each had to break a wedged claim, as the journal records them. This turn's own break is not in it — the fold ran before the break was journalled — so the turn adds itself (`TendResult.breaks`)."""
+
+    breaks_since: str | None = None
+    """When the current run of breaks began, or `None` where there is none."""
+
 
 def _history(workspace: Workspace) -> _History:
-    """Read the journal once, answering everything a turn asks of it."""
-    try:
-        events = read_journal(workspace.journal).events
-    except OSError:
-        return _History(pool=None, previous=frozenset(), acknowledged={})
+    """Read the journal once, answering everything a turn asks of it.
 
+    Raises:
+        TendError: The journal exists and could not be read. Refusing is the only honest answer: the journal holds the pause, the acknowledgments, and the last known settings, so a turn that proceeded on an empty history would silently un-pause the run, re-open every accepted decision, and degrade onto defaults nobody chose. The refusal reaches the channel through the same path every other failed turn does (`notify_failure`).
+    """
+    try:
+        read = read_journal(workspace.journal)
+    except OSError as ex:
+        raise TendError(
+            f"the journal ({workspace.journal}) could not be read: {ex} — a "
+            f"turn cannot run without it, because it holds the pause, the "
+            f"acknowledgments, and the settings a degraded turn falls back on"
+        ) from ex
+
+    events = read.events
     armed = read_armed(events)
+    status_failing, sync_failing = _episodes(events)
+    breaks_since, breaks = _breaks(events)
     ramp_levels, last_step = read_ramp_record(events)
     pool: Pool | None = None
     previous: frozenset[str] | None = None
@@ -526,7 +604,62 @@ def _history(workspace: Workspace) -> _History:
         ramp_holds=read_ramp_holds(events),
         ramp_levels=ramp_levels,
         last_step=last_step,
+        damage=read.damage,
+        status_failing=status_failing,
+        sync_failing=sync_failing,
+        breaks=breaks,
+        breaks_since=breaks_since,
     )
+
+
+def _episodes(events: list[JournalEvent]) -> tuple[str | None, dict[str, str]]:
+    """The write failures in force: `status.md`'s, and each sync destination's.
+
+    An episode opens with the `action` its writer journals on the *first* failure and closes with the `…_restored` its first success writes, so the fold is a switch per subject and the answer is *when it started* — which is what keys the item, and what makes acknowledging one episode not cover the next. Defensive on doubled edges (a crash can repeat one): the episode keeps its original start.
+    """
+    status_failing: str | None = None
+    sync_failing: dict[str, str] = {}
+    for event in events:
+        if event.type != ACTION:
+            continue
+        action = event.payload.get("action")
+        if action == "status_unwritable":
+            status_failing = status_failing or event.ts
+        elif action == "status_unwritable_restored":
+            status_failing = None
+        elif action in ("sync_failed", "sync_restored"):
+            target = event.payload.get("target")
+            if not isinstance(target, str) or not target:
+                continue
+            if action == "sync_failed":
+                sync_failing.setdefault(target, event.ts)
+            else:
+                sync_failing.pop(target, None)
+    return status_failing, sync_failing
+
+
+def _breaks(events: list[JournalEvent]) -> tuple[str | None, int]:
+    """The run of consecutive turns that each had to break a wedged claim.
+
+    Counted per `claim_broke` rather than per turn-slot, because the turns that matter most never reach their observation: a tend that breaks its predecessor and then wedges itself leaves only the break behind, and the next break lands in the same slot. What ends the run is the one thing a loop cannot produce — an observation from a turn that broke nothing.
+
+    Returns:
+        When the run began and how many breaks it holds, `(None, 0)` where the last completed turn was clean.
+    """
+    since: str | None = None
+    count = 0
+    broke_this_slot = False
+    for event in events:
+        if event.type == ACTION and event.payload.get("action") == "claim_broke":
+            if count == 0:
+                since = event.ts
+            count += 1
+            broke_this_slot = True
+        elif event.type == OBSERVATION:
+            if not broke_this_slot:
+                since, count = None, 0
+            broke_this_slot = False
+    return since, count
 
 
 def _elapsed(ts: str) -> float | None:
@@ -534,13 +667,7 @@ def _elapsed(ts: str) -> float | None:
 
     Unparseable rather than absent: a journal written by a version that stamped its timestamps differently is history, not damage, and the caller's answer to *how long since the last tend* is then *unknown* rather than *forever*.
     """
-    try:
-        recorded = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if recorded.tzinfo is None:
-        return None
-    return (datetime.now(timezone.utc) - recorded).total_seconds()
+    return seconds_since(ts)
 
 
 def _pool(recorded: object) -> Pool | None:
@@ -711,6 +838,27 @@ def _turn(
     # a row saying `83 running` beside a block saying nothing is running is the
     # kind of disagreement a reader has no way to resolve
     fleet = _live(inflight, logs)
+
+    # the anomaly census, diffed against the journal's fold. The pending
+    # events are computed for both dispositions and folded in for both --
+    # `anomalies` below is the state the journal holds after this tend, and
+    # the state it *would* hold for a status -- but only an executing turn
+    # appends them (below, before the observation)
+    classed = read_classed_cache(workspace.classed)
+    detection = detect(
+        observed, logs, inflight, fleet, workers_dir=workspace.workers, cache=classed
+    )
+    if detection.unreadable:
+        # summaries damage joins the header damage on the item surface; the
+        # summary's count was taken by reconcile before this read and stays a
+        # count of headers
+        observed = replace(
+            observed, unreadable=[*observed.unreadable, *detection.unreadable]
+        )
+    anomalies = read_anomalies(history.events)
+    pending = absorb(anomalies, detection.batches, task_health(observed))
+    if pending:
+        anomalies = read_anomalies([*history.events, *as_events(pending, utc_now())])
     progress = Progress(
         rows=task_progress(observed, fleet),
         # the pids come from the in-flight record rather than from the fleet,
@@ -761,12 +909,35 @@ def _turn(
         progress=progress,
         tuning=plan,
         log_dir=log_dir,
+        journal_damage=history.damage,
+        status_failing=history.status_failing,
+        sync_failing=history.sync_failing,
+        # this turn's own break is not in the fold -- the history was read
+        # before the break was journalled -- so it is added here, once
+        breaks=history.breaks + (1 if broke is not None else 0),
+        breaks_since=history.breaks_since,
+        anomalies=anomalies,
+        anomaly_pending=pending,
     )
     if not execute:
         return _projected(result, observed, inflight, history)
 
+    # the stall guard's account of the instants it could not read. Machinery
+    # rather than the run, so it goes to the operational log -- and only on an
+    # executing turn, which is what keeps `reconcile` pure and `status` silent
+    for warning in decision.warnings:
+        steward_log(workspace.log, warning)
+
     acted = _act(workspace, manifest, log_dir, decision.actions, observed)
     applied = _retune(workspace, plan, acted)
+
+    # the anomaly deltas land now, after the acting they describe alongside and
+    # before the observation that will list their items. An append that fails
+    # fails the turn, exactly like the observation's own: the journal is the
+    # one record nothing can rebuild, and the next turn's diff re-derives
+    # whatever did not land rather than double-counting what did
+    for entry in pending:
+        append_event(workspace.journal, entry.type, **entry.fields)
     if acted.journalled:
         # the projection below reports *what has been done to this run*, and
         # this turn has just done something to it -- so the read that fed it is
@@ -807,12 +978,28 @@ def _turn(
         action.location for action in decision.actions if isinstance(action, ArchiveLog)
     }
     write_attempt_cache(workspace.observed, cache.keep({*logs.locations} - moved))
+    # the classification cache follows the same discipline, narrowed the same
+    # way, plus to the evals still running (its per-sample memo keys on them)
+    write_classed_cache(
+        workspace.classed,
+        classed.keep(
+            {*logs.locations} - moved,
+            running={
+                attempt.eval_id
+                for attempts in logs.attempts.values()
+                for attempt in attempts
+                if attempt.status == "started"
+            },
+        ),
+    )
 
+    # before the observation, so a crash between the two costs a repeated
+    # observation rather than a snapshot the journal claims was written
+    _write_status(workspace, result, failing_since=history.status_failing)
     _record(
         workspace, result, pool=settings.pool, tuning=observation_payload(plan, applied)
     )
-    _write_status(workspace, result)
-    _sync(workspace, settings, log_dir)
+    _sync(workspace, settings, log_dir, failing=history.sync_failing)
     # last, after the file a post's footer sends its reader to has been written
     # and propagated -- and never at the cost of the turn, which has already
     # happened by the time anything is said about it
@@ -841,13 +1028,23 @@ def _retune(workspace: Workspace, plan: TuningPlan, acted: "_Acted") -> list[Mov
     """
     applied: list[Move] = []
     for move in plan.moves:
-        outcome = task_config(
-            move.task_id,
-            max_samples=move.to if move.knob == "max_samples" else None,
-            max_connections=move.to if move.knob == "max_connections" else None,
-            reason=move.reason,
-        )
         described = f"retune {move.key} ({move.knob} {move.at}→{move.to})"
+        try:
+            outcome = task_config(
+                move.task_id,
+                max_samples=move.to if move.knob == "max_samples" else None,
+                max_connections=move.to if move.knob == "max_connections" else None,
+                reason=move.reason,
+            )
+        except RuntimeError as ex:
+            # a usage error -- Steward built a line the CLI does not accept.
+            # A defect here rather than a condition out there, and it must
+            # cost this move rather than the turn: unwrapped it failed the
+            # whole tend, losing the observation, the snapshot, and the post,
+            # every interval, with nothing saying so anywhere but a traceback
+            # nobody was standing at
+            _failed(workspace, acted, f"could not {described}", ex)
+            continue
         if isinstance(outcome, Unavailable):
             failure = f"could not {described}: {outcome.kind}: {outcome.detail}"
             acted.failures.append(failure)
@@ -866,10 +1063,15 @@ def _retune(workspace: Workspace, plan: TuningPlan, acted: "_Acted") -> list[Mov
             # unattended retune nobody can find afterwards is the thing that
             # provenance exists to prevent, so it is reported rather than
             # inferred later from a gap
-            acted.failures.append(
+            unfiled = (
                 f"{described} took effect but was not recorded in the eval log; "
                 f"the journal has it and the log will not"
             )
+            acted.failures.append(unfiled)
+            # `steward.log` too, like every other failure in this loop: the
+            # failures list feeds a single turn's items, and the operational
+            # log is where a reader reconstructs the machinery's night from
+            steward_log(workspace.log, unfiled)
         append_event(
             workspace.journal,
             ACTION,
@@ -1403,6 +1605,12 @@ def _record(
         # the ids rather than the items: this is what the *next* turn diffs
         # against, and a rendered summary is not something to diff
         items=[item.id for item in result.items],
+        # open windows by class, for the time series an agent reads: whether a
+        # population is growing is a diff over these, not a re-derivation
+        anomalies={
+            anomaly.class_key: anomaly.evidence.count
+            for anomaly in result.anomalies.open
+        },
         # the same, for tasks. `states` counts them, and a count cannot tell one
         # task finishing while another is reset apart from nothing happening
         complete=_finished(result.progress),
@@ -1420,10 +1628,17 @@ def _record(
     )
 
 
-def _write_status(workspace: Workspace, result: TendResult) -> None:
+def _write_status(
+    workspace: Workspace, result: TendResult, *, failing_since: str | None
+) -> None:
     """Rewrite `status.md`, atomically, and never at the cost of the turn.
 
-    Written through a temporary file and renamed, because this is the file a remote reader watches and half of it would read as a run in a state it was never in. A failure to write it is machinery: the turn already happened, and the journal already recorded it.
+    Written through a temporary file and renamed, because this is the file a remote reader watches and half of it would read as a run in a state it was never in. A failure to write it is machinery: the turn already happened, and the journal already recorded it — but it is also the failure a remote reader detects *only* by this file going stale, which can take hours to notice. So the edges are journalled (`_mark`) and the episode becomes an item (`items.STATUS_UNWRITABLE`).
+
+    Args:
+        workspace: The workspace whose snapshot this is.
+        result: The turn to render.
+        failing_since: The open episode's start, or `None` where the last write worked — what makes a failure the *first* one worth recording and a success a recovery.
     """
     body = status_markdown(result)
     temporary = workspace.status.with_name(f".{workspace.status.name}.tmp")
@@ -1439,9 +1654,27 @@ def _write_status(workspace: Workspace, result: TendResult) -> None:
         except OSError:
             pass
         steward_log(workspace.log, f"could not write {workspace.status.name}: {ex}")
+        if failing_since is None:
+            _mark(workspace, "status_unwritable")
+        return
+    if failing_since is not None:
+        _mark(workspace, "status_unwritable_restored")
 
 
-def _sync(workspace: Workspace, settings: _Settings, log_dir: str) -> None:
+def _mark(workspace: Workspace, action: str, **fields: Any) -> None:
+    """Journal an episode edge, and never at the cost of the turn.
+
+    Swallowing `OSError` here is deliberate and honest about its gap: the failures these edges record are write failures, and the case where the whole disk is full can record nothing at all (workflow.md §9.2). What survives that case is the failure's own `steward.log` line and, for `status.md`, the staleness a remote reader was always going to see.
+    """
+    try:
+        append_event(workspace.journal, ACTION, action=action, **fields)
+    except OSError:
+        return
+
+
+def _sync(
+    workspace: Workspace, settings: _Settings, log_dir: str, *, failing: dict[str, str]
+) -> None:
     """Propagate the workspace to the log directory, if it propagates anywhere.
 
     **Last, and after `status.md` is written**, which is what makes it cheap to be interrupted by: everything this turn did has already happened and already been recorded, so a propagation that runs long or not at all costs a remote reader ten minutes of freshness and costs the run nothing.
@@ -1449,12 +1682,24 @@ def _sync(workspace: Workspace, settings: _Settings, log_dir: str) -> None:
     Also the reason a slow one needs no cancellation machinery. A turn holds the claim while it runs, so an overrunning propagation means the next timer fire is refused — the ordinary path rather than a problem — and the interval after it converges.
 
     Truncating `steward.log` happens here rather than beside the writer: the writer is the thing that must not fail, and this is the last point in the turn where the file is finished being written to.
+
+    The report is consumed rather than dropped: a propagation that failed is a remote reader losing their only channel, which `sync_workspace` says once in `steward.log` and then — because that file is truncated and the failure repeats every turn — this records as an episode (`_mark`), keyed by destination, for `items.SYNC_FAILED` to gate on.
+
+    An episode whose destination is no longer the one being synced — the target changed, or sync was turned off — closes here too: nothing will ever write its `sync_restored` otherwise, and a permanent warning about a destination nobody configured anymore is noise, not news.
     """
     truncate_log(workspace.log)
     target = sync_target(settings.sync, log_dir)
+    for stale in failing:
+        if stale != target:
+            _mark(workspace, "sync_restored", target=stale)
     if target is None:
         return
-    sync_workspace(workspace, target)
+    report = sync_workspace(workspace, target)
+    if report.failures:
+        if target not in failing:
+            _mark(workspace, "sync_failed", target=target)
+    elif target in failing:
+        _mark(workspace, "sync_restored", target=target)
 
 
 def _live(inflight: InFlight, logs: ObservedLogs) -> LiveFleet:

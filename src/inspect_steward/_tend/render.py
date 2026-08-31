@@ -15,6 +15,7 @@ Below that, where the run stands, and then what has been done to it.
 
 from typing import TYPE_CHECKING
 
+from .._anomaly.model import Anomalies, Anomaly, AnomalyState
 from .._evalset.cost import fleet_width, projection
 from .._evalset.observe import TaskState
 from .._schedule import Summary
@@ -96,6 +97,7 @@ def status_markdown(
         counts.insert(2, f"{summary.spawning} would be spawned")
     lines.extend(["", " · ".join(counts), ""])
     lines.extend(_progress(result))
+    lines.extend(_anomalies(result))
     lines.extend(_live(result))
     lines.extend(_tuning(result))
     lines.extend(_policies(result))
@@ -195,6 +197,10 @@ def _progress(result: "TendResult") -> list[str]:
     # not gated on `live` with the other two: what is still to run is known
     # whether or not a worker is answering, and most of a sweep has none
     queued = any(row.queued for row in rows)
+    # nor is this: an errored count is the log's to report, it is the number
+    # the anomaly queue exists for (step 23), and it is per task -- the totals
+    # line already carries the sum and cannot say which tasks it came from
+    errored = any(row.errored for row in rows)
     scored = any(row.headline is not None for row in rows)
     budgeted = any(row.budget is not None for row in rows)
 
@@ -205,6 +211,9 @@ def _progress(result: "TendResult") -> list[str]:
         align += ["---:"]
     if queued:
         header += ["queued"]
+        align += ["---:"]
+    if errored:
+        header += ["errored"]
         align += ["---:"]
     if live:
         header += ["connections"]
@@ -235,6 +244,8 @@ def _progress(result: "TendResult") -> list[str]:
             cells += [str(row.running) if row.running else ""]
         if queued:
             cells += [str(row.queued) if row.queued else ""]
+        if errored:
+            cells += [str(row.errored) if row.errored else ""]
         if live:
             connections = ""
             if row.connections is not None:
@@ -265,6 +276,98 @@ def _progress(result: "TendResult") -> list[str]:
         lines += ["", " ".join(notes)]
 
     return lines + [""]
+
+
+def anomalies_line(anomalies: Anomalies) -> str | None:
+    """One phrase for where the anomaly queue stands, or `None` while it is empty.
+
+    Shared by the terminal and this document for the reason `verdict_line` is: two wordings of the same count are two chances to disagree.
+    """
+    if not anomalies.open:
+        return None
+    parts: list[str] = []
+    for state, phrase in (
+        (AnomalyState.INVESTIGATING, "investigating"),
+        (AnomalyState.PROPOSED, "proposed"),
+        (AnomalyState.RULED, "awaiting a re-run"),
+    ):
+        count = sum(1 for anomaly in anomalies.open if anomaly.state is state)
+        if count:
+            parts.append(f"{count} {phrase}")
+    detail = f" ({', '.join(parts)})" if parts else ""
+    total = len(anomalies.open)
+    return f"anomalies: {total} open{detail}"
+
+
+def _anomalies(result: "TendResult") -> list[str]:
+    """The open windows, the live proposals, and the marks the record carries.
+
+    A sub-heading beside `### tasks` rather than a section, for the same reason the table is: the document has three sections and an agent relays it whole. Silent while nothing is open and nothing is marked — a run with no anomalies should not carry an empty heading saying so.
+
+    The marks stay after their windows settle, deliberately: an accepting ruling's effect is the report-facing account of what happened to the data ("2 samples excluded from scoring"), and a document that dropped it the moment the decision landed would show the decision only while it was still undecided.
+    """
+    anomalies = result.anomalies
+    line = anomalies_line(anomalies)
+    accepted = anomalies.accepted()
+    if line is None and not accepted:
+        return []
+    lines = ["### anomalies", ""]
+    if line is not None:
+        lines += [line, ""]
+    for anomaly in anomalies.open:
+        lines.append(f"- `{anomaly.class_key}` — {_window_line(anomaly)}")
+        if anomaly.evidence.exemplar:
+            lines.append(f"  - `{anomaly.evidence.exemplar}`")
+        for ruling in anomaly.precedent:
+            # verbatim, attached where the anomaly surfaces rather than looked
+            # up (workflow.md §12.8)
+            lines.append(
+                f"  - precedent: {ruling.disposition.value} by {ruling.by} "
+                f"at {ruling.ts}: {ruling.reason}"
+            )
+    for identifier, proposal in anomalies.proposals.items():
+        covered = len(proposal.classes)
+        lines.append(
+            f"- {identifier} proposes {proposal.action.value} for {covered} "
+            f"{'class' if covered == 1 else 'classes'} — "
+            f"`steward rule --proposal {identifier}`"
+        )
+    for anomaly in accepted:
+        ruling = anomaly.ruling
+        if ruling is None:
+            continue
+        mark = anomaly.effect or f"accepted — {ruling.reason}"
+        lines.append(
+            f"- `{anomaly.class_key}` — {mark} "
+            f"(ruled {ruling.disposition.value} by {ruling.by})"
+        )
+    return lines + [""]
+
+
+def _window_line(anomaly: Anomaly) -> str:
+    count = anomaly.evidence.count
+    plural = "" if count == 1 else "s"
+    if anomaly.state is AnomalyState.RULED and anomaly.ruling is not None:
+        ruled = f"ruled {anomaly.ruling.disposition.value} by {anomaly.ruling.by}"
+        if anomaly.failed_resolutions:
+            line = (
+                f"{ruled}; the re-run failed again "
+                f"×{anomaly.failed_resolutions} — awaiting a fresh ruling"
+            )
+        else:
+            line = f"{ruled}, awaiting the re-run"
+    elif anomaly.state is AnomalyState.INVESTIGATING:
+        note = f": {anomaly.note}" if anomaly.note else ""
+        line = f"investigating{note} — {count} instance{plural}"
+    elif anomaly.state is AnomalyState.PROPOSED:
+        line = f"proposed under {anomaly.proposal} — {count} instance{plural}"
+    else:
+        line = f"open, {count} instance{plural}"
+    if anomaly.generation > 1:
+        line += f" (generation {anomaly.generation})"
+    if anomaly.substrate:
+        line += " — looks like the machinery under the run; verify storage before re-running"
+    return line
 
 
 def _raised(count: int) -> str:

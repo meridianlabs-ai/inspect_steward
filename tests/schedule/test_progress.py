@@ -11,6 +11,7 @@ returns one rather than reaching into the table itself.
 """
 
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -240,6 +241,27 @@ def test_a_column_nothing_has_to_say_is_dropped(tmp_path: Path) -> None:
     # holds its width open -- the row is the key and the two counts, full stop
     assert line.split()[-2:] == ["10/10", "100%"]
     assert line == line.rstrip()
+
+
+def test_errored_samples_are_a_column_beside_the_queue(tmp_path: Path) -> None:
+    """The count the anomaly queue exists for, visible per task.
+
+    The totals line already sums it; only a row can say *which* task the
+    errors are in, and until somebody rules on them that is the reader's
+    first question.
+    """
+    flaky = SynthTask("flaky", samples=10, epochs=1)
+    clean = SynthTask("clean", samples=10, epochs=1)
+    write_log(tmp_path, flaky, total=10, completed=7)
+    write_log(tmp_path, clean, total=10, completed=10)
+
+    lines = progress_table(rows(tmp_path, [flaky, clean], LiveFleet()))
+
+    flaky_line = next(line for line in lines if "flaky" in line)
+    clean_line = next(line for line in lines if "clean" in line)
+    assert "3e" in flaky_line
+    # gated like running and queued: zero is the ordinary case and says nothing
+    assert re.search(r"\d+e\b", clean_line) is None
 
 
 QUEUES = [

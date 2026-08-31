@@ -21,7 +21,22 @@ The consequence is that **completion is not success**: a log can finish `success
 Two things govern what happens to errored samples:
 
 - **Automatic retry** belongs to your definition: set `retry_on_error` in your `eval_set()` call and it is honored exactly as written; when a definition says nothing, Steward workers default to 3 attempts per sample. Retrying samples release their concurrency slot and re-enter at the back of the queue, so retries never block healthy samples — they just tend to finish late in the task.
-- **Everything past automatic retry is a decision**: re-run the samples, accept them as failed, or exclude them from scoring. The agent groups errored samples into classes (a provider outage is one question, not two hundred) and either acts within your standing policy or asks you.
+- **Everything past automatic retry is a decision**, and Steward turns it into one you can actually make: samples that failed the same way are grouped into a **class** (a provider outage is one question, not two hundred), the class appears in `steward status` under *anomalies*, and it stays open until somebody rules on it with `steward rule`.
+
+A ruling names one of the honest answers, each with a different consequence for your results:
+
+| Disposition | What it means | What happens to the data |
+|----|----|----|
+| `rerun` | The failure was transient; the samples should run again | Steward watches the re-run and records whether it passed or failed again |
+| `exclude` | Leave the samples out of scoring | The report says how many were excluded, as a sentence you approved |
+| `zero` | Count the samples as failures | Scored zero, with the same visible mark |
+| `score` | The recorded results stand as they are | Scored as-is, marked |
+| `accept` | The anomaly is real and the data stands with a caveat | Requires `--effect`: the sentence the report carries. Refused for errored samples, where "accept" would be exclusion in disguise |
+| `dismiss` | Looked, nothing here | No mark; the record keeps who looked and why |
+
+Every ruling requires a `--reason` and a `--by` naming who decided, because the ruling is the part of the run's story that survives. If the same failure comes back after a ruling, it opens as a new question **carrying the old decision with it** — the 2am reader inherits the 11pm reasoning without hunting for it.
+
+The agent's part is grouping and legwork: `steward investigate` marks a class as being worked, and `steward propose` bundles related classes into one question with the evidence attached, which you answer whole or in part with `steward rule --proposal`. A ruling itself is always a person's.
 
 To stop a run when error rates climb, write it as a policy rule — e.g. *"if more than 10% of the samples in a task error out, pause the run and notify me"* — which pauses the whole run reversibly rather than failing one task.
 
@@ -29,10 +44,14 @@ To stop a run when error rates climb, write it as a policy rule — e.g. *"if mo
 
 A task that fails outright — an import error, an OOM, a scorer that throws, a worker process that dies — is re-launched by the next turn of the monitor. Attempts are counted, and after `stall_after` of them finish nothing new (default: 2) the task is marked **stalled**: it will not be re-launched again, and it is reported as needing a person.
 
+Each failed attempt is also classed like a sample error is — on the exception in the log's header, on the worker's own output when it died before writing any log — so a stalled task arrives with its evidence attached rather than as a bare count. A transient failure that Steward's own re-launch absorbed resolves itself; one that looks like the storage or credentials *under* the run is flagged, and no re-run is proposed for it until a person has looked.
+
 The limit exists because a structural failure re-runs to the same place at full price — a definition that will not import fails identically on attempt ten. Steward never retries past the limit on its own; raising `stall_after` in `_steward.yaml` is how you buy more patience for a genuinely flaky environment (a sandbox fleet earns more of it than a deterministic scorer bug).
 
 When a person rules on a stalled task — fixing the definition and re-launching, or invalidating samples for a re-run — the attempt history before that ruling is cleared: a decision to try again is made by the only party entitled to make one, and what happened before it no longer counts against the task.
 
 ## Where errors surface
 
-Sample error counts and stalled tasks both appear in `steward status` and in the questions the agent brings you, each raised once rather than repeated every interval. Decisions and their reasons are recorded in the journal as they happen, so how the run's errors were handled is part of the run's record.
+Per-task error counts appear in the status table, and open anomaly classes — with their instance counts, an example message, and any prior rulings — under the *anomalies* heading in `steward status` and `status.md`. Each class is raised once rather than repeated every interval, and again only when it materially changes: a population crossing an order of magnitude, or a re-run that failed. Rulings, their reasons, and who made them are recorded in the journal as they happen, so how the run's errors were handled is part of the run's record — and a run does not read as finished while a class is still waiting for its answer.
+
+Two kinds deliberately stay quieter than that. A worker death Steward's own re-launch absorbs resolves itself without asking anyone, and samples *you* killed (`limit:operator`) never ask inline at all — they wait in the anomalies block and get their ruling as part of accepting the results, since the person who killed them already knows.

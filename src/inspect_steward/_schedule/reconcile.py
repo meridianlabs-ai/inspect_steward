@@ -135,6 +135,9 @@ class DepartedWorker:
     pid: int | None = None
     """`None` for a worker that never launched."""
 
+    started: str = ""
+    """When the spawn began, from the in-flight record — what lets a departure with no log say when the attempt it wasted was."""
+
 
 @dataclass(frozen=True)
 class InFlight:
@@ -350,6 +353,12 @@ class Reconciliation:
 
     summary: Summary
 
+    warnings: list[str] = field(default_factory=list[str])
+    """Recorded instants the stall guard could not read, named per task.
+
+    `_stalled` treats an unparseable time as *not evidence* — losing a stall rather than inventing one — which is the right refusal and a quiet one: the guard is weaker than it looks for exactly the tasks whose records are damaged, and nothing said so. Reported rather than logged, because this function is pure; an executing turn writes them to `steward.log`, and a `status` discards them with the actions.
+    """
+
 
 def reconcile(
     manifest: Manifest,
@@ -391,10 +400,11 @@ def reconcile(
 
     pending: list[SpawnTask] = []
     stalled: list[str] = []
+    warnings: list[str] = []
     for observation in _spawn_order(observed.tasks):
         if observation.identifier in running:
             continue
-        if _stalled(observation, inflight, pool.stall_after):
+        if _stalled(observation, inflight, pool.stall_after, warnings):
             stalled.append(observation.identifier)
         else:
             pending.append(_spawn(observation, inflight))
@@ -433,6 +443,7 @@ def reconcile(
     return Reconciliation(
         actions=actions,
         queued=queued,
+        warnings=warnings,
         summary=_summarize(
             observed,
             running=running,
@@ -532,7 +543,10 @@ def _attempts(observation: TaskObservation) -> list[LogAttempt]:
 
 
 def _stalled(
-    observation: TaskObservation, inflight: InFlight, stall_after: int
+    observation: TaskObservation,
+    inflight: InFlight,
+    stall_after: int,
+    warnings: list[str],
 ) -> bool:
     """Whether respawning this task has stopped accomplishing anything.
 
@@ -545,6 +559,8 @@ def _stalled(
     **The two halves merge rather than alternate**, and consulting the record only for a task with no logs at all was a bug: a task whose first attempt lands a partial log and whose next twenty die at import has evidence in both places, and reading only the log would see one attempt that made progress and respawn forever. So the spent attempts that began *after the newest log did* are folded into the same run. That test identifies exactly the attempts that landed nothing, since an attempt that landed a log would be the newest one itself.
 
     **An invalidation clears the history before it, and only that.** Somebody reached in and marked samples for a re-run, which is a decision to try again made by the only party entitled to make one — so nothing that happened before they acted counts against the task any more. What they cannot do is exempt it forever: a retry that dies before landing a replacement leaves the invalidated log current, so *returning* here rather than resetting made the one branch with no ceiling on it, and an import error under an invalidated log respawned every ten minutes for as long as the run lasted. Attempts since the invalidation count normally.
+
+    **An instant that will not read is reported, never counted.** Every unparseable time here weakens the guard in the lenient direction — losing a stall rather than inventing one — and that used to be silent, so a task whose record was damaged looked exactly like one converging. `warnings` collects one line per skipped instant, for the executing turn to log.
     """
     attempts = _attempts(observation)
     spent = inflight.spent.get(observation.identifier, [])
@@ -554,7 +570,14 @@ def _stalled(
         # rewrites the log, and nothing else touches a finished one. Without a
         # time there is nothing to count from, so the task gets the benefit
         since = _mtime(observation.current)
-        return since is not None and _after(spent, since) >= stall_after
+        if since is None:
+            warnings.append(
+                f"the invalidated log for {observation.key} has no readable "
+                f"write time, so the stall guard is counting no attempts "
+                f"against it"
+            )
+            return False
+        return _after(spent, since, observation.key, warnings) >= stall_after
 
     if not attempts:
         return len(spent) >= stall_after
@@ -569,20 +592,31 @@ def _stalled(
             fruitless += 1
 
     if (newest := _when(attempts[-1].created)) is not None:
-        fruitless += _after(spent, newest)
+        fruitless += _after(spent, newest, observation.key, warnings)
+    else:
+        warnings.append(
+            f"the newest log for {observation.key} has an unreadable created "
+            f"time ({attempts[-1].created!r}), so crashed attempts since it "
+            f"are not counted toward the stall guard"
+        )
     return fruitless >= stall_after
 
 
-def _after(spent: list[str], instant: datetime) -> int:
+def _after(spent: list[str], instant: datetime, key: str, warnings: list[str]) -> int:
     """How many of a task's finished attempts began after some instant.
 
     Which is how many of them landed no log, whenever `instant` comes from the newest log there is: an attempt that landed one would be newer than the log it is being compared against.
     """
-    return sum(
-        1
-        for started in spent
-        if (when := _when(started)) is not None and when > instant
-    )
+    count = 0
+    for started in spent:
+        if (when := _when(started)) is None:
+            warnings.append(
+                f"a recorded attempt of {key} has an unreadable start time "
+                f"({started!r}) and is not counted toward the stall guard"
+            )
+        elif when > instant:
+            count += 1
+    return count
 
 
 def _mtime(attempt: LogAttempt | None) -> datetime | None:

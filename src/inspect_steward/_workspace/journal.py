@@ -27,13 +27,19 @@ __all__ = [
     "ARMED",
     "COLLECTED",
     "DISARMED",
+    "INSTANCE",
+    "INVESTIGATING",
     "LAUNCHED",
     "OBSERVATION",
+    "OPENED",
     "PAUSED",
+    "PROPOSAL",
     "RAISED",
     "RAMP_HELD",
     "RAMP_RESUMED",
+    "RESOLUTION",
     "RESUMED",
+    "RULING",
     "Ack",
     "Armed",
     "Collected",
@@ -172,6 +178,46 @@ UNDELIVERED = "undelivered"
 So a turn that could not deliver writes down what it was carrying, and the next turn subtracts that from the baseline it diffs against (`read_undelivered`). The edge is therefore retained rather than retried — the following turn recomputes a post from the current state and includes what was owed, which is right for a message that describes a moment rather than a queue of moments.
 
 Carries `items` (the ids that appeared) and `complete` (the display keys that finished). Read only back to the most recent `OBSERVATION`, since a turn that delivered records a baseline that already accounts for everything before it.
+"""
+
+OPENED = "opened"
+"""Journal event: a class of failures has a window absorbing instances.
+
+Written by a tend, mechanically, when detection finds instances of a class with no absorbing window — the first ever, or the first after a ruling closed the previous one. Carries `class`, `kind` (`error` | `limit` | `task` | `score`), and `substrate` (whether the failure is the machinery under the run, which forbids a re-run proposal until a person has looked — execution.md §9.1).
+"""
+
+INSTANCE = "instance"
+"""Journal event: new instances of a class, batched per turn.
+
+**At most one per class per turn**: five hundred errored samples arriving in one interval are one `opened` and one `instance` with `count=500`, never five hundred lines. The journal carries the time series and the decision trail; the authoritative instance set re-derives from the log directory every turn (this file's own module docstring: anomalies re-derive from logs).
+
+Carries `class`, `count`, and `refs` — one content-derived ref per instance, the dedupe ledger the fold maintains — plus capped evidence: `samples` (≤20 `id:epoch`), `tasks`, `logs`, `exemplar` (one verbatim message, display-only, never identity).
+"""
+
+INVESTIGATING = "investigating"
+"""Journal event: the agent is working a class before proposing anything.
+
+A sixth event rather than a flag on `proposal`, because investigation precedes proposing and must survive a session boundary: the next agent must not re-propose what the last one was mid-way through, and `status` must be able to say a class is being worked (workflow.md §12.5). Carries `class`, `by`, `note`.
+"""
+
+PROPOSAL = "proposal"
+"""Journal event: the agent's grouping judgement — these classes are one decision.
+
+Carries `id` (`prop-<digest8>`), one `action`, the covered `classes` with per-class evidence snapshotted from the fold (count, exemplar, window, precedent) — snapshotted by the verb so the record shows what the human was shown, and so a partial answer is possible — plus `reason` and `by`. A later proposal covering a class supersedes the earlier one for that class.
+"""
+
+RULING = "ruling"
+"""Journal event: a human decided what a class of failures means.
+
+**One event per class**: ruling a twelve-class proposal appends twelve lines sharing a `proposal` id, which is what lets a group decision be unpicked later (workflow.md §5.6). Carries `class`, `disposition` (`rerun` | `exclude` | `zero` | `score` | `accept` | `dismiss`), a required `reason`, `by` — free text naming who decided, never a role, with room for `policy` when a standing pre-authorization applies (step 25) — `effect` (the report-facing sentence for the dispositions that mark the data), and `proposal`.
+
+A ruling closes the class's window: the next instance opens a new generation carrying the old rulings as precedent.
+"""
+
+RESOLUTION = "resolution"
+"""Journal event: what happened after a `rerun` ruling, or a task class healing.
+
+Written by a tend, mechanically, when it observes the outcome. Carries `class`, `outcome` (`reran_passed` | `reran_failed`), and `detail`; a `reran_failed` also carries the `refs` ledger entries for the instances it consumed, so the fold absorbs them rather than re-counting them as news. **Not** written for accepted dispositions — ACCEPTED derives from the ruling itself, and an echo event is two records that can disagree (the same argument as `NOTIFIED`).
 """
 
 JournalEvent = Event

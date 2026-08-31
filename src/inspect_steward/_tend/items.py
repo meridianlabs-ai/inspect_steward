@@ -18,11 +18,12 @@ from enum import IntEnum, StrEnum
 from hashlib import sha256
 from typing import TYPE_CHECKING
 
+from .._anomaly.model import Anomalies, Anomaly, AnomalyState
 from .._evalset.observe import ObservedTasks, TaskObservation, TaskState
 from .._schedule import InFlight, attempts_made
-from .._util.duration import format_duration
+from .._util.duration import format_duration, seconds_since
 from .._worker import LiveParked, acp_sockets
-from .._workspace import Armed
+from .._workspace import DEFAULT_TEND_INTERVAL, Armed
 
 if TYPE_CHECKING:
     # the turn assembles its result and then projects it, so the type it passes
@@ -79,6 +80,11 @@ TIMER_DRIFT = "timer_drift"
 SIGNOFF_READY = "signoff_ready"
 PARKED = "parked"
 TUNING_PROPOSAL = "tuning_proposal"
+JOURNAL_DAMAGE = "journal_damage"
+STATUS_UNWRITABLE = "status_unwritable"
+SYNC_FAILED = "sync_failed"
+KILL_LOOP = "kill_loop"
+ANOMALY = "anomaly"
 
 OWNERS = {
     STALLED: Owner.HUMAN,
@@ -92,6 +98,11 @@ OWNERS = {
     SIGNOFF_READY: Owner.HUMAN,
     PARKED: Owner.HUMAN,
     TUNING_PROPOSAL: Owner.HUMAN,
+    JOURNAL_DAMAGE: Owner.AGENT,
+    STATUS_UNWRITABLE: Owner.HUMAN,
+    SYNC_FAILED: Owner.HUMAN,
+    KILL_LOOP: Owner.HUMAN,
+    ANOMALY: Owner.AGENT,
 }
 """Default owner per kind. Policy may move some of these once `_steward.yaml` can say so (step 23); a kind absent from the table is the agent's, since an unrouted item is an investigation rather than a question."""
 
@@ -101,12 +112,14 @@ FIXED_OWNER = frozenset({PARKED})
 One entry, and it is the reason the module docstring says `owner` is a function of *(kind, state, policy)* with an exception. A park is a request for a human decision about what an eval measures, and the agent may never answer one (agent.md §6) — so a `_steward.yaml` that routed it to the agent would not be expressing a preference, it would be asking Steward to answer an approval on a person's behalf.
 """
 
-UNACKNOWLEDGEABLE = frozenset({ACTION_FAILED, PARKED})
+UNACKNOWLEDGEABLE = frozenset({ACTION_FAILED, PARKED, ANOMALY})
 """Kinds that cannot be disposed of, because they have no lifecycle to dispose.
 
 An action that failed is a single-turn fact: the next turn either hits it again or does not. Letting it be acknowledged would give it a persistence it does not have, and would silence a recurrence that happens to reuse the same words.
 
 A park is the opposite case and lands in the same set: it has a lifecycle, but the *only* thing that ends it is somebody answering. Acknowledging one would silence a worker still holding its slot, its sandbox and its model connections — which is the exact inverse of what an acknowledgment means everywhere else here, where it says *this is real and I have accepted it*. What the agent can do with a park is `raise` it, which is a claim about telling somebody rather than about the item being over.
+
+An anomaly has a richer lifecycle than an ack can honour: its window closes on a **ruling** — `steward rule`, with a disposition, a reason, and an author — and never on somebody waving it past. The equivalent of accepting one is a `dismiss` ruling, which leaves a record where an ack would leave a silence (workflow.md §12.2).
 """
 
 
@@ -224,6 +237,11 @@ def tend_items(
         *_unreadable(observed),
         *_supervision(result),
         *_failures(result),
+        *_journal_damage(result),
+        *_status_unwritable(result),
+        *_sync_failed(result),
+        *_kill_loop(result),
+        *_anomalies(result.anomalies),
         *_signoff(result),
     ]
     items = [
@@ -695,6 +713,11 @@ def _digest(value: str | None) -> str:
     return value.rsplit(":", 1)[-1][:12]
 
 
+def _digest8(value: str) -> str:
+    """Eight hex of a hash of anything, for an id built from text nobody should read back."""
+    return sha256(value.encode("utf-8")).hexdigest()[:8]
+
+
 def _named(observation: TaskObservation | None, identifier: str) -> str:
     """A task, as an id can carry it: something readable, then something unique.
 
@@ -705,8 +728,300 @@ def _named(observation: TaskObservation | None, identifier: str) -> str:
         # an orphan has no manifest row, so its log's task name is all there is
         name = observation.key
     readable = "".join(char for char in name if char.isalnum() or char in "._-")
-    digest = sha256(identifier.encode("utf-8")).hexdigest()[:8]
+    digest = _digest8(identifier)
     return f"{readable}:{digest}" if readable else digest
+
+
+def _journal_damage(result: "TendResult") -> list[Item]:
+    """Lines the journal yielded that could not be read as events.
+
+    **The agent's, because the repair is judgement.** Damage is a torn last line after a crash — one record, recoverable by reading what remains of it — and every fold this turn ran (the pause, the acks, the diff baseline) ran without whatever the lines said. A person cannot do anything with a line number; an agent can read the fragment and re-journal what it meant, or accept it as lost.
+
+    One item for the damage as a whole, keyed on the line numbers, so further damage is a new question and an acknowledged tear stays acknowledged.
+    """
+    damage = result.journal_damage
+    if not damage:
+        return []
+    lines = [entry.line for entry in damage]
+    shown = ", ".join(str(line) for line in lines[:5])
+    if len(lines) > 5:
+        shown = f"{shown} and {len(lines) - 5} more"
+    plural = len(damage) != 1
+    return [
+        Item(
+            id=f"{JOURNAL_DAMAGE}:{_digest8(','.join(str(line) for line in lines))}",
+            kind=JOURNAL_DAMAGE,
+            owner=OWNERS[JOURNAL_DAMAGE],
+            level=Level.ATTENTION,
+            subject="journal.jsonl",
+            summary=(
+                f"{len(damage)} journal line{'s' if plural else ''} "
+                f"(line{'s' if plural else ''} {shown}) could not be read as "
+                f"event{'s' if plural else ''}, so whatever "
+                f"{'they' if plural else 'it'} recorded is not being counted"
+            ),
+        )
+    ]
+
+
+def _status_unwritable(result: "TendResult") -> list[Item]:
+    """`status.md` has stopped being writable, which only this can say quickly.
+
+    The failure's natural signal is the file going stale, which a remote reader takes hours to notice and a local one never does. Keyed on the episode's start, so accepting one outage does not accept the next.
+    """
+    if result.status_failing is None:
+        return []
+    return [
+        Item(
+            id=f"{STATUS_UNWRITABLE}:{result.status_failing}",
+            kind=STATUS_UNWRITABLE,
+            owner=OWNERS[STATUS_UNWRITABLE],
+            level=Level.ATTENTION,
+            subject="status.md",
+            summary=(
+                f"status.md has not been writable since {result.status_failing}, "
+                f"so every reader of it is seeing a snapshot frozen there"
+            ),
+        )
+    ]
+
+
+def _sync_failed(result: "TendResult") -> list[Item]:
+    """A destination the workspace has stopped reaching.
+
+    **Gated on one full tend interval**, which is what keeps a single slow bucket write from paging anybody: the propagation already retries every turn, and the episode worth a person's attention is the one that outlived a retry. The interval is the armed timer's where there is one — the actual cadence of retries — and the default where the run is tended by hand.
+    """
+    interval = (
+        result.supervision.armed.interval
+        if result.supervision is not None and result.supervision.armed is not None
+        else DEFAULT_TEND_INTERVAL
+    )
+    items: list[Item] = []
+    for target, since in sorted(result.sync_failing.items()):
+        age = seconds_since(since)
+        if age is None or age < interval:
+            continue
+        items.append(
+            Item(
+                id=f"{SYNC_FAILED}:{_digest8(target)}:{since}",
+                kind=SYNC_FAILED,
+                owner=OWNERS[SYNC_FAILED],
+                level=Level.ATTENTION,
+                subject=target,
+                summary=(
+                    f"the workspace has not propagated to {target} since "
+                    f"{since}, so a remote reader's copy is frozen there"
+                ),
+            )
+        )
+    return items
+
+
+def _kill_loop(result: "TendResult") -> list[Item]:
+    """Every turn is killing its wedged predecessor to take the claim.
+
+    One break is the recovery working as designed and is not an item — it is a `steward.log` line and a history entry. A run of them is a tend that wedges deterministically, killed and reincarnated every interval, each incarnation destroying the evidence of the last; the run converges on nothing while every snapshot looks freshly tended. Keyed on when the run of breaks began, so a later, separate loop is heard again.
+    """
+    if result.breaks < 2 or result.breaks_since is None:
+        return []
+    return [
+        Item(
+            id=f"{KILL_LOOP}:{result.breaks_since}",
+            kind=KILL_LOOP,
+            owner=OWNERS[KILL_LOOP],
+            level=Level.ATTENTION,
+            subject="claim",
+            summary=(
+                f"every turn since {result.breaks_since} has had to kill a "
+                f"wedged predecessor to take the claim ({result.breaks} in a "
+                f"row) — the tend is wedging deterministically, not recovering"
+            ),
+        )
+    ]
+
+
+def _anomalies(anomalies: Anomalies) -> list[Item]:
+    """Every open window's item, with owner following state.
+
+    The routing (workflow.md §12.5): an OPEN window is the agent's to investigate; an INVESTIGATING one is the agent's, informationally, so a fresh session does not re-open what the last one was mid-way through; a PROPOSED one is suppressed under **one consolidated item per live proposal** — the human answers a decision, not a list; a RULED one is the agent's note that a re-run is awaited (the phase-1 seam — step 25 makes the tend apply it); and a re-run that failed again is the human's review, because it means the ruling's premise did not hold.
+
+    **An OPEN `limit:` window produces no item at all.** An operator kill is somebody's own deliberate act, its window is adjudication material rather than an incident, and the run keeps going either way (workflow.md §15: anomalies are settled afterwards) — so it waits in the fold and the `### anomalies` block for the signoff conversation instead of asking inline. Engaging early still works: investigating, proposing, or ruling one puts it back on the ordinary surfaces.
+
+    **The id is the re-notification policy** twice over here: the generation is in it, so a recurrence after a ruling is a new item over the precedent; and the weight rides in an order-of-magnitude bucket, so a population crossing 10, 100, 1000 re-arms the edge without every new instance being news.
+    """
+    items: list[Item] = []
+    covered: dict[str, list[Anomaly]] = {}
+    for anomaly in anomalies.open:
+        if anomaly.state is AnomalyState.PROPOSED and anomaly.proposal:
+            covered.setdefault(anomaly.proposal, []).append(anomaly)
+            continue
+        if anomaly.state is AnomalyState.OPEN and anomaly.kind == "limit":
+            continue
+        items.extend(_window_items(anomaly))
+    for identifier, proposal in anomalies.proposals.items():
+        windows = covered.get(identifier, [])
+        if not windows:
+            continue
+        count = sum(window.evidence.count for window in windows)
+        classes = ", ".join(window.class_key for window in windows)
+        # the bucket rides here too: a proposed population crossing an order
+        # of magnitude is news even while the question is already asked
+        bucket = _bucket(count)
+        items.append(
+            Item(
+                id=f"{ANOMALY}:prop:{identifier}" + (f":{bucket}" if bucket else ""),
+                kind=ANOMALY,
+                owner=Owner.HUMAN,
+                level=Level.ATTENTION,
+                subject=identifier,
+                summary=(
+                    f"proposal {identifier} asks to {proposal.action.value} "
+                    f"{count} instances across {len(windows)} "
+                    f"{'class' if len(windows) == 1 else 'classes'} ({classes})"
+                ),
+                action=f"steward rule --proposal {identifier}",
+            )
+        )
+    return items
+
+
+def self_healing(item: Item) -> bool:
+    """Whether an agent item resolves without anyone acting — what the no-agent escalation skips.
+
+    A `task:` anomaly window is the one kind with a mechanical exit: Steward respawns the worker on its own, and the window resolves itself when the task completes (`_anomaly.fold`, the mechanical heal). Escalating one to a channel because no agent is attached would page a person about something nobody needs to touch — and if it *doesn't* heal, the task stalls, and the `stalled` item is the human-owned surface that says so durably.
+    """
+    return (
+        item.kind == ANOMALY
+        and item.owner is Owner.AGENT
+        and item.subject.partition(":")[0] == "task"
+    )
+
+
+def _window_items(anomaly: Anomaly) -> list[Item]:
+    base = _anomaly_id(anomaly)
+    summary = _anomaly_summary(anomaly)
+    if anomaly.state is AnomalyState.RULED:
+        ruling = anomaly.ruling
+        by = ruling.by if ruling is not None else "someone"
+        if anomaly.failed_resolutions:
+            # the outcome *has* been observed, so the pending-outcome item
+            # would sit beside this one contradicting it -- the review is the
+            # whole story until a fresh ruling re-arms the pass
+            detail = (
+                anomaly.resolution.detail
+                if anomaly.resolution is not None
+                else "the re-run failed again"
+            )
+            return [
+                Item(
+                    id=f"{base}:failed{anomaly.failed_resolutions}",
+                    kind=ANOMALY,
+                    owner=Owner.HUMAN,
+                    level=Level.ATTENTION,
+                    subject=anomaly.class_key,
+                    summary=(
+                        f"{anomaly.class_key} re-ran and {detail} — the "
+                        f"premise of the ruling did not hold"
+                    ),
+                    action=f"steward rule '{anomaly.class_key}'",
+                )
+            ]
+        return [
+            Item(
+                id=f"{base}:ruled",
+                kind=ANOMALY,
+                owner=Owner.AGENT,
+                level=Level.INFO,
+                subject=anomaly.class_key,
+                summary=(
+                    f"{anomaly.class_key} is ruled rerun by {by} and the "
+                    f"re-run's outcome has not been observed yet"
+                ),
+            )
+        ]
+    if anomaly.state is AnomalyState.INVESTIGATING:
+        note = f" ({anomaly.note})" if anomaly.note else ""
+        return [
+            Item(
+                id=f"{base}:investigating",
+                kind=ANOMALY,
+                owner=Owner.AGENT,
+                level=Level.INFO,
+                subject=anomaly.class_key,
+                summary=f"{anomaly.class_key} is being investigated{note}",
+            )
+        ]
+    return [
+        Item(
+            id=base,
+            kind=ANOMALY,
+            owner=Owner.AGENT,
+            level=Level.ATTENTION,
+            subject=anomaly.class_key,
+            summary=summary,
+            action=f"steward investigate '{anomaly.class_key}'",
+        )
+    ]
+
+
+def _anomaly_id(anomaly: Anomaly) -> str:
+    """`anomaly:<Name>:<digest8>:g<n>[:x<bucket>]` — readable, then unique, then the edges."""
+    name = _anomaly_name(anomaly.class_key)
+    generation = f"g{anomaly.generation}"
+    parts = [ANOMALY, name, _digest8(anomaly.class_key), generation]
+    bucket = _bucket(anomaly.evidence.count)
+    if bucket:
+        parts.append(bucket)
+    return ":".join(parts)
+
+
+def _bucket(count: int) -> str:
+    """The order-of-magnitude id segment, or empty below ten.
+
+    The population's weight rides in the id so crossing 10, 100, 1000 changes it — a new item to the appeared-diff, hence one re-notification per magnitude rather than one per instance.
+    """
+    return f"x{10 ** (len(str(count)) - 1)}" if count >= 10 else ""
+
+
+def _anomaly_name(class_key: str) -> str:
+    """The readable half of an anomaly id: the segment a person will recognise.
+
+    The exception's type where there is one (the segment carrying `@`), the task's name for a score class, the discriminating word otherwise — `vanished`, `no-log`, `operator`.
+    """
+    segments = class_key.split(":")
+    for segment in segments:
+        if "@" in segment:
+            name = segment.partition("@")[0]
+            break
+    else:
+        if segments[0] == "score" and len(segments) >= 3:
+            name = segments[2]
+        else:
+            name = segments[1] if len(segments) > 1 else segments[0]
+    readable = "".join(char for char in name if char.isalnum() or char in "._-")
+    return readable or "unclassed"
+
+
+def _anomaly_summary(anomaly: Anomaly) -> str:
+    count = anomaly.evidence.count
+    plural = "s" if count != 1 else ""
+    if anomaly.kind == "limit":
+        line = f"{count} sample{plural} were terminated by an operator"
+    elif anomaly.kind == "task":
+        line = f"{count} task attempt{plural} failed — {anomaly.class_key}"
+    elif anomaly.kind == "score":
+        line = f"every score converts to zero — {anomaly.class_key}"
+    else:
+        line = f"{count} sample{plural} errored the same way — {anomaly.class_key}"
+    if anomaly.generation > 1:
+        rulings = len(anomaly.precedent)
+        line += (
+            f" (generation {anomaly.generation}, "
+            f"{rulings} prior ruling{'s' if rulings != 1 else ''})"
+        )
+    if anomaly.substrate:
+        line += "; this looks like the machinery under the run — verify storage before re-running"
+    return line
 
 
 def _signoff(result: "TendResult") -> list[Item]:
@@ -716,11 +1031,15 @@ def _signoff(result: "TendResult") -> list[Item]:
 
     **Worded as a state rather than as an instruction, deliberately.** `steward signoff` is step 26, and a surface telling somebody to run a command that does not exist is the same lie as a `_steward.yaml` key that parses and does nothing. So this says what is true — every task is complete and nothing further will run — and gains the command when there is one. It is acknowledgeable meanwhile, which is how a person who has accepted the results silences it today.
 
-    Fires on completeness alone rather than on *completeness and nothing else wrong*: a run that finished with an unreadable file beside it is still finished, and signoff accepts exceptions (workflow.md, *The attestation*).
+    Fires on completeness alone rather than on *completeness and nothing else wrong* — a run that finished with an unreadable file beside it is still finished, and signoff accepts exceptions (workflow.md, *The attestation*) — **with one exception: an open anomaly**. Every anomaly resolved or accepted is workflow.md §12.2's definition of a resolvable run, so the readiness claim is simply false while a window is open, and a late finding un-readies the run for free: the window opens, this returns nothing, and the item disappears until somebody rules.
+
+    An open `limit:` window deliberately does **not** hold this back. Operator kills are adjudication material — the very conversation this item invites — so gating the invitation on them would hide the one line that leads a person to where they get ruled. Step 26's signoff verb itself still refuses while any window is open.
     """
     summary = result.summary
     complete = summary.states.get(TaskState.COMPLETE.value, 0)
     if not summary.tasks or complete != summary.tasks:
+        return []
+    if any(anomaly.kind != "limit" for anomaly in result.anomalies.open):
         return []
     return [
         Item(

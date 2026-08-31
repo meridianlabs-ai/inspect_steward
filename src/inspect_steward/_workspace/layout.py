@@ -103,6 +103,14 @@ class Workspace:
         return self.state / "observed.json"
 
     @property
+    def classed(self) -> Path:
+        """`.steward/classed.json` — what previous turns classified, per log.
+
+        Disposable exactly like `observed.json`: instance identity is content-derived and the journal's dedupe ledger is what prevents double-counting, so losing this costs one slow turn of re-reads and never a wrong answer.
+        """
+        return self.state / "classed.json"
+
+    @property
     def synced(self) -> Path:
         """`.steward/synced.json` — what the propagation last wrote out, by name and stamp.
 

@@ -36,7 +36,7 @@ from .._workspace import (
     read_journal,
     read_notified,
 )
-from .items import FIXED_OWNER, Item, Owner, Verdict, verdict_text
+from .items import FIXED_OWNER, Item, Owner, Verdict, self_healing, verdict_text
 from .progress import Progress, short_keys
 from .table import progress_table
 
@@ -146,7 +146,7 @@ def notify_failure(workspace: Workspace, reason: str) -> None:
     try:
         if establish_channel(workspace, _directives(workspace)) is None:
             return
-        if reason in read_notified(read_journal(workspace.journal).events):
+        if reason in _already_said(workspace):
             return
         if (instance := channel_apprise()) is None:
             return
@@ -181,6 +181,17 @@ def _directives(workspace: Workspace) -> Directives | None:
         return None
 
 
+def _already_said(workspace: Workspace) -> set[str]:
+    """What the latch holds, or nothing where the latch itself cannot be read.
+
+    An unreadable journal is one of the failures this path now reports — a turn refuses over it rather than proceeding on an empty history — and reading the latch through the same broken file would silence exactly that post. Answering *nothing was said* instead means the failure is reported every interval for as long as the journal stays unreadable, since the latch cannot be written either; between a repeated post and a silent stopped run, the repeat is the honest direction (workflow.md §9.2).
+    """
+    try:
+        return read_notified(read_journal(workspace.journal).events)
+    except OSError:
+        return set()
+
+
 def turn_post(result: "TendResult") -> Post | None:
     """The one post this turn earns, or `None` where it has nothing new to say.
 
@@ -192,7 +203,14 @@ def turn_post(result: "TendResult") -> Post | None:
     """
     unattended = _unattended(result)
     appeared = [item for item in result.items if item.id in set(result.appeared)]
-    shown = [item for item in appeared if unattended or item.owner is not Owner.AGENT]
+    # the escalation hands an unattended workspace's agent items to the person
+    # -- except the self-healing ones, which Steward's own respawn is already
+    # resolving and whose durable failure mode arrives as `stalled` instead
+    shown = [
+        item
+        for item in appeared
+        if item.owner is not Owner.AGENT or (unattended and not self_healing(item))
+    ]
     # over every open item rather than the shown ones, which keeps a `clear`
     # from firing on a turn where the agent merely disposed of its own. A human
     # queue that empties while the agent's stays busy therefore hears nothing

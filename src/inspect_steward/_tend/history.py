@@ -29,6 +29,7 @@ from .._workspace import (
     RAMP_HELD,
     RAMP_RESUMED,
     RESUMED,
+    RULING,
     JournalEvent,
 )
 
@@ -44,6 +45,7 @@ _ADMITTED = frozenset(
         ARMED,
         DISARMED,
         LAUNCHED,
+        RULING,
     }
 )
 """Event types this section reports.
@@ -147,6 +149,23 @@ def _describe(event: JournalEvent) -> str:
         tasks = payload.get("tasks")
         count = f"{tasks} tasks" if isinstance(tasks, int) else "the eval set"
         return f"launched {count} from {_text(payload, 'definition') or 'a definition'}"
+    if event.type == RULING:
+        # the one decision the whole anomaly machinery exists to reach, and
+        # exactly what a reader arriving at six needs from two: what was
+        # decided, by whom, and the mark the data carries for it
+        class_key = _text(payload, "class")
+        disposition = _text(payload, "disposition")
+        if not class_key or not disposition:
+            return ""
+        by = _text(payload, "by") or "somebody"
+        reason = _text(payload, "reason")
+        effect = _text(payload, "effect")
+        line = f"ruled {class_key}: {disposition} by {by}"
+        if reason:
+            line += f" — {reason}"
+        if effect:
+            line += f" ({effect})"
+        return line
     return ""
 
 
@@ -168,6 +187,20 @@ def _action(payload: dict[str, object]) -> str:
         return f"archived a log — {reason}" + (f": {location}" if location else "")
     if action == "ramp":
         return _ramp(payload)
+    if action == "claim_broke":
+        pid = payload.get("pid")
+        where = f" (pid {pid})" if isinstance(pid, int) else ""
+        return f"killed a wedged claim holder{where} to take the claim"
+    if action == "status_unwritable":
+        return "status.md stopped being writable — the snapshot is frozen"
+    if action == "status_unwritable_restored":
+        return "status.md is being written again"
+    if action == "sync_failed":
+        target = _text(payload, "target")
+        return f"the workspace stopped propagating{f' to {target}' if target else ''}"
+    if action == "sync_restored":
+        target = _text(payload, "target")
+        return f"propagation{f' to {target}' if target else ''} recovered"
     return action or ""
 
 

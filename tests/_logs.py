@@ -23,7 +23,7 @@ import json
 import zipfile
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Literal, Sequence
+from typing import Any, Literal, Sequence, cast
 
 from inspect_ai._eval.eval_set_manifest import task_args_hash
 from inspect_ai._eval.evalset import TASK_IDENTIFIER_VERSION, task_identifier
@@ -36,12 +36,15 @@ from inspect_ai.log import (
     EvalMetric,
     EvalPlan,
     EvalResults,
+    EvalSample,
+    EvalSampleLimit,
     EvalScore,
     EvalSpec,
     EvalStats,
     HeadlineMetric,
     write_eval_log,
 )
+from inspect_ai.scorer import Score
 from inspect_ai.util._sandbox.environment import SandboxEnvironmentSpec
 from inspect_steward._evalset.display import compute_display_keys
 from inspect_steward._evalset.manifest import (
@@ -108,6 +111,57 @@ class SynthTask:
         """
         identity = f"{self.file}@{self.name}#{sorted(self.args.items())}/{self.model}"
         return hashlib.sha256(identity.encode()).hexdigest()[:22]
+
+
+@dataclass(frozen=True)
+class SynthSample:
+    """A sample record for logs whose *contents* matter, not only their header.
+
+    Only what anomaly classification reads: the error (message and traceback), the limit, and the scores. Everything else gets a placeholder.
+    """
+
+    id: str
+    epoch: int = 1
+    error: str | None = None
+    traceback: str | None = None
+    limit: str | None = None
+    """A limit type, e.g. `operator`."""
+
+    limit_reason: str | None = None
+    score: float | str | None = None
+    """One `exact` score's value, when the sample has one."""
+
+    @property
+    def uuid(self) -> str:
+        return f"uuid-{self.id}-{self.epoch}"
+
+    def as_sample(self) -> EvalSample:
+        return EvalSample(
+            id=self.id,
+            epoch=self.epoch,
+            input="question",
+            target="answer",
+            uuid=self.uuid,
+            error=EvalError(
+                message=self.error,
+                traceback=self.traceback or "",
+                traceback_ansi=self.traceback or "",
+            )
+            if self.error is not None
+            else None,
+            limit=EvalSampleLimit(
+                # a plain-str field cast into the Literal; pydantic still
+                # rejects a typo at build time
+                type=cast(Any, self.limit),
+                limit=0,
+                reason=self.limit_reason,
+            )
+            if self.limit is not None
+            else None,
+            scores={"exact": Score(value=self.score)}
+            if self.score is not None
+            else None,
+        )
 
 
 def _eval_spec(
@@ -209,6 +263,8 @@ def write_log(
     selection: dict[str, Any] | None = None,
     sandbox: SandboxEnvironmentSpec | None = None,
     model_base_url: str | None = None,
+    samples: Sequence[SynthSample] | None = None,
+    error_traceback: str | None = None,
 ) -> Path:
     """Write one log for a task.
 
@@ -228,6 +284,8 @@ def write_log(
         selection: `limit`, `sample_id` and `sample_shuffle` the log ran with — which samples, rather than how many.
         sandbox: The sandbox the log ran under, **as resolved** — which is what a log records, config file and all.
         model_base_url: The gateway the log's model calls went to.
+        samples: Sample records to embed, for readers that go below the header — anomaly classification's summaries and single-sample reads.
+        error_traceback: Traceback for `error`, when a test cares what it parses to.
 
     Returns:
         Path the log was written to.
@@ -273,9 +331,14 @@ def write_log(
             started_at=created, completed_at="" if status == "started" else created
         ),
         invalidated=invalidated,
-        error=EvalError(message=error, traceback="", traceback_ansi="")
+        error=EvalError(
+            message=error,
+            traceback=error_traceback or "",
+            traceback_ansi=error_traceback or "",
+        )
         if error is not None
         else None,
+        samples=[sample.as_sample() for sample in samples] if samples else None,
     )
 
     location = log_dir / f"{_file_stem(task, created)}.{format}"
