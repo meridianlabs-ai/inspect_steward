@@ -1,0 +1,346 @@
+# Workflow – Inspect Steward
+
+## Overview
+
+A Steward run is a **project rather than an episode**: one evolving definition, one log directory holding its current results, one archive holding everything superseded, and one journal recording what happened. Work *converges* toward the manifest your definition captured rather than happening in identified attempts — which is why amending a run is just launching again, and why a run nobody touched for six hours is in exactly the state it should be.
+
+Three parties carry a run, and the division between them is what makes walking away safe:
+
+| party | supplies | how |
+|----|----|----|
+| the timer | the mechanical floor | `steward tend` on an interval, with nobody present |
+| the agent | judgement | diagnoses errors, groups them, oversees the concurrency ramp, investigates, writes up |
+| you | authority | rulings, approvals, and signing off on the results |
+
+Almost every verb below is one an agent runs. Yours are `init`, signoff, editing the definition and `_steward.yaml`, and asking questions in prose:
+
+| command | who calls it | what it does |
+|----|----|----|
+| `steward init` | you | Create the workspace: bootstrap, definition placeholder, `_steward.yaml`, a repository, the journal’s first event. Only ever creates. |
+| `steward launch` | agent | Capture the definition, report the delta, commit it as desired state, arm a timer, tend once. The only verb that reads the definition — and therefore the amend path too. |
+| `steward tend` | **a timer** | One turn of the loop: reconcile, spawn, reap, archive, rewrite `status.md`, append to the journal. Never blocks. |
+| `steward status` | either | Where the run stands, and what the next turn would do. `tend --dry-run`, and read-only. |
+| `steward collect` | agent | The agent’s queue, plus everything that happened since it last looked. |
+| `steward ack` / `steward raise` | agent, relaying you | Close an open item, or hand it to the person who can decide it. |
+| `steward pause` / `steward resume` | either | Stop scheduling new work; start again. Work in flight finishes either way. |
+| `steward ramp hold` / `steward ramp resume` | either | Freeze the concurrency climb without touching configuration. |
+| `steward timer arm` / `disarm` / `status` | either | Install, remove, or inspect the schedule. |
+| `steward tasks` | either | Enumerate what a definition resolves to, without running it. |
+| `steward runbook` | agent | The operating instructions, which ship with the package so they cannot go stale. |
+
+The rest of this page walks the arc of a run in the order you meet it.
+
+## The workspace
+
+The deliverable of `steward init` is a **workspace** — a directory that you and an agent co-inhabit, and that a third party can pick up cold. Everything important is written down in it rather than held in somebody’s session:
+
+``` text
+my-sweep/
+  AGENTS.md           # authored  — bootstrap: "you are tending a run; read the runbook"
+  CLAUDE.md           # authored  — symlink to AGENTS.md
+  _steward.yaml       # authored  — your eval policy
+  evalset.py          # authored  — your definition (or flow.py / hawk.yaml)
+  .env                # authored  — credentials, if you keep them here
+
+  journal.jsonl       # DURABLE   — append-only record; the source of truth
+  status.md           # generated — rewritten by every tend
+
+  logs/               # DURABLE   — the flat log directory: the current definition's results
+  logs-archive/       # DURABLE   — superseded, removed, and failed logs; never deleted
+
+  .steward/           # DISPOSABLE — claim, manifest, in-flight record, caches
+    steward.log       #            — whether Steward's own machinery worked
+    timer.log         #            — what a scheduled tend printed before Steward could log
+```
+
+The root holds what you authored and what you read, and nothing else: the two machine logs live under `.steward/` with the rest of the disposable state.
+
+`init` **only ever creates** — a second run reports each path as created or kept rather than restoring a pristine copy over your work. It is safe to run in a directory that already has a definition.
+
+### What is safe to delete
+
+The categories that matter are about whether a file can be recovered, not who wrote it:
+
+| Category | Files | If you delete it |
+|----|----|----|
+| **authored** | `_steward.yaml`, `AGENTS.md`, the definition | your own work is gone |
+| **durable machine state** | `journal.jsonl`, `logs/`, `logs-archive/` | the audit trail, or the results, are gone |
+| **authored by the agent** | `scanning.md`, `analysis.md` *(not yet implemented)* | the investigation is gone, and re-runs from scratch |
+| **disposable** | everything in `.steward/` (including the two logs), and `status.md` | rebuilt on the next turn, or gone with no loss |
+
+Gitignored is **not** the same as disposable: `logs/` and `logs-archive/` are ignored by git because `.eval` files are large outputs shared through an object store rather than source control — they are still durable. Only `.steward/` is safe to remove, and even that only when nothing is running: a worker that has not yet reached [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) dies with its instructions, and deleting the claim file under a running tend lets a second tend run concurrently.
+
+### The journal
+
+`journal.jsonl` is the append-only record of the run: what was observed, what was done, who decided what, and why. It is the source of truth that everything else is derived from — `status.md` is a rendering of it, and `.steward/` is a cache of it. It is plain JSON lines, so `jq -r '.type' journal.jsonl` works with no Steward installed.
+
+### The three log files
+
+The rule dividing them is one question: is this a fact about **the eval set**, or about **Steward**?
+
+- `status.md` answers the first — where the run stands, rewritten by every tend.
+- `.steward/steward.log` answers the second — a tend that crashed, a spawn that failed. A healthy run writes nothing to it at all.
+- `.steward/timer.log` catches what a scheduled tend printed before Steward could log anything — a Python that would not start, a workspace that moved. Every scheduler creates the directory before redirecting into it, so clearing `.steward/` costs the file’s contents and never the supervision.
+
+The split means *“no tend for four hours”* is computable from the journal’s silence, while *why* is in `steward.log` — a run whose tends were crashing does not look like a run with nothing to report.
+
+It is also why there are two files rather than one type of journal event. `steward.log` can be **truncated** and `journal.jsonl` never can: a failure that repeats every ten minutes — a wedged claim, a bucket that went away — is one line per turn forever, which is a bound away from harmless in a disposable file and unbounded growth of an irreplaceable one anywhere else.
+
+### Where your logs go
+
+**Leave `log_dir` out of your definition.** It is the one argument worth omitting: name one and it is the one Steward uses, forever and everywhere, and you have written a fact about a machine into a file about an eval.
+
+Say nothing and Steward answers in one of two ways:
+
+| you have said | logs go to |
+|----|----|
+| nothing at all | `logs/` in the workspace, with `logs-archive/` beside it |
+| `STEWARD_LOG_ROOT=s3://org-evals/runs` | `s3://org-evals/runs/<workspace directory name>`, archive alongside |
+
+The root is where *this machine* keeps eval logs, so it is usually a shell export rather than a committed setting — one line, and every workspace on the box lands in the bucket under a directory of its own. It can also be `log_root:` in `_steward.yaml` where it is a fact about the project, or `--log-root` for one launch; `--no-log-root` keeps a single run’s logs at home whatever the machine says.
+
+Each workspace gets its **own** directory under the root and needs to: the workspace is mirrored into its log directory (below), so two runs sharing one would overwrite each other’s `status.md`. Two workspaces with the same directory name under one root will collide — name them for what they measure.
+
+Moving a run’s logs after it has started is a **relocation**: nothing is lost, but the results stay where they are and the whole sweep runs again, so `steward launch` reports it and refuses without `--accept-archive`. That applies to changing `STEWARD_LOG_ROOT` exactly as it applies to editing `log_dir`, because the directory a launch resolved is recorded in the run rather than re-derived each turn — which is also what keeps a 02:00 tend, inheriting no shell, reading the directory its workers are writing to.
+
+### The workspace follows its logs
+
+Every tend mirrors the workspace into the run’s log directory: `status.md`, `journal.jsonl`, `steward.log`, your `_steward.yaml` and your definition, and anything else at the top level that you or an agent put there. So a result and the account of how it was produced sit together, and a log directory describes itself wherever it ends up — which on a machine reachable only through an object store is the whole observability channel.
+
+Dotfiles never leave, which is what keeps a stray `.env` on the machine; nor do directories, `AGENTS.md`, symlinks, or anything inspect would read as an eval log. Symlinks are on that list because every other rule is a rule about a *name*, and a `public-config` pointing at `.env` is not a dotfile. Say `sync: false` in `_steward.yaml` (or `--no-sync`, or `STEWARD_SYNC=false`) to decline, or give it a path to send the files somewhere other than the logs — bearing in mind that `journal.jsonl` and an agent’s writeups quote what was in the transcripts, so a destination outside the log bucket widens who can read them.
+
+### Version control
+
+`init` runs `git init` if, and only if, there is no repository already — a workspace created inside an existing project belongs to that repository. It writes a scoped `.gitignore` covering `logs/`, `logs-archive/`, `.env`, `.steward/`, and the machinery logs, so what remains tracked is what you authored plus the journal. `--no-git` skips repository creation entirely.
+
+## Launching
+
+`steward launch` is the only verb that reads your definition, and therefore the only one that *decides* anything — everything else converges toward a manifest somebody else committed. It is one command doing eight things, and the order is load-bearing:
+
+1.  **Take the run claim**, and hold it across all of what follows. A scheduled tend that fires meanwhile is refused, which is the ordinary path rather than a problem: a tend is built to be interrupted, and the next interval converges.
+2.  **Capture the manifest** — execute the definition under inspect’s capture mode and enumerate the tasks it resolves to. This is the same machinery `steward tasks` renders.
+3.  **Compute the delta** between that manifest and the committed one.
+4.  **Gate on it** — refuse to commit anything that would move results out of `logs/` unless you said otherwise.
+5.  **Commit** the manifest as desired state.
+6.  **Restore** logs the archive already holds for identifiers the new manifest asks for. A move rather than a re-run — where the archived log answers the question being asked: one produced under a slice or a gateway the run has since left is left where it is, since restoring it would move a log into `logs/` and re-run the task anyway.
+7.  **Stop** workers running tasks the new manifest no longer names, and **arm the timer**.
+8.  **Tend once**, which is what actually spawns the first workers.
+
+Arming happens *before* the first tend, so a launch whose own turn fails still leaves the run supervised and the next interval picks it up.
+
+### The delta, and the one gate on it
+
+Adding work is what you just asked for; removing work from `logs/` could equally be a typo. A one-character change to a task argument produces a new identifier and reads exactly like a deliberate removal — except that one of the two quietly buys a re-run of everything. So the delta is computed and shown, and it classifies every task into one of five rows:
+
+| Row | Meaning | Additive |
+|----|----|----|
+| **add** | Not in the committed manifest. New work. | yes |
+| **extend** | Same identifier, more work than before — raised epochs, a grown dataset. Nothing already in `logs/` stops counting. | yes |
+| **removed** | Gone from the definition, with nothing of its name and model left. | **archives** |
+| **superseded** | Gone, but a task of the same name and model is still there under a different configuration — what an edit displaced. | **archives** |
+| **restore** | Asked for, and a log for it is sitting in the archive that answers the shape the run is now asking for. | yes |
+
+A **relocation** is the sixth thing and is not a row, because it is not about a task: moving the definition’s `log_dir` leaves every identifier untouched while putting the run’s results in a directory the next tend no longer reads. Nothing is archived, nothing is deleted, and the whole sweep runs again — the archiving case in a different costume, and gated the same way. It also costs the fleet, because a worker’s destination is fixed in its selection document when it spawns: every worker still running is producing a log for a directory the run has stopped reading, so stopping them is part of what a relocation *is*.
+
+**A purely additive delta commits with no ceremony.** Anything else prints what it would move and refuses; `--accept-archive` commits it. The refusal is the mechanism rather than an obstacle to it — the runbook tells the agent that a flag reached for reflexively is the same as no gate, so the agent shows you the delta and lets you answer.
+
+The gate has to sit between the capture and the commit because there is nowhere else it could sit: once desired state says a task is not in the eval set, `tend` archives it as bookkeeping, with nobody present at 02:00.
+
+### Changing the eval set mid-run
+
+There is no `steward amend`. **A second `launch` is the amend path**: edit the definition, launch again, and Steward runs only what is new or changed. Completed work is never re-run, because a task whose identifier survives the edit already has its log in `logs/`.
+
+Two details worth knowing. Definition arguments (`-A key=value`, for a Flow spec function) default to the committed manifest’s on a re-launch, so a bare `launch` cannot silently capture a different eval set; `--no-args` is how you get back to the definition’s own defaults. And an edit you have *not* launched shows up as a `drift` item on every turn — the manifest is what the fleet is converging toward, and a definition that no longer matches it is a fact somebody should know.
+
+### The timer
+
+The timer is what makes the run survive you closing the laptop. `launch` arms one unless told `--no-timer`, choosing a launchd agent, a systemd user timer, or a marked block in the crontab — preferring one that survives a reboot, and telling you plainly when the machine has none of the three rather than substituting something weaker. Arming is idempotent: an existing timer is removed first, so re-arming at a new interval leaves exactly one.
+
+Arming **refuses when a scheduled tend would not inherit this shell’s credentials**, because the alternative is a fleet failing to authenticate every ten minutes all night while `status.md` reports it dutifully trying. The fix is usually to put the credentials in `.env`, which the workers already read; `--no-env-check` overrides the refusal. On a `launch` the check runs *before* the capture, so a Hawk config does not spend five minutes resolving packages on the way to being turned down.
+
+Because a scheduler cannot report its own absence, arming records what it installed, and any turn that finds no tend for **two intervals** reports the run as `unsupervised` — which catches a crontab somebody rewrote by hand as readily as one Steward removed. A `--no-timer` launch is recorded as unsupervised from the start, so it looks like what it is.
+
+## The tend loop
+
+A turn is **observe, decide, act, record**, and `steward tend` is one turn. It reads the log directory against the committed manifest, decides what should change, does it, and writes down what it saw:
+
+- spawns tasks that should be running and are not;
+- reaps workers that exited, recording what they were doing;
+- archives logs the definition no longer asks for;
+- counts a fruitless respawn against a task, and marks it **stalled** once `stall_after` of them get nowhere;
+- steps sample concurrency toward the ceiling when the window was clean, or cuts it on sustained provider pushback;
+- rewrites `status.md` and appends to `journal.jsonl`.
+
+Three properties are what make this safe to put on a timer:
+
+- **A turn never blocks.** Everything with an unbounded duration — a worker, later a scan — is a detached child that some later turn observes finishing. That is what keeps the claim short-lived.
+- **A repeated turn is a no-op**, so calling `tend` by hand while a timer is armed costs nothing.
+- **An interrupted turn is reconciled by the next one.** There is no resume path and no partial-turn state: the next turn re-reads the log directory and the process table and decides again from what it finds.
+
+Only one Steward writes at a time. `launch` and `tend` take the run claim; a holder that dies releases it, and one that wedges is killed so the run keeps converging (`--no-break-claim` refuses instead). `status`, `pause`, and `resume` deliberately take no claim — the moment you most want to pause is the moment a tend is in flight spawning what you want stopped.
+
+Each task runs in its own worker process by default, which buys fault isolation and real CPU parallelism; [Concurrency](./concurrency.html.md) covers how many run at once, how many processes carry them, and how sample concurrency is discovered.
+
+## Where the run stands
+
+`steward status` is the same function as `tend` with its actions discarded — the same reads and the same decision, so the preview cannot describe something other than what happens next. It is read-only: it spawns nothing, moves nothing, writes nothing, and takes no claim, so it is safe to type as often as you like while a tend is in flight.
+
+Over everything sits one verdict:
+
+|     |                                                              |
+|-----|--------------------------------------------------------------|
+| ✅  | nothing needs you                                            |
+| ⚠️  | something does, and work continues                           |
+| 🛑  | nothing is progressing                                       |
+| ⏸   | paused                                                       |
+| 🏁  | every task finished, and nobody has accepted the results yet |
+
+🏁 is deliberately not ✅. A finished run owes the most consequential decision in the workflow, and reporting it as all-clear is how a sweep sits unread for a week.
+
+Beneath the verdict sits a **Logs** line naming this run’s log directory. Take it from there rather than assuming `logs/` — under a [log root](#where-your-logs-go) there is no `logs/` in the workspace at all, and a `samples_df` pointed at one would find nothing rather than complain. It is in `steward status --json` too.
+
+Under the verdict come four sections, in this order:
+
+- **what needs a decision** — the open items, under a heading that says whose they are.
+- **the run** — task states and counts, per-task progress, what is live right now, and the tuning block.
+- **standing rules** — the policies actually in force, which is not always what `_steward.yaml` says (a `STEWARD_POLICIES` variable outranks the file).
+- **what happened** — the history.
+
+Two files-versus-commands distinctions are worth keeping straight. `status.md` is written by every **tend**, so it holds the last turn’s snapshot and can be a full interval stale; `steward status` recomputes. And `--format md` renders the same document as markdown rather than as aligned terminal columns, which is what the runbook asks an agent to relay verbatim when you ask how it’s going.
+
+## Decisions
+
+Everything a turn needs to say beyond a number is an **item**: a stalled task, a definition edited since capture, a file that would not parse, a worker parked on a human decision, a proposal to raise a concurrency bound. One list, filtered rather than duplicated, so the terminal and `status.md` cannot drift apart in what they report.
+
+Each item carries three things:
+
+- **an owner** — yours or the agent’s, computed each turn rather than baked in. One kind is fixed and policy may not move it: a parked worker is always yours, because nobody else may answer it.
+- **a level** — informational, needs attention, or blocking. Blocking says nothing progresses *on that subject*; whether the *run* is stopped is separate arithmetic, because a rule that painted a run red whenever any one thing was blocked would make red mean nothing.
+- **an id chosen so that what re-arms it is what changes it.** A stall keyed on its attempt count comes back when the task fails again; drift keyed on the content hash comes back on the next edit and clears at relaunch for free.
+
+Two acts take an item out of the queue, and which one is right is decided by who owns it:
+
+- **`steward ack <id> --reason "..."`** closes it — the case nothing will clear by itself, like a definition you edited on purpose. The item leaves every surface and the journal keeps the record.
+- **`steward raise <id>`** hands it to the person who can decide it and **closes nothing**. It stays in `status` and still counts toward the verdict; what changes is that `collect` stops offering it back to the agent every time it looks. Only a human-owned item can be raised.
+
+**A parked worker refuses an ack.** A sample stopped on a tool approval or an `ask_user` is waiting for authority over what the eval *does*, and it holds its slot, its sandbox, and its model connections the whole time. So the item carries the command that attaches you to that worker, and nothing but an answer clears it.
+
+For the agent, `steward collect` is the front door: the same three sections `status` prints, plus the one thing a snapshot cannot give — the stretch of history since the last collection. A snapshot cannot say that a task died at 1am and was respawned, or that an error class grew from three instances to forty, and that series is what most judgement calls need. Reading consumes nothing; the cursor governs history alone, so a session that dies mid-investigation finds its work waiting.
+
+What the decisions themselves are about is covered on two other pages: [Error Handling](./errors.html.md) for sample errors and stalled tasks, and [Concurrency](./concurrency.html.md) for the ramp and its tuning proposals.
+
+## Getting told
+
+Everything above is a file or a command, which means it reaches you only when you go and look. A run you left at 6pm that stopped at 2am is indistinguishable, from where you are, from one that is going fine. So set a channel:
+
+    _steward.yaml
+
+``` yaml
+notification: slack://{OAuthToken}/
+```
+
+or, keeping the token out of your repository:
+
+    .env
+
+``` ini
+STEWARD_NOTIFICATION=slack://{OAuthToken}/
+```
+
+It takes anything [Apprise](https://github.com/caronc/apprise) does — one URL, several separated by commas, or a path to an Apprise config file that names them — so Slack, email, SMS, Discord, a desktop notifier, or a webhook all work the same way. `steward launch --notification …` sets it for one run, and `notification: false` declines the whole thing. A launch with no channel prints one line saying so, once — as does a launch whose channel came only from the flag, since that one reaches the launch’s own turn and none of the scheduled ones.
+
+**Prefer the file or `.env` over exporting it in your shell.** A scheduled tend at 02:00 inherits almost nothing, and a channel that lives only in the shell you launched from is one the 02:00 turn does not have. `steward launch` refuses to arm a timer when it spots that, the same way it does for an API key.
+
+**One channel, two directions.** Steward posts what a turn found. Your *workers* post what a sample asked — an `ask_user()` question, a tool approval waiting on a human — and those block the sample until somebody answers. Setting `notification` wires both, so there is no arrangement where the fleet is asking and nobody is being told. That is also why `notification: false` and `--no-notification` silence Steward’s posts only, and still hand your workers the channel: silencing a blocking approval would hang a sample all night with nobody told. Setting inspect’s own `INSPECT_EVAL_NOTIFICATION` instead works too, and Steward will post there.
+
+**What actually fires.** At most one message per tend, whatever changed, because the tend is already the clock:
+
+|  |  |
+|----|----|
+| something new needs a person | as it appears — once, not every ten minutes |
+| a worker parked on a human decision | as it parks |
+| tasks finished | one message per turn, naming all of them |
+| the decision queue emptied | once |
+| the run reached its gate | once, and again after a re-launch changes the work |
+| a tend that could not run at all | once per distinct reason, until a turn succeeds again |
+
+**What does not fire is the agent’s half of the queue.** Some of what a tend finds is routed to the agent rather than to you — an unreadable log, an action that failed — and waking you for those is the channel advertising work you were told not to do. They still show in `status.md`, grouped by owner, where you can go and look on purpose.
+
+They *do* reach you when nobody is picking them up: no `steward collect` in the last two tends, or none ever. An agent’s item is only the agent’s while there is an agent, and what you have to do about a workspace nothing is attached to is attach something. The message says so rather than making you infer it.
+
+Every message opens with a verdict line and carries the progress table, so the last message in the channel is true modulo whatever you have since answered. Every message is named by the workspace directory it is about, since one channel serves however many runs you have going: `my-sweep: ⚠️ 2 decisions need attention`. It counts what *you* have to act on, where `status` splits the same items into yours and the agent’s because one of its readers is the agent. Tasks are named as shortly as the table names them — a model every task shares is said once, under the table, rather than after every name — long lines are trimmed and long lists are counted. `status.md` has the whole of everything, including the exception text behind a log that would not parse. Slack, email, and plain-text targets each get the markup they actually understand; a workspace posting to several gets each rendered properly rather than all reduced to the worst of them.
+
+**The agent has its own verb.** `steward notify "the sonnet arm is failing systematically, I've paused it"` carries judgement rather than a condition, which is the half of this that a trigger cannot produce. It takes `--kind attention` (default) or `--kind stopped`, and `--detail` for supporting lines. The four kinds Steward computes are refused there: a hand-sent claim that the run is finished is a claim nobody computed.
+
+**The value never travels.** Nothing prints it, and the `_steward.yaml` copy that Steward [propagates into the log directory](#the-workspace-follows-its-logs) has the key replaced by a note saying it was left behind — that path ends in an object store, and an Apprise URL is a bearer token. The scrubbed copy is read back before it is sent, and a file the channel could not be taken out of is held back entirely rather than sent as it is, with a line in `steward.log` saying which file and why. What is lost then is a remote reader’s copy of settings `status.md` also carries; what is prevented is a credential nobody can recall.
+
+## Standing rules
+
+`_steward.yaml` is your eval policy, in two halves that live in one file so that a decision and its reasoning stay next to each other. The settings are what Steward executes by itself at 3am; `policies` is free-form text the agent applies when one is in session.
+
+| Setting | Default | Meaning |
+|----|----|----|
+| `tend_interval` | `10m` | How often a scheduled tend runs. Always written with a unit. |
+| `max_workers` | one process per task | Pack the fleet into this many worker processes. |
+| `stall_after` | `2` | Fruitless respawns before a task is given up on and reported. |
+| `samples_ramp` | `[40, 200]` | Range to discover sample concurrency in; `false` to fix it. |
+| `log_store` | none | Where to look for logs this run does not have to produce. Recorded now, read when signoff can publish to it. |
+| `policies` | none | Prose, or a list of rules. Steward carries the text and never interprets it. |
+
+A file with both halves in it:
+
+    _steward.yaml
+
+``` yaml
+tend_interval: 10m
+stall_after: 3
+max_workers: 8
+
+policies:
+  - If more than 10% of the samples in a task error out, pause the run
+    and notify me right away. Otherwise, batch up questions for the end
+    of the run.
+  - A re-run that would replay more than 200 samples needs my approval
+    first.
+  - If a task's score looks implausible (e.g. near zero on a task that
+    usually scores well), investigate the transcripts before proposing
+    a re-run.
+```
+
+What is worth writing as a policy is whatever you would otherwise answer twice: failures you already know about and do not want to be woken for, what always reaches you regardless, rulings granted in advance, and what this eval set is *for* — the thing a third party picking up the directory cold cannot get from anywhere else.
+
+Two rules govern the file. **Steward never writes it** — it proposes changes and you decide, because promoting a one-off ruling into a standing rule widens what you have committed to. And **it may say only what your definition cannot**: `log_dir`, `model`, `epochs`, `max_samples`, `max_tasks`, `retry_on_error` and the rest of inspect’s vocabulary are refused *by name*, with a message saying where they belong, and an unrecognised key is refused outright rather than sitting inert. Refused here does not mean unsayable — `steward launch` accepts inspect’s own options for a single run, said inspect’s way. Every setting can also be said as a `STEWARD_*` variable or a command-line flag, resolving most specific first — see [One setting, three spellings](./concurrency.html.md#one-setting-three-spellings).
+
+`init` scaffolds the file with every setting commented out, which parses as *no preferences expressed* — a template shipping live values would make Steward’s defaults look like decisions you had made. An empty file is a valid one, and everything then escalates to you. Rules accumulate as you notice yourself answering the same question twice, and the run gets quieter as they do.
+
+## Pausing
+
+`steward pause --reason "..."` stops scheduling new work. Every later turn reports the run as paused and spawns nothing; workers already in flight are left alone, because stopping one is not a mechanical act and it is not what pausing means. That is what almost everyone wants, since the money is mostly on work not yet started.
+
+The pause is recorded in the journal rather than in `.steward/`, which is disposable — a pause that a cleared cache silently undid would resume an expensive run with nobody watching. `steward resume` starts scheduling again, and the next tend converges from whatever it finds, which is not necessarily where the run was when it was paused: logs landed, workers exited, and the definition may have been relaunched in between.
+
+## Picking up a run cold
+
+Nothing about a run lives in a conversation, which is the whole point of writing it all into the workspace. An agent — or a colleague — attaching to a run they did not start begins in the same three places:
+
+1.  `steward runbook` for the mechanics, which ship with the package and so can never be a version behind the CLI.
+2.  `_steward.yaml` for this project’s standing rules. One caveat: any setting, `policies` included, can also arrive from a `STEWARD_*` variable that is not in the workspace at all, so read the file for the reasoning and `steward status` for what is actually in force.
+3.  `steward collect --since 0` for the whole history, or a bare `collect` for what has accumulated since the last one.
+
+## How a run ends
+
+When every task has finished, the verdict turns 🏁 and the run raises a `signoff_ready` item. What remains is the part only a person can do.
+
+Some of it is reading what the [scanners](https://inspect.aisi.org.uk/scanners.html) found. Scanning is not a phase Steward runs: scanners are attached to your definition — `eval_set(scanner=...)`, like every other property of what is being measured — and they run **online**, reviewing each transcript as its sample completes, with findings written to `<log_dir>/scans/` alongside the logs. So the transcripts are already scanned by the time the last task lands. What is left is the *reading*: one worker sees one transcript, while Steward sees the distribution across the whole run, which is what turns a pile of measurements into a shortlist worth investigating.
+
+> **WARNING:**
+>
+> A definition that declares a scanner is **refused at `steward launch`** today. One `scans/` directory is shared by a whole eval set and its bookkeeping assumes a single writer, so Steward’s concurrent workers would race in it. Until that is fixed upstream, scan the log directory after the run with `scout scan` instead.
+
+> **NOTE: NoteNot yet implemented**
+>
+> The two phases that close a run are designed and not yet shipped: **investigation** — reading what the scanners found across the whole run, narrowing it to what is worth a look, and writing up what it meant in `scanning.md` and `analysis.md` — and **`steward signoff`**, the attestation that you accept the results, which unschedules the monitor and curates superseded attempts into `logs-archive/`. `steward launch --smoke`, the bounded rehearsal that catches configuration problems before a full run, is in the same category.
+>
+> Until then a run ends when you decide it has: read the results, and `steward timer disarm` takes it off the schedule.
+
+Signoff is the one command an agent may never run, and the [Agent Runbook](./runbook.html.md) says so flatly — it is a human attestation that the results are accepted, and an agent running it is the one thing that would make the whole record meaningless.

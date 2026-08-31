@@ -1,0 +1,20 @@
+# Inspect Steward
+
+> An agent that supervises evaluations, monitoring progress, diagnosing problems, and adjusting runtime state on your behalf.
+
+
+## Getting Started
+
+- [Getting Started](https://meridianlabs-ai.github.io/inspect_steward/index.html.md): Automated execution and supervision of long-running evaluations.
+
+## Using Steward
+
+- [Workflow](https://meridianlabs-ai.github.io/inspect_steward/workflow.html.md): Everything that happens in a Steward run: the workspace init creates, what launch captures and gates on, the tend loop, where the run stands, the decisions that reach a person, standing rules, pausing, cold pickup, and how a run ends.
+- [Concurrency](https://meridianlabs-ai.github.io/inspect_steward/concurrency.html.md): How Steward schedules tasks across processes, the three knobs that control fleet width and provider load, who owns each one, how the ramp discovers sample concurrency, and the three ways to say any setting for a single run.
+- [Error Handling](https://meridianlabs-ai.github.io/inspect_steward/errors.html.md): Steward's two error tiers — sample errors that never halt a task, and task failures that are re-launched up to a stall limit — plus who decides what happens after each.
+- [Agent Runbook](https://meridianlabs-ai.github.io/inspect_steward/runbook.html.md): What a coding agent supervising a Steward run decides, what it may never do, and the operating instructions Steward ships to it, reproduced verbatim.
+
+## Integrations
+
+- [Inspect Flow](https://meridianlabs-ai.github.io/inspect_steward/flow.html.md): Running an Inspect Flow spec under Steward: installation, how Flow's own CLI is driven, what Steward overrides in a worker, and the two declarations that do not survive.
+- [Inspect Hawk](https://meridianlabs-ai.github.io/inspect_steward/hawk.html.md): Running a Hawk eval set config under Steward: installation and its Python 3.13 floor, how Hawk's own runner is driven, what fan-out costs, and the caveats specific to running Hawk locally.

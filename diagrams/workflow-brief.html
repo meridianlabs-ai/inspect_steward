@@ -1,0 +1,953 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.10.18">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>workflow-brief – Inspect Steward</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: 1.5em;}
+div.column{flex: auto;}
+@media screen {
+div.columns{gap: min(4vw, 1.5em);}
+div.column{overflow-x: auto;}
+}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+</style>
+
+
+<script src="../site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="../site_libs/quarto-nav/headroom.min.js"></script>
+<script src="../site_libs/clipboard/clipboard.min.js"></script>
+<script src="../site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="../site_libs/quarto-search/fuse.min.js"></script>
+<script src="../site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="../">
+<script src="../site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="../site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="../site_libs/quarto-html/popper.min.js"></script>
+<script src="../site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="../site_libs/quarto-html/anchor.min.js"></script>
+<link href="../site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="../site_libs/quarto-html/quarto-syntax-highlighting-64a204ab8560d761af7679ceaba22944.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="../site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="../site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="../site_libs/bootstrap/bootstrap-6be907ae78873760d36834dbe5a66008.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+<link rel="alternate" type="text/markdown" title="LLM-readable docs index" href="../llms.txt">
+<link rel="alternate" type="text/markdown" title="LLM-readable docs (full)" href="../llms-full.txt">
+<link rel="alternate" type="text/markdown" title="LLM-readable docs (user guide)" href="../llms-guide.txt">
+
+
+<meta property="og:title" content="Inspect Steward">
+<meta property="og:description" content="An agent that supervises evaluations, monitoring progress, diagnosing problems, and adjusting runtime state on your behalf.">
+<meta property="og:site_name" content="Inspect Steward">
+<meta name="twitter:title" content="Inspect Steward">
+<meta name="twitter:description" content="An agent that supervises evaluations, monitoring progress, diagnosing problems, and adjusting runtime state on your behalf.">
+<meta name="twitter:card" content="summary">
+</head>
+
+<body class="nav-fixed quarto-light">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a class="navbar-brand" href="../index.html">
+    <span class="navbar-title">Inspect Steward</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="Search"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" role="menu" aria-expanded="false" aria-label="Toggle navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../index.html"> 
+<span class="menu-text">Getting Started</span></a>
+  </li>  
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-using-steward" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">Using Steward</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-using-steward">    
+        <li>
+    <a class="dropdown-item" href="../workflow.html">
+ <span class="dropdown-text">Workflow</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="../concurrency.html">
+ <span class="dropdown-text">Concurrency</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="../errors.html">
+ <span class="dropdown-text">Error Handling</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="../runbook.html">
+ <span class="dropdown-text">Agent Runbook</span></a>
+  </li>  
+    </ul>
+  </li>
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-integrations" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">Integrations</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-integrations">    
+        <li>
+    <a class="dropdown-item" href="../flow.html">
+ <span class="dropdown-text">Inspect Flow</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="../hawk.html">
+ <span class="dropdown-text">Inspect Hawk</span></a>
+  </li>  
+    </ul>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link" href="../reference/index.html"> 
+<span class="menu-text">Reference</span></a>
+  </li>  
+</ul>
+            <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="../CHANGELOG.html"> 
+<span class="menu-text">Changelog</span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_steward"> <i class="bi bi-github" role="img">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+</ul>
+          </div> <!-- /navcollapse -->
+            <div class="quarto-navbar-tools">
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+</header>
+<!-- content -->
+<div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active" data-toc-expanded="1">
+    <h2 id="toc-title">On this page</h2>
+   
+  <ul>
+  <li><a href="#what-this-is" id="toc-what-this-is" class="nav-link active" data-scroll-target="#what-this-is">What this is</a></li>
+  <li><a href="#its-relationship-to-the-hero-diagram" id="toc-its-relationship-to-the-hero-diagram" class="nav-link" data-scroll-target="#its-relationship-to-the-hero-diagram">Its relationship to the hero diagram</a></li>
+  <li><a href="#the-system-in-three-sentences" id="toc-the-system-in-three-sentences" class="nav-link" data-scroll-target="#the-system-in-three-sentences">The system in three sentences</a></li>
+  <li><a href="#the-spine-four-stages" id="toc-the-spine-four-stages" class="nav-link" data-scroll-target="#the-spine-four-stages">The spine: four stages</a></li>
+  <li><a href="#inside-stage-3-which-is-most-of-the-work" id="toc-inside-stage-3-which-is-most-of-the-work" class="nav-link" data-scroll-target="#inside-stage-3-which-is-most-of-the-work">Inside stage 3, which is most of the work</a></li>
+  <li><a href="#what-must-not-be-implied" id="toc-what-must-not-be-implied" class="nav-link" data-scroll-target="#what-must-not-be-implied">What must not be implied</a></li>
+  <li><a href="#exact-strings" id="toc-exact-strings" class="nav-link" data-scroll-target="#exact-strings">Exact strings</a></li>
+  <li><a href="#constraints-on-the-artifact" id="toc-constraints-on-the-artifact" class="nav-link" data-scroll-target="#constraints-on-the-artifact">Constraints on the artifact</a></li>
+  <li><a href="#scanning-is-not-a-stage" id="toc-scanning-is-not-a-stage" class="nav-link" data-scroll-target="#scanning-is-not-a-stage">Scanning is not a stage</a></li>
+  <li><a href="#what-is-not-built-yet" id="toc-what-is-not-built-yet" class="nav-link" data-scroll-target="#what-is-not-built-yet">What is not built yet</a></li>
+  <li><a href="#what-is-open" id="toc-what-is-open" class="nav-link" data-scroll-target="#what-is-open">What is open</a></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default">
+<div class="quarto-title">
+<h1 class="title">Design brief: the Steward workflow diagram</h1>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<section id="what-this-is" class="level2">
+<h2 class="anchored" data-anchor-id="what-this-is">What this is</h2>
+<p>The second diagram on the documentation landing page for <strong>Inspect Steward</strong>, occupying the <strong>Workflow</strong> section and replacing the five-row phase table sitting there now. It is full content width, and it comes after the Quick Tour — so the reader has already seen <code>steward init</code>, a definition, and a coding agent being told to run the eval.</p>
+<p>The one idea it must land: <em>between the one command you type and the results you sign off on, there is a loop you never see that keeps the run converging — and only what genuinely needs you reaches you.</em></p>
+<p>The audience is engineers who run large AI-model evaluations. They know what an eval is. By this point in the page they know Steward supervises a run; what they still do not know is <strong>what it is actually doing all night</strong>. This diagram answers that, and it is the last thing many readers will look at before deciding whether to try it.</p>
+</section>
+<section id="its-relationship-to-the-hero-diagram" class="level2">
+<h2 class="anchored" data-anchor-id="its-relationship-to-the-hero-diagram">Its relationship to the hero diagram</h2>
+<p>The page already carries one diagram (<code>overview-brief.md</code>, the four-layer supervision stack under the opening paragraph). The two must not appear to disagree. They are two axes of one system:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th></th>
+<th>axis</th>
+<th>answers</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>hero, top of page</td>
+<td>authority</td>
+<td>who absorbs what — a stack, escalation downward</td>
+</tr>
+<tr class="even">
+<td><strong>this one</strong></td>
+<td>time</td>
+<td>what happens when — <code>init</code> through <code>signoff</code></td>
+</tr>
+</tbody>
+</table>
+<p>Two consequences, both binding:</p>
+<ul>
+<li><strong>Inherit the hero’s palette and type conventions exactly</strong> (listed under <em>Constraints</em>). Two diagrams on one page in two visual languages read as two products.</li>
+<li><strong>Where this diagram shows the three parties, keep the hero’s vertical order</strong> — Steward’s machinery above, the coding agent below it, the human below that. A second diagram that puts the human on top would read as a contradiction rather than as a second view.</li>
+</ul>
+</section>
+<section id="the-system-in-three-sentences" class="level2">
+<h2 class="anchored" data-anchor-id="the-system-in-three-sentences">The system in three sentences</h2>
+<p>You create a workspace and write a definition; one <code>launch</code> captures it, commits it as the run’s desired state, and arms a timer. From then on a scheduled <code>tend</code> reconciles what is on disk against that desired state every ten minutes with nobody present — spawning what should be running, reaping what died, recording what it saw — while a coding agent reads the accumulated record and supplies the judgement the mechanical layer refuses to. Only decisions that need authority reach the human, and the run ends when a person signs off.</p>
+</section>
+<section id="the-spine-four-stages" class="level2">
+<h2 class="anchored" data-anchor-id="the-spine-four-stages">The spine: four stages</h2>
+<p>The diagram is a sequence of four stages. Three are small; the third is the diagram.</p>
+<p><strong>1. <code>steward init</code></strong> — you, once. Produces the workspace: a directory you and the agent co-inhabit and that a third party can pick up cold. Worth showing as two or three named artifacts rather than a featureless box, because “everything is written down” is a real claim of the product: <code>evalset.py</code> (your definition), <code>_steward.yaml</code> (your standing rules), <code>journal.jsonl</code> (the record).</p>
+<p><strong>2. <code>steward launch</code></strong> — the agent, on your word. Once, and again to amend. Four acts in one command: capture the definition into a manifest, commit it as desired state, <strong>arm the timer</strong>, spawn the first workers. This is the walk-away moment and the diagram should feel like it — everything to the left is setup, everything to the right happens without you.</p>
+<p><strong>3. The run</strong> — nobody present. <strong>This is the largest element on the canvas.</strong> A <em>cycle</em>, not a stage that is passed through. Its contents are enumerated in the next section.</p>
+<p><strong>4. <code>steward signoff</code></strong> — you, once. Accept the results, unschedule the monitor, archive superseded logs. The one command the agent may never run, and the only thing that ends a run.</p>
+</section>
+<section id="inside-stage-3-which-is-most-of-the-work" class="level2">
+<h2 class="anchored" data-anchor-id="inside-stage-3-which-is-most-of-the-work">Inside stage 3, which is most of the work</h2>
+<p>Six components. The first four are the mechanical loop; the last two are the escalation path.</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>component</th>
+<th>what it is</th>
+<th>note for the drawing</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><strong>the timer</strong></td>
+<td>fires <code>steward tend</code> on an interval</td>
+<td>The reason the run survives you closing the laptop. It is not the agent, and it is not you.</td>
+</tr>
+<tr class="even">
+<td><strong><code>steward tend</code></strong></td>
+<td>one turn: observe, decide, act, record</td>
+<td>The hub. Its four verbs are worth showing; they are the whole loop in four words.</td>
+</tr>
+<tr class="odd">
+<td><strong>the fleet</strong></td>
+<td>one worker process per task</td>
+<td>Spawned and reaped by <code>tend</code>, and <em>detached</em> — they outlive the turn that started them. Several of them, not one. This is also where transcript scanning happens, if the definition asks for it (see <em>Scanning is not a stage</em>).</td>
+</tr>
+<tr class="even">
+<td><strong><code>logs/</code> and <code>journal.jsonl</code></strong></td>
+<td>where results and the record accumulate</td>
+<td>The closing arm of the cycle: the next turn reconciles the log directory against the manifest. This is what makes it a converging loop rather than fire-and-forget, and it is the single most important arrow in the diagram.</td>
+</tr>
+<tr class="odd">
+<td><strong>the coding agent</strong></td>
+<td>reads the record, supplies judgement</td>
+<td>Diagnoses errors, groups them into classes, oversees the concurrency ramp, investigates. Reads through <code>steward collect</code>.</td>
+</tr>
+<tr class="even">
+<td><strong>you</strong></td>
+<td>receive only what needs authority</td>
+<td>Rulings on error classes, tool-call approvals, and eventually signoff. Deliberately outside the cycle.</td>
+</tr>
+</tbody>
+</table>
+<p>Two arrows leave the loop and one comes back in:</p>
+<ul>
+<li><strong><code>tend</code> → agent</strong> — <em>“escalates what needs judgement”</em></li>
+<li><strong>agent → you</strong> — <em>“escalates what needs authority”</em> (both labels are the hero diagram’s; reuse them verbatim so the two diagrams reinforce each other)</li>
+<li><strong>you → <code>steward launch</code></strong> — the amend path. Edit the definition, launch again, and only new or changed work runs. It should be visible but quiet: it is a real part of the workflow and not the main path.</li>
+</ul>
+<p>Volume attenuates along that chain: almost everything is absorbed by the loop, some reaches the agent, very little reaches you.</p>
+</section>
+<section id="what-must-not-be-implied" class="level2">
+<h2 class="anchored" data-anchor-id="what-must-not-be-implied">What must not be implied</h2>
+<p>These are the ways a diagram of this system goes wrong. Each one is a claim about the product that would be false.</p>
+<ul>
+<li><strong>The agent does not drive the loop.</strong> The timer does. The agent may be attached, periodic, or absent for eight hours, and the fleet keeps converging regardless — only decisions accumulate. Anything that puts the agent <em>inside</em> the cycle, or makes it look like the thing calling <code>tend</code>, inverts the product’s central guarantee.</li>
+<li><strong>The human is not in the loop.</strong> They are reached by it.</li>
+<li><strong>It is not a clean pipeline.</strong> The middle overlaps: errors are investigated while the eval is still running, and transcripts are scanned as individual samples finish. Hard phase boundaries with a baton passing between them would be a lie about how a run actually goes.</li>
+<li><strong><code>tend</code> does no long work.</strong> Everything slow — a worker, a scan — is a detached child that a <em>later</em> turn observes finishing. A turn takes seconds.</li>
+<li><strong>Nothing signs off automatically.</strong> The last arrow is a person’s.</li>
+</ul>
+</section>
+<section id="exact-strings" class="level2">
+<h2 class="anchored" data-anchor-id="exact-strings">Exact strings</h2>
+<p>Wordsmithed against the product’s vocabulary. Propose typographic treatment freely; do not reword.</p>
+<ul>
+<li><code>steward init</code> / “create the workspace: your definition, your standing rules, the record”</li>
+<li><code>steward launch</code> / “capture the definition, commit it, arm the timer, spawn the fleet”</li>
+<li>“the timer” / “every ten minutes, unattended”</li>
+<li><code>steward tend</code> / “observe · decide · act · record”</li>
+<li>“the fleet” / “one process per task”</li>
+<li>“logs and journal” / “results land; every turn is recorded”</li>
+<li>“coding agent” / “diagnose and recover from errors, tune concurrency, investigate”</li>
+<li>“human operator” / “rule on error classes, approve tool calls, sign off”</li>
+<li><code>steward signoff</code> / “accept the results, unschedule the monitor, archive superseded logs”</li>
+<li>connectives: “escalates what needs judgement” · “escalates what needs authority” · “edit and launch again — only new or changed work runs” · “reconcile against the manifest”</li>
+</ul>
+</section>
+<section id="constraints-on-the-artifact" class="level2">
+<h2 class="anchored" data-anchor-id="constraints-on-the-artifact">Constraints on the artifact</h2>
+<ul>
+<li><strong>Excalidraw</strong>, generated by a small Python script in this directory and rendered to SVG at docs build time — the same pipeline as <code>overview.py</code>. The design must therefore be expressible in Excalidraw primitives: rectangles (rounded, solid fills, opacity), straight and curved arrows, text in Excalidraw’s three fonts (hand-drawn, Helvetica-like, monospace). No gradients, shadows, custom fonts, or icons that cannot be drawn from those parts. No italic and no bold — size, weight of color, and spacing have to carry emphasis.</li>
+<li><strong>Palette, inherited and not renegotiated</strong>: indigo for both Steward layers (the deterministic machine), violet for the coding agent, amber for the human, grey for all connective tissue.</li>
+<li><strong>Type, inherited</strong>: monospace for things you type (the four commands), sans-serif for parties who act (the agent, you). The typeface alone distinguishes a command from an actor.</li>
+<li><strong>Renders on a white page in a ~700px content column</strong>, light theme only for now, and must stay legible at that width. This is the hard one: four stages side by side at 700px gives each stage ~170px, which is not enough for the loop. <strong>A vertical or L-shaped spine with the loop expanded is likely the right answer</strong>, and it has the side benefit of matching the hero’s verticality.</li>
+<li><strong>Mobile</strong>: the content column narrows to roughly 340px. The hero solves this by folding below the text; this diagram has no text to fold under, so it must degrade to a phone width on its own. Design for the narrow case first if the two conflict.</li>
+<li>House style follows the sibling projects’ docs diagrams: clean lines (no hand-drawn sketch roughness), soft 60%-opacity fills, generous whitespace.</li>
+</ul>
+</section>
+<section id="scanning-is-not-a-stage" class="level2">
+<h2 class="anchored" data-anchor-id="scanning-is-not-a-stage">Scanning is not a stage</h2>
+<p>Worth stating plainly, because the prose this diagram replaces gets it wrong and a diagram would enshrine the mistake.</p>
+<p><strong>Transcript scanning</strong> — looking for the things a score cannot show you: a task the model declined, a grader that was gamed or simply broken, a misconfigured environment, a model that behaves differently when it can tell it is being tested — happens <strong>online, inside the eval</strong>. Scanners are authored with <a href="https://meridianlabs-ai.github.io/inspect_scout/">Inspect Scout</a> and attached to the run through the definition (<code>eval_set(scanner=...)</code>), like every other property of what is being measured. Transcripts are scanned as their samples complete, right after scoring, in the worker process that ran them; findings land in <code>&lt;log_dir&gt;/scans/</code> alongside the logs. <strong>Steward orchestrates none of it</strong> — there is no scan pass for <code>tend</code> to spawn and no scan phase for a run to enter.</p>
+<p>So scanning is not a box on the spine, and it is not a component of the loop either. It is something the fleet is <em>already doing while it runs</em>, and if it appears at all it is a line on the worker, not an arrow between stages.</p>
+<p><strong>What genuinely sits at the end is reading those results.</strong> Any one worker sees one transcript; Steward sees the distribution across the whole run, which is what turns a pile of measurements into a shortlist — a scanner that fires on 4% of one run’s samples and 81% of the next run’s is a result no single transcript can give you. The agent investigates that shortlist and writes up what it meant. That is the terminal stage before signoff, and <strong>investigation</strong> is what to call it.</p>
+</section>
+<section id="what-is-not-built-yet" class="level2">
+<h2 class="anchored" data-anchor-id="what-is-not-built-yet">What is not built yet</h2>
+<p>Three things in the workflow are designed and not shipped, and the brief should not hide it: <strong><code>launch --smoke</code></strong> (a bounded rehearsal before the full run), <strong>investigation</strong> (the reading of scan results described above, and the agent’s writeup of what they meant), and <strong><code>steward signoff</code></strong> itself. The prose on the page currently describes all three in the present tense.</p>
+<p>Scanning is a fourth case and a different one: it exists and works in Inspect today, but a definition that declares a scanner is <strong>refused at <code>steward launch</code></strong>, because one <code>scans/</code> directory shared by an eval set assumes a single writer and Steward’s whole execution model is N concurrent workers writing into one flat directory. That is an upstream fix rather than a Steward feature.</p>
+<p>Two ways to handle the unshipped parts, and this is the user’s call rather than the designer’s:</p>
+<ul>
+<li><strong>Draw the full arc undifferentiated.</strong> Consistent with the phase table the diagram replaces, and describes the product rather than the current commit. Costs an edit to the diagram when each piece ships — which is cheap, since the diagram is generated from a script.</li>
+<li><strong>Draw only the shipped spine</strong> — <code>init</code> → <code>launch</code> → the loop → <em>(a person ends the run)</em>. Honest to the letter, and quieter; costs the reader the shape of where the product is going.</li>
+</ul>
+</section>
+<section id="what-is-open" class="level2">
+<h2 class="anchored" data-anchor-id="what-is-open">What is open</h2>
+<p>Everything aesthetic, and one structural question. Aesthetically: orientation (subject to the width constraint above), proportions and rhythm, how the cycle in stage 3 is drawn — a literal ring, a back-arrow, a spiral, something else — the arrow-and-label treatment, whether the stages want a shared frame or a background, and how the fleet’s multiplicity is shown (three boxes, a stack, a fan).</p>
+<p>Structurally: <strong>how much of stage 3’s interior to draw at all.</strong> Six components and eight arrows is a lot for a landing page, and there is a real version of this diagram that shows the timer, <code>tend</code>, and the fleet only, with the agent and the human as two arrows leaving the frame. The tension is that the escalation path is what makes the product interesting and the mechanical loop is what makes it trustworthy. Resolving that is the main design judgement here, and it is worth trying both.</p>
+
+
+</section>
+
+</main> <!-- /main -->
+<div id="copy-page-btn" class="btn-group" style="display:none;">
+  <button type="button" class="btn btn-sm btn-light" id="copy-page-action" title="Copy page as Markdown">
+    <i class="bi bi-clipboard"></i> Copy page
+  </button>
+  <button type="button" class="btn btn-sm btn-light dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false">
+    <span class="visually-hidden">Toggle Dropdown</span>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><a class="dropdown-item" href="#" id="copy-page-md">
+      <i class="bi bi-clipboard"></i> Copy page as Markdown
+    </a></li>
+    <li><a class="dropdown-item" href="#" id="open-page-md">
+      <i class="bi bi-box-arrow-up-right"></i> Open Markdown
+    </a></li>
+  </ul>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  var path = window.location.pathname;
+  var mdUrl = path.endsWith("/")
+    ? path + "index.html.md"
+    : path.replace(/\.html$/, ".html.md");
+  var btn = document.getElementById("copy-page-btn");
+  var cachedMarkdown = null;
+
+  // Pre-fetch the .html.md content
+  fetch(mdUrl)
+    .then(function (res) {
+      if (!res.ok) throw new Error(res.status);
+      return res.text();
+    })
+    .then(function (text) {
+      cachedMarkdown = text;
+
+      // Relocate button into the .quarto-title div
+      var titleDiv = document.querySelector(".quarto-title");
+      if (titleDiv) {
+        titleDiv.appendChild(btn);
+        btn.style.display = "";
+      }
+    })
+    .catch(function () {
+      // No .html.md available — remove button entirely
+      btn.remove();
+    });
+
+  function copyMarkdown(e) {
+    e.preventDefault();
+    if (!cachedMarkdown) return;
+    navigator.clipboard.writeText(cachedMarkdown).then(function () {
+      // Brief visual feedback — lock width to prevent layout shift
+      var actionBtn = document.getElementById("copy-page-action");
+      var original = actionBtn.innerHTML;
+      actionBtn.style.minWidth = actionBtn.offsetWidth + "px";
+      actionBtn.innerHTML = '<i class="bi bi-check2"></i> Copied!';
+      setTimeout(function () {
+        actionBtn.innerHTML = original;
+        actionBtn.style.minWidth = "";
+      }, 1500);
+    });
+  }
+
+  document.getElementById("copy-page-action").addEventListener("click", copyMarkdown);
+  document.getElementById("copy-page-md").addEventListener("click", copyMarkdown);
+  document.getElementById("open-page-md").addEventListener("click", function (e) {
+    e.preventDefault();
+    window.open(mdUrl, "_blank");
+  });
+});
+</script>
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp("https:\/\/meridianlabs-ai\.github\.io\/inspect_steward");
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        const annoteTargets = window.document.querySelectorAll('.code-annotation-anchor');
+        for (let i=0; i<annoteTargets.length; i++) {
+          const annoteTarget = annoteTargets[i];
+          const targetCell = annoteTarget.getAttribute("data-target-cell");
+          const targetAnnotation = annoteTarget.getAttribute("data-target-annotation");
+          const contentFn = () => {
+            const content = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+            if (content) {
+              const tipContent = content.cloneNode(true);
+              tipContent.classList.add("code-annotation-tip-content");
+              return tipContent.outerHTML;
+            }
+          }
+          const config = {
+            allowHTML: true,
+            content: contentFn,
+            onShow: (instance) => {
+              selectCodeLines(instance.reference);
+              instance.reference.classList.add('code-annotation-active');
+              window.tippy.hideAll();
+            },
+            onHide: (instance) => {
+              unselectCodeLines();
+              instance.reference.classList.remove('code-annotation-active');
+            },
+            maxWidth: 300,
+            delay: [50, 0],
+            duration: [200, 0],
+            offset: [5, 10],
+            arrow: true,
+            trigger: 'click',
+            appendTo: function(el) {
+              return el.parentElement.parentElement.parentElement;
+            },
+            interactive: true,
+            interactiveBorder: 10,
+            theme: 'quarto',
+            placement: 'right',
+            positionFixed: true,
+            popperOptions: {
+              modifiers: [
+              {
+                name: 'flip',
+                options: {
+                  flipVariations: false, // true by default
+                  allowedAutoPlacements: ['right'],
+                  fallbackPlacements: ['right', 'top', 'top-start', 'top-end', 'bottom', 'bottom-start', 'bottom-end', 'left'],
+                },
+              },
+              {
+                name: 'preventOverflow',
+                options: {
+                  mainAxis: false,
+                  altAxis: false
+                }
+              }
+              ]        
+            }      
+          };
+          window.tippy(annoteTarget, config); 
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+</div> <!-- /content -->
+<footer class="footer">
+  <div class="nav-footer">
+    <div class="nav-footer-left">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai">
+<p>Meridian Labs</p>
+</a>
+  </li>  
+</ul>
+    </div>   
+    <div class="nav-footer-center">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_steward">
+<p>Code</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_steward/blob/main/CHANGELOG.md">
+<p>Changelog</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_steward/blob/main/LICENSE">
+<p>License</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_steward/issues">
+<p>Issues</p>
+</a>
+  </li>  
+</ul>
+    </div>
+    <div class="nav-footer-right">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_steward/">
+      <i class="bi bi-github" role="img" aria-label="Inspect Steward on GitHub">
+</i> 
+    </a>
+  </li>  
+</ul>
+    </div>
+  </div>
+</footer>
+
+
+
+
+</body></html>

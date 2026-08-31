@@ -1,0 +1,92 @@
+# Inspect Hawk – Inspect Steward
+
+## Overview
+
+``` bash
+pip install "inspect-steward[hawk]"
+```
+
+A [Hawk](https://github.com/METR/hawk) eval set config is a [definition](./index.html.md#quick-tour) like any other, because `hawk local eval-set` is itself a program culminating in one [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) call. So Steward drives **Hawk’s own CLI** rather than parsing configs itself.
+
+That matters more here than for other formats. An earlier implementation did parse `EvalSetConfig` and reimplement Hawk’s lowering, and it diverged from a real Hawk run in ways a task list cannot show: the infra config was invisible to it, `runner.environment` was ignored, and secrets resolution was absent. All three dissolve when Hawk’s own runner does the work, because all three happen before the [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) call.
+
+So Hawk keeps its tasks × solvers/agents × models crossing, its secrets resolution, its provider environment for gateway routing, its sandbox annotations, and its refusal of configs it does not support. Steward sees the fully-lowered task list and owns execution from there.
+
+Name the config `hawk.yaml` in your workspace and the rest of the documentation applies unchanged.
+
+## Installation is stricter than Steward’s own
+
+> **IMPORTANT: Important**
+>
+> **Hawk requires Python 3.13; Steward requires 3.12.** The extra is marker-gated, so Hawk’s floor binds only those who ask for Hawk — on 3.12 the extra resolves to nothing and Hawk support is simply unavailable, with no error at install time.
+>
+> The extra also carries `uv`, which Hawk shells out to on every invocation but does not declare. Declaring it is necessary but not sufficient: pip installs `uv` beside the interpreter, and Hawk resolves a bare `uv` through `PATH`, which contains that directory only when the virtualenv happens to be activated. Steward prepends the interpreter’s directory to the Hawk child’s `PATH` — which is Steward’s to do, because Steward chose the interpreter.
+
+## What Steward passes
+
+`--direct` is not optional. Without it Hawk builds a fresh virtualenv per worker, which is a second isolation model running against Steward’s own — and it puts the eval in a grandchild process, so the pid Steward recorded and every liveness check keyed on it name the wrong process.
+
+Steward also overrides `log_dir` and the eval-set id through the selection each worker reads, because Hawk exposes no log-directory option: a local run synthesizes a fresh `logs/<random job id>/` relative to the working directory.
+
+### Hawk sets the concurrency, so the ramp does not run
+
+Hawk’s infra config always supplies `max_samples` — the default is `1000` — and Steward honors it exactly as it honors any other definition’s explicit value: the setpoint is **pinned**, and the [sample-concurrency ramp](./concurrency.html.md#the-ramp) does not apply. `samples_ramp` in `_steward.yaml` has nothing to govern under a Hawk config and is ignored there.
+
+That is Hawk’s policy to set, and Steward’s job is to run what the config asks for rather than to second-guess it. What it means in practice is worth knowing before a large run, because the number is per task and Steward runs a poolful:
+
+|  |  |
+|----|----|
+| `max_samples` | pinned from the infra config (default `1000`) — no ramp, no discovery |
+| `max_sandboxes` | from the infra config, which computes one; bounds containers per process |
+| `max_tasks` | honored as fleet width, the same as any other definition’s (see [Concurrency](./concurrency.html.md)) |
+
+If you want a different sample concurrency, set it in the Hawk config where the rest of your infra settings live. `steward launch --max-samples N` also outranks it for a run, and — as everywhere — pins rather than ramps.
+
+## What fan-out costs
+
+`--direct` means *install into the current interpreter* rather than *skip installing*, so every worker runs `uv pip install` on startup. Three things make that redundant rather than dangerous, and the first two were verified rather than reasoned about:
+
+- **uv takes an exclusive lock on the target environment.** Two concurrent installs into one virtualenv serialize — the second waits for the lock and both succeed. They do not interleave.
+- **Enumeration has already installed**, in Steward’s own interpreter, before `launch` spawns anything. So every worker’s install is a satisfied no-op.
+- Warm, a Hawk worker costs about 0.5s over a plain script — *cheaper* than Flow, because Flow pays two `uv` shell-outs where Hawk’s install is a no-op.
+
+What is genuinely multiplied is the remote work: a config with `secrets:` makes a Secrets Manager round trip **per worker**, and provider environment setup calls the gateway per worker, all at once. Throttling is the plausible failure and it would present as a confusing burst of worker startup failures. Nothing Steward can do about it from outside, because what those produce is process state rather than files — there is no directory to redirect and nothing to hand on unless Hawk reports it.
+
+Two concurrent Hawk workers writing into one flat log directory is verified end to end, both logs stamped with the eval-set id Steward assigned rather than Hawk’s synthetic one. Higher fan-out is not yet verified, and this is the first thing to suspect if it misbehaves.
+
+> **NOTE:**
+>
+> One ambient hazard, unrelated to fan-out: against a PyPI-versioned `inspect-ai`, Hawk emits an exact pin and installs it into the interpreter the runner is executing in. That happens at a single invocation — `steward tasks` triggers it — so it belongs with the general hazards of driving Hawk in-process rather than with anything Steward’s fan-out causes.
+
+## Local caveats
+
+Two things a Hawk config can ask for that a local run cannot provide:
+
+|  |  |
+|----|----|
+| `isolation: strict` | hard-fails without an environment variable that only Hawk’s Helm template sets |
+| `scan:` | rejected locally, as it is for every definition type today |
+
+A third is inert but worth knowing about: Hawk’s cloud path honours a declared `eval_set_id`, and its local path ignores it, synthesizing a throwaway `local-eval-set-<uuid>` fresh on every invocation. Nothing reads that field today — workers take their id from Steward — so it costs nothing now. It will matter when a resumed run has to land in the same place as the original.
+
+## What each side gains
+
+Worth stating plainly, because the integration is not one-directional.
+
+Hawk gains three things it does not have:
+
+- **Failure granularity.** Today the recovery unit is the whole pod: `restartPolicy: Never` plus `backoffLimit: 3` means one OOM restarts the world. Per-task workers make the blast radius one task.
+- **A structural record of re-run cost.** Hawk has code whose only job is to *log* this — its docstring reports a production run where three OOM kills turned 4,588 logical samples into 6,013 attempts, and nothing said so. Steward’s journal is that record, kept as it happens.
+- **Adjudication and signoff**, which have no equivalent at all. Job-complete currently means the eval loop returned; it says nothing about whether the data is usable.
+
+It pays with the per-worker startup above, and with one silent loss worth knowing:
+
+> **IMPORTANT: ImportantEval-set-scoped hooks do not fire**
+>
+> A Steward worker runs an [eval()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval), not an eval set, so it never reaches the eval-set lifecycle events. Run- and sample-scoped handlers are unaffected and fire in every worker, which is what keeps token refresh and `hawk stop` working with no cooperation from Steward at all.
+>
+> But handlers registered at **eval-set** scope are silently dropped. In Hawk’s case that costs a Datadog gauge, a CloudWatch completion metric, and — the one that matters, because it is a safety mechanism rather than a metric — the stuck eval watchdog is never armed. Steward’s own tend loop covers much of the same ground, since a worker that stops making progress is exactly what reconciliation notices, but “covered by something else” is a claim to verify rather than assume.
+
+## Steward inside a Hawk pod
+
+Not yet. Running a Hawk config *outside* the pod is what this page describes, and it needs nothing from Hawk. Running Steward *inside* the runner pod — a blocking launch that holds the pod open for the whole lifecycle Steward defines, an in-pod timer, and a relay surface an external agent drives it through — is designed but deliberately scheduled after everything else, and it is the one piece that needs a change on Hawk’s side.

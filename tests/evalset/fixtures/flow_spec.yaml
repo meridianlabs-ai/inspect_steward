@@ -1,4 +1,0 @@
-log_dir: logs
-tasks:
-  - name: tasks.py@addition
-    model: mockllm/model

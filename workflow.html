@@ -1,0 +1,1635 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.10.18">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>Workflow – Inspect Steward</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: 1.5em;}
+div.column{flex: auto;}
+@media screen {
+div.columns{gap: min(4vw, 1.5em);}
+div.column{overflow-x: auto;}
+}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="site_libs/quarto-nav/headroom.min.js"></script>
+<script src="site_libs/clipboard/clipboard.min.js"></script>
+<script src="site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="site_libs/quarto-search/fuse.min.js"></script>
+<script src="site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="./">
+<link href="./concurrency.html" rel="next">
+<link href="./index.html" rel="prev">
+<script src="site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="site_libs/quarto-html/popper.min.js"></script>
+<script src="site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="site_libs/quarto-html/anchor.min.js"></script>
+<link href="site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="site_libs/quarto-html/quarto-syntax-highlighting-64a204ab8560d761af7679ceaba22944.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="site_libs/bootstrap/bootstrap-6be907ae78873760d36834dbe5a66008.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+<link rel="alternate" type="text/markdown" title="LLM-readable docs index" href="./llms.txt">
+<link rel="alternate" type="text/markdown" title="LLM-readable docs (full)" href="./llms-full.txt">
+<link rel="alternate" type="text/markdown" title="LLM-readable docs (user guide)" href="./llms-guide.txt">
+
+
+<meta property="og:title" content="Inspect Steward">
+<meta property="og:description" content="An agent that supervises evaluations, monitoring progress, diagnosing problems, and adjusting runtime state on your behalf.">
+<meta property="og:site_name" content="Inspect Steward">
+<meta name="twitter:title" content="Inspect Steward">
+<meta name="twitter:description" content="An agent that supervises evaluations, monitoring progress, diagnosing problems, and adjusting runtime state on your behalf.">
+<meta name="twitter:card" content="summary">
+</head>
+
+<body class="nav-sidebar docked nav-fixed quarto-light">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a class="navbar-brand" href="./index.html">
+    <span class="navbar-title">Inspect Steward</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="Search"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" role="menu" aria-expanded="false" aria-label="Toggle navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link active" href="./index.html" aria-current="page"> 
+<span class="menu-text">Getting Started</span></a>
+  </li>  
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-using-steward" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">Using Steward</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-using-steward">    
+        <li>
+    <a class="dropdown-item" href="./workflow.html">
+ <span class="dropdown-text">Workflow</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./concurrency.html">
+ <span class="dropdown-text">Concurrency</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./errors.html">
+ <span class="dropdown-text">Error Handling</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./runbook.html">
+ <span class="dropdown-text">Agent Runbook</span></a>
+  </li>  
+    </ul>
+  </li>
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-integrations" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">Integrations</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-integrations">    
+        <li>
+    <a class="dropdown-item" href="./flow.html">
+ <span class="dropdown-text">Inspect Flow</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./hawk.html">
+ <span class="dropdown-text">Inspect Hawk</span></a>
+  </li>  
+    </ul>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link" href="./reference/index.html"> 
+<span class="menu-text">Reference</span></a>
+  </li>  
+</ul>
+            <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="./CHANGELOG.html"> 
+<span class="menu-text">Changelog</span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_steward"> <i class="bi bi-github" role="img">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+</ul>
+          </div> <!-- /navcollapse -->
+            <div class="quarto-navbar-tools">
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+  <nav class="quarto-secondary-nav">
+    <div class="container-fluid d-flex">
+      <button type="button" class="quarto-btn-toggle btn" data-bs-toggle="collapse" role="button" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+        <i class="bi bi-layout-text-sidebar-reverse"></i>
+      </button>
+        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./workflow.html">Using Steward</a></li><li class="breadcrumb-item"><a href="./workflow.html">Workflow</a></li></ol></nav>
+        <a class="flex-grow-1" role="navigation" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">      
+        </a>
+    </div>
+  </nav>
+</header>
+<!-- content -->
+<div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+  <nav id="quarto-sidebar" class="sidebar collapse collapse-horizontal quarto-sidebar-collapse-item sidebar-navigation docked overflow-auto">
+    <div class="sidebar-menu-container"> 
+    <ul class="list-unstyled mt-1">
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./index.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Getting Started</span></a>
+  </div>
+</li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="true">
+ <span class="menu-text">Using Steward</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-1" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./workflow.html" class="sidebar-item-text sidebar-link active">
+ <span class="menu-text">Workflow</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./concurrency.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Concurrency</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./errors.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Error Handling</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./runbook.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Agent Runbook</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true">
+ <span class="menu-text">Integrations</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-2" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./flow.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Inspect Flow</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./hawk.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Inspect Hawk</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a href="./reference/index.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Reference</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-3" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a href="./reference/enumeration.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Python API</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-4" class="collapse list-unstyled sidebar-section depth2 ">  
+          <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a href="./reference/enumeration.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Enumeration</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-5" class="collapse list-unstyled sidebar-section depth3 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/enumeration.html#read_eval_set" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">read_eval_set</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/enumeration.html#readevalseterror" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">ReadEvalSetError</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/enumeration.html#manifest" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Manifest</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/enumeration.html#manifestsource" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">ManifestSource</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/enumeration.html#manifesttask" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">ManifestTask</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+      </ul>
+  </li>
+          <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a href="./reference/steward_ack.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">CLI Commands</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-6" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-6" class="collapse list-unstyled sidebar-section depth2 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/steward_ack.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">steward ack</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/steward_collect.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">steward collect</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/steward_init.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">steward init</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/steward_launch.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">steward launch</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/steward_notify.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">steward notify</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/steward_pause.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">steward pause</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/steward_raise.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">steward raise</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/steward_ramp.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">steward ramp</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/steward_resume.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">steward resume</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/steward_runbook.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">steward runbook</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/steward_status.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">steward status</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/steward_tasks.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">steward tasks</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/steward_tend.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">steward tend</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/steward_timer.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">steward timer</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+      </ul>
+  </li>
+    </ul>
+    </div>
+</nav>
+<div id="quarto-sidebar-glass" class="quarto-sidebar-collapse-item" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item"></div>
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active" data-toc-expanded="1">
+    <h2 id="toc-title">On this page</h2>
+   
+  <ul>
+  <li><a href="#overview" id="toc-overview" class="nav-link active" data-scroll-target="#overview">Overview</a></li>
+  <li><a href="#the-workspace" id="toc-the-workspace" class="nav-link" data-scroll-target="#the-workspace">The workspace</a>
+  <ul class="collapse">
+  <li><a href="#what-is-safe-to-delete" id="toc-what-is-safe-to-delete" class="nav-link" data-scroll-target="#what-is-safe-to-delete">What is safe to delete</a></li>
+  <li><a href="#the-journal" id="toc-the-journal" class="nav-link" data-scroll-target="#the-journal">The journal</a></li>
+  <li><a href="#the-three-log-files" id="toc-the-three-log-files" class="nav-link" data-scroll-target="#the-three-log-files">The three log files</a></li>
+  <li><a href="#where-your-logs-go" id="toc-where-your-logs-go" class="nav-link" data-scroll-target="#where-your-logs-go">Where your logs go</a></li>
+  <li><a href="#the-workspace-follows-its-logs" id="toc-the-workspace-follows-its-logs" class="nav-link" data-scroll-target="#the-workspace-follows-its-logs">The workspace follows its logs</a></li>
+  <li><a href="#version-control" id="toc-version-control" class="nav-link" data-scroll-target="#version-control">Version control</a></li>
+  </ul></li>
+  <li><a href="#launching" id="toc-launching" class="nav-link" data-scroll-target="#launching">Launching</a>
+  <ul class="collapse">
+  <li><a href="#the-delta-and-the-one-gate-on-it" id="toc-the-delta-and-the-one-gate-on-it" class="nav-link" data-scroll-target="#the-delta-and-the-one-gate-on-it">The delta, and the one gate on it</a></li>
+  <li><a href="#changing-the-eval-set-mid-run" id="toc-changing-the-eval-set-mid-run" class="nav-link" data-scroll-target="#changing-the-eval-set-mid-run">Changing the eval set mid-run</a></li>
+  <li><a href="#the-timer" id="toc-the-timer" class="nav-link" data-scroll-target="#the-timer">The timer</a></li>
+  </ul></li>
+  <li><a href="#the-tend-loop" id="toc-the-tend-loop" class="nav-link" data-scroll-target="#the-tend-loop">The tend loop</a></li>
+  <li><a href="#where-the-run-stands" id="toc-where-the-run-stands" class="nav-link" data-scroll-target="#where-the-run-stands">Where the run stands</a></li>
+  <li><a href="#decisions" id="toc-decisions" class="nav-link" data-scroll-target="#decisions">Decisions</a></li>
+  <li><a href="#getting-told" id="toc-getting-told" class="nav-link" data-scroll-target="#getting-told">Getting told</a></li>
+  <li><a href="#standing-rules" id="toc-standing-rules" class="nav-link" data-scroll-target="#standing-rules">Standing rules</a></li>
+  <li><a href="#pausing" id="toc-pausing" class="nav-link" data-scroll-target="#pausing">Pausing</a></li>
+  <li><a href="#picking-up-a-run-cold" id="toc-picking-up-a-run-cold" class="nav-link" data-scroll-target="#picking-up-a-run-cold">Picking up a run cold</a></li>
+  <li><a href="#how-a-run-ends" id="toc-how-a-run-ends" class="nav-link" data-scroll-target="#how-a-run-ends">How a run ends</a></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./workflow.html">Using Steward</a></li><li class="breadcrumb-item"><a href="./workflow.html">Workflow</a></li></ol></nav>
+<div class="quarto-title">
+<h1 class="title">Workflow</h1>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<section id="overview" class="level2">
+<h2 class="anchored" data-anchor-id="overview">Overview</h2>
+<p>A Steward run is a <strong>project rather than an episode</strong>: one evolving definition, one log directory holding its current results, one archive holding everything superseded, and one journal recording what happened. Work <em>converges</em> toward the manifest your definition captured rather than happening in identified attempts — which is why amending a run is just launching again, and why a run nobody touched for six hours is in exactly the state it should be.</p>
+<p>Three parties carry a run, and the division between them is what makes walking away safe:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>party</th>
+<th>supplies</th>
+<th>how</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>the timer</td>
+<td>the mechanical floor</td>
+<td><code>steward tend</code> on an interval, with nobody present</td>
+</tr>
+<tr class="even">
+<td>the agent</td>
+<td>judgement</td>
+<td>diagnoses errors, groups them, oversees the concurrency ramp, investigates, writes up</td>
+</tr>
+<tr class="odd">
+<td>you</td>
+<td>authority</td>
+<td>rulings, approvals, and signing off on the results</td>
+</tr>
+</tbody>
+</table>
+<p>Almost every verb below is one an agent runs. Yours are <code>init</code>, signoff, editing the definition and <code>_steward.yaml</code>, and asking questions in prose:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>command</th>
+<th>who calls it</th>
+<th>what it does</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>steward init</code></td>
+<td>you</td>
+<td>Create the workspace: bootstrap, definition placeholder, <code>_steward.yaml</code>, a repository, the journal’s first event. Only ever creates.</td>
+</tr>
+<tr class="even">
+<td><code>steward launch</code></td>
+<td>agent</td>
+<td>Capture the definition, report the delta, commit it as desired state, arm a timer, tend once. The only verb that reads the definition — and therefore the amend path too.</td>
+</tr>
+<tr class="odd">
+<td><code>steward tend</code></td>
+<td><strong>a timer</strong></td>
+<td>One turn of the loop: reconcile, spawn, reap, archive, rewrite <code>status.md</code>, append to the journal. Never blocks.</td>
+</tr>
+<tr class="even">
+<td><code>steward status</code></td>
+<td>either</td>
+<td>Where the run stands, and what the next turn would do. <code>tend --dry-run</code>, and read-only.</td>
+</tr>
+<tr class="odd">
+<td><code>steward collect</code></td>
+<td>agent</td>
+<td>The agent’s queue, plus everything that happened since it last looked.</td>
+</tr>
+<tr class="even">
+<td><code>steward ack</code> / <code>steward raise</code></td>
+<td>agent, relaying you</td>
+<td>Close an open item, or hand it to the person who can decide it.</td>
+</tr>
+<tr class="odd">
+<td><code>steward pause</code> / <code>steward resume</code></td>
+<td>either</td>
+<td>Stop scheduling new work; start again. Work in flight finishes either way.</td>
+</tr>
+<tr class="even">
+<td><code>steward ramp hold</code> / <code>steward ramp resume</code></td>
+<td>either</td>
+<td>Freeze the concurrency climb without touching configuration.</td>
+</tr>
+<tr class="odd">
+<td><code>steward timer arm</code> / <code>disarm</code> / <code>status</code></td>
+<td>either</td>
+<td>Install, remove, or inspect the schedule.</td>
+</tr>
+<tr class="even">
+<td><code>steward tasks</code></td>
+<td>either</td>
+<td>Enumerate what a definition resolves to, without running it.</td>
+</tr>
+<tr class="odd">
+<td><code>steward runbook</code></td>
+<td>agent</td>
+<td>The operating instructions, which ship with the package so they cannot go stale.</td>
+</tr>
+</tbody>
+</table>
+<p>The rest of this page walks the arc of a run in the order you meet it.</p>
+</section>
+<section id="the-workspace" class="level2">
+<h2 class="anchored" data-anchor-id="the-workspace">The workspace</h2>
+<p>The deliverable of <code>steward init</code> is a <strong>workspace</strong> — a directory that you and an agent co-inhabit, and that a third party can pick up cold. Everything important is written down in it rather than held in somebody’s session:</p>
+<pre class="text"><code>my-sweep/
+  AGENTS.md           # authored  — bootstrap: "you are tending a run; read the runbook"
+  CLAUDE.md           # authored  — symlink to AGENTS.md
+  _steward.yaml       # authored  — your eval policy
+  evalset.py          # authored  — your definition (or flow.py / hawk.yaml)
+  .env                # authored  — credentials, if you keep them here
+
+  journal.jsonl       # DURABLE   — append-only record; the source of truth
+  status.md           # generated — rewritten by every tend
+
+  logs/               # DURABLE   — the flat log directory: the current definition's results
+  logs-archive/       # DURABLE   — superseded, removed, and failed logs; never deleted
+
+  .steward/           # DISPOSABLE — claim, manifest, in-flight record, caches
+    steward.log       #            — whether Steward's own machinery worked
+    timer.log         #            — what a scheduled tend printed before Steward could log</code></pre>
+<p>The root holds what you authored and what you read, and nothing else: the two machine logs live under <code>.steward/</code> with the rest of the disposable state.</p>
+<p><code>init</code> <strong>only ever creates</strong> — a second run reports each path as created or kept rather than restoring a pristine copy over your work. It is safe to run in a directory that already has a definition.</p>
+<section id="what-is-safe-to-delete" class="level3">
+<h3 class="anchored" data-anchor-id="what-is-safe-to-delete">What is safe to delete</h3>
+<p>The categories that matter are about whether a file can be recovered, not who wrote it:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Category</th>
+<th>Files</th>
+<th>If you delete it</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><strong>authored</strong></td>
+<td><code>_steward.yaml</code>, <code>AGENTS.md</code>, the definition</td>
+<td>your own work is gone</td>
+</tr>
+<tr class="even">
+<td><strong>durable machine state</strong></td>
+<td><code>journal.jsonl</code>, <code>logs/</code>, <code>logs-archive/</code></td>
+<td>the audit trail, or the results, are gone</td>
+</tr>
+<tr class="odd">
+<td><strong>authored by the agent</strong></td>
+<td><code>scanning.md</code>, <code>analysis.md</code> <em>(not yet implemented)</em></td>
+<td>the investigation is gone, and re-runs from scratch</td>
+</tr>
+<tr class="even">
+<td><strong>disposable</strong></td>
+<td>everything in <code>.steward/</code> (including the two logs), and <code>status.md</code></td>
+<td>rebuilt on the next turn, or gone with no loss</td>
+</tr>
+</tbody>
+</table>
+<p>Gitignored is <strong>not</strong> the same as disposable: <code>logs/</code> and <code>logs-archive/</code> are ignored by git because <code>.eval</code> files are large outputs shared through an object store rather than source control — they are still durable. Only <code>.steward/</code> is safe to remove, and even that only when nothing is running: a worker that has not yet reached <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> dies with its instructions, and deleting the claim file under a running tend lets a second tend run concurrently.</p>
+</section>
+<section id="the-journal" class="level3">
+<h3 class="anchored" data-anchor-id="the-journal">The journal</h3>
+<p><code>journal.jsonl</code> is the append-only record of the run: what was observed, what was done, who decided what, and why. It is the source of truth that everything else is derived from — <code>status.md</code> is a rendering of it, and <code>.steward/</code> is a cache of it. It is plain JSON lines, so <code>jq -r '.type' journal.jsonl</code> works with no Steward installed.</p>
+</section>
+<section id="the-three-log-files" class="level3">
+<h3 class="anchored" data-anchor-id="the-three-log-files">The three log files</h3>
+<p>The rule dividing them is one question: is this a fact about <strong>the eval set</strong>, or about <strong>Steward</strong>?</p>
+<ul>
+<li><code>status.md</code> answers the first — where the run stands, rewritten by every tend.</li>
+<li><code>.steward/steward.log</code> answers the second — a tend that crashed, a spawn that failed. A healthy run writes nothing to it at all.</li>
+<li><code>.steward/timer.log</code> catches what a scheduled tend printed before Steward could log anything — a Python that would not start, a workspace that moved. Every scheduler creates the directory before redirecting into it, so clearing <code>.steward/</code> costs the file’s contents and never the supervision.</li>
+</ul>
+<p>The split means <em>“no tend for four hours”</em> is computable from the journal’s silence, while <em>why</em> is in <code>steward.log</code> — a run whose tends were crashing does not look like a run with nothing to report.</p>
+<p>It is also why there are two files rather than one type of journal event. <code>steward.log</code> can be <strong>truncated</strong> and <code>journal.jsonl</code> never can: a failure that repeats every ten minutes — a wedged claim, a bucket that went away — is one line per turn forever, which is a bound away from harmless in a disposable file and unbounded growth of an irreplaceable one anywhere else.</p>
+</section>
+<section id="where-your-logs-go" class="level3">
+<h3 class="anchored" data-anchor-id="where-your-logs-go">Where your logs go</h3>
+<p><strong>Leave <code>log_dir</code> out of your definition.</strong> It is the one argument worth omitting: name one and it is the one Steward uses, forever and everywhere, and you have written a fact about a machine into a file about an eval.</p>
+<p>Say nothing and Steward answers in one of two ways:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>you have said</th>
+<th>logs go to</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>nothing at all</td>
+<td><code>logs/</code> in the workspace, with <code>logs-archive/</code> beside it</td>
+</tr>
+<tr class="even">
+<td><code>STEWARD_LOG_ROOT=s3://org-evals/runs</code></td>
+<td><code>s3://org-evals/runs/&lt;workspace directory name&gt;</code>, archive alongside</td>
+</tr>
+</tbody>
+</table>
+<p>The root is where <em>this machine</em> keeps eval logs, so it is usually a shell export rather than a committed setting — one line, and every workspace on the box lands in the bucket under a directory of its own. It can also be <code>log_root:</code> in <code>_steward.yaml</code> where it is a fact about the project, or <code>--log-root</code> for one launch; <code>--no-log-root</code> keeps a single run’s logs at home whatever the machine says.</p>
+<p>Each workspace gets its <strong>own</strong> directory under the root and needs to: the workspace is mirrored into its log directory (below), so two runs sharing one would overwrite each other’s <code>status.md</code>. Two workspaces with the same directory name under one root will collide — name them for what they measure.</p>
+<p>Moving a run’s logs after it has started is a <strong>relocation</strong>: nothing is lost, but the results stay where they are and the whole sweep runs again, so <code>steward launch</code> reports it and refuses without <code>--accept-archive</code>. That applies to changing <code>STEWARD_LOG_ROOT</code> exactly as it applies to editing <code>log_dir</code>, because the directory a launch resolved is recorded in the run rather than re-derived each turn — which is also what keeps a 02:00 tend, inheriting no shell, reading the directory its workers are writing to.</p>
+</section>
+<section id="the-workspace-follows-its-logs" class="level3">
+<h3 class="anchored" data-anchor-id="the-workspace-follows-its-logs">The workspace follows its logs</h3>
+<p>Every tend mirrors the workspace into the run’s log directory: <code>status.md</code>, <code>journal.jsonl</code>, <code>steward.log</code>, your <code>_steward.yaml</code> and your definition, and anything else at the top level that you or an agent put there. So a result and the account of how it was produced sit together, and a log directory describes itself wherever it ends up — which on a machine reachable only through an object store is the whole observability channel.</p>
+<p>Dotfiles never leave, which is what keeps a stray <code>.env</code> on the machine; nor do directories, <code>AGENTS.md</code>, symlinks, or anything inspect would read as an eval log. Symlinks are on that list because every other rule is a rule about a <em>name</em>, and a <code>public-config</code> pointing at <code>.env</code> is not a dotfile. Say <code>sync: false</code> in <code>_steward.yaml</code> (or <code>--no-sync</code>, or <code>STEWARD_SYNC=false</code>) to decline, or give it a path to send the files somewhere other than the logs — bearing in mind that <code>journal.jsonl</code> and an agent’s writeups quote what was in the transcripts, so a destination outside the log bucket widens who can read them.</p>
+</section>
+<section id="version-control" class="level3">
+<h3 class="anchored" data-anchor-id="version-control">Version control</h3>
+<p><code>init</code> runs <code>git init</code> if, and only if, there is no repository already — a workspace created inside an existing project belongs to that repository. It writes a scoped <code>.gitignore</code> covering <code>logs/</code>, <code>logs-archive/</code>, <code>.env</code>, <code>.steward/</code>, and the machinery logs, so what remains tracked is what you authored plus the journal. <code>--no-git</code> skips repository creation entirely.</p>
+</section>
+</section>
+<section id="launching" class="level2">
+<h2 class="anchored" data-anchor-id="launching">Launching</h2>
+<p><code>steward launch</code> is the only verb that reads your definition, and therefore the only one that <em>decides</em> anything — everything else converges toward a manifest somebody else committed. It is one command doing eight things, and the order is load-bearing:</p>
+<ol type="1">
+<li><strong>Take the run claim</strong>, and hold it across all of what follows. A scheduled tend that fires meanwhile is refused, which is the ordinary path rather than a problem: a tend is built to be interrupted, and the next interval converges.</li>
+<li><strong>Capture the manifest</strong> — execute the definition under inspect’s capture mode and enumerate the tasks it resolves to. This is the same machinery <code>steward tasks</code> renders.</li>
+<li><strong>Compute the delta</strong> between that manifest and the committed one.</li>
+<li><strong>Gate on it</strong> — refuse to commit anything that would move results out of <code>logs/</code> unless you said otherwise.</li>
+<li><strong>Commit</strong> the manifest as desired state.</li>
+<li><strong>Restore</strong> logs the archive already holds for identifiers the new manifest asks for. A move rather than a re-run — where the archived log answers the question being asked: one produced under a slice or a gateway the run has since left is left where it is, since restoring it would move a log into <code>logs/</code> and re-run the task anyway.</li>
+<li><strong>Stop</strong> workers running tasks the new manifest no longer names, and <strong>arm the timer</strong>.</li>
+<li><strong>Tend once</strong>, which is what actually spawns the first workers.</li>
+</ol>
+<p>Arming happens <em>before</em> the first tend, so a launch whose own turn fails still leaves the run supervised and the next interval picks it up.</p>
+<section id="the-delta-and-the-one-gate-on-it" class="level3">
+<h3 class="anchored" data-anchor-id="the-delta-and-the-one-gate-on-it">The delta, and the one gate on it</h3>
+<p>Adding work is what you just asked for; removing work from <code>logs/</code> could equally be a typo. A one-character change to a task argument produces a new identifier and reads exactly like a deliberate removal — except that one of the two quietly buys a re-run of everything. So the delta is computed and shown, and it classifies every task into one of five rows:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Row</th>
+<th>Meaning</th>
+<th>Additive</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><strong>add</strong></td>
+<td>Not in the committed manifest. New work.</td>
+<td>yes</td>
+</tr>
+<tr class="even">
+<td><strong>extend</strong></td>
+<td>Same identifier, more work than before — raised epochs, a grown dataset. Nothing already in <code>logs/</code> stops counting.</td>
+<td>yes</td>
+</tr>
+<tr class="odd">
+<td><strong>removed</strong></td>
+<td>Gone from the definition, with nothing of its name and model left.</td>
+<td><strong>archives</strong></td>
+</tr>
+<tr class="even">
+<td><strong>superseded</strong></td>
+<td>Gone, but a task of the same name and model is still there under a different configuration — what an edit displaced.</td>
+<td><strong>archives</strong></td>
+</tr>
+<tr class="odd">
+<td><strong>restore</strong></td>
+<td>Asked for, and a log for it is sitting in the archive that answers the shape the run is now asking for.</td>
+<td>yes</td>
+</tr>
+</tbody>
+</table>
+<p>A <strong>relocation</strong> is the sixth thing and is not a row, because it is not about a task: moving the definition’s <code>log_dir</code> leaves every identifier untouched while putting the run’s results in a directory the next tend no longer reads. Nothing is archived, nothing is deleted, and the whole sweep runs again — the archiving case in a different costume, and gated the same way. It also costs the fleet, because a worker’s destination is fixed in its selection document when it spawns: every worker still running is producing a log for a directory the run has stopped reading, so stopping them is part of what a relocation <em>is</em>.</p>
+<p><strong>A purely additive delta commits with no ceremony.</strong> Anything else prints what it would move and refuses; <code>--accept-archive</code> commits it. The refusal is the mechanism rather than an obstacle to it — the runbook tells the agent that a flag reached for reflexively is the same as no gate, so the agent shows you the delta and lets you answer.</p>
+<p>The gate has to sit between the capture and the commit because there is nowhere else it could sit: once desired state says a task is not in the eval set, <code>tend</code> archives it as bookkeeping, with nobody present at 02:00.</p>
+</section>
+<section id="changing-the-eval-set-mid-run" class="level3">
+<h3 class="anchored" data-anchor-id="changing-the-eval-set-mid-run">Changing the eval set mid-run</h3>
+<p>There is no <code>steward amend</code>. <strong>A second <code>launch</code> is the amend path</strong>: edit the definition, launch again, and Steward runs only what is new or changed. Completed work is never re-run, because a task whose identifier survives the edit already has its log in <code>logs/</code>.</p>
+<p>Two details worth knowing. Definition arguments (<code>-A key=value</code>, for a Flow spec function) default to the committed manifest’s on a re-launch, so a bare <code>launch</code> cannot silently capture a different eval set; <code>--no-args</code> is how you get back to the definition’s own defaults. And an edit you have <em>not</em> launched shows up as a <code>drift</code> item on every turn — the manifest is what the fleet is converging toward, and a definition that no longer matches it is a fact somebody should know.</p>
+</section>
+<section id="the-timer" class="level3">
+<h3 class="anchored" data-anchor-id="the-timer">The timer</h3>
+<p>The timer is what makes the run survive you closing the laptop. <code>launch</code> arms one unless told <code>--no-timer</code>, choosing a launchd agent, a systemd user timer, or a marked block in the crontab — preferring one that survives a reboot, and telling you plainly when the machine has none of the three rather than substituting something weaker. Arming is idempotent: an existing timer is removed first, so re-arming at a new interval leaves exactly one.</p>
+<p>Arming <strong>refuses when a scheduled tend would not inherit this shell’s credentials</strong>, because the alternative is a fleet failing to authenticate every ten minutes all night while <code>status.md</code> reports it dutifully trying. The fix is usually to put the credentials in <code>.env</code>, which the workers already read; <code>--no-env-check</code> overrides the refusal. On a <code>launch</code> the check runs <em>before</em> the capture, so a Hawk config does not spend five minutes resolving packages on the way to being turned down.</p>
+<p>Because a scheduler cannot report its own absence, arming records what it installed, and any turn that finds no tend for <strong>two intervals</strong> reports the run as <code>unsupervised</code> — which catches a crontab somebody rewrote by hand as readily as one Steward removed. A <code>--no-timer</code> launch is recorded as unsupervised from the start, so it looks like what it is.</p>
+</section>
+</section>
+<section id="the-tend-loop" class="level2">
+<h2 class="anchored" data-anchor-id="the-tend-loop">The tend loop</h2>
+<p>A turn is <strong>observe, decide, act, record</strong>, and <code>steward tend</code> is one turn. It reads the log directory against the committed manifest, decides what should change, does it, and writes down what it saw:</p>
+<ul>
+<li>spawns tasks that should be running and are not;</li>
+<li>reaps workers that exited, recording what they were doing;</li>
+<li>archives logs the definition no longer asks for;</li>
+<li>counts a fruitless respawn against a task, and marks it <strong>stalled</strong> once <code>stall_after</code> of them get nowhere;</li>
+<li>steps sample concurrency toward the ceiling when the window was clean, or cuts it on sustained provider pushback;</li>
+<li>rewrites <code>status.md</code> and appends to <code>journal.jsonl</code>.</li>
+</ul>
+<p>Three properties are what make this safe to put on a timer:</p>
+<ul>
+<li><strong>A turn never blocks.</strong> Everything with an unbounded duration — a worker, later a scan — is a detached child that some later turn observes finishing. That is what keeps the claim short-lived.</li>
+<li><strong>A repeated turn is a no-op</strong>, so calling <code>tend</code> by hand while a timer is armed costs nothing.</li>
+<li><strong>An interrupted turn is reconciled by the next one.</strong> There is no resume path and no partial-turn state: the next turn re-reads the log directory and the process table and decides again from what it finds.</li>
+</ul>
+<p>Only one Steward writes at a time. <code>launch</code> and <code>tend</code> take the run claim; a holder that dies releases it, and one that wedges is killed so the run keeps converging (<code>--no-break-claim</code> refuses instead). <code>status</code>, <code>pause</code>, and <code>resume</code> deliberately take no claim — the moment you most want to pause is the moment a tend is in flight spawning what you want stopped.</p>
+<p>Each task runs in its own worker process by default, which buys fault isolation and real CPU parallelism; <a href="./concurrency.html">Concurrency</a> covers how many run at once, how many processes carry them, and how sample concurrency is discovered.</p>
+</section>
+<section id="where-the-run-stands" class="level2">
+<h2 class="anchored" data-anchor-id="where-the-run-stands">Where the run stands</h2>
+<p><code>steward status</code> is the same function as <code>tend</code> with its actions discarded — the same reads and the same decision, so the preview cannot describe something other than what happens next. It is read-only: it spawns nothing, moves nothing, writes nothing, and takes no claim, so it is safe to type as often as you like while a tend is in flight.</p>
+<p>Over everything sits one verdict:</p>
+<table class="caption-top table">
+<tbody>
+<tr class="odd">
+<td>✅</td>
+<td>nothing needs you</td>
+</tr>
+<tr class="even">
+<td>⚠️</td>
+<td>something does, and work continues</td>
+</tr>
+<tr class="odd">
+<td>🛑</td>
+<td>nothing is progressing</td>
+</tr>
+<tr class="even">
+<td>⏸</td>
+<td>paused</td>
+</tr>
+<tr class="odd">
+<td>🏁</td>
+<td>every task finished, and nobody has accepted the results yet</td>
+</tr>
+</tbody>
+</table>
+<p>🏁 is deliberately not ✅. A finished run owes the most consequential decision in the workflow, and reporting it as all-clear is how a sweep sits unread for a week.</p>
+<p>Beneath the verdict sits a <strong>Logs</strong> line naming this run’s log directory. Take it from there rather than assuming <code>logs/</code> — under a <a href="#where-your-logs-go">log root</a> there is no <code>logs/</code> in the workspace at all, and a <code>samples_df</code> pointed at one would find nothing rather than complain. It is in <code>steward status --json</code> too.</p>
+<p>Under the verdict come four sections, in this order:</p>
+<ul>
+<li><strong>what needs a decision</strong> — the open items, under a heading that says whose they are.</li>
+<li><strong>the run</strong> — task states and counts, per-task progress, what is live right now, and the tuning block.</li>
+<li><strong>standing rules</strong> — the policies actually in force, which is not always what <code>_steward.yaml</code> says (a <code>STEWARD_POLICIES</code> variable outranks the file).</li>
+<li><strong>what happened</strong> — the history.</li>
+</ul>
+<p>Two files-versus-commands distinctions are worth keeping straight. <code>status.md</code> is written by every <strong>tend</strong>, so it holds the last turn’s snapshot and can be a full interval stale; <code>steward status</code> recomputes. And <code>--format md</code> renders the same document as markdown rather than as aligned terminal columns, which is what the runbook asks an agent to relay verbatim when you ask how it’s going.</p>
+</section>
+<section id="decisions" class="level2">
+<h2 class="anchored" data-anchor-id="decisions">Decisions</h2>
+<p>Everything a turn needs to say beyond a number is an <strong>item</strong>: a stalled task, a definition edited since capture, a file that would not parse, a worker parked on a human decision, a proposal to raise a concurrency bound. One list, filtered rather than duplicated, so the terminal and <code>status.md</code> cannot drift apart in what they report.</p>
+<p>Each item carries three things:</p>
+<ul>
+<li><strong>an owner</strong> — yours or the agent’s, computed each turn rather than baked in. One kind is fixed and policy may not move it: a parked worker is always yours, because nobody else may answer it.</li>
+<li><strong>a level</strong> — informational, needs attention, or blocking. Blocking says nothing progresses <em>on that subject</em>; whether the <em>run</em> is stopped is separate arithmetic, because a rule that painted a run red whenever any one thing was blocked would make red mean nothing.</li>
+<li><strong>an id chosen so that what re-arms it is what changes it.</strong> A stall keyed on its attempt count comes back when the task fails again; drift keyed on the content hash comes back on the next edit and clears at relaunch for free.</li>
+</ul>
+<p>Two acts take an item out of the queue, and which one is right is decided by who owns it:</p>
+<ul>
+<li><strong><code>steward ack &lt;id&gt; --reason "..."</code></strong> closes it — the case nothing will clear by itself, like a definition you edited on purpose. The item leaves every surface and the journal keeps the record.</li>
+<li><strong><code>steward raise &lt;id&gt;</code></strong> hands it to the person who can decide it and <strong>closes nothing</strong>. It stays in <code>status</code> and still counts toward the verdict; what changes is that <code>collect</code> stops offering it back to the agent every time it looks. Only a human-owned item can be raised.</li>
+</ul>
+<p><strong>A parked worker refuses an ack.</strong> A sample stopped on a tool approval or an <code>ask_user</code> is waiting for authority over what the eval <em>does</em>, and it holds its slot, its sandbox, and its model connections the whole time. So the item carries the command that attaches you to that worker, and nothing but an answer clears it.</p>
+<p>For the agent, <code>steward collect</code> is the front door: the same three sections <code>status</code> prints, plus the one thing a snapshot cannot give — the stretch of history since the last collection. A snapshot cannot say that a task died at 1am and was respawned, or that an error class grew from three instances to forty, and that series is what most judgement calls need. Reading consumes nothing; the cursor governs history alone, so a session that dies mid-investigation finds its work waiting.</p>
+<p>What the decisions themselves are about is covered on two other pages: <a href="./errors.html">Error Handling</a> for sample errors and stalled tasks, and <a href="./concurrency.html">Concurrency</a> for the ramp and its tuning proposals.</p>
+</section>
+<section id="getting-told" class="level2">
+<h2 class="anchored" data-anchor-id="getting-told">Getting told</h2>
+<p>Everything above is a file or a command, which means it reaches you only when you go and look. A run you left at 6pm that stopped at 2am is indistinguishable, from where you are, from one that is going fine. So set a channel:</p>
+<div class="code-with-filename">
+<div class="code-with-filename-file">
+<pre><strong>_steward.yaml</strong></pre>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2" data-filename="_steward.yaml"><pre class="sourceCode yaml code-with-copy"><code class="sourceCode yaml"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="fu">notification</span><span class="kw">:</span><span class="at"> slack://{OAuthToken}/</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>or, keeping the token out of your repository:</p>
+<div class="code-with-filename">
+<div class="code-with-filename-file">
+<pre><strong>.env</strong></pre>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3" data-filename=".env"><pre class="sourceCode ini code-with-copy"><code class="sourceCode ini"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="dt">STEWARD_NOTIFICATION</span><span class="ot">=</span><span class="st">slack://{OAuthToken}/</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>It takes anything <a href="https://github.com/caronc/apprise">Apprise</a> does — one URL, several separated by commas, or a path to an Apprise config file that names them — so Slack, email, SMS, Discord, a desktop notifier, or a webhook all work the same way. <code>steward launch --notification …</code> sets it for one run, and <code>notification: false</code> declines the whole thing. A launch with no channel prints one line saying so, once — as does a launch whose channel came only from the flag, since that one reaches the launch’s own turn and none of the scheduled ones.</p>
+<p><strong>Prefer the file or <code>.env</code> over exporting it in your shell.</strong> A scheduled tend at 02:00 inherits almost nothing, and a channel that lives only in the shell you launched from is one the 02:00 turn does not have. <code>steward launch</code> refuses to arm a timer when it spots that, the same way it does for an API key.</p>
+<p><strong>One channel, two directions.</strong> Steward posts what a turn found. Your <em>workers</em> post what a sample asked — an <code>ask_user()</code> question, a tool approval waiting on a human — and those block the sample until somebody answers. Setting <code>notification</code> wires both, so there is no arrangement where the fleet is asking and nobody is being told. That is also why <code>notification: false</code> and <code>--no-notification</code> silence Steward’s posts only, and still hand your workers the channel: silencing a blocking approval would hang a sample all night with nobody told. Setting inspect’s own <code>INSPECT_EVAL_NOTIFICATION</code> instead works too, and Steward will post there.</p>
+<p><strong>What actually fires.</strong> At most one message per tend, whatever changed, because the tend is already the clock:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<tbody>
+<tr class="odd">
+<td>something new needs a person</td>
+<td>as it appears — once, not every ten minutes</td>
+</tr>
+<tr class="even">
+<td>a worker parked on a human decision</td>
+<td>as it parks</td>
+</tr>
+<tr class="odd">
+<td>tasks finished</td>
+<td>one message per turn, naming all of them</td>
+</tr>
+<tr class="even">
+<td>the decision queue emptied</td>
+<td>once</td>
+</tr>
+<tr class="odd">
+<td>the run reached its gate</td>
+<td>once, and again after a re-launch changes the work</td>
+</tr>
+<tr class="even">
+<td>a tend that could not run at all</td>
+<td>once per distinct reason, until a turn succeeds again</td>
+</tr>
+</tbody>
+</table>
+<p><strong>What does not fire is the agent’s half of the queue.</strong> Some of what a tend finds is routed to the agent rather than to you — an unreadable log, an action that failed — and waking you for those is the channel advertising work you were told not to do. They still show in <code>status.md</code>, grouped by owner, where you can go and look on purpose.</p>
+<p>They <em>do</em> reach you when nobody is picking them up: no <code>steward collect</code> in the last two tends, or none ever. An agent’s item is only the agent’s while there is an agent, and what you have to do about a workspace nothing is attached to is attach something. The message says so rather than making you infer it.</p>
+<p>Every message opens with a verdict line and carries the progress table, so the last message in the channel is true modulo whatever you have since answered. Every message is named by the workspace directory it is about, since one channel serves however many runs you have going: <code>my-sweep: ⚠️ 2 decisions need attention</code>. It counts what <em>you</em> have to act on, where <code>status</code> splits the same items into yours and the agent’s because one of its readers is the agent. Tasks are named as shortly as the table names them — a model every task shares is said once, under the table, rather than after every name — long lines are trimmed and long lists are counted. <code>status.md</code> has the whole of everything, including the exception text behind a log that would not parse. Slack, email, and plain-text targets each get the markup they actually understand; a workspace posting to several gets each rendered properly rather than all reduced to the worst of them.</p>
+<p><strong>The agent has its own verb.</strong> <code>steward notify "the sonnet arm is failing systematically, I've paused it"</code> carries judgement rather than a condition, which is the half of this that a trigger cannot produce. It takes <code>--kind attention</code> (default) or <code>--kind stopped</code>, and <code>--detail</code> for supporting lines. The four kinds Steward computes are refused there: a hand-sent claim that the run is finished is a claim nobody computed.</p>
+<p><strong>The value never travels.</strong> Nothing prints it, and the <code>_steward.yaml</code> copy that Steward <a href="#the-workspace-follows-its-logs">propagates into the log directory</a> has the key replaced by a note saying it was left behind — that path ends in an object store, and an Apprise URL is a bearer token. The scrubbed copy is read back before it is sent, and a file the channel could not be taken out of is held back entirely rather than sent as it is, with a line in <code>steward.log</code> saying which file and why. What is lost then is a remote reader’s copy of settings <code>status.md</code> also carries; what is prevented is a credential nobody can recall.</p>
+</section>
+<section id="standing-rules" class="level2">
+<h2 class="anchored" data-anchor-id="standing-rules">Standing rules</h2>
+<p><code>_steward.yaml</code> is your eval policy, in two halves that live in one file so that a decision and its reasoning stay next to each other. The settings are what Steward executes by itself at 3am; <code>policies</code> is free-form text the agent applies when one is in session.</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Setting</th>
+<th>Default</th>
+<th>Meaning</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>tend_interval</code></td>
+<td><code>10m</code></td>
+<td>How often a scheduled tend runs. Always written with a unit.</td>
+</tr>
+<tr class="even">
+<td><code>max_workers</code></td>
+<td>one process per task</td>
+<td>Pack the fleet into this many worker processes.</td>
+</tr>
+<tr class="odd">
+<td><code>stall_after</code></td>
+<td><code>2</code></td>
+<td>Fruitless respawns before a task is given up on and reported.</td>
+</tr>
+<tr class="even">
+<td><code>samples_ramp</code></td>
+<td><code>[40, 200]</code></td>
+<td>Range to discover sample concurrency in; <code>false</code> to fix it.</td>
+</tr>
+<tr class="odd">
+<td><code>log_store</code></td>
+<td>none</td>
+<td>Where to look for logs this run does not have to produce. Recorded now, read when signoff can publish to it.</td>
+</tr>
+<tr class="even">
+<td><code>policies</code></td>
+<td>none</td>
+<td>Prose, or a list of rules. Steward carries the text and never interprets it.</td>
+</tr>
+</tbody>
+</table>
+<p>A file with both halves in it:</p>
+<div class="code-with-filename">
+<div class="code-with-filename-file">
+<pre><strong>_steward.yaml</strong></pre>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4" data-filename="_steward.yaml"><pre class="sourceCode yaml code-with-copy"><code class="sourceCode yaml"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="fu">tend_interval</span><span class="kw">:</span><span class="at"> 10m</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="fu">stall_after</span><span class="kw">:</span><span class="at"> </span><span class="dv">3</span></span>
+<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="fu">max_workers</span><span class="kw">:</span><span class="at"> </span><span class="dv">8</span></span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="fu">policies</span><span class="kw">:</span></span>
+<span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> If more than 10% of the samples in a task error out, pause the run</span></span>
+<span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a><span class="at">    and notify me right away. Otherwise, batch up questions for the end</span></span>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a><span class="at">    of the run.</span></span>
+<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> A re-run that would replay more than 200 samples needs my approval</span></span>
+<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a><span class="at">    first.</span></span>
+<span id="cb4-11"><a href="#cb4-11" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> If a task's score looks implausible (e.g. near zero on a task that</span></span>
+<span id="cb4-12"><a href="#cb4-12" aria-hidden="true" tabindex="-1"></a><span class="at">    usually scores well), investigate the transcripts before proposing</span></span>
+<span id="cb4-13"><a href="#cb4-13" aria-hidden="true" tabindex="-1"></a><span class="at">    a re-run.</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>What is worth writing as a policy is whatever you would otherwise answer twice: failures you already know about and do not want to be woken for, what always reaches you regardless, rulings granted in advance, and what this eval set is <em>for</em> — the thing a third party picking up the directory cold cannot get from anywhere else.</p>
+<p>Two rules govern the file. <strong>Steward never writes it</strong> — it proposes changes and you decide, because promoting a one-off ruling into a standing rule widens what you have committed to. And <strong>it may say only what your definition cannot</strong>: <code>log_dir</code>, <code>model</code>, <code>epochs</code>, <code>max_samples</code>, <code>max_tasks</code>, <code>retry_on_error</code> and the rest of inspect’s vocabulary are refused <em>by name</em>, with a message saying where they belong, and an unrecognised key is refused outright rather than sitting inert. Refused here does not mean unsayable — <code>steward launch</code> accepts inspect’s own options for a single run, said inspect’s way. Every setting can also be said as a <code>STEWARD_*</code> variable or a command-line flag, resolving most specific first — see <a href="./concurrency.html#one-setting-three-spellings">One setting, three spellings</a>.</p>
+<p><code>init</code> scaffolds the file with every setting commented out, which parses as <em>no preferences expressed</em> — a template shipping live values would make Steward’s defaults look like decisions you had made. An empty file is a valid one, and everything then escalates to you. Rules accumulate as you notice yourself answering the same question twice, and the run gets quieter as they do.</p>
+</section>
+<section id="pausing" class="level2">
+<h2 class="anchored" data-anchor-id="pausing">Pausing</h2>
+<p><code>steward pause --reason "..."</code> stops scheduling new work. Every later turn reports the run as paused and spawns nothing; workers already in flight are left alone, because stopping one is not a mechanical act and it is not what pausing means. That is what almost everyone wants, since the money is mostly on work not yet started.</p>
+<p>The pause is recorded in the journal rather than in <code>.steward/</code>, which is disposable — a pause that a cleared cache silently undid would resume an expensive run with nobody watching. <code>steward resume</code> starts scheduling again, and the next tend converges from whatever it finds, which is not necessarily where the run was when it was paused: logs landed, workers exited, and the definition may have been relaunched in between.</p>
+</section>
+<section id="picking-up-a-run-cold" class="level2">
+<h2 class="anchored" data-anchor-id="picking-up-a-run-cold">Picking up a run cold</h2>
+<p>Nothing about a run lives in a conversation, which is the whole point of writing it all into the workspace. An agent — or a colleague — attaching to a run they did not start begins in the same three places:</p>
+<ol type="1">
+<li><code>steward runbook</code> for the mechanics, which ship with the package and so can never be a version behind the CLI.</li>
+<li><code>_steward.yaml</code> for this project’s standing rules. One caveat: any setting, <code>policies</code> included, can also arrive from a <code>STEWARD_*</code> variable that is not in the workspace at all, so read the file for the reasoning and <code>steward status</code> for what is actually in force.</li>
+<li><code>steward collect --since 0</code> for the whole history, or a bare <code>collect</code> for what has accumulated since the last one.</li>
+</ol>
+</section>
+<section id="how-a-run-ends" class="level2">
+<h2 class="anchored" data-anchor-id="how-a-run-ends">How a run ends</h2>
+<p>When every task has finished, the verdict turns 🏁 and the run raises a <code>signoff_ready</code> item. What remains is the part only a person can do.</p>
+<p>Some of it is reading what the <a href="https://inspect.aisi.org.uk/scanners.html">scanners</a> found. Scanning is not a phase Steward runs: scanners are attached to your definition — <code>eval_set(scanner=...)</code>, like every other property of what is being measured — and they run <strong>online</strong>, reviewing each transcript as its sample completes, with findings written to <code>&lt;log_dir&gt;/scans/</code> alongside the logs. So the transcripts are already scanned by the time the last task lands. What is left is the <em>reading</em>: one worker sees one transcript, while Steward sees the distribution across the whole run, which is what turns a pile of measurements into a shortlist worth investigating.</p>
+<div class="callout callout-style-simple callout-warning">
+<div class="callout-body d-flex">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-body-container">
+<p>A definition that declares a scanner is <strong>refused at <code>steward launch</code></strong> today. One <code>scans/</code> directory is shared by a whole eval set and its bookkeeping assumes a single writer, so Steward’s concurrent workers would race in it. Until that is fixed upstream, scan the log directory after the run with <code>scout scan</code> instead.</p>
+</div>
+</div>
+</div>
+<div class="callout callout-style-simple callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Note</span>Not yet implemented
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>The two phases that close a run are designed and not yet shipped: <strong>investigation</strong> — reading what the scanners found across the whole run, narrowing it to what is worth a look, and writing up what it meant in <code>scanning.md</code> and <code>analysis.md</code> — and <strong><code>steward signoff</code></strong>, the attestation that you accept the results, which unschedules the monitor and curates superseded attempts into <code>logs-archive/</code>. <code>steward launch --smoke</code>, the bounded rehearsal that catches configuration problems before a full run, is in the same category.</p>
+<p>Until then a run ends when you decide it has: read the results, and <code>steward timer disarm</code> takes it off the schedule.</p>
+</div>
+</div>
+<p>Signoff is the one command an agent may never run, and the <a href="./runbook.html">Agent Runbook</a> says so flatly — it is a human attestation that the results are accepted, and an agent running it is the one thing that would make the whole record meaningless.</p>
+
+
+</section>
+
+</main> <!-- /main -->
+<div id="copy-page-btn" class="btn-group" style="display:none;">
+  <button type="button" class="btn btn-sm btn-light" id="copy-page-action" title="Copy page as Markdown">
+    <i class="bi bi-clipboard"></i> Copy page
+  </button>
+  <button type="button" class="btn btn-sm btn-light dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false">
+    <span class="visually-hidden">Toggle Dropdown</span>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><a class="dropdown-item" href="#" id="copy-page-md">
+      <i class="bi bi-clipboard"></i> Copy page as Markdown
+    </a></li>
+    <li><a class="dropdown-item" href="#" id="open-page-md">
+      <i class="bi bi-box-arrow-up-right"></i> Open Markdown
+    </a></li>
+  </ul>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  var path = window.location.pathname;
+  var mdUrl = path.endsWith("/")
+    ? path + "index.html.md"
+    : path.replace(/\.html$/, ".html.md");
+  var btn = document.getElementById("copy-page-btn");
+  var cachedMarkdown = null;
+
+  // Pre-fetch the .html.md content
+  fetch(mdUrl)
+    .then(function (res) {
+      if (!res.ok) throw new Error(res.status);
+      return res.text();
+    })
+    .then(function (text) {
+      cachedMarkdown = text;
+
+      // Relocate button into the .quarto-title div
+      var titleDiv = document.querySelector(".quarto-title");
+      if (titleDiv) {
+        titleDiv.appendChild(btn);
+        btn.style.display = "";
+      }
+    })
+    .catch(function () {
+      // No .html.md available — remove button entirely
+      btn.remove();
+    });
+
+  function copyMarkdown(e) {
+    e.preventDefault();
+    if (!cachedMarkdown) return;
+    navigator.clipboard.writeText(cachedMarkdown).then(function () {
+      // Brief visual feedback — lock width to prevent layout shift
+      var actionBtn = document.getElementById("copy-page-action");
+      var original = actionBtn.innerHTML;
+      actionBtn.style.minWidth = actionBtn.offsetWidth + "px";
+      actionBtn.innerHTML = '<i class="bi bi-check2"></i> Copied!';
+      setTimeout(function () {
+        actionBtn.innerHTML = original;
+        actionBtn.style.minWidth = "";
+      }, 1500);
+    });
+  }
+
+  document.getElementById("copy-page-action").addEventListener("click", copyMarkdown);
+  document.getElementById("copy-page-md").addEventListener("click", copyMarkdown);
+  document.getElementById("open-page-md").addEventListener("click", function (e) {
+    e.preventDefault();
+    window.open(mdUrl, "_blank");
+  });
+});
+</script>
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp("https:\/\/meridianlabs-ai\.github\.io\/inspect_steward");
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        const annoteTargets = window.document.querySelectorAll('.code-annotation-anchor');
+        for (let i=0; i<annoteTargets.length; i++) {
+          const annoteTarget = annoteTargets[i];
+          const targetCell = annoteTarget.getAttribute("data-target-cell");
+          const targetAnnotation = annoteTarget.getAttribute("data-target-annotation");
+          const contentFn = () => {
+            const content = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+            if (content) {
+              const tipContent = content.cloneNode(true);
+              tipContent.classList.add("code-annotation-tip-content");
+              return tipContent.outerHTML;
+            }
+          }
+          const config = {
+            allowHTML: true,
+            content: contentFn,
+            onShow: (instance) => {
+              selectCodeLines(instance.reference);
+              instance.reference.classList.add('code-annotation-active');
+              window.tippy.hideAll();
+            },
+            onHide: (instance) => {
+              unselectCodeLines();
+              instance.reference.classList.remove('code-annotation-active');
+            },
+            maxWidth: 300,
+            delay: [50, 0],
+            duration: [200, 0],
+            offset: [5, 10],
+            arrow: true,
+            trigger: 'click',
+            appendTo: function(el) {
+              return el.parentElement.parentElement.parentElement;
+            },
+            interactive: true,
+            interactiveBorder: 10,
+            theme: 'quarto',
+            placement: 'right',
+            positionFixed: true,
+            popperOptions: {
+              modifiers: [
+              {
+                name: 'flip',
+                options: {
+                  flipVariations: false, // true by default
+                  allowedAutoPlacements: ['right'],
+                  fallbackPlacements: ['right', 'top', 'top-start', 'top-end', 'bottom', 'bottom-start', 'bottom-end', 'left'],
+                },
+              },
+              {
+                name: 'preventOverflow',
+                options: {
+                  mainAxis: false,
+                  altAxis: false
+                }
+              }
+              ]        
+            }      
+          };
+          window.tippy(annoteTarget, config); 
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+<nav class="page-navigation">
+  <div class="nav-page nav-page-previous">
+      <a href="./index.html" class="pagination-link" aria-label="Getting Started">
+        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">Getting Started</span>
+      </a>          
+  </div>
+  <div class="nav-page nav-page-next">
+      <a href="./concurrency.html" class="pagination-link" aria-label="Concurrency">
+        <span class="nav-page-text">Concurrency</span> <i class="bi bi-arrow-right-short"></i>
+      </a>
+  </div>
+</nav>
+</div> <!-- /content -->
+<footer class="footer">
+  <div class="nav-footer">
+    <div class="nav-footer-left">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai">
+<p>Meridian Labs</p>
+</a>
+  </li>  
+</ul>
+    </div>   
+    <div class="nav-footer-center">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_steward">
+<p>Code</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_steward/blob/main/CHANGELOG.md">
+<p>Changelog</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_steward/blob/main/LICENSE">
+<p>License</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_steward/issues">
+<p>Issues</p>
+</a>
+  </li>  
+</ul>
+    </div>
+    <div class="nav-footer-right">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_steward/">
+      <i class="bi bi-github" role="img" aria-label="Inspect Steward on GitHub">
+</i> 
+    </a>
+  </li>  
+</ul>
+    </div>
+  </div>
+</footer>
+
+
+
+
+</body></html>

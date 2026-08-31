@@ -1,0 +1,794 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.10.18">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>changelog – Inspect Steward</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: 1.5em;}
+div.column{flex: auto;}
+@media screen {
+div.columns{gap: min(4vw, 1.5em);}
+div.column{overflow-x: auto;}
+}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+</style>
+
+
+<script src="site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="site_libs/quarto-nav/headroom.min.js"></script>
+<script src="site_libs/clipboard/clipboard.min.js"></script>
+<script src="site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="site_libs/quarto-search/fuse.min.js"></script>
+<script src="site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="./">
+<script src="site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="site_libs/quarto-html/popper.min.js"></script>
+<script src="site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="site_libs/quarto-html/anchor.min.js"></script>
+<link href="site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="site_libs/quarto-html/quarto-syntax-highlighting-64a204ab8560d761af7679ceaba22944.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="site_libs/bootstrap/bootstrap-6be907ae78873760d36834dbe5a66008.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+<link rel="alternate" type="text/markdown" title="LLM-readable docs index" href="./llms.txt">
+<link rel="alternate" type="text/markdown" title="LLM-readable docs (full)" href="./llms-full.txt">
+<link rel="alternate" type="text/markdown" title="LLM-readable docs (user guide)" href="./llms-guide.txt">
+
+
+<meta property="og:title" content="Inspect Steward">
+<meta property="og:description" content="An agent that supervises evaluations, monitoring progress, diagnosing problems, and adjusting runtime state on your behalf.">
+<meta property="og:site_name" content="Inspect Steward">
+<meta name="twitter:title" content="Inspect Steward">
+<meta name="twitter:description" content="An agent that supervises evaluations, monitoring progress, diagnosing problems, and adjusting runtime state on your behalf.">
+<meta name="twitter:card" content="summary">
+</head>
+
+<body class="nav-fixed quarto-light">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a class="navbar-brand" href="./index.html">
+    <span class="navbar-title">Inspect Steward</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="Search"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" role="menu" aria-expanded="false" aria-label="Toggle navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="./index.html"> 
+<span class="menu-text">Getting Started</span></a>
+  </li>  
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-using-steward" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">Using Steward</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-using-steward">    
+        <li>
+    <a class="dropdown-item" href="./workflow.html">
+ <span class="dropdown-text">Workflow</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./concurrency.html">
+ <span class="dropdown-text">Concurrency</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./errors.html">
+ <span class="dropdown-text">Error Handling</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./runbook.html">
+ <span class="dropdown-text">Agent Runbook</span></a>
+  </li>  
+    </ul>
+  </li>
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-integrations" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">Integrations</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-integrations">    
+        <li>
+    <a class="dropdown-item" href="./flow.html">
+ <span class="dropdown-text">Inspect Flow</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./hawk.html">
+ <span class="dropdown-text">Inspect Hawk</span></a>
+  </li>  
+    </ul>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link" href="./reference/index.html"> 
+<span class="menu-text">Reference</span></a>
+  </li>  
+</ul>
+            <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item">
+    <a class="nav-link active" href="./CHANGELOG.html" aria-current="page"> 
+<span class="menu-text">Changelog</span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_steward"> <i class="bi bi-github" role="img">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+</ul>
+          </div> <!-- /navcollapse -->
+            <div class="quarto-navbar-tools">
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+</header>
+<!-- content -->
+<div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active" data-toc-expanded="1">
+    <h2 id="toc-title">On this page</h2>
+   
+  <ul>
+  <li><a href="#unreleased" id="toc-unreleased" class="nav-link active" data-scroll-target="#unreleased">Unreleased</a></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content" id="quarto-document-content"><header id="title-block-header" class="quarto-title-block"></header>
+
+
+
+
+<section id="unreleased" class="level2">
+<h2 class="anchored" data-anchor-id="unreleased">Unreleased</h2>
+<ul>
+<li><p>Steward now tells you when something needs you. Set a channel — <code>notification:</code> in <code>_steward.yaml</code>, <code>STEWARD_NOTIFICATION</code> in your <code>.env</code>, or <code>--notification</code> for one launch — and a run that stops at 2am says so, in whatever Apprise reaches: Slack, email, SMS, a webhook, or a config file naming several. At most one message per tend, whatever changed, because the tend is already the clock: a sweep that finishes five tasks posts once naming five. What fires is a new decision appearing, a worker parking on something only you can answer, tasks finishing, the queue emptying, and the run reaching its gate — each on a diff between turns rather than on a level, so nothing repeats every ten minutes, and the gate re-arms when a re-launch changes the work. What does not fire is the agent’s half of the queue: an unreadable log or a failed action is routed to the agent precisely because you are not the one who should look at it, and a channel that named those anyway would be advertising work you were told to ignore. <code>status.md</code> still shows both, grouped by owner, for when you go and look on purpose. Those items do reach you when nobody is picking them up — no <code>collect</code> in the last two tends, or none ever — because an agent’s item is only the agent’s while there is an agent, and what a person has to do about a workspace nothing is attached to is attach something. A post therefore counts what <em>you</em> must act on, “2 decisions need attention”, where <code>status</code> splits the same items into yours and the agent’s for a reader that includes the agent — and it is named by the workspace directory, because one channel serves however many runs you have going and every title here is a sentence about <em>a</em> run. It stays a phone-sized message throughout: the list caps at eight with the rest counted, the table at twelve rows with the totals kept, and a summary carrying somebody else’s exception — an unreadable log’s absolute path and stack-shaped tail — is trimmed, with <code>status.md</code> holding all of it. A command is never trimmed, and a post announcing the gate says it once rather than restating its own heading as a bullet. A post that does not land is not lost with the turn that tried: the edge it was carrying is written down and the next turn produces it again, so a notifier unreachable for the one minute your gate landed in costs a delay rather than the message. A tend that cannot run <em>at all</em> — a malformed <code>_steward.yaml</code>, an unreadable log directory, an expired credential — posts too, once per distinct reason; that failure is otherwise silent forever, since it never reaches the point of writing anything anybody reads.</p></li>
+<li><p>The channel configures your workers as well, and both halves are wired from the one setting. A sample stopped on <code>ask_user()</code> or a tool approval blocks until somebody answers, so a fleet that cannot reach anyone is a fleet holding slots all night. Setting inspect’s own <code>INSPECT_EVAL_NOTIFICATION</code> instead works too and Steward posts there — the relationship runs both ways, which is what keeps Steward’s channel and the fleet’s from ever being two destinations. <code>notification: false</code> declines Steward’s posts and never the workers’, for the same reason. This is the second inspect word Steward owns outright after <code>log_dir</code>, so <code>STEWARD_NOTIFICATION</code> no longer means <code>eval_set(notification=…)</code> for one run.</p></li>
+<li><p>A URL in a committed <code>_steward.yaml</code> is a real cost and it is accepted deliberately: a scheduled tend at 02:00 inherits almost no environment, and the file is the one spelling still there when it fires. <code>steward launch</code> refuses to arm a timer when the shell holds a channel the workspace <code>.env</code> does not, the same way it does for an API key. What the value never does is travel — nothing prints it, and the <code>_steward.yaml</code> copy mirrored into the log directory has the key replaced by a note saying it was left behind. That copy is parsed back before it is sent and a file still carrying a channel is withheld rather than mirrored, as is any <code>_steward.yaml</code> that will not parse at all — one unclosed brace is enough to hide <code>{notification: slack://…}</code> from anything short of a parser, and a file Steward has already rejected holds no settings a remote reader could have acted on. A line in <code>steward.log</code> names what was held back: a rewrite driven by a pattern is a rewrite that can be evaded, and the cost of one miss is a bearer token in an object store. <code>.env</code> or a config file the repository only names is still the better habit, and the template says so.</p></li>
+<li><p>New <code>steward notify "..."</code>, the agent’s own verb: free text plus <code>--kind attention</code> or <code>--kind stopped</code>, carrying an interpretation rather than a condition. The four kinds Steward computes — <code>progress</code>, <code>clear</code>, <code>gate</code>, <code>signed_off</code> — are refused there, because a hand-sent claim that a run is finished is a claim nobody computed. A launch that resolves no channel prints one line saying what to set, and one whose channel came only from <code>--notification</code> prints its own, since a flag reaches that launch’s turn and no scheduled one; <code>notification: false</code> suppresses both.</p></li>
+<li><p>Posts are rendered per target rather than once for everybody. Slack’s <code>mrkdwn</code> is a different dialect, not a subset — no headings, no tables, <code>*bold*</code> rather than <code>**bold**</code> — and <code>status.md</code> is built from exactly the constructs that do not survive, so a channel reading it raw gets pipes and hashes. Each target’s declared format is read off the built Apprise instance, targets that disagree are partitioned and sent once per dialect, and the progress table rides in a fenced block, narrowed for the Slack family because a wide monospace block side-scrolls on the phone where a 3am post is actually read. <code>apprise</code> is now a proper dependency.</p></li>
+<li><p>Leaving <code>log_dir</code> out of your definition now works, and is the shape to prefer. It was already what Steward wanted — a definition that named no directory got the workspace’s own <code>logs/</code> — but no definition could be written that way, because <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> declared <code>log_dir</code> as a required argument, alone among inspect’s entry points. It now defaults the way <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval">eval()</a></span> always has, so the fallback is reachable and a location a definition had no opinion about stops being typed into it. A definition that does name one is untouched: an explicit <code>log_dir</code> is still the single source of truth for where its results go, and Steward still refuses every way of overriding one. Requires an <code>inspect-ai</code> release carrying the default.</p></li>
+<li><p>New <code>log_root</code>, for machines that keep every run’s logs in one place. Set it — <code>STEWARD_LOG_ROOT=s3://org-evals/runs</code> in your shell, <code>log_root:</code> in <code>_steward.yaml</code>, or <code>--log-root</code> for one launch — and a workspace whose definition names no <code>log_dir</code> writes to <code>&lt;root&gt;/&lt;workspace directory name&gt;</code> instead of to its own <code>logs/</code>, with the archive alongside as usual. One export and every workspace on the box lands in the bucket, without a deployment fact being written into any definition. Each workspace gets a directory of its own because it must: the workspace is mirrored into its log directory, so two runs sharing one would overwrite each other’s <code>status.md</code>. <code>--no-log-root</code> keeps a single run’s logs at home whatever the machine says. Moving a run this way after it has started is a relocation like any other — reported, and refused without <code>--accept-archive</code> — including when what moved is the variable rather than the definition, since the directory a launch resolved is recorded in the run rather than re-derived each turn. That is also what keeps a 02:00 tend, which inherits no shell, reading the directory its workers are writing to.</p></li>
+<li><p><code>status.md</code> and <code>steward status --json</code> now name the run’s log directory. Nothing did before, which was survivable while <code>logs/</code> was the near-universal answer and is not now: the runbook sends an agent to <code>samples_df</code> and <code>read_eval_log_sample_summaries</code>, and a workspace under a log root has no <code>logs/</code> directory to guess at — so the guess would find nothing rather than fail. The runbook says to take the directory from the summary. Not added to the terminal output of <code>tend</code> and <code>status</code>, where the reader is standing in the workspace and the compact form is for what changed.</p></li>
+<li><p>Fixed: a re-launch that changed <strong>which</strong> samples run — a different <code>limit</code> range, a different <code>sample_id</code>, a reshuffle — reported <em>nothing to change</em> and left the previous subset standing as the answer. All three are identity-neutral by design, which is what lets a raised limit resume rather than orphan what has run; the cost is that changing the slice keeps every identifier and can keep every sample count, so neither the delta nor the completeness check could see it. Tasks whose logs were produced under a different slice are now <code>reshaped</code> — incomplete, and re-run at the next tend — and <code>steward launch</code> says which field changed and how many tasks it would redo. The fleet is stopped with it, as a relocation stops it and for the same reason: a worker’s slice is fixed when it spawns, so one left running spends hours producing a log the next tend reads as <code>reshaped</code> anyway. Overriding <code>sandbox</code> or <code>model_base_url</code> at a launch is treated more harshly still, as <code>redirected</code>: a different image or gateway leaves the sample <em>set</em> untouched and every answer in it stale, so resuming would reuse all of them and the worker would finish having run nothing. A redirected task is therefore started fresh rather than resumed, and it outranks the reasons that do resume — a log that is both short and redirected has to reset. What a definition asks for is not compared, because nothing records it. The superseded logs stay where they are, as they do for any re-run, so this is reported rather than gated behind <code>--accept-archive</code>.</p></li>
+<li><p>Every tend now mirrors the workspace into the run’s log directory — <code>status.md</code>, <code>journal.jsonl</code>, <code>steward.log</code>, <code>_steward.yaml</code>, the definition, and anything else at the top level, including files nobody anticipated. A result and the account of how it was produced belong together, and a log directory that describes itself is one somebody can copy, hand on, or find in six months without also being told where the other half lives; on a machine reachable only through an object store it is the whole observability channel, and the alternative is shelling into the runner at 3am. It happens whether or not that directory is remote, because the discriminator the design originally proposed — <em>only when <code>log_dir</code> is remote</em> — silently skipped a definition pointing at a mounted NAS, which has exactly the same need. The policy is exclusionary rather than a list, so an <code>analysis.md</code> an agent writes flows out with no configuration change; dotfiles never leave, which is what keeps a stray <code>.env</code> on the machine, and neither do symlinks — every other rule is a rule about a name, and a <code>public-config</code> pointing at <code>.env</code> is not a dotfile — nor anything inspect would read as an eval log, since a file that looks like a log <em>becomes</em> one at that destination. Say <code>sync: false</code> (or <code>--no-sync</code>, or <code>STEWARD_SYNC=false</code>) to decline, or give it a path to send them elsewhere — bearing in mind that a journal quotes what was in the transcripts, so a destination outside the log bucket widens who can read them. Only files that changed are sent again, so a multi-day <code>journal.jsonl</code> is not re-uploaded every ten minutes. It is advisory throughout: bounded by a deadline that reports what it did not reach, failures recorded in <code>steward.log</code>, and a turn that has already happened is never lost to a bucket.</p></li>
+<li><p><strong>Breaking:</strong> <code>steward.log</code> and <code>timer.log</code> moved into <code>.steward/</code>, and the workspace root now holds only what a person authored and what a person reads. <code>steward.log</code> sat at the top level for one stated reason — so the propagation would carry it out without an exception to its own deny list — which was Steward dodging a rule Steward wrote and charging a root slot for it; it is named explicitly instead. <code>timer.log</code> had a real constraint, since cron’s redirect, launchd’s <code>StandardOutPath</code> and systemd’s <code>StandardOutput=append:</code> all open the path before Python starts and none creates a missing parent, so a path under a directory documented as safe to delete would have made clearing that directory silently stop supervision forever. All three backends now run <code>mkdir -p</code> and their own redirect in one shell command, so the next fire rebuilds what was deleted. Re-arm to pick up the new path; until you do, a scheduled tend writes where it was armed to. <code>steward.log</code> also gained the bound it was always owed: over a megabyte, the oldest lines are dropped. That is the honest reason it is a separate file from the journal — not that machinery is high-volume, which is false (every caller is a failure path, and a healthy run writes nothing), but that a failure repeating every ten minutes is a line per turn forever, which a disposable file can truncate and an irreplaceable one cannot.</p></li>
+<li><p>Fixed: returning to a shape this workspace has already run re-ran it. The attempt that counts for a task was the newest successful one, which is the only rule available for a directory read without a manifest and the wrong one where there is a manifest to read it against: run slice A, then B, then A again, and the newest log answers B while A’s answer sits one file away. Steward now picks the attempt that answers the question being asked and falls back to recency only when none does, so a slice or a gateway you go back to costs nothing — which matters most for a gateway, where the re-run would have started from nothing rather than resumed. <code>steward launch</code> counts the same way, so its <em>would run again</em> is what the next tend will actually do.</p></li>
+<li><p>Fixed: a log was restored from the archive on the strength of its identifier alone, and described as work that does not run again. An archived attempt can be from any era of a workspace, where the reshape comparison only sees the last two manifests — so one produced under a slice or a gateway the run has since left was moved back into <code>logs/</code> and then re-run at the next tend, from nothing where it had been redirected. Only attempts that answer the shape being asked for are restored now; the rest stay archived, since a cache entry for a different question is a miss.</p></li>
+<li><p>Fixed: the launch preview said how many workers a <em>relocation</em> would stop and never mentioned the ones a reshape stops, which is the whole fleet. That line is what somebody reads while deciding whether to pass <code>--accept-archive</code>, so a reshape arriving beside an archiving change hid the larger half of what accepting it would do.</p></li>
+<li><p>Fixed: two runs over different slices of the same dataset shared one acceptance digest, so acknowledging the first run’s <code>signoff_ready</code> silently covered the second. The digest hashed each task’s identifier, sample count and epochs — and <code>limit</code>, <code>sample_id</code> and <code>sample_shuffle</code> are identity-neutral <em>and</em> count-neutral, so <code>(0, 5)</code> and <code>(5, 10)</code> were indistinguishable. It now covers the run’s effective shaping fields as well.</p></li>
+<li><p>Fixed: a bad <code>INSPECT_EVAL_*</code> value degraded a tend and took the standing rules down with it, so <code>steward status</code> reported no policies from a <code>_steward.yaml</code> that had parsed perfectly — in the one place agents are told to read them from. The file’s rules now stand when only the environment is at fault. Two different broken variables were also one attention item, keyed on the unedited file’s modification time, so acknowledging the first suppressed the second; an environment failure is now identified by what it said.</p></li>
+<li><p>Fixed: a bare <code>steward launch</code> — the amend path, typed to pick up an edited definition — dropped the overrides the first launch recorded and recaptured at the definition’s own <code>epochs</code> and <code>limit</code>. Every log the run had produced then read as <code>reshaped</code> at the next tend and ran again, a loss arriving through a gate <code>--accept-archive</code> does not guard because nothing left <code>logs/</code>. Silence now reuses what the committed manifest recorded, exactly as it reuses <code>-A</code> arguments; any passthrough flag, <code>STEWARD_*</code>, or <code>INSPECT_EVAL_*</code> replaces the whole set; and a new <code>--no-overrides</code> asks for the definition’s own shape, which is the way back once a launch has passed one.</p></li>
+<li><p>Fixed: <code>steward launch</code> refuses to arm a timer when this shell holds a credential the workspace <code>.env</code> does not, and four settings that behave identically were not in the check. <code>INSPECT_EVAL_MODEL</code>, <code>INSPECT_EVAL_MODEL_ARGS</code>, <code>INSPECT_EVAL_MODEL_BASE_URL</code> and <code>INSPECT_EVAL_LOG_FILE_PATTERN</code> are read by inspect’s Python API rather than resolved at launch, so unlike every variable Steward reads they are not carried in the manifest and are simply gone at 02:00 — and a definition that named no model then resolves a different one, computes a different identifier than the manifest recorded, and writes a log no tend looks for. They are now named in the refusal, worded as settings rather than as credentials. <code>INSPECT_EVAL_NOTIFICATION</code> joins the credentials proper, since an Apprise URL is a bearer token with a scheme in front of it.</p></li>
+<li><p>Fixed: <code>steward init</code> in a workspace still holding an unconverted <code>_steward.md</code> wrote an empty <code>_steward.yaml</code> beside it. Since the refusal that names the rename only fires while the new file is absent, that buried the author’s standing rules under a file parsing as <em>no rules</em> and made the refusal unreachable from then on. <code>init</code> now refuses instead, before writing anything.</p></li>
+<li><p>Fixed: inspect’s own <code>INSPECT_*</code> variables are now read by <strong>inspect</strong>, through a resolver added upstream, rather than by Steward re-deriving them from field names. They are click <em>inputs</em> rather than values — an option’s type, its callback and a normalisation block in the command body all run before one reaches <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> — and Steward’s reading disagreed with <code>inspect eval</code> for at least seven of them, in three ways. <code>INSPECT_EVAL_LIMIT=10-20</code> was refused where inspect accepts it; <code>INSPECT_EVAL_SAMPLE_ID=a,b</code> silently became one id rather than two; and <code>INSPECT_EVAL_SCORE_DISPLAY</code>, <code>INSPECT_EVAL_NO_SCORE</code> and the other <code>--no-</code> flags mean the <em>opposite</em> of what their names say. <code>INSPECT_EVAL_NOTIFICATION</code> is no longer read at all, matching inspect’s own deliberate refusal to bind it: it carries the Apprise URL that <code>notification=true</code> reads, so reading it as an option value both meant the wrong thing and copied a credential into the committed manifest. A <code>notification</code> given as anything other than an existing config file is now refused at launch for the same reason. <code>STEWARD_*</code> aliases are unaffected and still go through Steward’s parser, so <code>--limit '[10, 20]'</code> is Steward’s spelling of the range inspect spells <code>10-20</code>. A variable the resolver cannot read now degrades a tend the way an unparseable <code>_steward.yaml</code> does, rather than escaping as an unhandled exception at 02:00. Requires an <code>inspect-ai</code> release carrying <code>resolve_eval_env</code>.</p></li>
+<li><p>Every setting Steward owns can now be said three ways, resolving most specific first — a <code>--flag</code>, then a <code>STEWARD_*</code> environment variable, then <code>_steward.yaml</code>, then the default. That means new <code>--stall-after</code> and <code>--samples-ramp</code> flags on <code>launch</code>, <code>tend</code>, and <code>status</code>, a <code>--tend-interval</code> flag on <code>launch</code> (and <code>timer arm</code>, where it replaces <code>--interval</code>), and <code>STEWARD_MAX_WORKERS</code>, <code>STEWARD_STALL_AFTER</code>, <code>STEWARD_SAMPLES_RAMP</code>, <code>STEWARD_TEND_INTERVAL</code>, and <code>STEWARD_POLICIES</code> for all of them. All three spellings go through one parser, so a value refused in the file is refused identically everywhere else. A <code>STEWARD_*</code> name Steward does not recognise is <strong>refused rather than ignored</strong>, because a misspelled variable sitting inert is a setting you believe is in force. <code>steward status</code> now reports the standing rules actually in force, since <code>policies</code> no longer has to come from the file.</p></li>
+<li><p><strong>Breaking:</strong> <code>steward tend --max-tasks</code> and <code>--max-samples</code> are gone, along with <code>steward status</code>’ and <code>steward launch</code>’ copies of them. They were Steward minting its own spellings for words it refuses from <code>_steward.yaml</code> by name — the ownership rule leaking through a different hole. What replaces them is the recognition that <strong>a Steward run is an <code>inspect eval-set</code> invocation with a longer lifetime</strong>: Steward now honours inspect’s own environment variables, and <code>steward launch</code> takes inspect’s own eval-set options, generated from inspect’s model so their names, types, and help text are inspect’s rather than Steward’s. That is not two knobs but <strong>every <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> argument that does not participate in task identity</strong> — <code>--epochs</code>, <code>--limit</code>, <code>--sample-id</code>, <code>--max-connections</code>, <code>--sandbox</code>, <code>--tags</code>, and the rest, listed under their own heading in <code>steward launch --help</code>. Each also has a <code>STEWARD_*</code> alias, which is the same knob narrowed to this tool and wins where both are set: an exported <code>INSPECT_EVAL_MAX_SAMPLES</code> reaches every <code>inspect eval</code> in the shell, where <code>STEWARD_MAX_SAMPLES</code> reaches only Steward. Steward’s two spellings — the flag and the alias — go through Steward’s parser, so <code>--epochs yes</code> is refused identically in both; inspect’s variables go through inspect’s own reader, so they keep inspect’s syntax (<code>INSPECT_EVAL_LIMIT=10-20</code> where Steward takes <code>--limit '[10, 20]'</code>). <strong>These are set once, at launch, and recorded in the committed manifest</strong> — which is what carries them to the 02:00 tend, and what keeps the enumeration’s per-task sample counts describing the run the fleet is actually having. <code>log_dir</code> is the exception: Steward decides where a run’s logs go, so it has no flag and no alias, and <code>INSPECT_LOG_DIR</code> is refused at launch rather than quietly ignored. Requires an <code>inspect-ai</code> release with eval-set selection schema 6. Sample-concurrency pins still outlive the turn that set them, and are still released by writing a <code>samples_ramp</code> range.</p></li>
+<li><p><strong>Breaking:</strong> the log store is now <code>log_store</code> — a <code>_steward.yaml</code> key, a <code>STEWARD_LOG_STORE</code> variable, and <code>steward launch --log-store</code>, replacing <code>INSPECT_STEWARD_STORE</code> and <code>--store</code>. Three changes come with the rename. It is a <strong>file key</strong> as well as a variable: the location was environment-only on the grounds that a store belongs to the machine rather than the project, which is true of a laptop’s mirror and false of a team’s shared S3 prefix, and the precedence now orders the two instead of the design choosing. The value is a <strong>location only</strong> — a path or <code>auto</code> — with <code>false</code> (or <code>--no-log-store</code>) for none, retiring the magic string <code>none</code>, which is refused by name since it is also a perfectly good directory name. And the word <code>store</code> is gone because Inspect already has a <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.util.html#store">Store</a></span>, the per-sample state a solver and a tool share, and a Steward run has both. Still recorded and inert: nothing reads a store until signoff can publish to one.</p></li>
+<li><p><strong>Breaking:</strong> <code>steward timer arm --interval</code> is now <code>--tend-interval</code>, and an interval without a unit is refused at the door (exit 2) rather than inside the command.</p></li>
+<li><p>Fixed: <code>steward launch</code> accepted <code>--stall-after</code>, <code>--samples-ramp</code>, and <code>--tend-interval</code> and then dropped all three, so a launch ran on the file’s values whatever was typed.</p></li>
+<li><p><strong>Breaking:</strong> the config file is now <code>_steward.yaml</code> and is pure YAML — no front matter fence, and the prose that used to sit below it becomes a <code>policies</code> key holding either a block of text or a list of rules. Rename your <code>_steward.md</code> and move its body under <code>policies:</code>; a workspace still holding the old file is refused by name rather than quietly running with no standing rules. The two regions still live in one file for the same reason they always did: the line between what Steward executes unattended and what an agent interprets is a fact about Steward’s capability rather than your intent, so it should not be a boundary you have to track. It is now a key rather than a delimiter, which is what lets a rule graduate from prose to setting without reformatting anything.</p></li>
+<li><p><strong>Breaking:</strong> <code>max_tasks</code> is no longer a <code>_steward.yaml</code> key and is refused there by name — fleet width now comes from your definition’s <code>eval_set(max_tasks=...)</code>, with <code>steward launch --max-tasks</code> (or <code>INSPECT_EVAL_MAX_TASKS</code>) overriding it for a run. Move the value rather than deleting it: an unset fleet width means every task at once. This completes the rule the config file follows, which is that inspect’s words go in the definition and <code>_steward.yaml</code> holds only words <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> does not know.</p></li>
+<li><p>Sample concurrency is now discovered rather than fixed: unless a <code>max_samples</code> is pinned (CLI or definition), tasks start at 40 and each tend ramps them toward 200 while the provider shows no rate-limit pushback, cutting the connection ceiling and stepping back down on sustained pushback. Configure with <code>samples_ramp: [floor, ceiling]</code> (or <code>false</code>) in <code>_steward.yaml</code> — narrowing the range brings running tasks back inside it — and freeze the climb with <code>steward ramp hold</code> / <code>resume</code>. A <code>--max-samples</code> given on the command line pins for the rest of the run rather than for one turn, and is released by writing a <code>samples_ramp</code> range. Capacity Steward has no authority to take (a pinned setpoint showing headroom, a ramp at its ceiling) surfaces as a <code>tuning_proposal</code> item. Note that Hawk eval sets are always pinned and never ramp, because Hawk’s infra config supplies a <code>max_samples</code> of its own.</p></li>
+<li><p>Hawk eval set configs are now a supported definition type (via the <code>[hawk]</code> extra, which requires Python 3.13+ — Hawk’s floor, not Steward’s). Steward drives Hawk’s own CLI (<code>hawk local eval-set --direct</code>), so Hawk keeps its task/solver/model crossing, secrets resolution, and environment setup, and the manifest reflects what Hawk would actually run.</p></li>
+<li><p>Configuration reading: <span class="element-type-name ref-interlink"><a href="./reference/enumeration.html#read_eval_set">read_eval_set()</a></span> enumerates the tasks of an eval set definition — a Python file culminating in <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span>, an Inspect Flow spec (Python or YAML, via the <code>[flow]</code> extra), or a Hawk eval set config (YAML, via the <code>[hawk]</code> extra) — returning a <span class="element-type-name ref-interlink"><a href="./reference/enumeration.html#manifest">Manifest</a></span> with per-task identity, display keys, sample counts, and epochs. Requires an <code>inspect-ai</code> release with eval-set capture support.</p></li>
+<li><p>New <code>steward tasks</code> CLI command to enumerate a definition (<code>--json</code> for the full manifest).</p></li>
+<li><p>Initial package scaffold with the <code>steward</code> CLI and its <code>init</code> command.</p></li>
+</ul>
+
+
+</section>
+
+</main> <!-- /main -->
+<div id="copy-page-btn" class="btn-group" style="display:none;">
+  <button type="button" class="btn btn-sm btn-light" id="copy-page-action" title="Copy page as Markdown">
+    <i class="bi bi-clipboard"></i> Copy page
+  </button>
+  <button type="button" class="btn btn-sm btn-light dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false">
+    <span class="visually-hidden">Toggle Dropdown</span>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><a class="dropdown-item" href="#" id="copy-page-md">
+      <i class="bi bi-clipboard"></i> Copy page as Markdown
+    </a></li>
+    <li><a class="dropdown-item" href="#" id="open-page-md">
+      <i class="bi bi-box-arrow-up-right"></i> Open Markdown
+    </a></li>
+  </ul>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  var path = window.location.pathname;
+  var mdUrl = path.endsWith("/")
+    ? path + "index.html.md"
+    : path.replace(/\.html$/, ".html.md");
+  var btn = document.getElementById("copy-page-btn");
+  var cachedMarkdown = null;
+
+  // Pre-fetch the .html.md content
+  fetch(mdUrl)
+    .then(function (res) {
+      if (!res.ok) throw new Error(res.status);
+      return res.text();
+    })
+    .then(function (text) {
+      cachedMarkdown = text;
+
+      // Relocate button into the .quarto-title div
+      var titleDiv = document.querySelector(".quarto-title");
+      if (titleDiv) {
+        titleDiv.appendChild(btn);
+        btn.style.display = "";
+      }
+    })
+    .catch(function () {
+      // No .html.md available — remove button entirely
+      btn.remove();
+    });
+
+  function copyMarkdown(e) {
+    e.preventDefault();
+    if (!cachedMarkdown) return;
+    navigator.clipboard.writeText(cachedMarkdown).then(function () {
+      // Brief visual feedback — lock width to prevent layout shift
+      var actionBtn = document.getElementById("copy-page-action");
+      var original = actionBtn.innerHTML;
+      actionBtn.style.minWidth = actionBtn.offsetWidth + "px";
+      actionBtn.innerHTML = '<i class="bi bi-check2"></i> Copied!';
+      setTimeout(function () {
+        actionBtn.innerHTML = original;
+        actionBtn.style.minWidth = "";
+      }, 1500);
+    });
+  }
+
+  document.getElementById("copy-page-action").addEventListener("click", copyMarkdown);
+  document.getElementById("copy-page-md").addEventListener("click", copyMarkdown);
+  document.getElementById("open-page-md").addEventListener("click", function (e) {
+    e.preventDefault();
+    window.open(mdUrl, "_blank");
+  });
+});
+</script>
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp("https:\/\/meridianlabs-ai\.github\.io\/inspect_steward");
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        const annoteTargets = window.document.querySelectorAll('.code-annotation-anchor');
+        for (let i=0; i<annoteTargets.length; i++) {
+          const annoteTarget = annoteTargets[i];
+          const targetCell = annoteTarget.getAttribute("data-target-cell");
+          const targetAnnotation = annoteTarget.getAttribute("data-target-annotation");
+          const contentFn = () => {
+            const content = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+            if (content) {
+              const tipContent = content.cloneNode(true);
+              tipContent.classList.add("code-annotation-tip-content");
+              return tipContent.outerHTML;
+            }
+          }
+          const config = {
+            allowHTML: true,
+            content: contentFn,
+            onShow: (instance) => {
+              selectCodeLines(instance.reference);
+              instance.reference.classList.add('code-annotation-active');
+              window.tippy.hideAll();
+            },
+            onHide: (instance) => {
+              unselectCodeLines();
+              instance.reference.classList.remove('code-annotation-active');
+            },
+            maxWidth: 300,
+            delay: [50, 0],
+            duration: [200, 0],
+            offset: [5, 10],
+            arrow: true,
+            trigger: 'click',
+            appendTo: function(el) {
+              return el.parentElement.parentElement.parentElement;
+            },
+            interactive: true,
+            interactiveBorder: 10,
+            theme: 'quarto',
+            placement: 'right',
+            positionFixed: true,
+            popperOptions: {
+              modifiers: [
+              {
+                name: 'flip',
+                options: {
+                  flipVariations: false, // true by default
+                  allowedAutoPlacements: ['right'],
+                  fallbackPlacements: ['right', 'top', 'top-start', 'top-end', 'bottom', 'bottom-start', 'bottom-end', 'left'],
+                },
+              },
+              {
+                name: 'preventOverflow',
+                options: {
+                  mainAxis: false,
+                  altAxis: false
+                }
+              }
+              ]        
+            }      
+          };
+          window.tippy(annoteTarget, config); 
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+</div> <!-- /content -->
+<footer class="footer">
+  <div class="nav-footer">
+    <div class="nav-footer-left">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai">
+<p>Meridian Labs</p>
+</a>
+  </li>  
+</ul>
+    </div>   
+    <div class="nav-footer-center">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_steward">
+<p>Code</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_steward/blob/main/CHANGELOG.md">
+<p>Changelog</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_steward/blob/main/LICENSE">
+<p>License</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_steward/issues">
+<p>Issues</p>
+</a>
+  </li>  
+</ul>
+    </div>
+    <div class="nav-footer-right">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_steward/">
+      <i class="bi bi-github" role="img" aria-label="Inspect Steward on GitHub">
+</i> 
+    </a>
+  </li>  
+</ul>
+    </div>
+  </div>
+</footer>
+
+
+
+
+</body></html>

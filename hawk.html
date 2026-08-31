@@ -1,0 +1,1197 @@
+<!DOCTYPE html>
+<html xmlns="http://www.w3.org/1999/xhtml" lang="en" xml:lang="en"><head>
+
+<meta charset="utf-8">
+<meta name="generator" content="quarto-1.10.18">
+
+<meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=yes">
+
+
+<title>Inspect Hawk – Inspect Steward</title>
+<style>
+/* Default styles provided by pandoc.
+** See https://pandoc.org/MANUAL.html#variables-for-html for config info.
+*/
+span.smallcaps{font-variant: small-caps;}
+div.columns{display: flex; gap: 1.5em;}
+div.column{flex: auto;}
+@media screen {
+div.columns{gap: min(4vw, 1.5em);}
+div.column{overflow-x: auto;}
+}
+div.hanging-indent{margin-left: 1.5em; text-indent: -1.5em;}
+ul.task-list{list-style: none;}
+ul.task-list li input[type="checkbox"] {
+  width: 0.8em;
+  margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
+  vertical-align: middle;
+}
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
+</style>
+
+
+<script src="site_libs/quarto-nav/quarto-nav.js"></script>
+<script src="site_libs/quarto-nav/headroom.min.js"></script>
+<script src="site_libs/clipboard/clipboard.min.js"></script>
+<script src="site_libs/quarto-search/autocomplete.umd.js"></script>
+<script src="site_libs/quarto-search/fuse.min.js"></script>
+<script src="site_libs/quarto-search/quarto-search.js"></script>
+<meta name="quarto:offset" content="./">
+<link href="./reference/index.html" rel="next">
+<link href="./flow.html" rel="prev">
+<script src="site_libs/quarto-html/quarto.js" type="module"></script>
+<script src="site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
+<script src="site_libs/quarto-html/popper.min.js"></script>
+<script src="site_libs/quarto-html/tippy.umd.min.js"></script>
+<script src="site_libs/quarto-html/anchor.min.js"></script>
+<link href="site_libs/quarto-html/tippy.css" rel="stylesheet">
+<link href="site_libs/quarto-html/quarto-syntax-highlighting-64a204ab8560d761af7679ceaba22944.css" rel="stylesheet" id="quarto-text-highlighting-styles">
+<script src="site_libs/bootstrap/bootstrap.min.js"></script>
+<link href="site_libs/bootstrap/bootstrap-icons.css" rel="stylesheet">
+<link href="site_libs/bootstrap/bootstrap-6be907ae78873760d36834dbe5a66008.min.css" rel="stylesheet" append-hash="true" id="quarto-bootstrap" data-mode="light">
+<script id="quarto-search-options" type="application/json">{
+  "location": "navbar",
+  "copy-button": false,
+  "collapse-after": 3,
+  "panel-placement": "end",
+  "type": "overlay",
+  "limit": 50,
+  "keyboard-shortcut": [
+    "f",
+    "/",
+    "s"
+  ],
+  "show-item-context": false,
+  "language": {
+    "search-no-results-text": "No results",
+    "search-matching-documents-text": "matching documents",
+    "search-copy-link-title": "Copy link to search",
+    "search-hide-matches-text": "Hide additional matches",
+    "search-more-match-text": "more match in this document",
+    "search-more-matches-text": "more matches in this document",
+    "search-clear-button-title": "Clear",
+    "search-text-placeholder": "",
+    "search-detached-cancel-button-title": "Cancel",
+    "search-submit-button-title": "Submit",
+    "search-label": "Search"
+  }
+}</script>
+<link rel="alternate" type="text/markdown" title="LLM-readable docs index" href="./llms.txt">
+<link rel="alternate" type="text/markdown" title="LLM-readable docs (full)" href="./llms-full.txt">
+<link rel="alternate" type="text/markdown" title="LLM-readable docs (user guide)" href="./llms-guide.txt">
+
+
+<meta property="og:title" content="Inspect Steward">
+<meta property="og:description" content="An agent that supervises evaluations, monitoring progress, diagnosing problems, and adjusting runtime state on your behalf.">
+<meta property="og:site_name" content="Inspect Steward">
+<meta name="twitter:title" content="Inspect Steward">
+<meta name="twitter:description" content="An agent that supervises evaluations, monitoring progress, diagnosing problems, and adjusting runtime state on your behalf.">
+<meta name="twitter:card" content="summary">
+</head>
+
+<body class="nav-sidebar docked nav-fixed quarto-light">
+
+<div id="quarto-search-results"></div>
+  <header id="quarto-header" class="headroom fixed-top">
+    <nav class="navbar navbar-expand-lg " data-bs-theme="dark">
+      <div class="navbar-container container-fluid">
+      <div class="navbar-brand-container mx-auto">
+    <a class="navbar-brand" href="./index.html">
+    <span class="navbar-title">Inspect Steward</span>
+    </a>
+  </div>
+            <div id="quarto-search" class="" title="Search"></div>
+          <button class="navbar-toggler" type="button" data-bs-toggle="collapse" data-bs-target="#navbarCollapse" aria-controls="navbarCollapse" role="menu" aria-expanded="false" aria-label="Toggle navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+  <span class="navbar-toggler-icon"></span>
+</button>
+          <div class="collapse navbar-collapse" id="navbarCollapse">
+            <ul class="navbar-nav navbar-nav-scroll me-auto">
+  <li class="nav-item">
+    <a class="nav-link active" href="./index.html" aria-current="page"> 
+<span class="menu-text">Getting Started</span></a>
+  </li>  
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-using-steward" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">Using Steward</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-using-steward">    
+        <li>
+    <a class="dropdown-item" href="./workflow.html">
+ <span class="dropdown-text">Workflow</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./concurrency.html">
+ <span class="dropdown-text">Concurrency</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./errors.html">
+ <span class="dropdown-text">Error Handling</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./runbook.html">
+ <span class="dropdown-text">Agent Runbook</span></a>
+  </li>  
+    </ul>
+  </li>
+  <li class="nav-item dropdown ">
+    <a class="nav-link dropdown-toggle" href="#" id="nav-menu-integrations" role="link" data-bs-toggle="dropdown" aria-expanded="false">
+ <span class="menu-text">Integrations</span>
+    </a>
+    <ul class="dropdown-menu" aria-labelledby="nav-menu-integrations">    
+        <li>
+    <a class="dropdown-item" href="./flow.html">
+ <span class="dropdown-text">Inspect Flow</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./hawk.html">
+ <span class="dropdown-text">Inspect Hawk</span></a>
+  </li>  
+    </ul>
+  </li>
+  <li class="nav-item">
+    <a class="nav-link" href="./reference/index.html"> 
+<span class="menu-text">Reference</span></a>
+  </li>  
+</ul>
+            <ul class="navbar-nav navbar-nav-scroll ms-auto">
+  <li class="nav-item">
+    <a class="nav-link" href="./CHANGELOG.html"> 
+<span class="menu-text">Changelog</span></a>
+  </li>  
+  <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_steward"> <i class="bi bi-github" role="img">
+</i> 
+<span class="menu-text"></span></a>
+  </li>  
+</ul>
+          </div> <!-- /navcollapse -->
+            <div class="quarto-navbar-tools">
+</div>
+      </div> <!-- /container-fluid -->
+    </nav>
+  <nav class="quarto-secondary-nav">
+    <div class="container-fluid d-flex">
+      <button type="button" class="quarto-btn-toggle btn" data-bs-toggle="collapse" role="button" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">
+        <i class="bi bi-layout-text-sidebar-reverse"></i>
+      </button>
+        <nav class="quarto-page-breadcrumbs" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./flow.html">Integrations</a></li><li class="breadcrumb-item"><a href="./hawk.html">Inspect Hawk</a></li></ol></nav>
+        <a class="flex-grow-1" role="navigation" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item" aria-controls="quarto-sidebar" aria-expanded="false" aria-label="Toggle sidebar navigation" onclick="if (window.quartoToggleHeadroom) { window.quartoToggleHeadroom(); }">      
+        </a>
+    </div>
+  </nav>
+</header>
+<!-- content -->
+<div id="quarto-content" class="quarto-container page-columns page-rows-contents page-layout-article page-navbar">
+<!-- sidebar -->
+  <nav id="quarto-sidebar" class="sidebar collapse collapse-horizontal quarto-sidebar-collapse-item sidebar-navigation docked overflow-auto">
+    <div class="sidebar-menu-container"> 
+    <ul class="list-unstyled mt-1">
+        <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./index.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Getting Started</span></a>
+  </div>
+</li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="true">
+ <span class="menu-text">Using Steward</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-1" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-1" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./workflow.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Workflow</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./concurrency.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Concurrency</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./errors.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Error Handling</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./runbook.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Agent Runbook</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a class="sidebar-item-text sidebar-link text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true">
+ <span class="menu-text">Integrations</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-2" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-2" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./flow.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Inspect Flow</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./hawk.html" class="sidebar-item-text sidebar-link active">
+ <span class="menu-text">Inspect Hawk</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+        <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a href="./reference/index.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Reference</span></a>
+          <a class="sidebar-item-toggle text-start" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-3" role="navigation" aria-expanded="true" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-3" class="collapse list-unstyled sidebar-section depth1 show">  
+          <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a href="./reference/enumeration.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Python API</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-4" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-4" class="collapse list-unstyled sidebar-section depth2 ">  
+          <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a href="./reference/enumeration.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Enumeration</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-5" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-5" class="collapse list-unstyled sidebar-section depth3 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/enumeration.html#read_eval_set" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">read_eval_set</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/enumeration.html#readevalseterror" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">ReadEvalSetError</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/enumeration.html#manifest" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Manifest</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/enumeration.html#manifestsource" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">ManifestSource</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/enumeration.html#manifesttask" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">ManifestTask</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+      </ul>
+  </li>
+          <li class="sidebar-item sidebar-item-section">
+      <div class="sidebar-item-container"> 
+            <a href="./reference/steward_ack.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">CLI Commands</span></a>
+          <a class="sidebar-item-toggle text-start collapsed" data-bs-toggle="collapse" data-bs-target="#quarto-sidebar-section-6" role="navigation" aria-expanded="false" aria-label="Toggle section">
+            <i class="bi bi-chevron-right ms-2"></i>
+          </a> 
+      </div>
+      <ul id="quarto-sidebar-section-6" class="collapse list-unstyled sidebar-section depth2 ">  
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/steward_ack.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">steward ack</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/steward_collect.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">steward collect</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/steward_init.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">steward init</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/steward_launch.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">steward launch</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/steward_notify.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">steward notify</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/steward_pause.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">steward pause</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/steward_raise.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">steward raise</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/steward_ramp.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">steward ramp</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/steward_resume.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">steward resume</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/steward_runbook.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">steward runbook</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/steward_status.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">steward status</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/steward_tasks.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">steward tasks</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/steward_tend.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">steward tend</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./reference/steward_timer.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">steward timer</span></a>
+  </div>
+</li>
+      </ul>
+  </li>
+      </ul>
+  </li>
+    </ul>
+    </div>
+</nav>
+<div id="quarto-sidebar-glass" class="quarto-sidebar-collapse-item" data-bs-toggle="collapse" data-bs-target=".quarto-sidebar-collapse-item"></div>
+<!-- margin-sidebar -->
+    <div id="quarto-margin-sidebar" class="sidebar margin-sidebar">
+        <nav id="TOC" role="doc-toc" class="toc-active" data-toc-expanded="1">
+    <h2 id="toc-title">On this page</h2>
+   
+  <ul>
+  <li><a href="#overview" id="toc-overview" class="nav-link active" data-scroll-target="#overview">Overview</a></li>
+  <li><a href="#installation-is-stricter-than-stewards-own" id="toc-installation-is-stricter-than-stewards-own" class="nav-link" data-scroll-target="#installation-is-stricter-than-stewards-own">Installation is stricter than Steward’s own</a></li>
+  <li><a href="#what-steward-passes" id="toc-what-steward-passes" class="nav-link" data-scroll-target="#what-steward-passes">What Steward passes</a>
+  <ul class="collapse">
+  <li><a href="#hawk-sets-the-concurrency-so-the-ramp-does-not-run" id="toc-hawk-sets-the-concurrency-so-the-ramp-does-not-run" class="nav-link" data-scroll-target="#hawk-sets-the-concurrency-so-the-ramp-does-not-run">Hawk sets the concurrency, so the ramp does not run</a></li>
+  </ul></li>
+  <li><a href="#what-fan-out-costs" id="toc-what-fan-out-costs" class="nav-link" data-scroll-target="#what-fan-out-costs">What fan-out costs</a></li>
+  <li><a href="#local-caveats" id="toc-local-caveats" class="nav-link" data-scroll-target="#local-caveats">Local caveats</a></li>
+  <li><a href="#what-each-side-gains" id="toc-what-each-side-gains" class="nav-link" data-scroll-target="#what-each-side-gains">What each side gains</a></li>
+  <li><a href="#steward-inside-a-hawk-pod" id="toc-steward-inside-a-hawk-pod" class="nav-link" data-scroll-target="#steward-inside-a-hawk-pod">Steward inside a Hawk pod</a></li>
+  </ul>
+</nav>
+    </div>
+<!-- main -->
+<main class="content" id="quarto-document-content">
+
+<header id="title-block-header" class="quarto-title-block default"><nav class="quarto-page-breadcrumbs quarto-title-breadcrumbs d-none d-lg-block" aria-label="breadcrumb"><ol class="breadcrumb"><li class="breadcrumb-item"><a href="./flow.html">Integrations</a></li><li class="breadcrumb-item"><a href="./hawk.html">Inspect Hawk</a></li></ol></nav>
+<div class="quarto-title">
+<h1 class="title">Inspect Hawk</h1>
+</div>
+
+
+
+<div class="quarto-title-meta">
+
+    
+  
+    
+  </div>
+  
+
+
+</header>
+
+
+<section id="overview" class="level2">
+<h2 class="anchored" data-anchor-id="overview">Overview</h2>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">pip</span> install <span class="st">"inspect-steward[hawk]"</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>A <a href="https://github.com/METR/hawk">Hawk</a> eval set config is a <a href="./index.html#quick-tour">definition</a> like any other, because <code>hawk local eval-set</code> is itself a program culminating in one <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> call. So Steward drives <strong>Hawk’s own CLI</strong> rather than parsing configs itself.</p>
+<p>That matters more here than for other formats. An earlier implementation did parse <code>EvalSetConfig</code> and reimplement Hawk’s lowering, and it diverged from a real Hawk run in ways a task list cannot show: the infra config was invisible to it, <code>runner.environment</code> was ignored, and secrets resolution was absent. All three dissolve when Hawk’s own runner does the work, because all three happen before the <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> call.</p>
+<p>So Hawk keeps its tasks × solvers/agents × models crossing, its secrets resolution, its provider environment for gateway routing, its sandbox annotations, and its refusal of configs it does not support. Steward sees the fully-lowered task list and owns execution from there.</p>
+<p>Name the config <code>hawk.yaml</code> in your workspace and the rest of the documentation applies unchanged.</p>
+</section>
+<section id="installation-is-stricter-than-stewards-own" class="level2">
+<h2 class="anchored" data-anchor-id="installation-is-stricter-than-stewards-own">Installation is stricter than Steward’s own</h2>
+<div class="callout callout-style-default callout-important callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+Important
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p><strong>Hawk requires Python 3.13; Steward requires 3.12.</strong> The extra is marker-gated, so Hawk’s floor binds only those who ask for Hawk — on 3.12 the extra resolves to nothing and Hawk support is simply unavailable, with no error at install time.</p>
+<p>The extra also carries <code>uv</code>, which Hawk shells out to on every invocation but does not declare. Declaring it is necessary but not sufficient: pip installs <code>uv</code> beside the interpreter, and Hawk resolves a bare <code>uv</code> through <code>PATH</code>, which contains that directory only when the virtualenv happens to be activated. Steward prepends the interpreter’s directory to the Hawk child’s <code>PATH</code> — which is Steward’s to do, because Steward chose the interpreter.</p>
+</div>
+</div>
+</section>
+<section id="what-steward-passes" class="level2">
+<h2 class="anchored" data-anchor-id="what-steward-passes">What Steward passes</h2>
+<p><code>--direct</code> is not optional. Without it Hawk builds a fresh virtualenv per worker, which is a second isolation model running against Steward’s own — and it puts the eval in a grandchild process, so the pid Steward recorded and every liveness check keyed on it name the wrong process.</p>
+<p>Steward also overrides <code>log_dir</code> and the eval-set id through the selection each worker reads, because Hawk exposes no log-directory option: a local run synthesizes a fresh <code>logs/&lt;random job id&gt;/</code> relative to the working directory.</p>
+<section id="hawk-sets-the-concurrency-so-the-ramp-does-not-run" class="level3">
+<h3 class="anchored" data-anchor-id="hawk-sets-the-concurrency-so-the-ramp-does-not-run">Hawk sets the concurrency, so the ramp does not run</h3>
+<p>Hawk’s infra config always supplies <code>max_samples</code> — the default is <code>1000</code> — and Steward honors it exactly as it honors any other definition’s explicit value: the setpoint is <strong>pinned</strong>, and the <a href="./concurrency.html#the-ramp">sample-concurrency ramp</a> does not apply. <code>samples_ramp</code> in <code>_steward.yaml</code> has nothing to govern under a Hawk config and is ignored there.</p>
+<p>That is Hawk’s policy to set, and Steward’s job is to run what the config asks for rather than to second-guess it. What it means in practice is worth knowing before a large run, because the number is per task and Steward runs a poolful:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 25%">
+<col style="width: 75%">
+</colgroup>
+<tbody>
+<tr class="odd">
+<td><code>max_samples</code></td>
+<td>pinned from the infra config (default <code>1000</code>) — no ramp, no discovery</td>
+</tr>
+<tr class="even">
+<td><code>max_sandboxes</code></td>
+<td>from the infra config, which computes one; bounds containers per process</td>
+</tr>
+<tr class="odd">
+<td><code>max_tasks</code></td>
+<td>honored as fleet width, the same as any other definition’s (see <a href="./concurrency.html">Concurrency</a>)</td>
+</tr>
+</tbody>
+</table>
+<p>If you want a different sample concurrency, set it in the Hawk config where the rest of your infra settings live. <code>steward launch --max-samples N</code> also outranks it for a run, and — as everywhere — pins rather than ramps.</p>
+</section>
+</section>
+<section id="what-fan-out-costs" class="level2">
+<h2 class="anchored" data-anchor-id="what-fan-out-costs">What fan-out costs</h2>
+<p><code>--direct</code> means <em>install into the current interpreter</em> rather than <em>skip installing</em>, so every worker runs <code>uv pip install</code> on startup. Three things make that redundant rather than dangerous, and the first two were verified rather than reasoned about:</p>
+<ul>
+<li><strong>uv takes an exclusive lock on the target environment.</strong> Two concurrent installs into one virtualenv serialize — the second waits for the lock and both succeed. They do not interleave.</li>
+<li><strong>Enumeration has already installed</strong>, in Steward’s own interpreter, before <code>launch</code> spawns anything. So every worker’s install is a satisfied no-op.</li>
+<li>Warm, a Hawk worker costs about 0.5s over a plain script — <em>cheaper</em> than Flow, because Flow pays two <code>uv</code> shell-outs where Hawk’s install is a no-op.</li>
+</ul>
+<p>What is genuinely multiplied is the remote work: a config with <code>secrets:</code> makes a Secrets Manager round trip <strong>per worker</strong>, and provider environment setup calls the gateway per worker, all at once. Throttling is the plausible failure and it would present as a confusing burst of worker startup failures. Nothing Steward can do about it from outside, because what those produce is process state rather than files — there is no directory to redirect and nothing to hand on unless Hawk reports it.</p>
+<p>Two concurrent Hawk workers writing into one flat log directory is verified end to end, both logs stamped with the eval-set id Steward assigned rather than Hawk’s synthetic one. Higher fan-out is not yet verified, and this is the first thing to suspect if it misbehaves.</p>
+<div class="callout callout-style-simple callout-note">
+<div class="callout-body d-flex">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-body-container">
+<p>One ambient hazard, unrelated to fan-out: against a PyPI-versioned <code>inspect-ai</code>, Hawk emits an exact pin and installs it into the interpreter the runner is executing in. That happens at a single invocation — <code>steward tasks</code> triggers it — so it belongs with the general hazards of driving Hawk in-process rather than with anything Steward’s fan-out causes.</p>
+</div>
+</div>
+</div>
+</section>
+<section id="local-caveats" class="level2">
+<h2 class="anchored" data-anchor-id="local-caveats">Local caveats</h2>
+<p>Two things a Hawk config can ask for that a local run cannot provide:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<tbody>
+<tr class="odd">
+<td><code>isolation: strict</code></td>
+<td>hard-fails without an environment variable that only Hawk’s Helm template sets</td>
+</tr>
+<tr class="even">
+<td><code>scan:</code></td>
+<td>rejected locally, as it is for every definition type today</td>
+</tr>
+</tbody>
+</table>
+<p>A third is inert but worth knowing about: Hawk’s cloud path honours a declared <code>eval_set_id</code>, and its local path ignores it, synthesizing a throwaway <code>local-eval-set-&lt;uuid&gt;</code> fresh on every invocation. Nothing reads that field today — workers take their id from Steward — so it costs nothing now. It will matter when a resumed run has to land in the same place as the original.</p>
+</section>
+<section id="what-each-side-gains" class="level2">
+<h2 class="anchored" data-anchor-id="what-each-side-gains">What each side gains</h2>
+<p>Worth stating plainly, because the integration is not one-directional.</p>
+<p>Hawk gains three things it does not have:</p>
+<ul>
+<li><strong>Failure granularity.</strong> Today the recovery unit is the whole pod: <code>restartPolicy: Never</code> plus <code>backoffLimit: 3</code> means one OOM restarts the world. Per-task workers make the blast radius one task.</li>
+<li><strong>A structural record of re-run cost.</strong> Hawk has code whose only job is to <em>log</em> this — its docstring reports a production run where three OOM kills turned 4,588 logical samples into 6,013 attempts, and nothing said so. Steward’s journal is that record, kept as it happens.</li>
+<li><strong>Adjudication and signoff</strong>, which have no equivalent at all. Job-complete currently means the eval loop returned; it says nothing about whether the data is usable.</li>
+</ul>
+<p>It pays with the per-worker startup above, and with one silent loss worth knowing:</p>
+<div class="callout callout-style-default callout-important callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Important</span>Eval-set-scoped hooks do not fire
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>A Steward worker runs an <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval">eval()</a></span>, not an eval set, so it never reaches the eval-set lifecycle events. Run- and sample-scoped handlers are unaffected and fire in every worker, which is what keeps token refresh and <code>hawk stop</code> working with no cooperation from Steward at all.</p>
+<p>But handlers registered at <strong>eval-set</strong> scope are silently dropped. In Hawk’s case that costs a Datadog gauge, a CloudWatch completion metric, and — the one that matters, because it is a safety mechanism rather than a metric — the stuck eval watchdog is never armed. Steward’s own tend loop covers much of the same ground, since a worker that stops making progress is exactly what reconciliation notices, but “covered by something else” is a claim to verify rather than assume.</p>
+</div>
+</div>
+</section>
+<section id="steward-inside-a-hawk-pod" class="level2">
+<h2 class="anchored" data-anchor-id="steward-inside-a-hawk-pod">Steward inside a Hawk pod</h2>
+<p>Not yet. Running a Hawk config <em>outside</em> the pod is what this page describes, and it needs nothing from Hawk. Running Steward <em>inside</em> the runner pod — a blocking launch that holds the pod open for the whole lifecycle Steward defines, an in-pod timer, and a relay surface an external agent drives it through — is designed but deliberately scheduled after everything else, and it is the one piece that needs a change on Hawk’s side.</p>
+
+
+</section>
+
+</main> <!-- /main -->
+<div id="copy-page-btn" class="btn-group" style="display:none;">
+  <button type="button" class="btn btn-sm btn-light" id="copy-page-action" title="Copy page as Markdown">
+    <i class="bi bi-clipboard"></i> Copy page
+  </button>
+  <button type="button" class="btn btn-sm btn-light dropdown-toggle dropdown-toggle-split" data-bs-toggle="dropdown" aria-expanded="false">
+    <span class="visually-hidden">Toggle Dropdown</span>
+  </button>
+  <ul class="dropdown-menu dropdown-menu-end">
+    <li><a class="dropdown-item" href="#" id="copy-page-md">
+      <i class="bi bi-clipboard"></i> Copy page as Markdown
+    </a></li>
+    <li><a class="dropdown-item" href="#" id="open-page-md">
+      <i class="bi bi-box-arrow-up-right"></i> Open Markdown
+    </a></li>
+  </ul>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function () {
+  var path = window.location.pathname;
+  var mdUrl = path.endsWith("/")
+    ? path + "index.html.md"
+    : path.replace(/\.html$/, ".html.md");
+  var btn = document.getElementById("copy-page-btn");
+  var cachedMarkdown = null;
+
+  // Pre-fetch the .html.md content
+  fetch(mdUrl)
+    .then(function (res) {
+      if (!res.ok) throw new Error(res.status);
+      return res.text();
+    })
+    .then(function (text) {
+      cachedMarkdown = text;
+
+      // Relocate button into the .quarto-title div
+      var titleDiv = document.querySelector(".quarto-title");
+      if (titleDiv) {
+        titleDiv.appendChild(btn);
+        btn.style.display = "";
+      }
+    })
+    .catch(function () {
+      // No .html.md available — remove button entirely
+      btn.remove();
+    });
+
+  function copyMarkdown(e) {
+    e.preventDefault();
+    if (!cachedMarkdown) return;
+    navigator.clipboard.writeText(cachedMarkdown).then(function () {
+      // Brief visual feedback — lock width to prevent layout shift
+      var actionBtn = document.getElementById("copy-page-action");
+      var original = actionBtn.innerHTML;
+      actionBtn.style.minWidth = actionBtn.offsetWidth + "px";
+      actionBtn.innerHTML = '<i class="bi bi-check2"></i> Copied!';
+      setTimeout(function () {
+        actionBtn.innerHTML = original;
+        actionBtn.style.minWidth = "";
+      }, 1500);
+    });
+  }
+
+  document.getElementById("copy-page-action").addEventListener("click", copyMarkdown);
+  document.getElementById("copy-page-md").addEventListener("click", copyMarkdown);
+  document.getElementById("open-page-md").addEventListener("click", function (e) {
+    e.preventDefault();
+    window.open(mdUrl, "_blank");
+  });
+});
+</script>
+<script id="quarto-html-after-body" type="application/javascript">
+  window.document.addEventListener("DOMContentLoaded", function (event) {
+    const icon = "";
+    const anchorJS = new window.AnchorJS();
+    anchorJS.options = {
+      placement: 'right',
+      icon: icon
+    };
+    anchorJS.add('.anchored');
+    const isCodeAnnotation = (el) => {
+      for (const clz of el.classList) {
+        if (clz.startsWith('code-annotation-')) {                     
+          return true;
+        }
+      }
+      return false;
+    }
+    const onCopySuccess = function(e) {
+      // button target
+      const button = e.trigger;
+      // don't keep focus
+      button.blur();
+      // flash "checked"
+      button.classList.add('code-copy-button-checked');
+      var currentTitle = button.getAttribute("title");
+      button.setAttribute("title", "Copied!");
+      let tooltip;
+      if (window.bootstrap) {
+        button.setAttribute("data-bs-toggle", "tooltip");
+        button.setAttribute("data-bs-placement", "left");
+        button.setAttribute("data-bs-title", "Copied!");
+        tooltip = new bootstrap.Tooltip(button, 
+          { trigger: "manual", 
+            customClass: "code-copy-button-tooltip",
+            offset: [0, -8]});
+        tooltip.show();    
+      }
+      setTimeout(function() {
+        if (tooltip) {
+          tooltip.hide();
+          button.removeAttribute("data-bs-title");
+          button.removeAttribute("data-bs-toggle");
+          button.removeAttribute("data-bs-placement");
+        }
+        button.setAttribute("title", currentTitle);
+        button.classList.remove('code-copy-button-checked');
+      }, 1000);
+      // clear code selection
+      e.clearSelection();
+    }
+    const getTextToCopy = function(trigger) {
+      const outerScaffold = trigger.parentElement.cloneNode(true);
+      const codeEl = outerScaffold.querySelector('code');
+      for (const childEl of codeEl.children) {
+        if (isCodeAnnotation(childEl)) {
+          childEl.remove();
+        }
+      }
+      return codeEl.innerText;
+    }
+    const clipboard = new window.ClipboardJS('.code-copy-button:not([data-in-quarto-modal])', {
+      text: getTextToCopy
+    });
+    clipboard.on('success', onCopySuccess);
+    if (window.document.getElementById('quarto-embedded-source-code-modal')) {
+      const clipboardModal = new window.ClipboardJS('.code-copy-button[data-in-quarto-modal]', {
+        text: getTextToCopy,
+        container: window.document.getElementById('quarto-embedded-source-code-modal')
+      });
+      clipboardModal.on('success', onCopySuccess);
+    }
+      var localhostRegex = new RegExp(/^(?:http|https):\/\/localhost\:?[0-9]*\//);
+      var mailtoRegex = new RegExp(/^mailto:/);
+        var filterRegex = new RegExp("https:\/\/meridianlabs-ai\.github\.io\/inspect_steward");
+      var isInternal = (href) => {
+          return filterRegex.test(href) || localhostRegex.test(href) || mailtoRegex.test(href);
+      }
+      // Inspect non-navigation links and adorn them if external
+     var links = window.document.querySelectorAll('a[href]:not(.nav-link):not(.navbar-brand):not(.toc-action):not(.sidebar-link):not(.sidebar-item-toggle):not(.pagination-link):not(.no-external):not([aria-hidden]):not(.dropdown-item):not(.quarto-navigation-tool):not(.about-link)');
+      for (var i=0; i<links.length; i++) {
+        const link = links[i];
+        if (!isInternal(link.href)) {
+          // undo the damage that might have been done by quarto-nav.js in the case of
+          // links that we want to consider external
+          if (link.dataset.originalHref !== undefined) {
+            link.href = link.dataset.originalHref;
+          }
+        }
+      }
+    function tippyHover(el, contentFn, onTriggerFn, onUntriggerFn) {
+      const config = {
+        allowHTML: true,
+        maxWidth: 500,
+        delay: 100,
+        arrow: false,
+        appendTo: function(el) {
+            return el.parentElement;
+        },
+        interactive: true,
+        interactiveBorder: 10,
+        theme: 'quarto',
+        placement: 'bottom-start',
+      };
+      if (contentFn) {
+        config.content = contentFn;
+      }
+      if (onTriggerFn) {
+        config.onTrigger = onTriggerFn;
+      }
+      if (onUntriggerFn) {
+        config.onUntrigger = onUntriggerFn;
+      }
+      window.tippy(el, config); 
+    }
+    const noterefs = window.document.querySelectorAll('a[role="doc-noteref"]');
+    for (var i=0; i<noterefs.length; i++) {
+      const ref = noterefs[i];
+      tippyHover(ref, function() {
+        // use id or data attribute instead here
+        let href = ref.getAttribute('data-footnote-href') || ref.getAttribute('href');
+        try { href = new URL(href).hash; } catch {}
+        const id = href.replace(/^#\/?/, "");
+        const note = window.document.getElementById(id);
+        if (note) {
+          return note.innerHTML;
+        } else {
+          return "";
+        }
+      });
+    }
+    const xrefs = window.document.querySelectorAll('a.quarto-xref');
+    const processXRef = (id, note) => {
+      // Strip column container classes
+      const stripColumnClz = (el) => {
+        el.classList.remove("page-full", "page-columns");
+        if (el.children) {
+          for (const child of el.children) {
+            stripColumnClz(child);
+          }
+        }
+      }
+      stripColumnClz(note)
+      if (id === null || id.startsWith('sec-')) {
+        // Special case sections, only their first couple elements
+        const container = document.createElement("div");
+        if (note.children && note.children.length > 2) {
+          container.appendChild(note.children[0].cloneNode(true));
+          for (let i = 1; i < note.children.length; i++) {
+            const child = note.children[i];
+            if (child.tagName === "P" && child.innerText === "") {
+              continue;
+            } else {
+              container.appendChild(child.cloneNode(true));
+              break;
+            }
+          }
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(container);
+          }
+          return container.innerHTML
+        } else {
+          if (window.Quarto?.typesetMath) {
+            window.Quarto.typesetMath(note);
+          }
+          return note.innerHTML;
+        }
+      } else {
+        // Remove any anchor links if they are present
+        const anchorLink = note.querySelector('a.anchorjs-link');
+        if (anchorLink) {
+          anchorLink.remove();
+        }
+        if (window.Quarto?.typesetMath) {
+          window.Quarto.typesetMath(note);
+        }
+        if (note.classList.contains("callout")) {
+          return note.outerHTML;
+        } else {
+          return note.innerHTML;
+        }
+      }
+    }
+    for (var i=0; i<xrefs.length; i++) {
+      const xref = xrefs[i];
+      tippyHover(xref, undefined, function(instance) {
+        instance.disable();
+        let url = xref.getAttribute('href');
+        let hash = undefined; 
+        if (url.startsWith('#')) {
+          hash = url;
+        } else {
+          try { hash = new URL(url).hash; } catch {}
+        }
+        if (hash) {
+          const id = hash.replace(/^#\/?/, "");
+          const note = window.document.getElementById(id);
+          if (note !== null) {
+            try {
+              const html = processXRef(id, note.cloneNode(true));
+              instance.setContent(html);
+            } finally {
+              instance.enable();
+              instance.show();
+            }
+          } else {
+            // See if we can fetch this
+            fetch(url.split('#')[0])
+            .then(res => res.text())
+            .then(html => {
+              const parser = new DOMParser();
+              const htmlDoc = parser.parseFromString(html, "text/html");
+              const note = htmlDoc.getElementById(id);
+              if (note !== null) {
+                const html = processXRef(id, note);
+                instance.setContent(html);
+              } 
+            }).finally(() => {
+              instance.enable();
+              instance.show();
+            });
+          }
+        } else {
+          // See if we can fetch a full url (with no hash to target)
+          // This is a special case and we should probably do some content thinning / targeting
+          fetch(url)
+          .then(res => res.text())
+          .then(html => {
+            const parser = new DOMParser();
+            const htmlDoc = parser.parseFromString(html, "text/html");
+            const note = htmlDoc.querySelector('main.content');
+            if (note !== null) {
+              // This should only happen for chapter cross references
+              // (since there is no id in the URL)
+              // remove the first header
+              if (note.children.length > 0 && note.children[0].tagName === "HEADER") {
+                note.children[0].remove();
+              }
+              const html = processXRef(null, note);
+              instance.setContent(html);
+            } 
+          }).finally(() => {
+            instance.enable();
+            instance.show();
+          });
+        }
+      }, function(instance) {
+      });
+    }
+        let selectedAnnoteEl;
+        const selectorForAnnotation = ( cell, annotation) => {
+          let cellAttr = 'data-code-cell="' + cell + '"';
+          let lineAttr = 'data-code-annotation="' +  annotation + '"';
+          const selector = 'span[' + cellAttr + '][' + lineAttr + ']';
+          return selector;
+        }
+        const selectCodeLines = (annoteEl) => {
+          const doc = window.document;
+          const targetCell = annoteEl.getAttribute("data-target-cell");
+          const targetAnnotation = annoteEl.getAttribute("data-target-annotation");
+          const annoteSpan = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+          const lines = annoteSpan.getAttribute("data-code-lines").split(",");
+          const lineIds = lines.map((line) => {
+            return targetCell + "-" + line;
+          })
+          let top = null;
+          let height = null;
+          let parent = null;
+          if (lineIds.length > 0) {
+              //compute the position of the single el (top and bottom and make a div)
+              const el = window.document.getElementById(lineIds[0]);
+              top = el.offsetTop;
+              height = el.offsetHeight;
+              parent = el.parentElement.parentElement;
+            if (lineIds.length > 1) {
+              const lastEl = window.document.getElementById(lineIds[lineIds.length - 1]);
+              const bottom = lastEl.offsetTop + lastEl.offsetHeight;
+              height = bottom - top;
+            }
+            if (top !== null && height !== null && parent !== null) {
+              // cook up a div (if necessary) and position it 
+              let div = window.document.getElementById("code-annotation-line-highlight");
+              if (div === null) {
+                div = window.document.createElement("div");
+                div.setAttribute("id", "code-annotation-line-highlight");
+                div.style.position = 'absolute';
+                parent.appendChild(div);
+              }
+              div.style.top = top - 2 + "px";
+              div.style.height = height + 4 + "px";
+              div.style.left = 0;
+              let gutterDiv = window.document.getElementById("code-annotation-line-highlight-gutter");
+              if (gutterDiv === null) {
+                gutterDiv = window.document.createElement("div");
+                gutterDiv.setAttribute("id", "code-annotation-line-highlight-gutter");
+                gutterDiv.style.position = 'absolute';
+                const codeCell = window.document.getElementById(targetCell);
+                const gutter = codeCell.querySelector('.code-annotation-gutter');
+                gutter.appendChild(gutterDiv);
+              }
+              gutterDiv.style.top = top - 2 + "px";
+              gutterDiv.style.height = height + 4 + "px";
+            }
+            selectedAnnoteEl = annoteEl;
+          }
+        };
+        const unselectCodeLines = () => {
+          const elementsIds = ["code-annotation-line-highlight", "code-annotation-line-highlight-gutter"];
+          elementsIds.forEach((elId) => {
+            const div = window.document.getElementById(elId);
+            if (div) {
+              div.remove();
+            }
+          });
+          selectedAnnoteEl = undefined;
+        };
+          // Handle positioning of the toggle
+      window.addEventListener(
+        "resize",
+        throttle(() => {
+          elRect = undefined;
+          if (selectedAnnoteEl) {
+            selectCodeLines(selectedAnnoteEl);
+          }
+        }, 10)
+      );
+      function throttle(fn, ms) {
+      let throttle = false;
+      let timer;
+        return (...args) => {
+          if(!throttle) { // first call gets through
+              fn.apply(this, args);
+              throttle = true;
+          } else { // all the others get throttled
+              if(timer) clearTimeout(timer); // cancel #2
+              timer = setTimeout(() => {
+                fn.apply(this, args);
+                timer = throttle = false;
+              }, ms);
+          }
+        };
+      }
+        const annoteTargets = window.document.querySelectorAll('.code-annotation-anchor');
+        for (let i=0; i<annoteTargets.length; i++) {
+          const annoteTarget = annoteTargets[i];
+          const targetCell = annoteTarget.getAttribute("data-target-cell");
+          const targetAnnotation = annoteTarget.getAttribute("data-target-annotation");
+          const contentFn = () => {
+            const content = window.document.querySelector(selectorForAnnotation(targetCell, targetAnnotation));
+            if (content) {
+              const tipContent = content.cloneNode(true);
+              tipContent.classList.add("code-annotation-tip-content");
+              return tipContent.outerHTML;
+            }
+          }
+          const config = {
+            allowHTML: true,
+            content: contentFn,
+            onShow: (instance) => {
+              selectCodeLines(instance.reference);
+              instance.reference.classList.add('code-annotation-active');
+              window.tippy.hideAll();
+            },
+            onHide: (instance) => {
+              unselectCodeLines();
+              instance.reference.classList.remove('code-annotation-active');
+            },
+            maxWidth: 300,
+            delay: [50, 0],
+            duration: [200, 0],
+            offset: [5, 10],
+            arrow: true,
+            trigger: 'click',
+            appendTo: function(el) {
+              return el.parentElement.parentElement.parentElement;
+            },
+            interactive: true,
+            interactiveBorder: 10,
+            theme: 'quarto',
+            placement: 'right',
+            positionFixed: true,
+            popperOptions: {
+              modifiers: [
+              {
+                name: 'flip',
+                options: {
+                  flipVariations: false, // true by default
+                  allowedAutoPlacements: ['right'],
+                  fallbackPlacements: ['right', 'top', 'top-start', 'top-end', 'bottom', 'bottom-start', 'bottom-end', 'left'],
+                },
+              },
+              {
+                name: 'preventOverflow',
+                options: {
+                  mainAxis: false,
+                  altAxis: false
+                }
+              }
+              ]        
+            }      
+          };
+          window.tippy(annoteTarget, config); 
+        }
+    const findCites = (el) => {
+      const parentEl = el.parentElement;
+      if (parentEl) {
+        const cites = parentEl.dataset.cites;
+        if (cites) {
+          return {
+            el,
+            cites: cites.split(' ')
+          };
+        } else {
+          return findCites(el.parentElement)
+        }
+      } else {
+        return undefined;
+      }
+    };
+    var bibliorefs = window.document.querySelectorAll('a[role="doc-biblioref"]');
+    for (var i=0; i<bibliorefs.length; i++) {
+      const ref = bibliorefs[i];
+      const citeInfo = findCites(ref);
+      if (citeInfo) {
+        tippyHover(citeInfo.el, function() {
+          var popup = window.document.createElement('div');
+          citeInfo.cites.forEach(function(cite) {
+            var citeDiv = window.document.createElement('div');
+            citeDiv.classList.add('hanging-indent');
+            citeDiv.classList.add('csl-entry');
+            var biblioDiv = window.document.getElementById('ref-' + cite);
+            if (biblioDiv) {
+              citeDiv.innerHTML = biblioDiv.innerHTML;
+            }
+            popup.appendChild(citeDiv);
+          });
+          return popup.innerHTML;
+        });
+      }
+    }
+  });
+  </script>
+<nav class="page-navigation">
+  <div class="nav-page nav-page-previous">
+      <a href="./flow.html" class="pagination-link" aria-label="Inspect Flow">
+        <i class="bi bi-arrow-left-short"></i> <span class="nav-page-text">Inspect Flow</span>
+      </a>          
+  </div>
+  <div class="nav-page nav-page-next">
+      <a href="./reference/index.html" class="pagination-link" aria-label="Reference">
+        <span class="nav-page-text">Reference</span> <i class="bi bi-arrow-right-short"></i>
+      </a>
+  </div>
+</nav>
+</div> <!-- /content -->
+<footer class="footer">
+  <div class="nav-footer">
+    <div class="nav-footer-left">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai">
+<p>Meridian Labs</p>
+</a>
+  </li>  
+</ul>
+    </div>   
+    <div class="nav-footer-center">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_steward">
+<p>Code</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_steward/blob/main/CHANGELOG.md">
+<p>Changelog</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_steward/blob/main/LICENSE">
+<p>License</p>
+</a>
+  </li>  
+    <li class="nav-item">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_steward/issues">
+<p>Issues</p>
+</a>
+  </li>  
+</ul>
+    </div>
+    <div class="nav-footer-right">
+      <ul class="footer-items list-unstyled">
+    <li class="nav-item compact">
+    <a class="nav-link" href="https://github.com/meridianlabs-ai/inspect_steward/">
+      <i class="bi bi-github" role="img" aria-label="Inspect Steward on GitHub">
+</i> 
+    </a>
+  </li>  
+</ul>
+    </div>
+  </div>
+</footer>
+
+
+
+
+</body></html>
