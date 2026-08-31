@@ -1,0 +1,4 @@
+.steward/
+logs/
+logs-archive/
+.env

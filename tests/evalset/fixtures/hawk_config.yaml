@@ -1,0 +1,24 @@
+# A Hawk eval set config, crossed by Hawk's own runner into tasks x solvers x
+# models. The task comes from hawk's own inspect_ai entry point (hawk ships
+# `hawk.e2e.task`), which is the only registered task available without
+# installing something else -- `--direct` installs nothing, so whatever a
+# fixture names has to be importable already.
+#
+# The doubled `hawk/hawk/` in the item name is not a typo: inspect prefixes a
+# registered task with its entry-point name, and hawk's own decorator already
+# declares `name="hawk/e2e_hello"`.
+name: steward-hawk-fixture
+tasks:
+  - package: hawk
+    name: hawk
+    items:
+      - name: hawk/e2e_hello
+solvers:
+  - package: inspect-ai
+    items:
+      - name: generate
+      - name: chain_of_thought
+models:
+  - package: inspect-ai
+    items:
+      - name: mockllm/model

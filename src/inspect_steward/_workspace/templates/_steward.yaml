@@ -1,0 +1,89 @@
+# Your standing rules for this project, in two halves.
+#
+# The settings below are what Steward executes by itself, at 3am, with nobody
+# watching. The `policies` key at the bottom is what an agent reads and applies
+# when one is in session. They live in one file so that a decision and its
+# reasoning stay next to each other.
+#
+# Steward never writes this file. It proposes changes and you decide, because
+# promoting a one-off ruling into a standing rule is a judgement that widens
+# what you have committed to.
+#
+# An empty file is a valid one: everything then escalates to you. Rules
+# accumulate as you notice yourself answering the same question twice, and the
+# run gets quieter as they do.
+
+# --- Settings Steward acts on -----------------------------------------------
+#
+# Only words `eval_set()` does not know belong here. Anything inspect knows —
+# log_dir, model, max_samples, max_tasks, epochs, limits — is refused by name,
+# because your definition is the single source of truth for those. For one run
+# you can still say them inspect's way: `steward launch --epochs 2 --limit 5`,
+# or INSPECT_EVAL_EPOCHS / STEWARD_EPOCHS in the shell.
+#
+# Uncomment what you want. Anything left commented out uses Steward's default.
+#
+# Every one of these can also be said two other ways, for the times a project
+# setting is not what you want: `STEWARD_MAX_WORKERS=4 steward tend` for this
+# shell or this machine, and `steward tend --max-workers 4` for one invocation.
+# The flag wins over the variable, and the variable wins over this file.
+
+# tend_interval: 10m      # how often a scheduled tend runs (always with a unit)
+# max_workers: 8          # pack the run into this many worker processes
+# stall_after: 3          # give up respawning a task after this many fruitless tries
+# samples_ramp: [40, 200] # range to discover sample concurrency in (false to fix it)
+# log_store: auto         # reuse logs already run elsewhere (a path, or false for none)
+# sync: auto              # mirror this workspace into the log directory (a path, or false)
+# log_root: s3://…/runs   # where this machine keeps logs, one directory per workspace
+# notification: apprise.yml  # where to reach you (an Apprise URL, or false for nowhere)
+#
+# log_root is not an exception to the rule above, though it looks like one. It
+# never overrides a log_dir your definition names — it answers the case where
+# your definition names none, which is the one Steward recommends. Usually it
+# belongs in the environment (STEWARD_LOG_ROOT) rather than here, since it is a
+# fact about the machine; put it here when it is a fact about the project.
+#
+# notification is the setting worth not leaving commented out. Without it an
+# overnight run that stops at 2am says so only in files nobody is looking at.
+# It takes one Apprise URL, several separated by commas, or a path to an Apprise
+# config file, and it configures the workers too — a sample waiting on your
+# approval reaches the same place. `notification: false` silences Steward and
+# never those.
+#
+# A URL here is committed. Prefer STEWARD_NOTIFICATION in your .env, or a config
+# file this file only names, and keep the token out of the repository. Steward
+# never prints the value and never syncs it out to the log store.
+
+# --- Standing rules an agent applies ----------------------------------------
+#
+# Free-form. Write a list of rules, or one block of prose — Steward carries the
+# text and never interprets it, so say whatever a person would need to hear.
+# `STEWARD_POLICIES` works here too; `steward status` reports whatever is in
+# force, from either source.
+#
+# What is worth writing down:
+#
+#   - Failures you already know about, so the agent does not wake you for them.
+#     e.g. "Sandbox startup times out on roughly 1% of samples in this eval;
+#     that is the environment, not the model. Invalidate and re-run."
+#
+#   - What always reaches you regardless.
+#     e.g. "Anything touching the grader — I want to see grader failures even
+#     if they look transient."
+#
+#   - Rulings granted in advance. An agent acting on one of these is executing
+#     a decision you have already made, not making its own.
+#     e.g. "Re-run samples that failed on provider rate limits, up to twice,
+#     without asking."
+#
+#   - The room an agent may move in beneath the settings above, where that
+#     takes judgement rather than a number.
+#     e.g. "Back off at the first sign of provider throttling rather than
+#     riding the limit."
+#
+#   - What this eval set is for, and anything a third party picking up the
+#     directory cold would need in order to judge the results.
+
+# policies:
+#   - Notify me before re-running anything that would replay more than 200 samples.
+#   - Sandbox startup timeouts under 1% are expected here — invalidate and re-run.

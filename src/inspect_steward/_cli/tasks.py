@@ -1,0 +1,101 @@
+from typing import Any
+
+import click
+import yaml
+
+from .._evalset.detect import DefinitionType
+from .._evalset.manifest import Manifest
+from .._evalset.read import ReadEvalSetError, read_eval_set
+
+
+@click.command("tasks")
+@click.argument("definition", type=click.Path(exists=True, dir_okay=False))
+@click.option(
+    "--arg",
+    "-A",
+    "definition_args",
+    multiple=True,
+    metavar="KEY=VALUE",
+    help="Argument for the definition (flow spec function args only). Can be specified multiple times.",
+)
+@click.option(
+    "--type",
+    "definition_type",
+    type=click.Choice(["evalset", "flow", "hawk"]),
+    default=None,
+    help="Definition type (auto-detected by default).",
+)
+@click.option(
+    "--json",
+    "output_json",
+    is_flag=True,
+    default=False,
+    help="Output the full manifest as JSON.",
+)
+def tasks_command(
+    definition: str,
+    definition_args: tuple[str, ...],
+    definition_type: DefinitionType | None,
+    output_json: bool,
+) -> None:
+    """Enumerate the tasks defined by an eval set definition.
+
+    DEFINITION is a Python file culminating in an eval_set() call, an Inspect Flow spec (Python or YAML), or a Hawk eval set config (YAML).
+    """
+    try:
+        manifest = read_eval_set(
+            definition,
+            args=parse_args(definition_args),
+            type=definition_type,
+        )
+    except (ValueError, ReadEvalSetError) as ex:
+        raise click.ClickException(str(ex)) from ex
+
+    if output_json:
+        click.echo(manifest.model_dump_json(indent=2))
+    else:
+        _print_tasks(manifest)
+
+
+def parse_args(args: tuple[str, ...]) -> dict[str, Any] | None:
+    """Parse `-A KEY=VALUE` args with the same semantics as inspect_ai's `parse_cli_args` (YAML scalar coercion, comma-separated strings become lists, dashes in keys become underscores).
+
+    Shared with `launch`, which takes the same flag against the same definitions and must coerce it the same way: two parsers would mean `steward tasks -A limit=10` enumerating a different eval set than `steward launch -A limit=10` captures.
+
+    Args:
+        args: The `-A` values as given.
+
+    Returns:
+        The parsed arguments, or `None` where none were given — which is what lets a re-launch distinguish *no arguments* from *the same arguments as last time*.
+
+    Raises:
+        click.UsageError: If a value is not `KEY=VALUE`.
+    """
+    if not args:
+        return None
+    parsed: dict[str, Any] = {}
+    for arg in args:
+        key, sep, value = arg.partition("=")
+        if not sep or not key:
+            raise click.UsageError(f"--arg must be KEY=VALUE (got '{arg}').")
+        loaded = yaml.safe_load(value)
+        if isinstance(loaded, str):
+            elements = value.split(",")
+            loaded = elements if len(elements) > 1 else elements[0]
+        parsed[key.replace("-", "_")] = loaded
+    return parsed
+
+
+def _print_tasks(manifest: Manifest) -> None:
+    rows = [(task.key, str(task.samples), str(task.epochs)) for task in manifest.tasks]
+    widths = [
+        max(len(header), *(len(row[i]) for row in rows))
+        for i, header in enumerate(("KEY", "SAMPLES", "EPOCHS"))
+    ]
+    click.echo(
+        f"{'KEY':<{widths[0]}}  {'SAMPLES':>{widths[1]}}  {'EPOCHS':>{widths[2]}}"
+    )
+    for key, samples, epochs in rows:
+        click.echo(f"{key:<{widths[0]}}  {samples:>{widths[1]}}  {epochs:>{widths[2]}}")
+    total = sum(task.samples * task.epochs for task in manifest.tasks)
+    click.echo(f"\n{len(manifest.tasks)} tasks, {total} total samples")

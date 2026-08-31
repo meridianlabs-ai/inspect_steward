@@ -1,0 +1,201 @@
+[project]
+name = "inspect_steward"
+dynamic = ["version"]
+description = "An agent that supervises evaluations, monitoring progress, diagnosing problems, and adjusting runtime state on your behalf."
+authors = [{ name = "Meridian Labs" }]
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT License" }
+# POSIX only, and deliberately so: Steward's central requirement is that a run
+# outlives the process that started it, which it achieves by spawning workers
+# into their own session. Windows has no equivalent that `subprocess` reaches
+# the same way, and the rest of the design leans the same direction (AF_UNIX
+# control sockets, process-table identification). Supporting it would be a
+# second execution model rather than a flag, so it is declined rather than
+# deferred. Classifiers are metadata, not enforcement — pip will still install
+# here; nothing pretends the guarantee holds.
+classifiers = [
+    "Operating System :: POSIX :: Linux",
+    "Operating System :: MacOS",
+]
+dependencies = [
+    "inspect-ai>=0.3.259", # TODO: floor at the first release with eval-set capture (and drop the git source below)
+    "inspect-scout>=0.4.46",
+    "click>=8.0",
+    "pyyaml>=6.0",
+    # the process table is how Steward finds a worker that has not yet reached
+    # its eval, and so has no log and no control-discovery entry. inspect-ai
+    # depends on psutil too, but this is a direct import and a transitive
+    # dependency is not a promise.
+    "psutil>=5.9",
+    # a worker's control server is HTTP over an AF_UNIX socket, and reading a
+    # running fleet for `status` goes to it directly rather than through
+    # `inspect ctl` (see _worker/live.py). inspect-ai depends on httpx too, but
+    # this is a direct import and a transitive dependency is not a promise.
+    "httpx>=0.27",
+    # arming a timer checks which credentials a workspace's `.env` really
+    # defines, and only the resolved value answers that -- `KEY=""` and
+    # `KEY=${UNSET}` both look like assignments and both arrive as nothing. Read
+    # with the same parser inspect will use so the two cannot disagree.
+    # inspect-ai depends on python-dotenv too, but this is a direct import and a
+    # transitive dependency is not a promise.
+    "python-dotenv>=1.0",
+    # notification is the gate on autonomy rather than a nicety (workflow.md
+    # §11): an unattended run that cannot reach a person is the failure the
+    # whole design exists to prevent. inspect-ai makes apprise optional because
+    # an eval that never asks a human needs no channel; a supervisor always
+    # might, so a workspace must not be able to configure a channel Steward
+    # then cannot reach.
+    "apprise>=1.9",
+]
+
+[project.optional-dependencies]
+flow = ["inspect_flow>=0.12.0"]
+# cli: the `python -m hawk` click entry point Steward invokes.
+# runner: hawk.runner.run_eval_set imports k8s_sandbox at module scope.
+# uv: hawk shells out to `uv pip install` on every invocation but does not
+#   declare it, so without this the extra installs and then fails at the first
+#   read with FileNotFoundError. Ours to carry until hawk declares it.
+#   Declaring it is necessary but not sufficient: pip puts the binary beside
+#   the interpreter, and hawk resolves a bare `uv` through PATH, which only
+#   contains that directory when the venv happens to be activated. The hawk
+#   branch of `definition_command` prepends it for the child process.
+#
+# Marker-gated because hawk requires Python 3.13 and inspect_steward does not.
+# An extra is opt-in, so hawk's floor binds only those who ask for hawk: on
+# 3.12 the extra resolves to nothing and hawk support is simply unavailable.
+#
+# No upper bound, but note the coupling it leaves open: the hawk test fixture
+# names `hawk/e2e_hello`, hawk's own internal smoke-test task, because
+# `--direct` installs nothing new and it is the only registered task available
+# without one. A hawk release that renames or drops it breaks that fixture with
+# no change on our side.
+hawk = [
+    "hawk[cli,runner]>=2.4.0; python_version >= '3.13'",
+    "uv>=0.5; python_version >= '3.13'",
+]
+
+[project.urls]
+"Source Code" = "https://github.com/meridianlabs-ai/inspect_steward"
+"Issue Tracker" = "https://github.com/meridianlabs-ai/inspect_steward/issues"
+
+[build-system]
+requires = ["hatchling", "hatch-vcs"]
+build-backend = "hatchling.build"
+
+[project.entry-points.inspect_ai]
+inspect_steward = "inspect_steward._registry"
+
+[project.scripts]
+steward = "inspect_steward._cli.main:main"
+
+
+[dependency-groups]
+dev = [
+    "ruff",
+    "pytest",
+    "pyright",
+    "pytest-xdist",
+    "pytest-dotenv",
+    "pytest-timeout>=2.4.0",
+    "types-psutil", # psutil ships no inline types and pyright runs strict
+    "inspect_flow>=0.12.0", # for the flow definition tests
+    # for the hawk definition tests; 3.13+ only, so those tests skip on 3.12
+    "hawk[cli,runner]>=2.4.0; python_version >= '3.13'",
+    "uv>=0.5; python_version >= '3.13'",
+    {include-group = "doc"},
+]
+doc = [
+    "jupyter",
+    "panflute",
+    "markdown",
+    "griffe>=2",
+    "rich",
+    "pyyaml",
+    "types-PyYAML",
+    "quarto-cli>=1.9.36",
+]
+dist = ["twine", "build"]
+
+[tool.hatch.build]
+only-packages = true
+exclude = ["docs/", "tests/"]
+artifacts = ["src/**/*.yaml", "src/**/*.md", "src/**/*.txt"]
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/inspect_steward/_version.py"
+
+[tool.hatch.version.raw-options]
+local_scheme = "no-local-version" # Important for PyPI compatibility
+
+[tool.hatch.metadata]
+allow-direct-references = true
+
+[tool.uv]
+managed = true
+
+# TEMPORARY: a local checkout, because the version-5 selection facets
+# (`registry_name`, `args_hash`) and the early pruning that reads them are not
+# on inspect_ai main yet. Point this back at
+# `{ git = "https://github.com/UKGovernmentBEIS/inspect_ai", branch = "main" }`
+# once they merge — nothing else here depends on the checkout, and a launch
+# will refuse loudly against an older inspect rather than misbehave, since a v5
+# selection document fails its version gate.
+[tool.uv.sources]
+inspect-ai = { path = "../../UKGovernmentBEIS/inspect_ai", editable = true }
+
+[tool.ruff]
+extend-exclude = ["docs"]
+src = ["."]
+
+[tool.ruff.lint]
+select = [
+    "E",      # pycodestyle errors
+    "W",      # pycodestyle warnings
+    "F",      # flake8
+    "D",      # pydocstyle
+    "I",      # isort
+    "B",      # flake8-bugbear
+    "SIM101", # duplicate isinstance
+    # "RET", # flake8-return
+    # "RUF", # ruff rules
+]
+ignore = ["E203", "E501", "D10", "D212", "D415"]
+
+[tool.ruff.lint.pydocstyle]
+convention = "google"
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+# `not network` by default, and the reason is isolation rather than speed:
+# hawk's CLI runs `uv pip install` into the *running interpreter*, which
+# uninstalls this project's editable inspect-ai and rewrites the package tree
+# from hawk's own git pin. Two consequences, both observed. Concurrently, a
+# sibling xdist worker importing inspect_ai mid-rewrite dies with a bare
+# ModuleNotFoundError nowhere near its own subject. Afterwards, the venv is
+# left pointing at hawk's snapshot, so every later run -- and every `steward`
+# invocation -- silently tests a different inspect than the checkout.
+# Opt in with `pytest -m network -n0`, and `uv sync` when it is done.
+addopts = "-n auto -m 'not network'"
+markers = [
+    # Requires network and the `uv` binary. Hawk's CLI runs `uv pip install`
+    # into the running interpreter on every invocation, resolving inspect-ai
+    # from a pinned git commit, so a hawk definition cannot be read offline
+    # -- and cannot be read without replacing what is installed. Deselected by
+    # default (see addopts above).
+    "network: needs network access, an external tool on PATH, and sole use of the environment",
+]
+
+[tool.pyright]
+include = ["src", "tests"]
+typeCheckingMode = "strict"
+pythonPlatform = "All"
+
+# tests may exercise private helpers directly
+[[tool.pyright.executionEnvironments]]
+root = "tests"
+reportPrivateUsage = false
