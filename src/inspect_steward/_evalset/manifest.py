@@ -52,6 +52,19 @@ class ManifestTask(EvalSetCaptureTask):
     """Human-facing display key (`task[solver]@model`, disambiguated when tasks collide). Unique within a manifest, but not stable across definition edits — use `identifier` for stable matching."""
 
 
+class ManifestScan(BaseModel):
+    """The run's scanning material: what capture serialized, and what Steward added."""
+
+    spec: dict[str, Any] | None = None
+    """Serialized scout `ScanSpec` as capture recorded it — the definition's own scanners with their config hash — or `None` where the definition declares none and only injected scanners scan. Wire form rather than live objects, because the objects exist only inside the capture subprocess; the launch's bracket merges the injected specs into this and hands the result to `scan_init_from_spec`."""
+
+    scans: str | None = None
+    """The scans location where the definition redirected it off the log directory (`ScannerConfig.scans`, e.g. an S3 bucket), or `None` for the default `<log_dir>/scans/`. Recorded for the reason `log_dir` is: the fold and the finalize address the scan directory from a tend that cannot re-derive a redirect living in the definition's live objects."""
+
+    injected: dict[str, dict[str, Any]] | None = None
+    """Scanners Steward added at launch — the built-in plus the operator's `scanners` key — as `ScannerSpec` dicts keyed by merge name, or `None` where nothing was injected. The durable copy for the reason `overrides` is: every worker's selection document carries exactly these, and the 02:00 tend that spawns workers has nowhere else to read them from. Only the injected ones — workers hold the definition's own scanners already, and carrying the merged set would have the worker-side merge refuse its own names as collisions."""
+
+
 class Manifest(BaseModel):
     """Static enumeration of an eval set read from a definition."""
 
@@ -86,6 +99,12 @@ class Manifest(BaseModel):
     **The durable copy, and the only one.** A run's overrides are resolved once, at launch, from flags and the environment — and neither survives to the 02:00 tend that spawns the next worker. They cannot live in `.steward/` either, which this design tells people they may delete. So they are captured *with* the manifest, by the same subprocess that honoured them, and every later tend reads them back out of the committed file: the enumeration and the fleet cannot disagree, because the fleet's copy is the one the enumeration was made under.
 
     `MANIFEST_VERSION` deliberately did not move for this, and the `capture_rss` reasoning only half covers it. That argument is about a *new* reader meeting an old manifest, where an absent field means *not measured* and nothing is lost. The other direction is not so comfortable: an **older** reader meeting this field drops it silently, accepts the manifest as version 1, and tends the run on the definition's own values — a different eval than the one that was captured, with nothing said. What makes that acceptable is only that no such reader exists in the wild; the package is unreleased. The moment one does, this field is the reason to bump.
+    """
+
+    scan: "ManifestScan | None" = None
+    """The run's scanning material, or `None` where nothing scans — no scanner in the definition and nothing injected at launch.
+
+    Committed by the launch rather than the capture alone, because injection is the launch's word: capture contributes `spec` and `scans` (`read_eval_set`), and the launch adds `injected` once the merge is settled. `MANIFEST_VERSION` deliberately did not move, on the `capture_rss` reasoning: absence means *this run does not scan*, which is exactly what an older manifest's absence should mean to a newer tend — nothing to inject, fold, or finalize.
     """
 
     tasks: list[ManifestTask]

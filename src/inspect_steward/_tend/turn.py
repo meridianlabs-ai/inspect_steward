@@ -41,6 +41,7 @@ from .._evalset.observe import (
     observe_tasks,
 )
 from .._notify import establish_channel
+from .._scan import establish_scan_model
 from .._schedule import (
     Action,
     ArchiveLog,
@@ -83,6 +84,7 @@ from .._workspace import (
     acquire,
     append_event,
     declared_notification,
+    declared_scan_model,
     read_acks,
     read_armed,
     read_claim,
@@ -262,6 +264,7 @@ def tend(
     samples_ramp: tuple[int, int] | bool | None = None,
     sync: str | bool | None = None,
     notification: str | bool | None = None,
+    scan_model: str | bool | None = None,
     break_stale: bool = True,
     claim: Claim | None = None,
 ) -> TendResult | Refused:
@@ -274,6 +277,7 @@ def tend(
         samples_ramp: The ramp's envelope for this turn, overriding `_steward.yaml`. A narrower range brings running tasks back inside it.
         sync: Where to propagate the workspace this turn, overriding `_steward.yaml`. `False` propagates nowhere; `None` defers to the file, which itself defaults to the log directory.
         notification: Where Steward posts this turn, overriding `_steward.yaml`. `False` silences Steward and never the fleet; `None` defers to the file, then to `INSPECT_EVAL_NOTIFICATION`. Settled before anything spawns, because it is also the channel every worker this turn starts will inherit (`_notify.channel`).
+        scan_model: The model scanners use this turn, overriding `_steward.yaml`. `False` configures none — scanners fall to each sample's own model; `None` defers to the file, then to `SCOUT_SCAN_MODEL`. Settled before anything spawns, the way `notification` is and for the same reason (`_scan.model`).
         break_stale: Kill a wedged claim holder and take the claim from it.
         claim: A claim the caller already holds, to run this turn under instead of taking one. For `launch`, whose whole composition — capture, commit, arm, tend — is one span of single-writer work: a launch that released before its own first turn would be refused by it, or worse, would let a timer firing in the gap spawn workers for tasks the commit had just orphaned. Released by the caller, not here, because the caller's work is not over.
 
@@ -297,6 +301,7 @@ def tend(
             samples_ramp=samples_ramp,
             sync=sync,
             notification=notification,
+            scan_model=scan_model,
         )
 
     outcome = acquire(workspace.claim, command="tend", break_stale=break_stale)
@@ -313,6 +318,7 @@ def tend(
             samples_ramp=samples_ramp,
             sync=sync,
             notification=notification,
+            scan_model=scan_model,
         )
 
 
@@ -326,6 +332,7 @@ def _tend(
     samples_ramp: tuple[int, int] | bool | None,
     sync: str | bool | None = None,
     notification: str | bool | None = None,
+    scan_model: str | bool | None = None,
 ) -> TendResult:
     """One turn, with the claim already in hand however it got there."""
     # inside the claim, because resolving these can *write* — a degraded
@@ -341,6 +348,7 @@ def _tend(
         samples_ramp=samples_ramp,
         sync=sync,
         notification=notification,
+        scan_model=scan_model,
         execute=True,
     )
     if claim.broke is not None:
@@ -648,6 +656,12 @@ class _Settings:
     The two come apart in exactly one case and it is the one that matters: `--no-notification` beside a `notification:` in `_steward.yaml` silences Steward and must still reach the fleet, because a worker's notifications are blocking prompts (`_notify.channel.establish_channel`). Everywhere else this is the same value as `notification`.
     """
 
+    scan_model: str | bool | None = None
+    """The model scanners use, `False` for none configured, or `None` where the spellings say nothing.
+
+    Unresolved, like `notification` and on its pattern exactly: the last rung is `SCOUT_SCAN_MODEL`, and reading it belongs to `_scan.model`, which owns both directions of that reflexive relationship. Through a degraded turn the fleet keeps scanning, but with whatever spellings survive: a `_steward.yaml` that will not parse takes its `scan_model:` down with it, and a scheduled turn — no flag to say otherwise — falls to `STEWARD_SCAN_MODEL`, then the ambient default. Accepted rather than engineered around: the ambient default is each sample's own model, and a broken file is already the turn's headline.
+    """
+
     policies: list[str] = field(default_factory=list[str])
     """The standing rules in force, from whichever source expressed them.
 
@@ -674,6 +688,11 @@ def _turn(
     channel = establish_channel(
         workspace, notification=settings.notification, fleet=settings.channel
     )
+    # beside the channel and for its reason: this is the other value every
+    # worker this turn spawns inherits from this process's environment, and
+    # settling it late would leave part of a fleet scanning with the shell's
+    # answer rather than the workspace's
+    establish_scan_model(settings.scan_model)
     drift = _drifted(workspace, manifest)
     log_dir = _log_dir(workspace, manifest)
 
@@ -1160,6 +1179,9 @@ def _fleet(workspace: Workspace, manifest: Manifest, log_dir: str) -> Fleet:
         cwd=workspace.root,
         args=manifest.source.args or None,
         overrides=manifest.overrides,
+        # from the manifest, never this turn's directives: the merge was
+        # settled and verified at launch (`_scan.bracket`)
+        scanners=manifest.scan.injected if manifest.scan is not None else None,
     )
 
 
@@ -1187,6 +1209,7 @@ def _settings(
     execute: bool,
     sync: str | bool | None = None,
     notification: str | bool | None = None,
+    scan_model: str | bool | None = None,
 ) -> _Settings:
     """What to operate under, degrading to the last known good where it must.
 
@@ -1273,6 +1296,17 @@ def _settings(
                 if directives is not None
                 else declared_notification(os.environ)
             ),
+            # the same standing as the channel: where the file is what failed,
+            # the spelling the edit could not have damaged still answers
+            scan_model=(
+                scan_model
+                if scan_model is not None
+                else (
+                    directives.scan_model
+                    if directives is not None
+                    else declared_scan_model(os.environ)
+                )
+            ),
         )
 
     return _Settings(
@@ -1297,6 +1331,7 @@ def _settings(
         if notification is not None
         else directives.notification,
         channel=directives.notification,
+        scan_model=scan_model if scan_model is not None else directives.scan_model,
     )
 
 

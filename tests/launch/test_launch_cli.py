@@ -392,22 +392,79 @@ def test_a_relaunch_reuses_the_committed_arguments_and_type(
     assert capture.calls[-1].args == {"scale": 3}
 
 
-def test_a_definition_that_declares_a_scanner_is_refused_before_anything_is_written(
+def test_a_launch_lays_the_scan_directory_down_and_writes_the_scanners_down(
     workspace: Workspace, capture: FakeCapture
 ) -> None:
-    """Refused here rather than by every one of its workers failing identically.
+    """Scanning rides every run: the built-in scanner is injected unconditionally, the scan directory exists before the first turn could spawn a worker into it, and both the manifest and the journal say so.
 
-    Capture reports whether the definition scans precisely so a runner learns it
-    at enumeration time.
+    The manifest carrying `injected` is what lets a scheduled tend build every worker's selection; the journal naming the set is what lets `status` answer *what scans here*.
     """
-    capture.manifest = synth_manifest([ADDITION, ECHO], scanners=True)
+    result = run("--no-timer")
+    assert result.exit_code == 0
+
+    manifest = committed(workspace)
+    assert manifest.scan is not None
+    assert manifest.scan.injected is not None
+    assert set(manifest.scan.injected) == {"scoring_integrity"}
+
+    scan_id = (workspace.logs / ".eval-set-id").read_text().strip()
+    scan_json = workspace.logs / "scans" / f"scan_id={scan_id}" / "_scan.json"
+    spec = json.loads(scan_json.read_text())
+    assert set(spec["scanners"]) == {"scoring_integrity"}
+    assert spec["scan_id"] == scan_id
+
+    assert launched(workspace)[-1]["scanners"] == ["scoring_integrity"]
+
+
+def test_an_operator_scanner_colliding_with_the_builtin_refuses_before_anything_is_written(
+    workspace: Workspace, capture: FakeCapture
+) -> None:
+    """A collision cannot be resolved without silently changing what one of the two records, so it is refused at the launch — the one moment a human is present to rename it."""
+    workspace.directives.write_text(
+        "scanners:\n  scoring_integrity:\n    name: some_pkg/other\n"
+    )
 
     result = run("--no-timer")
 
     assert result.exit_code == 1
-    assert "scanner" in result.output
+    assert "scoring_integrity" in result.output
     assert result.exception is None or isinstance(result.exception, SystemExit)
     assert launched(workspace) == []
+
+
+def test_a_relaunch_admits_added_scanners_and_refuses_changed_ones(
+    workspace: Workspace, capture: FakeCapture
+) -> None:
+    """The scan directory is the witness: an added scanner records from here forward, a changed one would silently change what its recorded rows mean and refuses.
+
+    Keyed off the directory beside the logs rather than `.steward/`, which the design tells people they may delete.
+    """
+    assert run("--no-timer").exit_code == 0
+
+    # an added scanner is admitted, and the merged spec on disk grows
+    workspace.directives.write_text("scanners:\n  mine:\n    name: some_pkg/mine\n")
+    assert run("--no-timer").exit_code == 0
+    scan_id = (workspace.logs / ".eval-set-id").read_text().strip()
+    scan_json = workspace.logs / "scans" / f"scan_id={scan_id}" / "_scan.json"
+    assert set(json.loads(scan_json.read_text())["scanners"]) == {
+        "scoring_integrity",
+        "mine",
+    }
+
+    # the same name with different substance is a different scanner
+    workspace.directives.write_text(
+        "scanners:\n  mine:\n    name: some_pkg/mine\n    params:\n      x: 1\n"
+    )
+    result = run("--no-timer")
+    assert result.exit_code == 1
+    assert "mine" in result.output
+    assert result.exception is None or isinstance(result.exception, SystemExit)
+
+    # and dropping it again is a removal, refused on the same grounds
+    workspace.directives.write_text("")
+    result = run("--no-timer")
+    assert result.exit_code == 1
+    assert "mine" in result.output
 
 
 def test_the_credentials_check_refuses_before_the_capture(

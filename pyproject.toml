@@ -136,16 +136,20 @@ allow-direct-references = true
 
 [tool.uv]
 managed = true
+# scout's own dependencies pin `inspect-ai @ git+...@main`, which uv reads as
+# a distinct (and thus conflicting) URL requirement even when the source below
+# names the same branch — the override lets the source answer alone
+override-dependencies = ["inspect-ai"]
 
-# TEMPORARY: a local checkout, because the version-5 selection facets
-# (`registry_name`, `args_hash`) and the early pruning that reads them are not
-# on inspect_ai main yet. Point this back at
-# `{ git = "https://github.com/UKGovernmentBEIS/inspect_ai", branch = "main" }`
-# once they merge — nothing else here depends on the checkout, and a launch
-# will refuse loudly against an older inspect rather than misbehave, since a v5
-# selection document fails its version gate.
+# TEMPORARY: both pinned to main until releases carry what this branch needs —
+# inspect_ai's record-only selection scanning (selection v7 / capture v3, the
+# ambient scan-model default) and inspect_scout's unique summary tmp names
+# (the released wheel's fixed name lets concurrent workers error each other's
+# samples). A launch against an older inspect refuses loudly rather than
+# misbehaving: an unknown selection version fails its gate.
 [tool.uv.sources]
-inspect-ai = { path = "../../UKGovernmentBEIS/inspect_ai", editable = true }
+inspect-ai = { git = "https://github.com/UKGovernmentBEIS/inspect_ai", branch = "main" }
+inspect-scout = { git = "https://github.com/meridianlabs-ai/inspect_scout", branch = "main" }
 
 [tool.ruff]
 extend-exclude = ["docs"]

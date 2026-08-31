@@ -36,6 +36,13 @@ from .._evalset.manifest import (
 )
 from .._evalset.observe import ObservedLogs, observe_logs
 from .._evalset.read import ReadEvalSetError, read_eval_set
+from .._scan import (
+    ScanError,
+    initialize_scan,
+    merged_scanners,
+    scan_material,
+    verify_scan,
+)
 from .._schedule import RunningWorker
 from .._tend import TendResult, tend
 from .._timer import (
@@ -46,7 +53,13 @@ from .._timer import (
     explain_env,
     unavailable_credentials,
 )
-from .._worker import Stop, StopRequest, resolve_inflight, stop_workers
+from .._worker import (
+    Stop,
+    StopRequest,
+    resolve_eval_set_id,
+    resolve_inflight,
+    stop_workers,
+)
 from .._workspace import (
     LAUNCHED,
     LOG_DIR,
@@ -94,6 +107,9 @@ class Launch:
     disarmed: str | None = None
     """The scheduler a `--no-timer` launch *removed*, or `None` where there was nothing to remove. Skipping the arming is not the same act as ending the supervision, and on a re-launch only the second one is what was asked for."""
 
+    scan_dir: str | None = None
+    """The scan directory this launch initialized, or `None` where the launch stopped at the gate. Workers refuse to record without it, which is why laying it down is the launch's job rather than the first turn's discovery."""
+
     restored: list[str] = field(default_factory=list[str])
     """Logs moved back out of the archive, by their new location."""
 
@@ -125,6 +141,7 @@ def launch(
     tend_interval: int | None = None,
     sync: str | bool | None = None,
     notification: str | bool | None = None,
+    scan_model: str | bool | None = None,
     break_stale: bool = True,
 ) -> Launch | Held:
     """Capture a definition, commit it as desired state, arm a timer, and tend once.
@@ -146,6 +163,7 @@ def launch(
         tend_interval: Seconds between scheduled tends, overriding `_steward.yaml`. Already parsed — the flag is validated at the door.
         sync: Where to propagate the workspace, overriding `_steward.yaml`. `False` propagates nowhere; `None` defers to the file, which itself defaults to the log directory. For this launch's own turn only — every later tend reads the file again, because unlike the overrides this is not a property of the run.
         notification: Where Steward posts, overriding `_steward.yaml`. `False` silences Steward's own posts and never the fleet's, whose notifications are blocking human-in-the-loop moments. For this launch's own turn only, like `sync` — the durable spelling is the file key, which is the one still there at 02:00.
+        scan_model: The model scanners use, overriding `_steward.yaml`. `False` configures none, leaving scanners on each sample's own model. For this launch's own turn only, like `notification` and on its pattern — every later tend resolves the file key again (`_scan.model`).
         break_stale: Kill a wedged claim holder and take the claim from it.
 
     Returns:
@@ -207,6 +225,8 @@ def launch(
             samples_ramp=samples_ramp,
             sync=sync,
             notification=notification,
+            scan_model=scan_model,
+            scanners=directives.scanners,
         )
 
 
@@ -229,6 +249,8 @@ def _launch(
     samples_ramp: tuple[int, int] | bool | None,
     sync: str | bool | None,
     notification: str | bool | None,
+    scan_model: str | bool | None,
+    scanners: dict[str, Any] | None,
 ) -> Launch:
     """The launch itself, with the claim in hand for the whole of it."""
     committed = _committed(workspace)
@@ -241,7 +263,14 @@ def _launch(
         else (committed.source.type if committed else None),
         overrides=overrides if not reuse_overrides else _prior_overrides(committed),
     )
-    _refuse_scanners(manifest)
+    # the merge is settled here, at the one moment capture's word and the
+    # operator's are both in hand, and committed with the manifest: every
+    # later tend injects exactly these (`Manifest.scan`)
+    try:
+        scan = scan_material(manifest.scan, scanners)
+    except ScanError as ex:
+        raise LaunchError(str(ex)) from ex
+    manifest = manifest.model_copy(update={"scan": scan})
 
     # resolved here and nowhere else, then carried by the manifest: a tend
     # re-deriving it would be re-reading an environment a scheduler does not
@@ -254,6 +283,26 @@ def _launch(
     # edit or a moved `log_root` has moved it, the difference is the whole of
     # what the delta would otherwise miss
     previous = _previous(workspace, committed, log_dir)
+
+    # before the gate because it is a refusal and refusals come first; keyed
+    # off the scan directory itself rather than `.steward/`, which is
+    # deletable while the rows beside the logs are not
+    try:
+        verify_scan(
+            scan,
+            log_dir=log_dir,
+            eval_set_id=manifest.eval_set_id,
+            committed=committed.scan if committed is not None else None,
+            committed_log_dir=previous,
+        )
+    except ScanError as ex:
+        raise LaunchError(str(ex)) from ex
+    except OSError as ex:
+        raise LaunchError(
+            f"the run's scan directory could not be read, so whether this "
+            f"launch's scanners agree with what is already recorded is "
+            f"unknown: {ex}"
+        ) from ex
 
     inflight = resolve_inflight(workspace.inflight, workspace.workers)
     logs = _observe(log_dir)
@@ -282,6 +331,19 @@ def _launch(
     restored = _restore(workspace, delta, log_dir, failures)
     stopped = _stop(workspace, delta, inflight.running, logs, failures)
 
+    # after the restore, keeping all `log_dir` mutation contiguous, and
+    # before the first tend spawns anything: workers refuse to record into a
+    # scan directory that does not exist, so a failure here fails the launch
+    # rather than every worker identically
+    scan_id = resolve_eval_set_id(log_dir, manifest.eval_set_id)
+    try:
+        scan_dir = initialize_scan(scan, log_dir=log_dir, scan_id=scan_id)
+    except OSError as ex:
+        raise LaunchError(
+            f"the manifest is committed but the scan directory could not be "
+            f"initialized, and workers refuse to record without it: {ex}"
+        ) from ex
+
     armed, disarmed, refused = _supervise(workspace, interval, timer=timer)
 
     # after the arming so it can name the scheduler, and before the tend so
@@ -293,6 +355,7 @@ def _launch(
         tasks=len(manifest.tasks),
         timer=armed.scheduler if armed is not None else None,
         log_store=log_store,
+        scanners=sorted(merged_scanners(scan)),
     )
     if refused is not None:
         raise LaunchError(refused)
@@ -304,6 +367,7 @@ def _launch(
         samples_ramp=samples_ramp,
         sync=sync,
         notification=notification,
+        scan_model=scan_model,
         claim=claim,
     )
     return Launch(
@@ -312,6 +376,7 @@ def _launch(
         committed=True,
         armed=armed,
         disarmed=disarmed,
+        scan_dir=scan_dir,
         restored=restored,
         stopped=stopped,
         # `tend` cannot refuse a claim it was handed, so the union is only
@@ -367,21 +432,6 @@ def _capture(
     return manifest.model_copy(
         update={"source": manifest.source.model_copy(update={"path": str(recorded)})}
     )
-
-
-def _refuse_scanners(manifest: Manifest) -> None:
-    """Stop a definition that scans, before any of its workers would.
-
-    Selection mode rejects scanners outright: one scan directory is shared by a whole eval set and its bookkeeping assumes a single writer. Capture reports whether the definition declares one precisely so a runner learns it here rather than from every worker failing identically at its `eval_set()` boundary (configuration.md, *Flow's store*).
-    """
-    if manifest.options.get("scanners") is True:
-        raise LaunchError(
-            "this definition declares a scanner, which cannot run under "
-            "Steward: one scan directory is shared by a whole eval set and its "
-            "bookkeeping assumes a single writer, so concurrent workers would "
-            "race in it. Remove the scanner from the definition and scan the "
-            "log directory afterwards instead"
-        )
 
 
 def _committed(workspace: Workspace) -> Manifest | None:

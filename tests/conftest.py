@@ -36,6 +36,9 @@ def no_worker_outlives_its_test(tmp_path: Path) -> Iterator[None]:
 CHANNELS = ("STEWARD_NOTIFICATION", "INSPECT_EVAL_NOTIFICATION")
 """The two spellings of a notification channel, which no test may inherit."""
 
+SCAN_MODELS = ("STEWARD_SCAN_MODEL", "SCOUT_SCAN_MODEL")
+"""The two spellings of a scan-side model, kept out for the same reasons."""
+
 
 @pytest.fixture(autouse=True)
 def no_ambient_channel(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -46,8 +49,10 @@ def no_ambient_channel(monkeypatch: pytest.MonkeyPatch) -> None:
     The tests that assert Steward *stays silent* fail, because a variable outranks the file by design — so `notification: false` in a fixture's `_steward.yaml` is correctly overridden by a value the test never wrote and cannot see.
 
     And a test that posts posts **to the real channel**. `establish_channel` falls back to the environment precisely so that declaring the channel inspect's way works, which means a CLI test that resolves one would reach whatever Slack workspace the developer configured. Every test that wants a channel sets its own.
+
+    The scan-model spellings are cleared on the same grounds: `establish_scan_model` is reflexive with `SCOUT_SCAN_MODEL` by design, so an ambient value would configure a real (billed) model into any test that scans.
     """
-    for name in CHANNELS:
+    for name in CHANNELS + SCAN_MODELS:
         monkeypatch.delenv(name, raising=False)
 
 

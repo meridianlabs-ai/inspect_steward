@@ -106,6 +106,12 @@ REFUSED: dict[str, str] = {
     ),
     "notify": "`notification`, which is what it is called here",
     "store": "`log_store`, which is what it is now called",
+    # the singular is the definition's word; the plural key beside it says
+    # something the definition cannot -- scan with these *too*
+    "scanner": (
+        f"{_DEFINITION} — or `scanners` here, to scan in addition to whatever "
+        f"the definition declares"
+    ),
 }
 """Keys that belong somewhere else, and where.
 
@@ -248,6 +254,63 @@ class Directives(BaseModel):
                 "is `false` now, since `none` reads as a target called none"
             )
         return value
+
+    scan_model: str | bool | None = Field(default=None)
+    """The model scanners use, `false` for none configured, or `None` for no preference.
+
+    The online path resolves a scanner's model as the definition's own `EvalScannerConfig.model`, then `SCOUT_SCAN_MODEL`, then the sample's own ambient context — the model under evaluation, or a "none"-model eval's first model role. This key is the durable spelling of the second rung: it reaches every worker as an exported `SCOUT_SCAN_MODEL` (`_scan.model.establish_scan_model`), which leaves the definition's explicit choice winning, exactly as the eval-properties rule wants — and leaves an unconfigured deployment scanning with the model already doing the work, rather than raising. The one eval that *needs* this key is one with no model and no roles at all, where a scanner's dispatch otherwise records a scan error asking for it by name.
+
+    **Reflexive with scout's own variable, the way `notification` is with inspect's.** Either spelling configures scanning; where both are set Steward's wins by overwriting the export, since the fleet agreeing with Steward matters more than which was set first. `false` clears an ambient `SCOUT_SCAN_MODEL` from what workers inherit — the one thing only Steward can say, since the variable itself has no spelling for *not that*.
+
+    Admitted by the same test as `notification`: which model grades scans is a property of the deployment (whose keys, whose budget), and `eval_set()` knows no such word — the definition's spelling lives inside its `scanner` argument and is untouched.
+    """
+
+    @field_validator("scan_model", mode="before")
+    @classmethod
+    def _scan_model(cls, value: object) -> object:
+        """A model name, or `false`. Shaped like `notification` and refused the same way."""
+        if value is True:
+            raise ValueError(
+                "should be a model name (e.g. `openai/gpt-5-nano`), or `false` "
+                "to configure none — `true` says nothing about which"
+            )
+        if isinstance(value, str) and not value.strip():
+            raise ValueError("should be a model name, or `false` — not an empty value")
+        if value == "none":
+            raise ValueError(
+                "is `false` now, since `none` reads as a model called none"
+            )
+        return value
+
+    scanners: dict[str, dict[str, Any]] | None = Field(default=None)
+    """Scanners this workspace runs *in addition to* whatever the definition declares, or `None` for none.
+
+    Scout `ScannerSpec` references keyed by scanner name — a registry `name`, plus optional `params` and `file` — the same form scout's own YAML configs use. Steward merges them with the definition's scanners and its own built-in one at launch, writes the merged spec into the scan directory, and carries them to every worker in its selection document; a name collision with the definition's scanners refuses at launch.
+
+    **This key looks like it breaks the rule above, and passes it narrowly.** `eval_set(scanner=...)` is the definition's word — but what it says is *scan with these*, and what this key says is *scan with these too*, a merge no `eval_set()` argument can express. The same shape of argument admitted `max_workers`: the fan-out is Steward's invention, and so is running the operator's detectors over another author's eval. The singular `scanner` is refused by name, so the definition's word stays the definition's.
+    """
+
+    @field_validator("scanners", mode="before")
+    @classmethod
+    def _scanners(cls, value: object) -> object:
+        """A mapping of name to spec. Entries are validated per entry, like `policies`, and the specs themselves are scout's to validate at realization.
+
+        An empty mapping is a workspace that wrote `scanners:` and stopped, which reads as `None` rather than as an instruction to inject nothing.
+        """
+        if not isinstance(value, dict):
+            return value
+        entries = cast(dict[object, object], value)
+        for name, entry in entries.items():
+            if not isinstance(name, str) or not name.strip():
+                raise ValueError(
+                    f"should map scanner names to specs — {name!r} is not a name"
+                )
+            if not isinstance(entry, dict):
+                raise ValueError(
+                    f"should map scanner names to specs — `{name}` is "
+                    f"{type(entry).__name__} rather than a mapping"
+                )
+        return entries or None
 
     log_root: str | bool | None = Field(default=None)
     """The root this machine keeps eval logs under, `false` for none, or `None` for no preference.
@@ -571,6 +634,25 @@ def declared_notification(environ: Mapping[str, str]) -> str | bool | None:
         # answers here too -- a second reading of the same variable is a second
         # set of rules waiting to disagree with the first
         return cast("str | bool | None", parse_setting("notification", raw))
+    except DirectivesError:
+        return None
+
+
+def declared_scan_model(environ: Mapping[str, str]) -> str | bool | None:
+    """`STEWARD_SCAN_MODEL` alone, for a caller that has no `Directives` to ask.
+
+    The `declared_notification` twin, for the same path and on the same terms: only reached where `_steward.yaml` would not parse, never raising, with an unusable value reading as *no preference* — which leaves `SCOUT_SCAN_MODEL` (read by `establish_scan_model`) to answer.
+
+    Args:
+        environ: The environment to read, normally `os.environ`.
+
+    Returns:
+        A model, `False` where the operator declined, or `None` where the variable is unset, empty, or unusable.
+    """
+    if not (raw := environ.get(f"{PREFIX}SCAN_MODEL", "")).strip():
+        return None
+    try:
+        return cast("str | bool | None", parse_setting("scan_model", raw))
     except DirectivesError:
         return None
 

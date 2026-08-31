@@ -158,3 +158,86 @@ def test_a_run_converges_and_then_stays_converged(
     assert relaunched.turn is not None
     assert (relaunched.turn.spawned, relaunched.turn.archived) == ([], [])
     assert len(list_eval_logs(str(workspace.logs))) == 2
+
+
+def test_scanning_rides_the_workers_and_a_relaunch_attaches(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Online scanning, closed once for real: the bracket the launch lays down and the rows the workers record are about the same directory.
+
+    The layers are otherwise tested against fixtures of each other's shape — the bracket against hand-written `_scan.json`s (`tests/scan/test_bracket.py`), the worker against injected specs (upstream's selection suite) — and what only a real fleet shows is that they agree: the spec the launch writes is the one two concurrent workers find, the definition's scanner and both injected ones record one buffer row per transcript, and a re-launch attaches to the directory rather than resetting it.
+
+    **Budget: two launches** — one capture and two workers, then a re-launch costing a second capture and no workers.
+    """
+    import json
+
+    from inspect_scout import Summary
+    from inspect_scout._recorder.buffer import RecorderBuffer
+    from inspect_steward._scan import finalize_scan
+
+    fake_cron(monkeypatch)
+    clear_credentials(monkeypatch)
+    create_workspace(tmp_path, git=False)
+    workspace = Workspace.at(tmp_path)
+    definition = workspace.root / "evalset.py"
+    shutil.copy(FIXTURES / "scanning_evalset.py", definition)
+
+    started = launch(workspace, definition)
+    assert isinstance(started, Launch), f"refused by {started}"
+    assert started.turn is not None
+    assert len(started.turn.spawned) == 2
+
+    # the bracket precedes the fleet: the merged spec — the definition's own
+    # scanner beside Steward's built-in — was on disk before any worker started
+    assert started.scan_dir is not None
+    scan_dir = Path(started.scan_dir)
+    spec = json.loads((scan_dir / "_scan.json").read_text())
+    assert set(spec["scanners"]) == {"transcript_echo", "scoring_integrity"}
+    committed = started.manifest.scan
+    assert committed is not None and committed.injected is not None
+    assert set(committed.injected) == {"scoring_integrity"}
+
+    settle(workspace)
+    finished = turn(workspace)
+    assert finished.summary.states["complete"] == 2
+
+    # record-only workers: one buffer row per transcript per scanner (2
+    # addition samples + 1 echo sample × 2 epochs), from two concurrent
+    # writers, and no finalize artifacts — the buffer still holds the rows
+    # because folding them forward is the tend's job, not any worker's
+    def stems(scanner: str) -> set[str]:
+        sdir = RecorderBuffer.buffer_dir(str(scan_dir)) / f"scanner={scanner}"
+        return {p.stem for p in sdir.glob("*.parquet")} if sdir.exists() else set()
+
+    echoed = stems("transcript_echo")
+    assert len(echoed) == 4
+    # the built-in dispatched for every transcript too, reviewing with the
+    # ambient model under evaluation (mockllm) — no scan model is configured
+    assert stems("scoring_integrity") == echoed
+
+    # a re-launch attaches: same directory, same spec, rows undisturbed
+    relaunched = launch(workspace, definition)
+    assert isinstance(relaunched, Launch)
+    assert relaunched.committed is True
+    assert relaunched.scan_dir == started.scan_dir
+    assert set(json.loads((scan_dir / "_scan.json").read_text())["scanners"]) == {
+        "transcript_echo",
+        "scoring_integrity",
+    }
+    assert stems("transcript_echo") == echoed
+
+    # the terminal act: fold, prune, and a summary derived from the rows.
+    # This is where the buffer's accumulated `_summary.json` would lie —
+    # each of the two workers persisted only its own counts, last writer
+    # winning — and the rebuild replaces it with what the compacted rows say
+    summary = finalize_scan(
+        log_dir=str(workspace.logs),
+        scan_id=json.loads((scan_dir / "_scan.json").read_text())["scan_id"],
+    )
+    assert set(summary.scanners) == {"transcript_echo", "scoring_integrity"}
+    assert all(scanner.scans == 4 for scanner in summary.scanners.values())
+    echo_summary = summary.scanners["transcript_echo"]
+    assert (echo_summary.results, echo_summary.errors) == (4, 0)
+    # and the file beside the results says exactly what was returned
+    on_disk = json.loads((scan_dir / "_summary.json").read_text())
+    assert Summary.model_validate(on_disk) == summary

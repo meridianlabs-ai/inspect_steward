@@ -13,6 +13,7 @@ from .display import compute_display_keys
 from .manifest import (
     MANIFEST_VERSION,
     Manifest,
+    ManifestScan,
     ManifestSource,
     ManifestTask,
     definition_hash,
@@ -119,6 +120,11 @@ def read_eval_set(
         ),
         options=capture.options,
         overrides=capture.overrides,
+        scan=(
+            ManifestScan(spec=capture.scan.spec, scans=capture.scan.scans)
+            if capture.scan is not None
+            else None
+        ),
         tasks=[
             ManifestTask(**task.model_dump(), key=key)
             for task, key in zip(capture.tasks, keys, strict=True)

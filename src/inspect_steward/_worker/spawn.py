@@ -117,6 +117,12 @@ class Fleet:
     Carried into every worker's selection so that the fleet runs what the manifest was enumerated under. It comes from the manifest rather than from this turn's environment for the reason the manifest exists: an 02:00 tend inherits no shell, and a worker running two epochs where the manifest counted one would make every progress figure wrong without failing anything.
     """
 
+    scanners: dict[str, dict[str, Any]] | None = None
+    """Scanners Steward injects beside the definition's own, as scout `ScannerSpec` dicts keyed by merge name (`Manifest.scan.injected`).
+
+    From the manifest rather than this turn's directives, for the reason `overrides` is: the merge was settled and verified at launch, so an edited `scanners:` key changes nothing until a re-launch verifies it — a worker recording under a set nobody verified would be writing rows the next launch then refuses.
+    """
+
     def spawn(self, action: SpawnWorker) -> SpawnedWorker:
         """Spawn a detached worker to run a share of the eval set.
 
@@ -167,6 +173,7 @@ class Fleet:
                 eval_set_id=self.eval_set_id,
                 log_dir=self.log_dir,
                 overrides=self.overrides,
+                scanners=self.scanners,
             ).model_dump_json(exclude_none=True, indent=2),
             encoding="utf-8",
         )
@@ -233,6 +240,7 @@ def worker_selection(
     eval_set_id: str,
     log_dir: str,
     overrides: EvalSetOverrides | None = None,
+    scanners: dict[str, dict[str, Any]] | None = None,
 ) -> EvalSetSelection:
     """Build the selection document for one worker.
 
@@ -245,6 +253,7 @@ def worker_selection(
         eval_set_id: Eval set id to stamp into the worker's logs.
         log_dir: Log directory for the worker.
         overrides: Inspect's arguments for the run, from the committed manifest. This worker's three own values are applied over them.
+        scanners: Scanners the worker realizes and merges with the definition's own — a selection field of its own rather than an override, because injection merges where an override replaces.
 
     Returns:
         The selection.
@@ -252,6 +261,7 @@ def worker_selection(
     return EvalSetSelection(
         version=EVAL_SET_SELECTION_VERSION,
         eval_set_id=eval_set_id,
+        scanners=scanners or None,
         tasks=[
             EvalSetSelectionTask(
                 identifier=task.identifier,

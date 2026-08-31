@@ -16,6 +16,7 @@ import click
 from .._evalset.detect import DefinitionType
 from .._launch import Change, Delta, Launch, LaunchError, launch
 from .._notify import INSPECT_NOTIFICATION, usable_channel
+from .._scan import merged_scanners
 from .._util.duration import format_duration
 from .._workspace import DirectivesError, Held, Workspace, read_directives
 from .options import (
@@ -168,6 +169,25 @@ _LABELS = {
         "on a person still asks."
     ),
 )
+@click.option(
+    "--scan-model",
+    type=Setting("scan_model"),
+    default=None,
+    metavar="MODEL",
+    help=(
+        "Model scanners use, for this launch's own turn. Reaches every worker "
+        f"too. {overrides('scan_model')}"
+    ),
+)
+@click.option(
+    "--no-scan-model",
+    is_flag=True,
+    default=False,
+    help=(
+        "Configure no scan model — scanners use each sample's own model under "
+        "evaluation."
+    ),
+)
 @shape_options
 @tend_interval_option
 @sync_options
@@ -200,6 +220,8 @@ def launch_command(
     no_log_store: bool,
     notification: str | bool | None,
     no_notification: bool,
+    scan_model: str | bool | None,
+    no_scan_model: bool,
     max_workers: int | None,
     stall_after: int | None,
     samples_ramp: tuple[int, int] | bool | None,
@@ -248,6 +270,11 @@ def launch_command(
             "--no-notification asks to post nowhere, and --notification names "
             "a channel. Pass whichever you meant."
         )
+    if no_scan_model and scan_model is not None:
+        raise click.UsageError(
+            "--no-scan-model asks for no scan model, and --scan-model names "
+            "one. Pass whichever you meant."
+        )
 
     workspace = find_workspace()
     resolved = definition or _own_definition(workspace)
@@ -279,6 +306,7 @@ def launch_command(
             samples_ramp=samples_ramp,
             tend_interval=tend_interval,
             sync=False if no_sync else sync,
+            scan_model=False if no_scan_model else scan_model,
             break_stale=not no_break_claim,
         )
     except (LaunchError, *TURN_ERRORS) as ex:
@@ -393,6 +421,10 @@ def _echo_launch(result: Launch, root: Path) -> None:
         )
     else:
         click.echo("no timer armed — nothing will tend this run until somebody does")
+
+    if result.scan_dir is not None and result.manifest.scan is not None:
+        names = sorted(merged_scanners(result.manifest.scan))
+        click.echo(f"scanning online with {', '.join(names)} — {result.scan_dir}")
 
     if result.restored:
         click.echo(
