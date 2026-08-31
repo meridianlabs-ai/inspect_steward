@@ -349,11 +349,11 @@ That is a change from an earlier draft, and the reason is a race. A stored seque
 | `investigating` | a class the agent is working before proposing anything — the note is the hand-off that survives a session boundary | the agent |
 | `proposal` | the classes it covers, the action, and per-class evidence snapshotted from the fold — so the record shows what the human was shown, and a partial answer is possible | the agent |
 | `raised` | an item the agent has put in front of the owner who can decide it — its id, and what the agent did to surface it. Closes nothing: the item stays open and stays in the summary's decisions, but leaves the *agent's* queue | the agent |
-| `ruling` | the decision, its reasoning, and who made it — **one record per class**, even when made against a group | the human, via the agent |
+| `ruling` | the decision, its reasoning, and who made it — **one record per class**, even when made against a group. A standing `preauthorized:` pattern lands as the same record with `by: policy` naming the pattern | the human, via the agent; a tend, for pre-authorized patterns |
 | `acknowledged` | an item somebody looked at and accepted — its id, who decided, and why | `steward ack` |
 | `paused` / `resumed` | scheduling is held, or released — who decided, and (on `paused`) why | `steward pause` / `steward resume` |
 | `armed` / `disarmed` | a timer was installed or removed — which scheduler, at what interval, under what label | `steward timer`, and `launch` / `signoff` through it |
-| `action` | what was actually done — requeue, respawn, archive, pause — and its outcome | Steward |
+| `action` | what was actually done — requeue, respawn, archive, pause, `ruling_applied` (a rerun ruling carried out: warm requeues, landed invalidations, convergences) — and its outcome | Steward |
 | `resolution` | what became of a pending re-run: passed, or failed again — a failure also carries the dedupe entries for the instances it consumed. **Not** written for accepted dispositions, which derive from the ruling itself: an echo event is two records that can disagree | as observed |
 | `signoff` | terminal; who, when, the manifest digest, the exceptions accepted | the human |
 

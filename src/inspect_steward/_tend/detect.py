@@ -98,17 +98,27 @@ def detect(
 
 
 def task_health(observed: ObservedTasks) -> dict[str, TaskHealth]:
-    """Per task, whether it stands recovered — what resolution detection consumes."""
-    return {
-        task.identifier: TaskHealth(
-            complete=task.state is TaskState.COMPLETE,
+    """Per task, whether it stands recovered — what resolution detection consumes.
+
+    A task with an unreadable log is not recovered, whatever its headers say: the census is blind to whatever that log holds, and both pass branches trust the census's silence — the landed one that a new attempt carried no fresh failures, the warm one that nothing of the ruled population is left unapplied. A recovery the fold cannot verify waits for the read; the `unreadable` item is already saying why.
+    """
+    unreadable = {entry.location for entry in observed.unreadable}
+    health: dict[str, TaskHealth] = {}
+    for task in observed.tasks:
+        if task.task is None:
+            continue
+        complete = task.state is TaskState.COMPLETE and not any(
+            attempt.location in unreadable
+            for attempt in (task.current, *task.superseded)
+            if attempt is not None
+        )
+        health[task.identifier] = TaskHealth(
+            complete=complete,
             settled=task.current.created
-            if task.state is TaskState.COMPLETE and task.current is not None
+            if complete and task.current is not None
             else "",
         )
-        for task in observed.tasks
-        if task.task is not None
-    }
+    return health
 
 
 def _tracked(observed: ObservedTasks, logs: ObservedLogs) -> ObservedLogs:

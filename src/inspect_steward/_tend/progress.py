@@ -18,7 +18,14 @@ from .._evalset.observe import (
     TaskState,
 )
 from .._util.size import format_bytes
-from .._worker import LiveFleet, LiveParked, LiveTask, ProcessUsage, process_usage
+from .._worker import (
+    LiveFleet,
+    LiveParked,
+    LiveStuck,
+    LiveTask,
+    ProcessUsage,
+    process_usage,
+)
 
 SUFFIX = {
     "turns": "t",
@@ -122,6 +129,18 @@ class TaskProgress:
     """Samples of this task waiting on a person. Empty for anything not running.
 
     Not a column — a park is a *decision somebody owes*, so it becomes an item rather than a number in a table, and the row is only how it gets here. Carried per task rather than per worker because that is what a person recognises: a packed worker holding two parked tasks is two decisions.
+    """
+
+    stuck: LiveStuck = field(default_factory=LiveStuck)
+    """Samples of this task that have stopped moving. Empty for anything not running.
+
+    Like `parked`, not a column — a stuck sample is an escalation ladder somebody has to climb, so it becomes an item, and the row is only how it gets here.
+    """
+
+    task_id: str = ""
+    """The control channel's id for this task, or empty where no worker answered.
+
+    Here for the stuck item's ladder and nothing else: every `inspect ctl sample` directive takes this selector, so it is what turns *this sample stopped* into a command a reader can run.
     """
 
     pid: int = 0
@@ -273,6 +292,8 @@ def _row(task: TaskObservation, live: LiveTask | None) -> TaskProgress:
             else None
         ),
         parked=live.parked if answered and live is not None else LiveParked(),
+        stuck=live.stuck if answered and live is not None else LiveStuck(),
+        task_id=live.task_id if answered and live is not None else "",
         pid=live.pid if live is not None else 0,
         live=answered,
         unavailable=live.unavailable if live is not None else None,

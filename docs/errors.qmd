@@ -27,7 +27,7 @@ A ruling names one of the honest answers, each with a different consequence for 
 
 | Disposition | What it means | What happens to the data |
 |----|----|----|
-| `rerun` | The failure was transient; the samples should run again | Steward watches the re-run and records whether it passed or failed again |
+| `rerun` | The failure was transient; the samples should run again | Steward carries the re-run out — requeued in place while the task still runs, or the landed log invalidated for resume — and records whether it passed or failed again |
 | `exclude` | Leave the samples out of scoring | The report says how many were excluded, as a sentence you approved |
 | `zero` | Count the samples as failures | Scored zero, with the same visible mark |
 | `score` | The recorded results stand as they are | Scored as-is, marked |
@@ -38,7 +38,31 @@ Every ruling requires a `--reason` and a `--by` naming who decided, because the 
 
 The agent's part is grouping and legwork: `steward investigate` marks a class as being worked, and `steward propose` bundles related classes into one question with the evidence attached, which you answer whole or in part with `steward rule --proposal`. A ruling itself is always a person's.
 
+A ruling can also be made in advance. `preauthorized:` in `_steward.yaml` maps class patterns to dispositions — `"error:ReadTimeout@*": rerun` — and when a new class matches a pattern, the tend records an ordinary ruling with `by: policy` naming the pattern and applies it in the same turn. It is the same decision made earlier and it sits on the record like any other; **nothing is pre-authorized by default**, and after a pre-authorized re-run fails the pattern stops matching that class until a person has looked.
+
 To stop a run when error rates climb, write it as a policy rule — e.g. *"if more than 10% of the samples in a task error out, pause the run and notify me"* — which pauses the whole run reversibly rather than failing one task.
+
+## Stuck samples
+
+Between the two tiers sits a condition that is neither: a sample that is alive but not moving. A `bash` that never returns, a connection a silent peer holds open — nothing errors, nothing scores, and the task's clock keeps running. Steward keeps three names apart so each gets its own remedy: a **stuck** sample has stopped moving inside a healthy worker; a **stalled** task keeps failing its re-launches (below); a **wedged** Steward holds the run claim without progressing (killed and replaced by the next tend).
+
+Detection reads the live channel's own activity feed: a running sample whose last activity is older than `stuck_after` (default: 5 hours) is reported, one item per task, naming the samples and the tool call they are inside where one names it. The exclusions are what make the report trustworthy — streaming counts as activity, so a slow but healthy `generate` is never stuck; a sample parked on an approval or a question is waiting on you, not stuck; a provider backoff with a live deadline is waiting on purpose.
+
+`stuck_after` is a **reporting threshold, never a limit**: nothing is cancelled when it passes. The enforced budget for how long a sample may work belongs to the definition's own `working_limit` — which is why Steward refuses a `working_limit:` key in `_steward.yaml`.
+
+What to do about a stuck sample is an escalation ladder, cheapest rung first, and the item carries the applicable rung as an `inspect ctl` command ready to run:
+
+| Rung | Command | What it costs |
+|----|----|----|
+| Cancel the tool call | `inspect ctl sample cancel-tool-call TASK ID EPOCH` | The call fails inside the sample, which continues — the model sees the failure and works with it |
+| Cancel the sample | `inspect ctl sample cancel TASK ID EPOCH` | The sample stops; how it is recorded (`--action score|error|cancel`) is your call at the moment you run it |
+| Requeue the sample | `inspect ctl sample requeue TASK ID EPOCH` | Everything the sample did is discarded and it runs again from the start |
+
+A cancel is a request, and the feedback is explicit: when a cancellation was asked and the call still has not stopped, the item returns marked as such — *a cancel was asked and it did not stop* — which is the signal to climb a rung rather than ask again.
+
+The first rung can be granted in advance: `stuck_cancel: true` in `_steward.yaml` lets the agent cancel any stuck pending tool call itself, and a list (`stuck_cancel: [bash]`) admits only those tools. The higher rungs stay a person's — cancelling a sample records an outcome, and discarding work is not a call to pre-authorize.
+
+A stuck sample is **not an anomaly**: nothing has failed and there is nothing to rule on. It is a live condition in the tend queue — reported while it holds, gone when the sample moves.
 
 ## Task failures
 
@@ -48,7 +72,7 @@ Each failed attempt is also classed like a sample error is — on the exception 
 
 The limit exists because a structural failure re-runs to the same place at full price — a definition that will not import fails identically on attempt ten. Steward never retries past the limit on its own; raising `stall_after` in `_steward.yaml` is how you buy more patience for a genuinely flaky environment (a sandbox fleet earns more of it than a deterministic scorer bug).
 
-When a person rules on a stalled task — fixing the definition and re-launching, or invalidating samples for a re-run — the attempt history before that ruling is cleared: a decision to try again is made by the only party entitled to make one, and what happened before it no longer counts against the task.
+When a person rules `rerun`, the tend carries the ruling out: samples in a still-running task are requeued in place, and a landed log has exactly the ruled samples invalidated so the next turn re-launches it and re-runs them (reusing everything else). The attempt history before the ruling is cleared — a decision to try again is made by the only party entitled to make one, and what happened before it no longer counts against the task — and authorized re-runs are scheduled ahead of ordinary queued work.
 
 ## Where errors surface
 

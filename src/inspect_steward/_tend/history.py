@@ -201,7 +201,48 @@ def _action(payload: dict[str, object]) -> str:
     if action == "sync_restored":
         target = _text(payload, "target")
         return f"propagation{f' to {target}' if target else ''} recovered"
+    if action == "ruling_applied":
+        return _applied(payload)
     return action or ""
+
+
+def _applied(payload: dict[str, object]) -> str:
+    """One line for a rerun ruling the tend carried out.
+
+    The ruled line just above it says what was decided and by whom; this one says what was actually done about it — requeues into a live run, landed logs invalidated for resume, or the discovery that nothing was left to re-run. A deferral tail is provenance, not a promise: the remainder is recomputed next turn from the census, and this line only notes that some of it waited.
+    """
+    class_key = _text(payload, "class") or "an anomaly"
+    parts: list[str] = []
+    requeued = payload.get("requeued")
+    if isinstance(requeued, list) and requeued:
+        n = len(cast(list[object], requeued))
+        parts.append(f"requeued {n} sample{'s' if n != 1 else ''} in the live run")
+    invalidated = payload.get("invalidated")
+    if isinstance(invalidated, list) and invalidated:
+        entries = [
+            cast(dict[str, object], entry)
+            for entry in cast(list[object], invalidated)
+            if isinstance(entry, dict)
+        ]
+        logs = len(entries)
+        samples = sum(len(_strings(entry.get("uuids"))) for entry in entries)
+        where = f" across {logs} logs" if logs > 1 else ""
+        if samples:
+            parts.append(
+                f"invalidated {samples} landed sample{'s' if samples != 1 else ''}{where}"
+            )
+        elif logs:
+            parts.append(f"invalidated {logs} landed log{'s' if logs != 1 else ''}")
+    converged = _strings(payload.get("converged"))
+    if converged:
+        n = len(converged)
+        parts.append(f"found nothing left to re-run in {n} task{'s' if n != 1 else ''}")
+    deferred = payload.get("deferred")
+    if isinstance(deferred, list) and deferred:
+        n = len(cast(list[object], deferred))
+        parts.append(f"{n} deferred to the next turn")
+    what = f": {', '.join(parts)}" if parts else ""
+    return f"applied the rerun ruling on {class_key}{what}"
 
 
 def _ramp(payload: dict[str, object]) -> str:

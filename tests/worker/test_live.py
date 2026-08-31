@@ -16,6 +16,7 @@ import json
 import shutil
 import tempfile
 import threading
+import time
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
@@ -145,8 +146,12 @@ def worker(
             writer.close()
             return
         path = request.split(b" ")[1].decode()
-        found = path in table
-        body = json.dumps(table.get(path)).encode()
+        # exact match first so a fixture can pin the query string the client
+        # must send; the stripped fallback keeps every routes table that only
+        # cares about the resource working unchanged
+        key = path if path in table else path.split("?")[0]
+        found = key in table
+        body = json.dumps(table.get(key)).encode()
         writer.write(
             f"HTTP/1.1 {200 if found else 404} .\r\n"
             f"Content-Type: application/json\r\n"
@@ -300,6 +305,21 @@ def test_samples_waiting_on_a_person_are_counted_and_named(sockets: Path) -> Non
     assert task.parked.functions == ("bash", "python")
 
 
+def test_the_sample_listing_asks_for_every_row(sockets: Path) -> None:
+    # the endpoint's default caps the listing at 100 rows, and a stuck or
+    # parked sample past the cap would be invisible -- so the read must say
+    # `all=true`. The route here answers ONLY the query-pinned path: a client
+    # that dropped the query would 404 and lose its usage columns
+    pinned: Routes = {
+        route: body for route, body in WORKER.items() if "samples" not in route
+    }
+    pinned["/evals/E1/samples?all=true"] = SAMPLES
+    with worker(sockets / "w.sock", pinned) as target:
+        (task,) = read_fleet([target], NO_PACKING).tasks.values()
+
+    assert task.usage.turns == 8
+
+
 def test_a_worker_with_nothing_waiting_reports_no_park(sockets: Path) -> None:
     # the ordinary case, and the one that must not drift: a tool call is work,
     # and reporting it as a park would put a decision in front of somebody who
@@ -334,6 +354,136 @@ def test_a_worker_running_an_inspect_without_the_signal_reports_no_park(
 
     assert task.parked.total == 0
     assert task.samples.in_flight == 57
+
+
+# --- samples that have stopped moving -------------------------------------
+
+
+def moving(*rows: dict[str, object]) -> Routes:
+    """A worker whose running samples carry these rows verbatim."""
+    return dict(WORKER, **{"/evals/E1/samples": {"samples": list(rows)}})
+
+
+def row(
+    ago: float | None,
+    activity: dict[str, object] | None = None,
+    *,
+    sample_id: str = "s1",
+    epoch: int = 1,
+) -> dict[str, object]:
+    """One running sample whose last activity was `ago` seconds ago."""
+    entry: dict[str, object] = {
+        "status": "running",
+        "turn_count": 1,
+        "sample_id": sample_id,
+        "epoch": epoch,
+    }
+    if ago is not None:
+        entry["last_activity_at"] = time.time() - ago
+    if activity is not None:
+        entry["activity"] = activity
+    return entry
+
+
+def call(
+    function: str, *, id: str = "c1", cancel_requested: bool = False
+) -> dict[str, object]:
+    return {
+        "id": id,
+        "function": function,
+        "started_at": 1.0,
+        "cancel_requested": cancel_requested,
+    }
+
+
+def tool(*calls: dict[str, object]) -> dict[str, object]:
+    return {"type": "tool", "count": len(calls), "detail": "", "calls": list(calls)}
+
+
+GENERATE: dict[str, object] = {"type": "model", "count": 1, "detail": ""}
+
+
+def test_an_aged_tool_call_is_stuck_and_named_by_its_call(sockets: Path) -> None:
+    routes = moving(row(3600, tool(call("bash"))))
+    with worker(sockets / "w.sock", routes) as target:
+        (task,) = read_fleet([target], NO_PACKING, stuck_after=60).tasks.values()
+
+    assert task.stuck.count == 1
+    assert task.stuck.oldest_idle == pytest.approx(3600, abs=30)
+    (sample,) = task.stuck.samples
+    assert (sample.sample_id, sample.epoch) == ("s1", 1)
+    assert (sample.function, sample.call_id) == ("bash", "c1")
+    assert not task.stuck.asked
+
+
+def test_a_slow_but_streaming_generate_is_never_stuck(sockets: Path) -> None:
+    # a long generate that is still talking is healthy, and from this side
+    # "streaming" *is* "recent `last_activity_at`": upstream folds the pending
+    # ModelEvent's `last_progress_at` into that field per streamed chunk
+    # (inspect_ai `_control/state.py`, `_sample_row`), so a silent
+    # non-streaming call goes idle and a streaming one never does. This pins
+    # Steward's half — recent activity produces nothing, however old the call
+    with worker(sockets / "w.sock", moving(row(5, GENERATE))) as target:
+        (task,) = read_fleet([target], NO_PACKING, stuck_after=60).tasks.values()
+
+    assert task.stuck.count == 0
+
+
+def test_a_parked_sample_is_waiting_on_a_person_and_not_stuck(sockets: Path) -> None:
+    # the human branch of the classification leads upstream precisely so the
+    # two never conflate: a park however old is a decision owed, not a wedge
+    routes = moving(row(3600, approval("bash")), row(3600, QUESTION, sample_id="s2"))
+    with worker(sockets / "w.sock", routes) as target:
+        (task,) = read_fleet([target], NO_PACKING, stuck_after=60).tasks.values()
+
+    assert task.stuck.count == 0
+    assert task.parked.total == 2
+
+
+def test_a_backoff_is_progress_until_its_deadline_passes(sockets: Path) -> None:
+    ahead: dict[str, object] = {"type": "retry_wait", "deadline": time.time() + 300}
+    passed: dict[str, object] = {"type": "retry_wait", "deadline": time.time() - 300}
+    routes = moving(row(3600, ahead), row(3600, passed, sample_id="s2"))
+    with worker(sockets / "w.sock", routes) as target:
+        (task,) = read_fleet([target], NO_PACKING, stuck_after=60).tasks.values()
+
+    assert task.stuck.count == 1
+    assert task.stuck.samples[0].sample_id == "s2"
+
+
+def test_a_row_with_no_activity_record_cannot_be_read_as_idle(sockets: Path) -> None:
+    # an older inspect sends no `last_activity_at`; silence about activity is
+    # not evidence of its absence
+    with worker(sockets / "w.sock", moving(row(None, GENERATE))) as target:
+        (task,) = read_fleet([target], NO_PACKING, stuck_after=60).tasks.values()
+
+    assert task.stuck.count == 0
+
+
+def test_a_sample_wedged_on_two_calls_is_one_stuck_sample(sockets: Path) -> None:
+    routes = moving(row(3600, tool(call("bash"), call("python", id="c2"))))
+    with worker(sockets / "w.sock", routes) as target:
+        (task,) = read_fleet([target], NO_PACKING, stuck_after=60).tasks.values()
+
+    assert task.stuck.count == 1
+    assert [s.call_id for s in task.stuck.samples] == ["c1", "c2"]
+
+
+def test_asked_means_every_call_was_asked_and_none_stopped(sockets: Path) -> None:
+    asked = moving(row(3600, tool(call("bash", cancel_requested=True))))
+    with worker(sockets / "w.sock", asked) as target:
+        (task,) = read_fleet([target], NO_PACKING, stuck_after=60).tasks.values()
+    assert task.stuck.asked
+
+    # a call-less stuck sample was never askable, so nothing was asked
+    mixed = moving(
+        row(3600, tool(call("bash", cancel_requested=True))),
+        row(3600, GENERATE, sample_id="s2"),
+    )
+    with worker(sockets / "m.sock", mixed) as target:
+        (task,) = read_fleet([target], NO_PACKING, stuck_after=60).tasks.values()
+    assert task.stuck.count == 2
+    assert not task.stuck.asked
 
 
 # --- and when it does not -----------------------------------------------

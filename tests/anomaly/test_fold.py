@@ -5,14 +5,17 @@ The claims worth defending: replaying the journal reproduces state exactly (cras
 Everything here is synthesized events and instances — no files, no logs, no clock.
 """
 
+from dataclasses import replace
 from typing import Any
 
+from inspect_steward._anomaly.applied import Application, Applied
 from inspect_steward._anomaly.fold import (
     SAMPLE_CAP,
     Pending,
     TaskHealth,
     absorb,
     as_events,
+    covered_refs,
     read_anomalies,
 )
 from inspect_steward._anomaly.model import (
@@ -578,6 +581,45 @@ class TestRoutingAfterARuling:
         assert [p.fields.get("outcome") for p in pending] == ["reran_failed"]
         assert pending[0].fields["refs"] == ["taskA@w2"]
 
+    def test_a_score_reruns_failure_routes_by_the_task_not_the_census(self) -> None:
+        # a score ref names its attempt, and the invalidated attempt has left
+        # the census (uniform-zero reads the current attempt only) -- so
+        # membership reads off the window's evidence tasks, exactly as task
+        # windows do; the class key is already task-scoped. Routed by census
+        # refs, another all-zero result opened generation two while the ruled
+        # window sat RULED in silence, and the failed-rerun review never fired
+        cls = "score:zero:probe:abcd1234"
+        events = [
+            opened(cls, ts=T0, kind="score"),
+            ev(
+                INSTANCE,
+                T0,
+                **{
+                    "class": cls,
+                    "count": 1,
+                    "refs": ["taskA@ev1"],
+                    "tasks": ["taskA"],
+                },
+            ),
+            ruling(cls, ts=T1),
+        ]
+        again = Instance(
+            class_key=cls,
+            ref="taskA@ev2",
+            task="taskA",
+            location="logs/ev2.eval",
+            message="headline is 0.0 again",
+            attempt_created=T2,
+            eval_id="ev2",
+        )
+
+        pending = absorb(read_anomalies(events), [batch(again)], {})
+
+        assert [p.fields.get("outcome") for p in pending] == ["reran_failed"]
+        state = folded(events, pending)
+        assert [window.generation for window in state.open] == [1]
+        assert state.open[0].failed_resolutions == 1
+
     def test_a_reran_failure_is_not_news_on_the_following_turn(self) -> None:
         events = [
             opened(ts=T0),
@@ -734,3 +776,165 @@ class TestResolutionDetection:
         health = {"taskA": TaskHealth(complete=False)}
 
         assert absorb(read_anomalies(events), [], health) == []
+
+
+class TestWarmBoundaries:
+    """A warm requeue never moves the attempt instant, so its outcomes ride the applied fold."""
+
+    def applied(self, *applications: Application) -> Applied:
+        return Applied(by_class={CLASS: applications})
+
+    def test_a_warm_reruns_failure_routes_by_the_applied_record(self) -> None:
+        # the re-run keeps (sample_id, epoch) and mints a fresh uuid inside
+        # the same attempt, so `attempt_created` cannot route it -- the
+        # requeue record is what says this is the re-run failing again
+        events = [
+            opened(ts=T0),
+            instance(ts=T0, count=1, tasks=["taskA"]),
+            ruling(ts=T1),
+        ]
+        warm = self.applied(
+            Application(
+                ruling_ts=T1,
+                ts=T2,
+                requeued=frozenset({("taskA", "s1", 1)}),
+                tasks=frozenset({"taskA"}),
+            )
+        )
+        fresh = replace(
+            inst(sample_id="s1", created=T0), uuid="u-fresh", ref="ev1:s1:1:u-fresh"
+        )
+        census = [batch(inst(sample_id="s1", created=T0), fresh)]
+
+        pending = absorb(read_anomalies(events), census, {}, warm)
+
+        assert [p.fields.get("outcome") for p in pending] == ["reran_failed"]
+        assert folded(events, pending).open[0].failed_resolutions == 1
+
+    def test_one_tasks_warm_witness_does_not_excuse_the_other(self) -> None:
+        # the boundary is per task: a class spanning two tasks needs each one
+        # recovered on its own evidence
+        events = [
+            opened(ts=T0),
+            instance(
+                ts=T0,
+                count=2,
+                refs=[ref("s1"), ref("s2", eval_id="ev2")],
+                tasks=["taskA", "taskB"],
+            ),
+            ruling(ts=T1),
+        ]
+        census = [
+            batch(
+                inst(sample_id="s1", task="taskA", created=T0),
+                inst(eval_id="ev2", sample_id="s2", task="taskB", created=T0),
+            )
+        ]
+        # both tasks complete, neither with a post-ruling attempt: only the
+        # applied record can witness a recovery
+        health = {
+            "taskA": TaskHealth(complete=True, settled=T0),
+            "taskB": TaskHealth(complete=True, settled=T0),
+        }
+        one = Application(
+            ruling_ts=T1,
+            ts=T2,
+            requeued=frozenset({("taskA", "s1", 1)}),
+            tasks=frozenset({"taskA"}),
+        )
+        other = Application(
+            ruling_ts=T1,
+            ts=T2,
+            requeued=frozenset({("taskB", "s2", 1)}),
+            tasks=frozenset({"taskB"}),
+        )
+
+        partial = absorb(read_anomalies(events), census, health, self.applied(one))
+        whole = absorb(read_anomalies(events), census, health, self.applied(one, other))
+
+        assert partial == []
+        assert [p.fields.get("outcome") for p in whole] == ["reran_passed"]
+
+    def test_the_newest_resolution_guards_the_replaced_record_trap(self) -> None:
+        """A warm failure whose errored record a later manual re-run replaces.
+
+        The census is then clean, the task quiet and COMPLETE with an attempt
+        that postdates the ruling -- every other check reads recovered, and
+        this refusal is the only one standing. A fresh ruling re-arms it.
+        """
+        events = [
+            opened(ts=T0),
+            instance(ts=T0, count=1, tasks=["taskA"]),
+            ruling(ts=T1),
+            ev(
+                RESOLUTION,
+                T2,
+                **{
+                    "class": CLASS,
+                    "outcome": "reran_failed",
+                    "detail": "1 failed again after the re-run",
+                },
+            ),
+        ]
+        health = {"taskA": TaskHealth(complete=True, settled=T4)}
+
+        held = absorb(read_anomalies(events), [], health)
+        rearmed = absorb(read_anomalies([*events, ruling(ts=T3)]), [], health)
+
+        assert held == []
+        assert [p.fields.get("outcome") for p in rearmed] == ["reran_passed"]
+
+    def test_a_later_ruling_covers_the_failed_rerun_the_authorizing_one_never_does(
+        self,
+    ) -> None:
+        """A `reran_failed` ref joins the window's coverage — per ruling instant.
+
+        The regression: with membership read off `refs` alone, re-ruling after
+        a failed re-run found nothing applicable, so the failed sample never
+        re-ran and the window could pass with it still failed. The boundary
+        matters in both directions — the ruling that authorized the re-run
+        must never cover its own outcome (re-applying it would be an unruled
+        re-run), while the later ruling, made with the failure on the record,
+        covers exactly it.
+        """
+        failed = "ev1:s1:1:u-fresh"
+        events = [
+            opened(ts=T0),
+            instance(ts=T0, count=1, tasks=["taskA"]),
+            ruling(ts=T1),
+            ev(
+                RESOLUTION,
+                T2,
+                **{
+                    "class": CLASS,
+                    "outcome": "reran_failed",
+                    "detail": "1 failed again after the re-run",
+                    "refs": [failed],
+                },
+            ),
+            ruling(ts=T3),
+        ]
+
+        (window,) = read_anomalies(events).open
+
+        assert covered_refs(window, T1) == frozenset({ref("s1")})
+        assert covered_refs(window, T3) == frozenset({ref("s1"), failed})
+
+    def test_each_window_carries_exactly_what_it_absorbed(self) -> None:
+        # the window's refs are the ruled population: what its ruling covers,
+        # what the executor applies, what the report attributes -- so a ref
+        # belongs to the generation that absorbed it and to no other
+        events = [
+            opened(ts=T0),
+            instance(ts=T0, count=2),
+            ruling(ts=T1),
+            instance(ts=T2, refs=[ref("s9")]),
+        ]
+
+        state = read_anomalies(events)
+
+        gen1, gen2 = state.open
+        assert (gen1.generation, gen2.generation) == (1, 2)
+        assert gen1.refs == frozenset({ref("s1"), ref("s2")})
+        assert gen2.refs == frozenset({ref("s9")})
+        assert state.absorbed_refs[CLASS] == gen1.refs | gen2.refs

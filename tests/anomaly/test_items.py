@@ -166,20 +166,15 @@ def test_a_proposed_population_crossing_a_magnitude_changes_the_item(
     assert items[0].id == "anomaly:prop:prop-abcd1234:x10"
 
 
-def test_a_pending_rerun_is_the_agents_note_until_it_resolves(
-    tmp_path: Path,
-) -> None:
+def test_a_pending_rerun_is_machinery_and_not_an_item(tmp_path: Path) -> None:
+    # the tend applies the ruling itself, so a RULED window is work in motion
+    # rather than anybody's decision -- the anomalies block still reports it
+    # as awaiting the re-run, and only a failed outcome makes an item again
     workspace = erroring(tmp_path)
     turn(workspace)
     ruling(workspace, "rerun")
 
-    items = anomaly_items(workspace)
-
-    assert len(items) == 1
-    assert items[0].owner is Owner.AGENT
-    assert items[0].level is Level.INFO
-    assert items[0].id.endswith(":ruled")
-    assert "ruled rerun by kaia" in items[0].summary
+    assert anomaly_items(workspace) == []
 
 
 def test_a_failed_rerun_is_one_human_review_item(tmp_path: Path) -> None:

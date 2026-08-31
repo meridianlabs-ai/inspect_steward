@@ -65,6 +65,29 @@ class Outcome(StrEnum):
     RERAN_FAILED = "reran_failed"
 
 
+SAMPLE_MARKS = frozenset({Disposition.EXCLUDE, Disposition.ZERO, Disposition.SCORE})
+"""The dispositions that mark per-sample data — meaningful only where the residue is sample-shaped."""
+
+
+def honest(kind: str, disposition: Disposition) -> bool:
+    """Whether a disposition can honestly be recorded against a class of this kind.
+
+    The matrix `steward rule` and `propose` refuse on, and the one a policy ruling re-checks at application time — one definition, so a pattern in `_steward.yaml` cannot grant what a person could not type. Two rows: `accept` on an `error:` class is silent exclusion wearing a decision's clothes, and the three sample marks mean nothing where the residue is not sample-shaped.
+
+    Args:
+        kind: The class key's first segment — `error`, `limit`, `task`, or `score`.
+        disposition: The answer being considered.
+
+    Returns:
+        Whether recording it would be honest.
+    """
+    if disposition is Disposition.ACCEPT:
+        return kind != "error"
+    if disposition in SAMPLE_MARKS:
+        return kind in ("error", "limit")
+    return True
+
+
 @dataclass(frozen=True)
 class Evidence:
     """What one window absorbed, capped for the journal.
@@ -199,6 +222,16 @@ class Anomaly:
     failed_resolutions: int = 0
     """Re-runs this window that failed again — what re-arms the recurrence-review item."""
 
+    refs: frozenset[str] = frozenset()
+    """The content-derived ref of every instance this window absorbed — the window's full membership, rebuilt from its `instance` events at fold time.
+
+    What a ruling on this window covers, exactly. Attempt instants cannot say that: a failure appearing *after* the ruling inside the same still-running attempt predates nothing, opens the next generation, and must not be re-run under a decision that never saw it — so the executor's applicable set, the pass check's remainder, and the dispositions report all key on these refs instead. Distinct from `evidence.samples`, which is capped display material."""
+
+    failed_refs: dict[str, str] = field(default_factory=dict[str, str])
+    """Ref to resolution instant, for every re-run failure recorded against this window.
+
+    A re-run's failure replaces the record the ruling covered (a requeue supersedes the old row under a fresh uuid; a landed retry writes a new attempt), so its ref lives here rather than in `refs` — and it carries its instant because coverage is per ruling: the ruling that authorized the re-run must never re-apply to its own outcome, while a **later** ruling on this window covers exactly these refs (`fold.covered_refs`). Without this record, re-ruling after `reran_failed` would find nothing applicable and the window could pass without the failed sample ever re-running."""
+
     @property
     def effect(self) -> str:
         """The mark the report carries, from the ruling in force."""
@@ -260,8 +293,35 @@ class Anomalies:
         )
 
 
+def composed_effect(anomalies: Anomalies, key: str, decided: Disposition) -> str:
+    """The report-facing sentence a marking disposition composes when nobody wrote one.
+
+    One composition shared by `steward rule` and a policy ruling, so the sentence the record carries cannot depend on which path recorded it. Empty for the dispositions that mark nothing — `rerun` and `dismiss` — and for `accept`, whose effect only a person can write.
+
+    Args:
+        anomalies: The fold, for the class's open population.
+        key: The class being ruled.
+        decided: The disposition being recorded.
+
+    Returns:
+        The sentence, or empty where the disposition composes none.
+    """
+    if decided not in SAMPLE_MARKS:
+        return ""
+    count = sum(
+        anomaly.evidence.count for anomaly in anomalies.open if anomaly.class_key == key
+    )
+    plural = "" if count == 1 else "s"
+    if decided is Disposition.EXCLUDE:
+        return f"{count} sample{plural} excluded from scoring"
+    if decided is Disposition.ZERO:
+        return f"{count} sample{plural} scored zero"
+    return f"{count} sample{plural} scored as recorded"
+
+
 __all__ = [
     "ABSORBING",
+    "SAMPLE_MARKS",
     "TERMINAL",
     "Anomalies",
     "Anomaly",
@@ -273,4 +333,6 @@ __all__ = [
     "ProposalEvidence",
     "Resolution",
     "Ruling",
+    "composed_effect",
+    "honest",
 ]

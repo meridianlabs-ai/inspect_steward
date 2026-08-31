@@ -94,6 +94,7 @@ REFUSED: dict[str, str] = {
     "token_limit": _DEFINITION,
     "time_limit": _DEFINITION,
     "message_limit": _DEFINITION,
+    "working_limit": _DEFINITION,
     "fail_on_error": _DEFINITION,
     "retry_on_error": _DEFINITION,
     "max_samples": _DEFINITION,
@@ -150,6 +151,94 @@ class Directives(BaseModel):
     Passes the same test `max_workers` does: respawning a task is Steward's invention, and no `eval_set()` argument reaches it, so there is nothing here for a definition to contradict. How much patience a project's failures deserve is genuinely a standing property of the project — a flaky sandbox fleet earns more of it than a deterministic scorer bug does (`_schedule.reconcile._stalled`).
     """
 
+    stuck_after: int | None = Field(default=None, gt=0)
+    """Seconds a running sample may go without activity before it is reported stuck, or `None` for the default.
+
+    Written with a unit — `stuck_after: 5h` — and stored as seconds, exactly like `tend_interval`. Named to rhyme with `stall_after`, because the two are siblings: a *stalled* task's worker keeps dying, a *stuck* sample's worker is perfectly healthy and one call inside it never returns.
+
+    **A reporting threshold, never a limit.** Nothing is cancelled when it trips — a `stuck` item appears, carrying the `inspect ctl` line that would act. The enforced budget is the definition's `working_limit`, which is refused here by name; this key decides when a person hears about a sample the limit has not caught. Passes the admission test the same way `stall_after` does: watching a fleet for silence is Steward's invention, and no `eval_set()` argument reaches it. Default: `DEFAULT_STUCK_AFTER` (`_worker.live`), five hours.
+    """
+
+    stuck_cancel: bool | list[str] | None = Field(default=None)
+    """Which stuck pending tool calls the agent may cancel without asking, or unset for none.
+
+    `true` admits any tool function; a list admits only those named (`stuck_cancel: [bash]`); unset or `false` admits nothing — the default, because cancelling a call loses whatever it was mid-way through. What it moves is the `stuck` item's owner: a task whose every stuck sample is a pending call this key admits is the agent's to act on (rung 1 of the ladder, execution.md §7.5), and everything else stays a person's.
+
+    `true` is meaningful here where `notification: true` is refused, because *any tool call* is a real universal where *somewhere* is not an address.
+    """
+
+    @field_validator("stuck_cancel", mode="before")
+    @classmethod
+    def _stuck_cancel(cls, value: object) -> object:
+        """A boolean or a list of tool function names, refused with its meaning otherwise.
+
+        `mode="before"` for the list case: strict validation would report a list holding an integer as a type error against the whole field, when the author needs told which entry is wrong. An empty list admits nothing, which is what unset already says.
+        """
+        if not isinstance(value, list):
+            return value
+        entries = cast(list[object], value)
+        for index, entry in enumerate(entries):
+            if not isinstance(entry, str) or not entry.strip():
+                raise ValueError(
+                    f"should be `true`, `false`, or a list of tool function "
+                    f"names — entry {index + 1} is not a name: {entry!r}"
+                )
+        return entries or None
+
+    preauthorized: dict[str, str] | bool | None = Field(default=None)
+    """Rulings granted in advance: anomaly-class patterns mapped to the disposition each is authorized to receive, `false` to decline every standing grant, or `None` for none.
+
+    Keys are `fnmatch` patterns over class keys (`error:*APITimeoutError*`), values one of the doctrinal four — `rerun`, `exclude`, `zero`, `score`. A tend that finds an open window matching a pattern journals an ordinary `ruling` with `by: policy` naming the pattern, then applies it like any other — the machine-readable half of the "rulings granted in advance" bullet in `policies`. First matching pattern wins, in file order. Nothing is pre-authorized by default.
+
+    `false` is the off-switch, and it exists because `None` cannot be one: an unset narrower scope defers to the file, so without a spellable *nothing* there would be no way to hold the file's grants back for one turn — `--preauthorized false`, or `STEWARD_PREAUTHORIZED=false` on a machine that must not auto-rule (the `sync: false` shape). An empty mapping normalizes to `None`, because grants nothing and expresses no preference are the same instruction from a file and dangerously different ones from a flag.
+
+    `accept` and `dismiss` are refused by name: an accept needs an `--effect` sentence no pattern can carry, and a dismissal granted in advance is a wave-past — the one thing a standing rule must not be. Patterns are data: whether a disposition fits a class's *kind* (no `exclude` against a `task:` class) is checked at application time, since a pattern's targets are unknowable here.
+    """
+
+    @field_validator("preauthorized", mode="before")
+    @classmethod
+    def _preauthorized(cls, value: object) -> object:
+        """Patterns to dispositions, with the two ineligible dispositions refused by name."""
+        if value is None or value is False:
+            return value
+        if value is True:
+            raise ValueError(
+                "should be a mapping of class patterns to dispositions, or "
+                "`false` to decline every standing grant — `true` grants "
+                "nothing nameable"
+            )
+        if not isinstance(value, dict):
+            raise ValueError(
+                f"should be a mapping of class patterns to dispositions, "
+                f"like `'error:*Timeout*': rerun` — not {value!r}"
+            )
+        entries = cast(dict[object, object], value)
+        for pattern, disposition in entries.items():
+            if not isinstance(pattern, str) or not pattern.strip():
+                raise ValueError(
+                    f"patterns must be class-key text, like `error:*Timeout*` — "
+                    f"not {pattern!r}"
+                )
+            if disposition == "accept":
+                raise ValueError(
+                    f"`{pattern}: accept` cannot be granted in advance — accept "
+                    f"carries an effect sentence the report needs, and no "
+                    f"pattern can write one; rule it with `steward rule ... "
+                    f"--effect`"
+                )
+            if disposition == "dismiss":
+                raise ValueError(
+                    f"`{pattern}: dismiss` cannot be granted in advance — a "
+                    f"dismissal nobody looked at is a wave-past, which is what "
+                    f"the anomaly queue exists to prevent"
+                )
+            if disposition not in ("rerun", "exclude", "zero", "score"):
+                raise ValueError(
+                    f"`{pattern}: {disposition!r}` is not a disposition a "
+                    f"pattern can grant — one of rerun, exclude, zero, score"
+                )
+        return entries or None
+
     samples_ramp: tuple[int, int] | bool | None = Field(default=None)
     """The range the tuning loop may explore sample concurrency over, `false` to disable it, or `None` for the default range.
 
@@ -196,12 +285,12 @@ class Directives(BaseModel):
     A standing preference rather than what is currently installed. `steward timer arm` reads it, but a timer armed at one interval and a file later edited to another disagree until somebody re-arms, which is a `timer_drift` item rather than something a tend quietly fixes — reaching into a user's crontab unprompted is not a mechanical act.
     """
 
-    @field_validator("tend_interval", mode="before")
+    @field_validator("tend_interval", "stuck_after", mode="before")
     @classmethod
     def _duration(cls, value: object) -> object:
         """A duration is written with its unit, and a bare number is refused.
 
-        The one place strictness is not enough on its own. `tend_interval: 10` is a perfectly good integer and means ten minutes to whoever typed it and ten seconds to whoever wrote the parser, so it is rejected rather than guessed at — the same posture as every other key here, applied to a hazard typing cannot see.
+        The one place strictness is not enough on its own. `tend_interval: 10` is a perfectly good integer and means ten minutes to whoever typed it and ten seconds to whoever wrote the parser, so it is rejected rather than guessed at — the same posture as every other key here, applied to a hazard typing cannot see. `stuck_after` shares it: `5` could mean seconds or hours, and either misreading silences or floods the one surface the key feeds.
         """
         if value is None:
             return None

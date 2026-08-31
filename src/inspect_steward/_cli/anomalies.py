@@ -13,7 +13,14 @@ from pathlib import Path
 import click
 
 from .._anomaly.fold import Pending
-from .._anomaly.model import Anomalies, Anomaly, Disposition, Ruling
+from .._anomaly.model import (
+    SAMPLE_MARKS,
+    Anomalies,
+    Anomaly,
+    Disposition,
+    Ruling,
+    honest,
+)
 from .._evalset.classify import kind_of
 from .._workspace import INSTANCE, OPENED, append_event
 
@@ -22,35 +29,28 @@ DOCTRINE = (
     "or score (workflow.md §12)"
 )
 
-SAMPLE_MARKS = frozenset({Disposition.EXCLUDE, Disposition.ZERO, Disposition.SCORE})
-"""The dispositions that mark per-sample data — meaningful only where the residue is sample-shaped."""
-
 
 def refuse_dishonest(targets: list[str], decided: Disposition) -> None:
     """The disposition-kind pairings refused rather than recorded.
 
-    Two rows. `accept` on an `error:` class would leave errored samples in the data with a caveat saying so — silent exclusion wearing a decision's clothes, precisely what the four answers exist to prevent. And the three sample marks (`exclude`, `zero`, `score`) mean nothing where the residue is not sample-shaped: a `task:` or `score:` class has no sample population to mark, and marking one would put a false sentence in the report ("1 sample excluded from scoring" for a failed task attempt).
+    The matrix itself is `_anomaly.model.honest` — shared with the tend's policy rulings, so a pattern cannot grant what a person could not type. Two rows. `accept` on an `error:` class would leave errored samples in the data with a caveat saying so — silent exclusion wearing a decision's clothes, precisely what the four answers exist to prevent. And the three sample marks (`exclude`, `zero`, `score`) mean nothing where the residue is not sample-shaped: a `task:` or `score:` class has no sample population to mark, and marking one would put a false sentence in the report ("1 sample excluded from scoring" for a failed task attempt).
 
     Raises:
         click.ClickException: Naming each refused class and its kind.
     """
+    refused = [key for key in targets if not honest(kind_of(key), decided)]
+    if not refused:
+        return
     if decided is Disposition.ACCEPT:
-        errored = [key for key in targets if kind_of(key) == "error"]
-        if errored:
-            raise click.ClickException(
-                f"accept is refused for {', '.join(errored)} — {DOCTRINE}"
-            )
-    elif decided in SAMPLE_MARKS:
-        unmarked = [key for key in targets if kind_of(key) not in ("error", "limit")]
-        if unmarked:
-            kinds = ", ".join(
-                f"{key} ({kind_of(key)} class)" for key in dict.fromkeys(unmarked)
-            )
-            raise click.ClickException(
-                f"{decided.value} marks samples, and there is no sample "
-                f"population behind {kinds} — rerun, accept (with --effect), "
-                f"and dismiss are the answers that fit"
-            )
+        raise click.ClickException(
+            f"accept is refused for {', '.join(refused)} — {DOCTRINE}"
+        )
+    kinds = ", ".join(f"{key} ({kind_of(key)} class)" for key in dict.fromkeys(refused))
+    raise click.ClickException(
+        f"{decided.value} marks samples, and there is no sample "
+        f"population behind {kinds} — rerun, accept (with --effect), "
+        f"and dismiss are the answers that fit"
+    )
 
 
 def persist_windows(

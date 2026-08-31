@@ -315,6 +315,100 @@ def test_an_interval_is_stored_as_seconds(tmp_path: Path) -> None:
     assert directives.tend_interval == 7200
 
 
+# --- the stuck threshold, and the ladder's standing grants ------------------
+
+
+def test_the_stuck_threshold_is_a_duration_stored_as_seconds(tmp_path: Path) -> None:
+    assert read_directives(written(tmp_path, "stuck_after: 5h\n")).stuck_after == 18000
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        pytest.param("stuck_after: 300\n", "unit", id="a_bare_number"),
+        pytest.param("stuck_after: 0h\n", "zero", id="never"),
+    ],
+)
+def test_a_threshold_that_is_not_a_duration_is_refused(
+    text: str, message: str, tmp_path: Path
+) -> None:
+    with pytest.raises(DirectivesError, match=message):
+        read_directives(written(tmp_path, text))
+
+
+CANCEL: list[tuple[str, str, bool | list[str] | None]] = [
+    ("any tool call", "stuck_cancel: true\n", True),
+    ("nothing, said out loud", "stuck_cancel: false\n", False),
+    ("named tools only", "stuck_cancel: [bash, python]\n", ["bash", "python"]),
+    # an empty list admits nothing, which is what unset already says
+    ("an empty list", "stuck_cancel: []\n", None),
+    ("unset", "max_workers: 2\n", None),
+]
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [(text, expected) for _, text, expected in CANCEL],
+    ids=[case for case, _, _ in CANCEL],
+)
+def test_what_the_agent_may_cancel_parses(
+    text: str, expected: bool | list[str] | None, tmp_path: Path
+) -> None:
+    assert read_directives(written(tmp_path, text)).stuck_cancel == expected
+
+
+def test_a_cancel_entry_that_is_not_a_name_is_refused_by_position(
+    tmp_path: Path,
+) -> None:
+    with pytest.raises(DirectivesError, match="entry 2 is not a name"):
+        read_directives(written(tmp_path, "stuck_cancel: [bash, 3]\n"))
+
+
+def test_standing_rulings_parse_as_patterns_to_dispositions(tmp_path: Path) -> None:
+    text = "preauthorized:\n  'error:*Timeout*': rerun\n  'limit:operator': score\n"
+
+    directives = read_directives(written(tmp_path, text))
+
+    assert directives.preauthorized == {
+        "error:*Timeout*": "rerun",
+        "limit:operator": "score",
+    }
+    # an empty mapping grants nothing, which is what unset already says
+    assert read_directives(written(tmp_path, "preauthorized: {}\n")).preauthorized is (
+        None
+    )
+    # `false` is the off-switch — every standing grant declined, the `sync:
+    # false` shape — and it must survive the parser so a narrower scope
+    # (--preauthorized false) can decline what the file grants
+    assert read_directives(
+        written(tmp_path, "preauthorized: false\n")
+    ).preauthorized is (False)
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        # the two ineligible dispositions are refused by name, with why
+        pytest.param("preauthorized: {'error:*': accept}\n", "effect", id="accept"),
+        pytest.param("preauthorized: {'task:*': dismiss}\n", "wave-past", id="dismiss"),
+        pytest.param(
+            "preauthorized: {'error:*': retry}\n",
+            "rerun, exclude, zero, score",
+            id="not_a_disposition",
+        ),
+        pytest.param("preauthorized: rerun\n", "mapping", id="not_a_mapping"),
+        # `false` declines; `true` would have to grant, and grants nothing
+        # nameable
+        pytest.param("preauthorized: true\n", "nothing nameable", id="true"),
+    ],
+)
+def test_a_grant_that_cannot_be_one_is_refused_with_its_meaning(
+    text: str, message: str, tmp_path: Path
+) -> None:
+    with pytest.raises(DirectivesError, match=message):
+        read_directives(written(tmp_path, text))
+
+
 # --- the ramp envelope -----------------------------------------------------
 
 RAMP: list[tuple[str, str, tuple[int, int] | bool | None]] = [
@@ -471,6 +565,22 @@ ENVIRONMENT: list[tuple[str, str, str, str, Any]] = [
     ("a ramp range", "STEWARD_SAMPLES_RAMP", "[60, 300]", "samples_ramp", (60, 300)),
     ("a ramp switched off", "STEWARD_SAMPLES_RAMP", "false", "samples_ramp", False),
     ("an interval", "STEWARD_TEND_INTERVAL", "30m", "tend_interval", 1800),
+    ("a stuck threshold", "STEWARD_STUCK_AFTER", "5h", "stuck_after", 18000),
+    ("a ladder grant", "STEWARD_STUCK_CANCEL", "[bash]", "stuck_cancel", ["bash"]),
+    (
+        "standing rulings",
+        "STEWARD_PREAUTHORIZED",
+        "{'error:*': rerun}",
+        "preauthorized",
+        {"error:*": "rerun"},
+    ),
+    (
+        "standing rulings declined",
+        "STEWARD_PREAUTHORIZED",
+        "false",
+        "preauthorized",
+        False,
+    ),
     ("a store", "STEWARD_LOG_STORE", "s3://team/store", "log_store", "s3://team/store"),
     ("no store", "STEWARD_LOG_STORE", "false", "log_store", False),
     ("a root", "STEWARD_LOG_ROOT", "s3://team/runs", "log_root", "s3://team/runs"),
@@ -593,6 +703,14 @@ SETTING: list[tuple[str, str, str, Any]] = [
     ("a ramp range", "samples_ramp", "[40, 300]", (40, 300)),
     ("a ramp switched off", "samples_ramp", "false", False),
     ("an interval", "tend_interval", "10m", 600),
+    ("a stuck threshold", "stuck_after", "5h", 18000),
+    (
+        "standing rulings",
+        "preauthorized",
+        "{'error:*Timeout*': rerun}",
+        {"error:*Timeout*": "rerun"},
+    ),
+    ("standing rulings declined", "preauthorized", "false", False),
 ]
 
 

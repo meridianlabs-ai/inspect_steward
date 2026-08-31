@@ -669,6 +669,7 @@ def test_the_observation_carries_the_settings_a_later_turn_reads_back(
         "max_samples": 7,
         "samples_ramp": None,
         "stall_after": 2,
+        "stuck_after": None,
     }
     assert recorded["states"]["complete"] == 1
     assert recorded["drift"] is False

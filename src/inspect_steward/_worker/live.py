@@ -14,6 +14,7 @@ Nothing here raises. A worker that has gone, wedged, or never bound a socket cos
 """
 
 import asyncio
+import time
 from collections.abc import Mapping
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -93,6 +94,53 @@ class LiveParked:
         return self.approvals + self.questions
 
 
+DEFAULT_STUCK_AFTER = 5 * 60 * 60
+"""Seconds a running sample may go without activity before it reads as stuck.
+
+Five hours, because the threshold is a *reporting* one and the cost of tripping early is a person paged about a slow sandbox: a long tool call is the ordinary shape of agentic work, and `last_activity_at` already advances per streamed model chunk, so what crosses this is genuinely silent. `stuck_after` in `_steward.yaml` overrides it.
+"""
+
+
+@dataclass(frozen=True)
+class StuckSample:
+    """One running sample that has stopped moving, and what it is stopped inside."""
+
+    sample_id: str
+    epoch: int
+
+    idle: float
+    """Seconds since the sample's last recorded activity."""
+
+    function: str = ""
+    """The pending tool function, or empty where the wait is not a tool call — a silent non-streaming generate, or no activity at all."""
+
+    call_id: str = ""
+    """The pending call `sample cancel-tool-call` targets, or empty."""
+
+    cancel_requested: bool = False
+    """Whether a cancel has already been asked of this call and not been heeded — rung 1 already spent, which is what flips the ladder to rung 2."""
+
+
+@dataclass(frozen=True)
+class LiveStuck:
+    """Samples in this task that have stopped moving past the threshold.
+
+    Not parked, not failed — a `bash` that never returns, a connection held open silently. A parked sample is excluded (the human branch of the activity classification leads upstream, precisely so this reading can tell them apart), and so is a `retry_wait` whose deadline is still ahead: waiting out a backoff is progress of a kind.
+    """
+
+    count: int = 0
+    """Stuck samples, not pending calls — a sample wedged on two calls is one stuck sample."""
+
+    oldest_idle: float = 0.0
+    """Seconds since the longest-stuck sample last moved."""
+
+    samples: tuple[StuckSample, ...] = ()
+    """One entry per pending tool call, plus one call-less entry per non-tool stuck sample."""
+
+    asked: bool = False
+    """Whether every stuck sample is a pending tool call that has already been asked to cancel — the delivered-but-unheeded state, which escalates the ladder. `False` while anything stuck was never askable."""
+
+
 @dataclass(frozen=True)
 class LiveTask:
     """What one worker says about itself right now."""
@@ -104,6 +152,7 @@ class LiveTask:
     usage: LiveUsage = field(default_factory=LiveUsage)
     connections: LiveConnections = field(default_factory=LiveConnections)
     parked: LiveParked = field(default_factory=LiveParked)
+    stuck: LiveStuck = field(default_factory=LiveStuck)
     total_tokens: int = 0
 
     max_samples: tuple[int, int] | None = None
@@ -182,6 +231,7 @@ def read_fleet(
     locations: Mapping[str, str],
     *,
     timeout: float = TIMEOUT,
+    stuck_after: float = DEFAULT_STUCK_AFTER,
 ) -> LiveFleet:
     """Read every worker concurrently.
 
@@ -189,13 +239,16 @@ def read_fleet(
         targets: Running workers with a discovered socket. An empty list is an empty fleet and costs nothing — which is the common shape late in a campaign, when everything has finished and there is nothing live to ask.
         locations: Log location to task identifier, for naming the rows a packed worker reports. Required rather than defaulted, and positional rather than keyword, because a caller that omits it is only ever wrong: at the default width it is unread, and at any other width its absence silently costs every row its identity and reports a running task as finished. An empty mapping says *nothing to correlate* out loud.
         timeout: Seconds to wait per worker.
+        stuck_after: Seconds a running sample may go without activity before it reads as stuck.
 
     Returns:
         What each worker reported, including the ones that could not be reached.
     """
     if not targets:
         return LiveFleet()
-    return asyncio.run(read_fleet_async(targets, locations, timeout=timeout))
+    return asyncio.run(
+        read_fleet_async(targets, locations, timeout=timeout, stuck_after=stuck_after)
+    )
 
 
 async def read_fleet_async(
@@ -203,6 +256,7 @@ async def read_fleet_async(
     locations: Mapping[str, str],
     *,
     timeout: float = TIMEOUT,
+    stuck_after: float = DEFAULT_STUCK_AFTER,
 ) -> LiveFleet:
     """Read every worker concurrently.
 
@@ -210,20 +264,28 @@ async def read_fleet_async(
         targets: Running workers with a discovered socket.
         locations: Log location to task identifier, for naming the rows a packed worker reports.
         timeout: Seconds to wait per worker.
+        stuck_after: Seconds a running sample may go without activity before it reads as stuck.
 
     Returns:
         What each worker reported.
     """
     if not targets:
         return LiveFleet()
+    # one clock reading for the whole fleet, so two workers' idle times are
+    # measured against the same instant rather than drifting with read order
+    now = time.time()
     read = await asyncio.gather(
-        *(_read(target, timeout, locations) for target in targets),
+        *(_read(target, timeout, locations, stuck_after, now) for target in targets),
     )
     return LiveFleet(tasks={task.identifier: task for tasks in read for task in tasks})
 
 
 async def _read(
-    target: LiveTarget, timeout: float, locations: Mapping[str, str]
+    target: LiveTarget,
+    timeout: float,
+    locations: Mapping[str, str],
+    stuck_after: float = DEFAULT_STUCK_AFTER,
+    now: float = 0.0,
 ) -> list[LiveTask]:
     """One worker's reads, or why they did not happen.
 
@@ -266,7 +328,16 @@ async def _read(
                 {task_id for row in rows if (task_id := _text(row.get("task_id")))}
             )
             read = await asyncio.gather(
-                *(_get(client, f"/evals/{eval_id}/samples") for eval_id in evals),
+                # `all=true`, because the endpoint's default caps the listing
+                # at 100 rows -- and at the 200-300 sample concurrency a tuned
+                # task runs, the rows past the cap are exactly where a stuck
+                # or parked sample would silently hide. The rows are small and
+                # the read is per-tend, so the full dump costs nothing worth
+                # a truncation blind spot
+                *(
+                    _get(client, f"/evals/{eval_id}/samples?all=true")
+                    for eval_id in evals
+                ),
                 *(_get(client, f"/tasks/{task_id}/config") for task_id in tasks),
             )
             samples = dict(zip(evals, read[: len(evals)], strict=True))
@@ -300,6 +371,7 @@ async def _read(
                 samples=_samples(row.get("samples")),
                 usage=_usage(samples.get(_text(row.get("eval_id")))),
                 parked=_parked(samples.get(_text(row.get("eval_id")))),
+                stuck=_stuck(samples.get(_text(row.get("eval_id"))), stuck_after, now),
                 connections=_connections(config, model),
                 max_samples=_sample_limit(config),
                 sandboxes=_sandboxes(config),
@@ -409,6 +481,77 @@ def _parked(payload: object) -> LiveParked:
     return LiveParked(
         approvals=approvals, questions=questions, functions=tuple(sorted(functions))
     )
+
+
+def _stuck(payload: object, stuck_after: float, now: float) -> LiveStuck:
+    """Samples that have stopped moving, from each running row's `last_activity_at`.
+
+    The third walk of the rows `_read` already fetched, beside `_usage` and `_parked`, so the reading costs no request. Per running row, stuck means: not waiting on a person (`approval`/`question` — that is a park, and the human branch leads upstream precisely so the two never conflate); not inside a `retry_wait` whose deadline is still ahead (waiting out a backoff is progress); and `last_activity_at` more than `stuck_after` seconds ago. `last_activity_at` advances per streamed model chunk, so a slow-but-streaming generate never reads as idle.
+
+    A tool row contributes one `StuckSample` per pending call — `sample cancel-tool-call` targets a call, so the calls are what the item has to be able to name. Everything else stuck contributes one call-less entry.
+    """
+    stuck: list[StuckSample] = []
+    sample_ids: set[tuple[str, int]] = set()
+    oldest = 0.0
+    for sample in _running_samples(payload):
+        entry = sample.get("activity")
+        activity = cast(dict[str, object], entry) if isinstance(entry, dict) else {}
+        kind = _text(activity.get("type"))
+        if kind in ("approval", "question"):
+            continue
+        last = sample.get("last_activity_at")
+        if not isinstance(last, int | float) or isinstance(last, bool):
+            continue
+        idle = now - float(last)
+        if idle <= stuck_after:
+            continue
+        if kind == "retry_wait":
+            deadline = activity.get("deadline")
+            if (
+                isinstance(deadline, int | float)
+                and not isinstance(deadline, bool)
+                and float(deadline) > now
+            ):
+                continue
+        sample_id = str(sample.get("sample_id", ""))
+        epoch = _number(sample.get("epoch")) or 1
+        calls = _pending_calls(activity)
+        for call in calls:
+            stuck.append(
+                StuckSample(
+                    sample_id=sample_id,
+                    epoch=epoch,
+                    idle=idle,
+                    function=_text(call.get("function")),
+                    call_id=_text(call.get("id")),
+                    cancel_requested=call.get("cancel_requested") is True,
+                )
+            )
+        if not calls:
+            stuck.append(StuckSample(sample_id=sample_id, epoch=epoch, idle=idle))
+        sample_ids.add((sample_id, epoch))
+        oldest = max(oldest, idle)
+    asked = bool(stuck) and all(
+        sample.function and sample.cancel_requested for sample in stuck
+    )
+    return LiveStuck(
+        count=len(sample_ids),
+        oldest_idle=oldest,
+        samples=tuple(stuck),
+        asked=asked,
+    )
+
+
+def _pending_calls(activity: dict[str, object]) -> list[dict[str, object]]:
+    """The pending tool calls an activity carries, if any."""
+    calls = activity.get("calls")
+    if not isinstance(calls, list):
+        return []
+    return [
+        cast(dict[str, object], call)
+        for call in cast(list[object], calls)
+        if isinstance(call, dict)
+    ]
 
 
 def _usage(payload: object) -> LiveUsage:

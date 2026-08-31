@@ -12,7 +12,7 @@ from typing import Any
 
 import click
 
-from .._anomaly.model import Anomalies, Anomaly, Disposition
+from .._anomaly.model import Anomalies, Anomaly, Disposition, composed_effect
 from .._tend import status
 from .._workspace import RULING, append_event
 from .anomalies import (
@@ -234,17 +234,9 @@ def _effects(
         return {key: effect for key in targets}
     if effect is not None:
         return {key: effect for key in targets}
-    composed: dict[str, str] = {}
-    for key in targets:
-        count = sum(window.evidence.count for window in _open_windows(anomalies, key))
-        plural = "" if count == 1 else "s"
-        if decided is Disposition.EXCLUDE:
-            composed[key] = f"{count} sample{plural} excluded from scoring"
-        elif decided is Disposition.ZERO:
-            composed[key] = f"{count} sample{plural} scored zero"
-        else:
-            composed[key] = f"{count} sample{plural} scored as recorded"
-    return composed
+    # the shared composition, so a person's ruling and a policy's cannot word
+    # the same mark differently
+    return {key: composed_effect(anomalies, key, decided) for key in targets}
 
 
 def _open_windows(anomalies: Anomalies, key: str) -> list[Anomaly]:

@@ -138,6 +138,34 @@ how much it left out and how to see it. Take those counts literally: `1 raised,
 awaiting a person` under an otherwise empty decisions section means there *is*
 an open decision, and it is not yours.
 
+## A sample that has stopped moving
+
+A **stuck** item names samples that are alive but idle past `stuck_after` —
+nothing failed, nothing is waiting on a person, the task's clock just keeps
+running. One item per task, and it is not an anomaly: nothing is broken and
+there is nothing to rule on. It clears on its own the moment the sample moves.
+
+The remedy is a ladder, cheapest rung first, and the item carries the
+applicable command ready to run:
+
+- **Cancel the pending tool call** (`inspect ctl sample cancel-tool-call ...`)
+  — the call fails inside the sample, which continues and works with the
+  failure. This rung is yours **only when** the human granted it in advance
+  (`stuck_cancel:` in `_steward.yaml`), and the item says so by arriving
+  agent-owned. Run the command it carries, then record what you did:
+  `steward ack <id> --by agent --reason "cancelled bash in <task>"`. This is
+  the narrow `--by agent` exception — something you did yourself — and the
+  recorded reason is what keeps the next session from asking again.
+- **Everything above that is the human's.** Cancelling the sample records an
+  outcome (`--action score|error|cancel` is a judgement about the eval's data),
+  and a requeue discards everything the sample did. Raise the item and pass on
+  the command it carries.
+
+**Ask once.** A cancel is a request, and the feedback is explicit: if it was
+asked and the call has not stopped, the item comes back with `:asked` in its
+id and human-owned — *a cancel was asked and it did not stop*. That is the
+signal to climb a rung, never to repeat the ask.
+
 ## Anomalies: from failure to ruling
 
 Failures that mean the same thing share a **class** — an exception type at a
@@ -172,12 +200,18 @@ steward rule <class> --disposition <d> --reason "..." --by <person>   # record t
   storage: re-running into broken machinery burns the work twice. Verify first;
   a person ruling `rerun` directly is that verification.
 
-After a `rerun` ruling Steward watches: the class going quiet with its tasks
-complete resolves it, and the same samples failing again comes back to the
-human as *the ruling's premise did not hold*. Recurrence after any ruling opens
-a new generation carrying every prior ruling as precedent — so read the
-precedent lines before proposing; the 11pm decision usually answers the 2am
-question.
+After a `rerun` ruling the tend carries it out itself: samples in a
+still-running task are requeued in place, and a landed log has exactly the
+ruled samples invalidated so the next turn re-launches it, reusing everything
+else. **There is nothing for you to run** — the window stays open while the
+re-run is in flight (the status says so), resolves itself when its tasks come
+home clean, and the same samples failing again comes back to the human as *the
+ruling's premise did not hold*. A ruling can also arrive from a standing
+`preauthorized:` pattern in `_steward.yaml`; the record then says `by: policy`,
+and it is the same decision made earlier, not yours to make. Recurrence after
+any ruling opens a new generation carrying every prior ruling as precedent — so
+read the precedent lines before proposing; the 11pm decision usually answers
+the 2am question.
 
 Two classes deliberately make less noise than the rest. A `task:` window
 resolves itself once Steward's own respawn brings the task home — leave it

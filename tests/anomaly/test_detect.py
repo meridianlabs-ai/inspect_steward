@@ -3,11 +3,12 @@
 Sample-level classification is `test_instances.py`'s subject; here the claims are the ones only composition can make: an errored log classes on its header, a started log with no worker is `vanished`, a departure with no log classes on its tail, a zero headline needs its confirming read, and an orphan's failures are nobody's anomaly.
 """
 
+from dataclasses import replace
 from pathlib import Path
 
 from inspect_steward._anomaly.fold import TaskHealth
 from inspect_steward._evalset.instances import ClassedCache
-from inspect_steward._evalset.observe import observe_logs, observe_tasks
+from inspect_steward._evalset.observe import UnreadableLog, observe_logs, observe_tasks
 from inspect_steward._schedule.reconcile import (
     DepartedWorker,
     InFlight,
@@ -321,3 +322,26 @@ class TestComposition:
             complete=True, settled="2026-08-30T11:00:00+00:00"
         )
         assert health[waiting.identifier] == TaskHealth(complete=False)
+
+    def test_an_unreadable_log_holds_its_task_out_of_recovered(
+        self, tmp_path: Path
+    ) -> None:
+        # both pass branches trust the census's silence, and an unreadable log
+        # makes that silence blindness -- health is the one place they already
+        # look, so a task whose log will not read is not recovered, whatever
+        # its headers say
+        done = SynthTask("done")
+        write_log(tmp_path, done)
+        observed = observe_tasks(synth_manifest([done]), observe_logs(tmp_path))
+        current = observed.tasks[0].current
+        assert current is not None
+        blinded = replace(
+            observed,
+            unreadable=[
+                UnreadableLog(location=current.location, reason="summaries truncated")
+            ],
+        )
+
+        health = task_health(blinded)
+
+        assert health[done.identifier] == TaskHealth(complete=False)

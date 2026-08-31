@@ -13,6 +13,7 @@ Everything a turn wants to *say* beyond counts is an **item**: a stalled task, a
 **A summary names its task in full, where the table beside it does not.** That looks like an inconsistency and is the deliberate consequence of what each is for. A table row is a *comparison*, so `shorten_keys` elides whatever every row shares; an item is a *statement*, and it travels alone — into a channel, into a notification title, into a line somebody reads with no table under it. `sec_bench_pro` is enough to pick a row out of five; only the full key is enough to name a task to somebody who cannot see the other four.
 """
 
+import shlex
 from dataclasses import dataclass, replace
 from enum import IntEnum, StrEnum
 from hashlib import sha256
@@ -22,7 +23,7 @@ from .._anomaly.model import Anomalies, Anomaly, AnomalyState
 from .._evalset.observe import ObservedTasks, TaskObservation, TaskState
 from .._schedule import InFlight, attempts_made
 from .._util.duration import format_duration, seconds_since
-from .._worker import LiveParked, acp_sockets
+from .._worker import LiveParked, LiveStuck, acp_sockets
 from .._workspace import DEFAULT_TEND_INTERVAL, Armed
 
 if TYPE_CHECKING:
@@ -70,6 +71,7 @@ class Verdict(StrEnum):
 
 
 STALLED = "stalled"
+STUCK = "stuck"
 DRIFT = "drift"
 DEGRADED = "degraded"
 ORPHAN_RUNNING = "orphan_running"
@@ -88,6 +90,7 @@ ANOMALY = "anomaly"
 
 OWNERS = {
     STALLED: Owner.HUMAN,
+    STUCK: Owner.HUMAN,
     DRIFT: Owner.HUMAN,
     DEGRADED: Owner.HUMAN,
     ORPHAN_RUNNING: Owner.HUMAN,
@@ -230,6 +233,7 @@ def tend_items(
     items = [
         *_stalled(result, lookup, inflight),
         *_parked(result, lookup),
+        *_stuck(result, lookup),
         *_tuning(result),
         *_drift(result),
         *_degraded(result),
@@ -459,6 +463,143 @@ def _waiting(parked: LiveParked) -> str:
             f"{parked.questions} question{'' if parked.questions == 1 else 's'}"
         )
     return f"has {parked.total} samples waiting on a person: {' and '.join(parts)}"
+
+
+def _stuck(result: "TendResult", lookup: dict[str, TaskObservation]) -> list[Item]:
+    """A sample that has stopped moving inside a healthy worker, and the ladder's next rung.
+
+    Not failed and not parked — a `bash` that never returns, a connection held open silently — which is why neither the anomaly queue nor the park can say it: nothing raised, and nobody is being asked anything. One item per task, whatever it holds, because the escalation is per task and a reader climbing the ladder wants one place to stand.
+
+    **The id encodes the episode — what the item still asks about — plus `:asked`.** An acknowledgment is permanent per id (`read_acks` never expires one), so an id keyed on the task alone would let "I know, leave it" about this week's sample silence next week's forever. The digest is over the *un-asked* pending calls plus every call-less stuck sample (`_asks`): it re-arms on a different sample, when another call joins, and when rung 1 is spent on one call of several — the next call's ask is a new item the old acknowledgment does not cover, where a digest of the sample set alone would let acknowledging the first cancellation hide every rung-one action after it — and stays quiet while the same condition merely persists. The `:asked` flip is a new id for the same reason — the escalation re-notifies through the ordinary appeared diff, and an acknowledgment of the quiet wait does not cover the wedged one. The actions are execution.md §7.5's ladder, one rung at a time: `cancel-tool-call` costs one tool result, `cancel` costs the sample, and neither is ever pre-filled with an outcome — recording how a cancelled sample counts is the decision, so `--action` is left for the person to type.
+
+    **Owner is the agent only where `stuck_cancel` admits everything stuck and nothing has been asked yet** — rung 1 is the one pre-authorizable act, and once it has been spent the delivered-but-unheeded state is a person's. The agent acts through `inspect ctl` itself and journals via the `ack --by agent` narrow exception; the tend never cancels anything.
+    """
+    items: list[Item] = []
+    for row in result.progress.rows:
+        stuck = row.stuck
+        if not stuck.count:
+            continue
+        episode = _digest8(",".join(sorted(_asks(stuck))))
+        suffix = ":asked" if stuck.asked else ""
+        owner = (
+            Owner.AGENT
+            if not stuck.asked and _cancel_admitted(stuck, result.stuck_cancel)
+            else OWNERS[STUCK]
+        )
+        items.append(
+            Item(
+                id=f"{STUCK}:{_named(lookup.get(row.identifier), row.identifier)}"
+                f":{episode}{suffix}",
+                kind=STUCK,
+                owner=owner,
+                level=Level.ATTENTION,
+                subject=row.identifier,
+                summary=_stuck_summary(row.key, stuck),
+                action=_stuck_action(row.task_id, stuck),
+            )
+        )
+    return items
+
+
+def _asks(stuck: LiveStuck) -> set[str]:
+    """The episode: every ask still open — un-asked pending calls by id, and the call-less stuck samples nothing can be asked of."""
+    return {
+        f"{one.sample_id}:{one.epoch}:{one.call_id}"
+        if one.function
+        else f"{one.sample_id}:{one.epoch}"
+        for one in stuck.samples
+        if not one.cancel_requested
+    }
+
+
+def _cancel_admitted(stuck: LiveStuck, granted: bool | tuple[str, ...] | None) -> bool:
+    """Whether `stuck_cancel` covers everything stuck here — what hands rung 1 to the agent."""
+    if not granted:
+        return False
+    return all(
+        sample.function
+        and (granted is True or sample.function in granted)
+        and not sample.cancel_requested
+        for sample in stuck.samples
+    )
+
+
+def _stuck_summary(key: str, stuck: LiveStuck) -> str:
+    """What stopped, inside what, for how long — and explicitly what it is not."""
+    functions = sorted({sample.function for sample in stuck.samples if sample.function})
+    inside = f" inside {', '.join(functions)}" if functions else ""
+    quiet = format_duration(max(60, int(stuck.oldest_idle)) // 60 * 60)
+    if stuck.count == 1:
+        line = (
+            f"{key} has a sample that has stopped moving{inside} — no activity "
+            f"for {quiet}, nothing failed and nothing is waiting on you"
+        )
+    else:
+        line = (
+            f"{key} has {stuck.count} samples that have stopped moving{inside} — "
+            f"the oldest quiet for {quiet}, nothing failed and nothing is "
+            f"waiting on you"
+        )
+    if stuck.asked:
+        line += "; a cancel was asked and it did not stop"
+    return line
+
+
+def _stuck_action(task_id: str, stuck: LiveStuck) -> str | None:
+    """The ladder's next rung, as one command — never two rungs at once.
+
+    While any pending call is still un-asked, the command is rung 1 and only rung 1: `sample cancel` ends the whole sample and records an outcome, which is more than any `stuck_cancel` grant covers — so a sample wedged on several calls names one of them by id rather than escalating. Rung 2 appears only once rung 1 is spent (every call asked, and nothing stopped) or there was never a call to cancel — with `--action` left off, because recording how the cancelled sample counts is the decision. More than one stuck sample gets the listing, since a ladder is climbed one target at a time.
+
+    Every interpolated value is shell-quoted. A sample id is the dataset's free text — the one field here Steward does not mint — and this line is one the runbook tells an agent to run: an id with a space would silently target the wrong sample, and worse is imaginable.
+    """
+    if not task_id:
+        return None
+    if stuck.count > 1:
+        return shlex.join(["inspect", "ctl", "sample", "list", task_id, "--json"])
+    sample = stuck.samples[0] if stuck.samples else None
+    if sample is None:
+        return None
+    unasked = [
+        one for one in stuck.samples if one.function and not one.cancel_requested
+    ]
+    if len(unasked) == 1 and len(stuck.samples) == 1:
+        return shlex.join(
+            [
+                "inspect",
+                "ctl",
+                "sample",
+                "cancel-tool-call",
+                task_id,
+                sample.sample_id,
+                str(sample.epoch),
+            ]
+        )
+    if unasked:
+        first = unasked[0]
+        return shlex.join(
+            [
+                "inspect",
+                "ctl",
+                "sample",
+                "cancel-tool-call",
+                task_id,
+                first.sample_id,
+                str(first.epoch),
+                "--tool-call-id",
+                first.call_id,
+            ]
+        )
+    return shlex.join(
+        [
+            "inspect",
+            "ctl",
+            "sample",
+            "cancel",
+            task_id,
+            sample.sample_id,
+            str(sample.epoch),
+        ]
+    )
 
 
 def _tuning(result: "TendResult") -> list[Item]:
@@ -843,7 +984,7 @@ def _kill_loop(result: "TendResult") -> list[Item]:
 def _anomalies(anomalies: Anomalies) -> list[Item]:
     """Every open window's item, with owner following state.
 
-    The routing (workflow.md §12.5): an OPEN window is the agent's to investigate; an INVESTIGATING one is the agent's, informationally, so a fresh session does not re-open what the last one was mid-way through; a PROPOSED one is suppressed under **one consolidated item per live proposal** — the human answers a decision, not a list; a RULED one is the agent's note that a re-run is awaited (the phase-1 seam — step 25 makes the tend apply it); and a re-run that failed again is the human's review, because it means the ruling's premise did not hold.
+    The routing (workflow.md §12.5): an OPEN window is the agent's to investigate; an INVESTIGATING one is the agent's, informationally, so a fresh session does not re-open what the last one was mid-way through; a PROPOSED one is suppressed under **one consolidated item per live proposal** — the human answers a decision, not a list; a RULED one produces nothing while the outcome is pending, because the tend applies the ruling itself and machinery in flight is not anyone's work; and a re-run that failed again is the human's review, because it means the ruling's premise did not hold.
 
     **An OPEN `limit:` window produces no item at all.** An operator kill is somebody's own deliberate act, its window is adjudication material rather than an incident, and the run keeps going either way (workflow.md §15: anomalies are settled afterwards) — so it waits in the fold and the `### anomalies` block for the signoff conversation instead of asking inline. Engaging early still works: investigating, proposing, or ruling one puts it back on the ordinary surfaces.
 
@@ -901,11 +1042,9 @@ def _window_items(anomaly: Anomaly) -> list[Item]:
     base = _anomaly_id(anomaly)
     summary = _anomaly_summary(anomaly)
     if anomaly.state is AnomalyState.RULED:
-        ruling = anomaly.ruling
-        by = ruling.by if ruling is not None else "someone"
         if anomaly.failed_resolutions:
-            # the outcome *has* been observed, so the pending-outcome item
-            # would sit beside this one contradicting it -- the review is the
+            # the outcome *has* been observed, so the pending-outcome status
+            # line would sit beside this contradicting it -- the review is the
             # whole story until a fresh ruling re-arms the pass
             detail = (
                 anomaly.resolution.detail
@@ -926,19 +1065,11 @@ def _window_items(anomaly: Anomaly) -> list[Item]:
                     action=f"steward rule '{anomaly.class_key}'",
                 )
             ]
-        return [
-            Item(
-                id=f"{base}:ruled",
-                kind=ANOMALY,
-                owner=Owner.AGENT,
-                level=Level.INFO,
-                subject=anomaly.class_key,
-                summary=(
-                    f"{anomaly.class_key} is ruled rerun by {by} and the "
-                    f"re-run's outcome has not been observed yet"
-                ),
-            )
-        ]
+        # no item while the outcome is pending: the tend applies the ruling
+        # itself now, so the window's pendency is machinery rather than
+        # anyone's work -- the `### anomalies` block still says "awaiting the
+        # re-run" for whoever asks
+        return []
     if anomaly.state is AnomalyState.INVESTIGATING:
         note = f" ({anomaly.note})" if anomaly.note else ""
         return [

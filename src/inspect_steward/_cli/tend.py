@@ -32,6 +32,8 @@ def tend_command(
     max_workers: int | None,
     stall_after: int | None,
     samples_ramp: tuple[int, int] | bool | None,
+    stuck_after: int | None,
+    preauthorized: dict[str, str] | bool | None,
     sync: str | bool | None,
     no_sync: bool,
     no_break_claim: bool,
@@ -56,6 +58,8 @@ def tend_command(
             max_workers=max_workers,
             stall_after=stall_after,
             samples_ramp=samples_ramp,
+            stuck_after=stuck_after,
+            preauthorized=preauthorized,
             sync=False if no_sync else sync,
             break_stale=not no_break_claim,
         )

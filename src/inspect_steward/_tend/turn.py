@@ -25,6 +25,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Literal, cast
 
+from .._anomaly.applied import read_applied
 from .._anomaly.fold import Pending, absorb, as_events, read_anomalies
 from .._anomaly.model import Anomalies
 from .._evalset.archive import archive_log
@@ -58,6 +59,7 @@ from .._schedule import (
 )
 from .._util.duration import seconds_since
 from .._worker import (
+    DEFAULT_STUCK_AFTER,
     Fleet,
     LiveFleet,
     LiveTarget,
@@ -114,6 +116,13 @@ from .items import Item, Supervision, Verdict, tend_items, verdict
 from .notify import notify_turn
 from .progress import Progress, live_totals, task_progress
 from .render import status_markdown
+from .rulings import (
+    Dispositions,
+    apply_rulings,
+    dispositions,
+    policy_rulings,
+    rerun_ruled,
+)
 from .tuning import (
     Baseline,
     Move,
@@ -293,12 +302,20 @@ class TendResult:
     anomaly_pending: list[Pending] = field(default_factory=list[Pending])
     """The window events this turn's census implies. A tend has appended them by the time it returns; a `status` leaves them unwritten — which is why a deciding verb persists its targets' share (`_cli.anomalies.persist_windows`) before its decision, so a ruling never lands against a window the journal does not hold."""
 
+    dispositions: Dispositions = field(default_factory=Dispositions)
+    """Per task, what each errored sample's class has been ruled — the errored cell's split and the "Scores are over n of m" note (`_tend.rulings.dispositions`)."""
+
+    stuck_cancel: bool | tuple[str, ...] | None = None
+    """Which stuck pending tool calls the agent may cancel, normalized — `True` for any, a tuple of function names, `None` for none. What routes a `stuck` item's owner."""
+
 
 def tend(
     workspace: Workspace,
     *,
     max_workers: int | None = None,
     stall_after: int | None = None,
+    stuck_after: int | None = None,
+    preauthorized: dict[str, str] | bool | None = None,
     samples_ramp: tuple[int, int] | bool | None = None,
     sync: str | bool | None = None,
     notification: str | bool | None = None,
@@ -311,6 +328,8 @@ def tend(
         workspace: The workspace to tend.
         max_workers: Worker processes for this turn, overriding `_steward.yaml`. `None` expresses no preference and defers to the file, which itself defaults to a process per task — it does not request that width, so a workspace that sets the key cannot be widened back to unbounded for one turn.
         stall_after: Fruitless respawns before a task is given up on, overriding `_steward.yaml`.
+        stuck_after: Seconds of sample silence before a `stuck` item, overriding `_steward.yaml`.
+        preauthorized: Class patterns to dispositions, overriding `_steward.yaml` — the rulings granted in advance this turn may apply. `False` declines every standing grant for this turn; `None` defers to the file.
         samples_ramp: The ramp's envelope for this turn, overriding `_steward.yaml`. A narrower range brings running tasks back inside it.
         sync: Where to propagate the workspace this turn, overriding `_steward.yaml`. `False` propagates nowhere; `None` defers to the file, which itself defaults to the log directory.
         notification: Where Steward posts this turn, overriding `_steward.yaml`. `False` silences Steward and never the fleet; `None` defers to the file, then to `INSPECT_EVAL_NOTIFICATION`. Settled before anything spawns, because it is also the channel every worker this turn starts will inherit (`_notify.channel`).
@@ -334,6 +353,8 @@ def tend(
             claim,
             max_workers=max_workers,
             stall_after=stall_after,
+            stuck_after=stuck_after,
+            preauthorized=preauthorized,
             samples_ramp=samples_ramp,
             sync=sync,
             notification=notification,
@@ -350,6 +371,8 @@ def tend(
             held,
             max_workers=max_workers,
             stall_after=stall_after,
+            stuck_after=stuck_after,
+            preauthorized=preauthorized,
             samples_ramp=samples_ramp,
             sync=sync,
             notification=notification,
@@ -363,6 +386,8 @@ def _tend(
     *,
     max_workers: int | None,
     stall_after: int | None,
+    stuck_after: int | None = None,
+    preauthorized: dict[str, str] | bool | None = None,
     samples_ramp: tuple[int, int] | bool | None,
     sync: str | bool | None = None,
     notification: str | bool | None = None,
@@ -378,6 +403,8 @@ def _tend(
         history,
         max_workers=max_workers,
         stall_after=stall_after,
+        stuck_after=stuck_after,
+        preauthorized=preauthorized,
         samples_ramp=samples_ramp,
         sync=sync,
         notification=notification,
@@ -422,6 +449,8 @@ def status(
     *,
     max_workers: int | None = None,
     stall_after: int | None = None,
+    stuck_after: int | None = None,
+    preauthorized: dict[str, str] | bool | None = None,
     samples_ramp: tuple[int, int] | bool | None = None,
 ) -> TendResult:
     """Report where the run stands, and what the next turn would do.
@@ -434,6 +463,8 @@ def status(
         workspace: The workspace to report on.
         max_workers: Worker processes to preview against.
         stall_after: Respawn patience to preview against.
+        stuck_after: Stuck threshold to preview against.
+        preauthorized: Standing rulings to preview against. The preview shows a matching class as ruled — the same decision the next tend will record — but nothing is journaled and nothing applied here; `False` previews with every standing grant declined.
         samples_ramp: Ramp envelope to preview against.
 
     Returns:
@@ -450,6 +481,8 @@ def status(
         history,
         max_workers=max_workers,
         stall_after=stall_after,
+        stuck_after=stuck_after,
+        preauthorized=preauthorized,
         samples_ramp=samples_ramp,
         execute=False,
     )
@@ -486,6 +519,9 @@ class _History:
 
     **Absent and empty are different, and conflating them costs one wrong notification.** A run tended by a Steward that predates this key has no recorded set, and reading that as *nothing was complete* would make every already-finished task read as finishing this turn — one post naming two hundred tasks, on the first turn after an upgrade. `None` says *not known*, which suppresses the diff for exactly that turn and records a set for the next one.
     """
+
+    stuck_after: int | None = None
+    """The stuck threshold the most recent turn ran under, from the same recorded settings the pool degrades onto — a file that will not parse is exactly when a silently defaulted threshold would misreport the fleet."""
 
     raised: dict[str, Raised] = field(default_factory=dict[str, "Raised"])
     """Items the agent has handed to their owner, by id. Marked rather than removed — see `items.tend_items`."""
@@ -566,6 +602,7 @@ def _history(workspace: Workspace) -> _History:
     breaks_since, breaks = _breaks(events)
     ramp_levels, last_step = read_ramp_record(events)
     pool: Pool | None = None
+    recorded_stuck: int | None = None
     previous: frozenset[str] | None = None
     complete: frozenset[str] | None = None
     since: float | None = None
@@ -578,6 +615,12 @@ def _history(workspace: Workspace) -> _History:
             since = _elapsed(event.ts)
         if pool is None:
             pool = _pool(event.payload.get("settings"))
+            if pool is not None and isinstance(
+                recorded := event.payload.get("settings"), dict
+            ):
+                recorded_stuck = _positive(
+                    cast(dict[str, Any], recorded).get("stuck_after")
+                )
         if pool is not None:
             break
 
@@ -588,6 +631,7 @@ def _history(workspace: Workspace) -> _History:
     owed_items, owed_complete = read_undelivered(events)
     return _History(
         pool=pool,
+        stuck_after=recorded_stuck,
         previous=(previous if previous is not None else frozenset[str]()) - owed_items,
         complete=None if complete is None else complete - owed_complete,
         acknowledged=read_acks(events),
@@ -781,6 +825,15 @@ class _Settings:
     Carried rather than acted on, and reported rather than interpreted. It exists because `policies` can now arrive from `STEWARD_POLICIES` as readily as from the file, which makes *open `_steward.yaml`* an incomplete instruction for an agent — so the turn has to be able to say what is actually in force. A block scalar arrives as one entry, since splitting somebody's paragraphs on their behalf would be interpreting them.
     """
 
+    stuck_after: int | None = None
+    """Seconds of sample silence before a `stuck` item, or `None` for `DEFAULT_STUCK_AFTER`. On a degraded turn, the last recorded value — the same last-known-good the pool falls back on."""
+
+    stuck_cancel: bool | list[str] | None = None
+    """Which stuck tool calls the agent may cancel, as the file expressed it. `None` on a degraded turn whose file would not parse — a standing authority whose text cannot be read is not guessed from history."""
+
+    preauthorized: dict[str, str] | None = None
+    """The rulings granted in advance, as patterns to dispositions. `None` on a degraded turn for the same reason as `stuck_cancel` — degrading must narrow authority, never preserve it."""
+
 
 def _turn(
     workspace: Workspace,
@@ -825,6 +878,13 @@ def _turn(
         ) from ex
 
     observed = observe_tasks(manifest, logs)
+    # the anomaly and applied folds are hoisted above the decision, because the
+    # decision consumes them: reconcile forgives attempt history at a rerun
+    # ruling's instant and schedules the authorized re-runs first, so it needs
+    # the rulings in force before it decides. Pure folds over events already
+    # read -- hoisting them costs nothing
+    anomalies = read_anomalies(history.events)
+    applied = read_applied(history.events)
     decision = reconcile(
         manifest,
         inflight,
@@ -832,12 +892,21 @@ def _turn(
         pool=settings.pool,
         paused=history.paused is not None,
         levels=history.ramp_levels,
+        ruled=rerun_ruled(anomalies),
     )
     # one read of the running fleet, feeding both the table's live columns and
     # the block under it -- a second read would be a second set of numbers, and
     # a row saying `83 running` beside a block saying nothing is running is the
     # kind of disagreement a reader has no way to resolve
-    fleet = _live(inflight, logs)
+    fleet = _live(
+        inflight,
+        logs,
+        stuck_after=(
+            settings.stuck_after
+            if settings.stuck_after is not None
+            else DEFAULT_STUCK_AFTER
+        ),
+    )
 
     # the anomaly census, diffed against the journal's fold. The pending
     # events are computed for both dispositions and folded in for both --
@@ -855,10 +924,24 @@ def _turn(
         observed = replace(
             observed, unreadable=[*observed.unreadable, *detection.unreadable]
         )
-    anomalies = read_anomalies(history.events)
-    pending = absorb(anomalies, detection.batches, task_health(observed))
+    pending = absorb(anomalies, detection.batches, task_health(observed), applied)
     if pending:
         anomalies = read_anomalies([*history.events, *as_events(pending, utc_now())])
+    # standing pre-authorizations are part of the turn's decision, so they are
+    # computed here on the shared path: a `status` folds the would-be rulings
+    # state-if-executed exactly as it folds pending windows -- a class the
+    # next tend will auto-rule must not preview as an open question -- while
+    # only an executing turn journals them (and then refolds from the file,
+    # because a ruling's recorded instant is its identity)
+    policy, declined = policy_rulings(anomalies, settings.preauthorized)
+    if policy:
+        anomalies = read_anomalies(
+            [
+                *history.events,
+                *as_events(pending, utc_now()),
+                *as_events(policy, utc_now()),
+            ]
+        )
     progress = Progress(
         rows=task_progress(observed, fleet),
         # the pids come from the in-flight record rather than from the fleet,
@@ -918,6 +1001,10 @@ def _turn(
         breaks_since=history.breaks_since,
         anomalies=anomalies,
         anomaly_pending=pending,
+        dispositions=dispositions(
+            detection.batches, anomalies, _current_locations(observed)
+        ),
+        stuck_cancel=_cancel_authority(settings.stuck_cancel),
     )
     if not execute:
         return _projected(result, observed, inflight, history)
@@ -929,15 +1016,64 @@ def _turn(
         steward_log(workspace.log, warning)
 
     acted = _act(workspace, manifest, log_dir, decision.actions, observed)
-    applied = _retune(workspace, plan, acted)
 
     # the anomaly deltas land now, after the acting they describe alongside and
-    # before the observation that will list their items. An append that fails
+    # before anything that decides against them -- a policy ruling appended
+    # ahead of its window's `opened` would be skipped by every later fold, the
+    # exact trap `persist_windows` closes for the verbs. An append that fails
     # fails the turn, exactly like the observation's own: the journal is the
     # one record nothing can rebuild, and the next turn's diff re-derives
     # whatever did not land rather than double-counting what did
     for entry in pending:
         append_event(workspace.journal, entry.type, **entry.fields)
+
+    # the standing pre-authorizations the shared path computed become ordinary
+    # rulings now, before the applier reads the fold, so a pattern's ruling
+    # lands and applies in one turn. Reused rather than recomputed: the shared
+    # path already folded them into `anomalies` state-if-executed, and asking
+    # again against that state would find the windows already ruled and
+    # journal nothing
+    for note in declined:
+        steward_log(workspace.log, note)
+    if policy:
+        for entry in policy:
+            append_event(workspace.journal, entry.type, **entry.fields)
+        acted.journalled = True
+        # refold from the journal itself, never from re-synthesized events: a
+        # ruling's ts is identity (the applied fold keys on it), and only the
+        # file holds the instant `append_event` actually stamped -- a second
+        # `utc_now()` here would make `ruling_applied.for` name a ruling the
+        # journal does not contain, and the next turn would apply it again
+        anomalies = read_anomalies(read_journal(workspace.journal).events)
+        result = replace(
+            result,
+            anomalies=anomalies,
+            dispositions=dispositions(
+                detection.batches, anomalies, _current_locations(observed)
+            ),
+        )
+
+    # the executor: warm requeues and landed invalidations, applied against the
+    # pre-application census -- outcomes are next turn's observation, the same
+    # one-turn lag every other effect has
+    apply_rulings(
+        workspace,
+        anomalies,
+        detection.batches,
+        applied,
+        inflight,
+        fleet,
+        observed,
+        spawned={
+            task.identifier
+            for action in decision.actions
+            if isinstance(action, SpawnWorker)
+            for task in action.tasks
+        },
+        acted=acted,
+    )
+    retuned = _retune(workspace, plan, acted)
+
     if acted.journalled:
         # the projection below reports *what has been done to this run*, and
         # this turn has just done something to it -- so the read that fed it is
@@ -997,7 +1133,11 @@ def _turn(
     # observation rather than a snapshot the journal claims was written
     _write_status(workspace, result, failing_since=history.status_failing)
     _record(
-        workspace, result, pool=settings.pool, tuning=observation_payload(plan, applied)
+        workspace,
+        result,
+        pool=settings.pool,
+        stuck_after=settings.stuck_after,
+        tuning=observation_payload(plan, retuned),
     )
     _sync(workspace, settings, log_dir, failing=history.sync_failing)
     # last, after the file a post's footer sends its reader to has been written
@@ -1387,6 +1527,8 @@ def _settings(
     stall_after: int | None,
     samples_ramp: tuple[int, int] | bool | None,
     execute: bool,
+    stuck_after: int | None = None,
+    preauthorized: dict[str, str] | bool | None = None,
     sync: str | bool | None = None,
     notification: str | bool | None = None,
 ) -> _Settings:
@@ -1451,6 +1593,28 @@ def _settings(
             # an agent reading `status` needs the ones it can have
             policies=_policies(directives) if directives is not None else [],
             interval=directives.tend_interval if directives is not None else None,
+            # the reporting threshold degrades to the last known good like the
+            # pool; the two authorities degrade to *nothing* -- a standing
+            # authorization whose text cannot be read must not be exercised
+            stuck_after=(
+                stuck_after
+                if stuck_after is not None
+                else (
+                    directives.stuck_after
+                    if directives is not None
+                    else history.stuck_after
+                )
+            ),
+            stuck_cancel=directives.stuck_cancel if directives is not None else None,
+            preauthorized=(
+                _granted(preauthorized)
+                if preauthorized is not None
+                else (
+                    _granted(directives.preauthorized)
+                    if directives is not None
+                    else None
+                )
+            ),
             # for the same reason as the policies: a file that parsed still
             # says where the workspace goes, and a remote reader watching a
             # degraded run is exactly who needs the file to keep arriving
@@ -1494,6 +1658,13 @@ def _settings(
         degraded=None,
         interval=directives.tend_interval,
         policies=_policies(directives),
+        stuck_after=stuck_after if stuck_after is not None else directives.stuck_after,
+        stuck_cancel=directives.stuck_cancel,
+        preauthorized=(
+            _granted(preauthorized)
+            if preauthorized is not None
+            else _granted(directives.preauthorized)
+        ),
         sync=sync if sync is not None else directives.sync,
         notification=notification
         if notification is not None
@@ -1577,6 +1748,7 @@ def _record(
     *,
     pool: Pool,
     tuning: dict[str, Any],
+    stuck_after: int | None = None,
 ) -> None:
     """Append this turn's observation to the journal.
 
@@ -1622,6 +1794,10 @@ def _record(
             "max_samples": pool.max_samples,
             "samples_ramp": list(ramp) if isinstance(ramp, tuple) else ramp,
             "stall_after": pool.stall_after,
+            # beside the pool's keys because it degrades with them; `_pool`'s
+            # payload sentinel keys on `stall_after` alone, so an extra key
+            # costs it nothing
+            "stuck_after": stuck_after,
         },
         # what the next turn's window measures against (`_tend.tuning.Baseline`)
         tuning=tuning,
@@ -1702,7 +1878,12 @@ def _sync(
         _mark(workspace, "sync_restored", target=target)
 
 
-def _live(inflight: InFlight, logs: ObservedLogs) -> LiveFleet:
+def _live(
+    inflight: InFlight,
+    logs: ObservedLogs,
+    *,
+    stuck_after: float = DEFAULT_STUCK_AFTER,
+) -> LiveFleet:
     """Ask the running workers how they are getting on.
 
     **Only the ones that are running, and only when some are.** The in-flight record already answers *is anything alive* for free, so a finished campaign — the common shape late on — pays nothing at all for the live columns. A worker that has not yet bound its control socket has no entry here either; it is in the window before its `eval_set()` boundary, where there is genuinely nothing to ask.
@@ -1714,7 +1895,35 @@ def _live(inflight: InFlight, logs: ObservedLogs) -> LiveFleet:
         for worker in inflight.running
         if worker.socket is not None
     ]
-    return read_fleet(targets, _locations(logs))
+    return read_fleet(targets, _locations(logs), stuck_after=stuck_after)
+
+
+def _current_locations(observed: ObservedTasks) -> dict[str, str]:
+    """Task identifier to its current attempt's location, for the dispositions fold."""
+    return {
+        task.identifier: task.current.location
+        for task in observed.tasks
+        if task.current is not None
+    }
+
+
+def _granted(value: dict[str, str] | bool | None) -> dict[str, str] | None:
+    """The standing grants actually in force: a mapping grants; `false` and unset grant nothing.
+
+    `False` exists so a narrower scope can *decline* the file's grants rather than merely not add to them — `--preauthorized false` on a turn that must not auto-rule — where `None` defers to the file.
+    """
+    return value if isinstance(value, dict) and value else None
+
+
+def _cancel_authority(
+    stuck_cancel: bool | list[str] | None,
+) -> bool | tuple[str, ...] | None:
+    """The `stuck_cancel` grant, normalized for the item routing: `True`, a tuple of function names, or `None` for nothing."""
+    if stuck_cancel is True:
+        return True
+    if isinstance(stuck_cancel, list):
+        return tuple(stuck_cancel)
+    return None
 
 
 def _locations(logs: ObservedLogs) -> dict[str, str]:

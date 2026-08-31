@@ -245,7 +245,11 @@ def _progress(result: "TendResult") -> list[str]:
         if queued:
             cells += [str(row.queued) if row.queued else ""]
         if errored:
-            cells += [str(row.errored) if row.errored else ""]
+            cells += [
+                _errored_cell(
+                    row.errored, result.dispositions.by_task.get(row.identifier)
+                )
+            ]
         if live:
             connections = ""
             if row.connections is not None:
@@ -272,10 +276,47 @@ def _progress(result: "TendResult") -> list[str]:
         # fell back to the first of the first score: a bare number in a column
         # is not self-describing, and two tasks can land on different metrics
         notes.append(f"Score is {' / '.join(sorted(named))}.")
+    marks = _marks_note(result)
+    if marks:
+        notes.append(marks)
     if notes:
         lines += ["", " ".join(notes)]
 
     return lines + [""]
+
+
+_BUCKET_ORDER = ("rerunning", "excluded", "zeroed", "scored", "accepted", "undecided")
+
+
+def _errored_cell(count: int, split: dict[str, int] | None) -> str:
+    """The errored cell, split by ruling where one is in force.
+
+    `3 (2 excluded, 1 undecided)` — the count is still the log's number; the parenthetical is what has been decided about it. A wholly undecided task keeps the bare count.
+    """
+    if not count:
+        return ""
+    if not split or set(split) == {"undecided"}:
+        return str(count)
+    parts = [f"{split[name]} {name}" for name in _BUCKET_ORDER if split.get(name)]
+    return f"{count} ({', '.join(parts)})"
+
+
+def _marks_note(result: "TendResult") -> str | None:
+    """The scoring qualification when exclusions or zeroes are in force.
+
+    The qualification beside the number, never a recomputed number: headline scores still come off the log verbatim, and this line says what population they describe.
+    """
+    excluded = result.dispositions.excluded
+    zeroed = result.dispositions.zeroed
+    if not excluded and not zeroed:
+        return None
+    total = sum(row.total for row in result.progress.rows)
+    parts = [
+        f"{n} {name}" for n, name in ((excluded, "excluded"), (zeroed, "zeroed")) if n
+    ]
+    return (
+        f"Scores are over {total - excluded} of {total} samples ({', '.join(parts)})."
+    )
 
 
 def anomalies_line(anomalies: Anomalies) -> str | None:

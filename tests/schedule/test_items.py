@@ -40,7 +40,15 @@ from inspect_steward._tend.items import (
     UNSUPERVISED,
     Item,
 )
-from inspect_steward._worker import LiveFleet, LiveParked, LiveSamples, LiveTask
+from inspect_steward._tend.items import STUCK as STUCK_SAMPLE
+from inspect_steward._worker import (
+    LiveFleet,
+    LiveParked,
+    LiveSamples,
+    LiveStuck,
+    LiveTask,
+    StuckSample,
+)
 from inspect_steward._workspace import (
     ACKNOWLEDGED,
     ARMED,
@@ -215,7 +223,7 @@ def parked_run(
         }
     )
 
-    def read(inflight: object, logs: object) -> LiveFleet:
+    def read(inflight: object, logs: object, *, stuck_after: float = 0.0) -> LiveFleet:
         return fleet
 
     monkeypatch.setattr("inspect_steward._tend.turn._live", read)
@@ -360,6 +368,274 @@ def test_a_park_sorts_above_the_other_decisions_a_person_owes(
 
     assert human[0] == PARKED
     assert DRIFT in human
+
+
+# --- a sample that has stopped moving ------------------------------------
+
+
+def wedged(function: str = "bash", *, asked: bool = False) -> LiveStuck:
+    """One sample stuck on one pending tool call for two hours."""
+    return LiveStuck(
+        count=1,
+        oldest_idle=7200.0,
+        samples=(
+            StuckSample(
+                sample_id="s1",
+                epoch=1,
+                idle=7200.0,
+                function=function,
+                call_id="c1",
+                cancel_requested=asked,
+            ),
+        ),
+        asked=asked,
+    )
+
+
+def stuck_run(
+    root: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    stuck: LiveStuck,
+    *,
+    task_id: str = "T1",
+) -> Workspace:
+    """A run whose one worker holds samples that have stopped moving."""
+    workspace, manifest = prepared(root, [TASK])
+    write_log(workspace.logs, TASK)
+    fleet = LiveFleet(
+        tasks={
+            manifest.tasks[0].identifier: LiveTask(
+                pid=os.getpid(),
+                identifier=manifest.tasks[0].identifier,
+                task_id=task_id,
+                samples=LiveSamples(total=4, completed=0, in_flight=1),
+                stuck=stuck,
+            )
+        }
+    )
+
+    def read(inflight: object, logs: object, *, stuck_after: float = 0.0) -> LiveFleet:
+        return fleet
+
+    monkeypatch.setattr("inspect_steward._tend.turn._live", read)
+    return workspace
+
+
+def test_a_stuck_sample_carries_the_ladder_s_first_rung(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # nothing pre-authorized: the condition is reported, the command is ready,
+    # and running it is a person's act
+    workspace = stuck_run(tmp_path, monkeypatch, wedged())
+    item = items(workspace)[STUCK_SAMPLE]
+
+    assert item.owner is Owner.HUMAN
+    assert item.level is Level.ATTENTION
+    assert item.acknowledgeable
+    assert item.id.startswith("stuck:probe:")
+    assert not item.id.endswith(":asked")
+    assert "stopped moving inside bash" in item.summary
+    assert "nothing failed" in item.summary
+    assert item.action == "inspect ctl sample cancel-tool-call T1 s1 1"
+
+
+@pytest.mark.parametrize(
+    ("granted", "function", "owner"),
+    [
+        pytest.param("stuck_cancel: [bash]\n", "bash", Owner.AGENT, id="named"),
+        pytest.param("stuck_cancel: true\n", "bash", Owner.AGENT, id="any"),
+        pytest.param("stuck_cancel: [bash]\n", "python", Owner.HUMAN, id="unnamed"),
+        pytest.param("", "bash", Owner.HUMAN, id="ungranted"),
+    ],
+)
+def test_the_grant_decides_who_holds_rung_one(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+    granted: str,
+    function: str,
+    owner: Owner,
+) -> None:
+    workspace = stuck_run(tmp_path, monkeypatch, wedged(function))
+    if granted:
+        workspace.directives.write_text(granted, encoding="utf-8")
+
+    assert items(workspace)[STUCK_SAMPLE].owner is owner
+
+
+def test_an_unheeded_cancel_is_a_new_item_and_a_person_s(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The `:asked` flip re-notifies through the ordinary appeared diff.
+
+    Rung 1 has been spent, so the grant no longer covers it whatever the file
+    says — the delivered-but-unheeded state escalates, and never repeats the
+    ask.
+    """
+    workspace = stuck_run(tmp_path, monkeypatch, wedged())
+    workspace.directives.write_text("stuck_cancel: [bash]\n", encoding="utf-8")
+    quiet = items(workspace)[STUCK_SAMPLE]
+
+    stuck_run(tmp_path, monkeypatch, wedged(asked=True))
+    asked = items(workspace)[STUCK_SAMPLE]
+
+    assert quiet.id != asked.id
+    assert asked.id.endswith(":asked")
+    assert asked.owner is Owner.HUMAN
+    assert "a cancel was asked and it did not stop" in asked.summary
+    assert asked.action == "inspect ctl sample cancel T1 s1 1"
+
+
+def test_two_calls_on_one_sample_stay_on_rung_one(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The grant covers cancelling a call, never the sample.
+
+    A sample wedged on two admitted calls is still the agent's — and its
+    command names one call by id, because `sample cancel` ends the whole
+    sample and records an outcome, which exceeds anything `stuck_cancel`
+    can authorize.
+    """
+    two_calls = LiveStuck(
+        count=1,
+        oldest_idle=7200.0,
+        samples=(
+            StuckSample(
+                sample_id="s1", epoch=1, idle=7200.0, function="bash", call_id="c1"
+            ),
+            StuckSample(
+                sample_id="s1", epoch=1, idle=7200.0, function="python", call_id="c2"
+            ),
+        ),
+    )
+    workspace = stuck_run(tmp_path, monkeypatch, two_calls)
+    workspace.directives.write_text("stuck_cancel: true\n", encoding="utf-8")
+    item = items(workspace)[STUCK_SAMPLE]
+
+    assert item.owner is Owner.AGENT
+    assert (
+        item.action == "inspect ctl sample cancel-tool-call T1 s1 1 --tool-call-id c1"
+    )
+
+
+def test_two_stuck_samples_get_the_listing_rather_than_a_rung(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # a ladder is climbed one target at a time, so the item hands over the
+    # listing and the reader picks their footing
+    two = LiveStuck(
+        count=2,
+        oldest_idle=7200.0,
+        samples=(
+            StuckSample(sample_id="s1", epoch=1, idle=7200.0),
+            StuckSample(sample_id="s2", epoch=1, idle=3600.0),
+        ),
+    )
+    workspace = stuck_run(tmp_path, monkeypatch, two)
+    item = items(workspace)[STUCK_SAMPLE]
+
+    assert "2 samples that have stopped moving" in item.summary
+    assert item.action == "inspect ctl sample list T1 --json"
+
+
+def test_an_ack_silences_the_episode_and_not_the_condition(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The id carries the episode — the set of stuck samples — so an ack ends.
+
+    An acknowledgment is permanent per id, and a task name is not an episode:
+    keyed on the name alone, accepting one wedged `bash` in week one silenced
+    every stuck sample the task would ever have.
+    """
+    workspace = stuck_run(tmp_path, monkeypatch, wedged())
+    first = items(workspace)[STUCK_SAMPLE]
+    ack(workspace, first.id)
+
+    # the same episode stays accepted, turn after turn
+    assert STUCK_SAMPLE not in items(workspace)
+
+    different = LiveStuck(
+        count=1,
+        oldest_idle=3600.0,
+        samples=(
+            StuckSample(
+                sample_id="s2", epoch=1, idle=3600.0, function="bash", call_id="c2"
+            ),
+        ),
+    )
+    stuck_run(tmp_path, monkeypatch, different)
+    fresh = items(workspace)[STUCK_SAMPLE]
+
+    assert fresh.id != first.id
+
+
+def test_spending_rung_one_on_one_call_re_arms_the_item(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Asking one call of several is a new episode with a new ask.
+
+    The digest is over the un-asked calls, so an acknowledgment of the first
+    ask does not cover the second — keyed on the sample set alone, acking the
+    c1 item silenced the c2 action forever.
+    """
+
+    def calls(*, first_asked: bool) -> LiveStuck:
+        return LiveStuck(
+            count=1,
+            oldest_idle=7200.0,
+            samples=(
+                StuckSample(
+                    sample_id="s1",
+                    epoch=1,
+                    idle=7200.0,
+                    function="bash",
+                    call_id="c1",
+                    cancel_requested=first_asked,
+                ),
+                StuckSample(
+                    sample_id="s1",
+                    epoch=1,
+                    idle=7200.0,
+                    function="python",
+                    call_id="c2",
+                ),
+            ),
+        )
+
+    workspace = stuck_run(tmp_path, monkeypatch, calls(first_asked=False))
+    first = items(workspace)[STUCK_SAMPLE]
+    assert first.action is not None and "--tool-call-id c1" in first.action
+    ack(workspace, first.id)
+
+    stuck_run(tmp_path, monkeypatch, calls(first_asked=True))
+    item = items(workspace)[STUCK_SAMPLE]
+
+    assert item.id != first.id
+    assert item.action is not None and "--tool-call-id c2" in item.action
+
+
+def test_a_sample_id_is_free_text_and_the_command_survives_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # the action is a line the runbook tells an agent to execute, and a sample
+    # id comes off the dataset -- whatever it holds must arrive at the CLI as
+    # one argument
+    hostile = LiveStuck(
+        count=1,
+        oldest_idle=7200.0,
+        samples=(
+            StuckSample(
+                sample_id="q 1; rm -rf",
+                epoch=1,
+                idle=7200.0,
+                function="bash",
+                call_id="c1",
+            ),
+        ),
+    )
+    workspace = stuck_run(tmp_path, monkeypatch, hostile)
+    item = items(workspace)[STUCK_SAMPLE]
+
+    assert item.action == "inspect ctl sample cancel-tool-call T1 'q 1; rm -rf' 1"
 
 
 def test_accepting_results_survives_an_edit_that_produces_no_new_results(
