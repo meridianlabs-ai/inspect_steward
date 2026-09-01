@@ -86,9 +86,6 @@ class Post:
     **Two renderings carried rather than one narrowed on the way out**, because the rows arrive already padded to a common column width: trimming them afterwards cuts columns off the right-hand end rather than shortening the key on the left, which is the one part a reader is scanning for. Building both costs one more pass over rows a turn has already computed.
     """
 
-    footer: str | None = None
-    """Where the logs are, or `None`. The one thing a reader away from the machine cannot look up."""
-
     glyph: str | None = None
     """The character the title leads with, in front of the workspace name.
 

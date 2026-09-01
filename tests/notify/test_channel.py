@@ -33,16 +33,11 @@ def workspace_at(root: Path, text: str | None = None) -> Workspace:
     return workspace
 
 
-@pytest.fixture(autouse=True)
-def no_ambient_channel(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Neither variable, unless a test sets one.
-
-    Both are read from the real environment, and a developer with a channel
-    exported would otherwise watch half these tests pass for the wrong reason.
-    """
-    monkeypatch.delenv(INSPECT_NOTIFICATION, raising=False)
-    monkeypatch.delenv("STEWARD_NOTIFICATION", raising=False)
-
+# the ambient channel is cleared by `conftest.no_ambient_channel`, which this
+# file used to shadow with a local copy of the same idea. The copy was the
+# weaker of the two — it cleared the variables and nothing else — and shadowing
+# is silent, so the module about channels was the one module the suite's own
+# guard against posting to a real one did not cover
 
 ACCEPTED = [
     ("one url", SLACK),
@@ -148,6 +143,31 @@ def test_nothing_configured_anywhere_is_no_channel(tmp_path: Path) -> None:
     workspace = workspace_at(tmp_path, "")
 
     assert establish_channel(workspace, read_directives(workspace.directives)) is None
+
+
+def test_a_dotenv_beside_a_command_cannot_restore_a_channel(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The hole the suite's own isolation had, pinned where it can be seen.
+
+    Every `steward` invocation reads `.env` from the cwd upward — deliberately,
+    because a scheduled tend runs under a stripped environment and needs to see
+    what its workers see. In a test that put back exactly what `conftest`'s
+    `no_ambient_channel` had removed, so an in-process CLI test running inside
+    a repository with a channel in its `.env` had a live one underneath it and
+    would have posted to it for real.
+    """
+    from click.testing import CliRunner
+    from inspect_steward._cli.main import steward
+
+    (tmp_path / ".env").write_text(
+        "STEWARD_NOTIFICATION=slack://real/channel\n", encoding="utf-8"
+    )
+    monkeypatch.chdir(tmp_path)
+
+    CliRunner().invoke(steward, ["status"])
+
+    assert os.environ.get("STEWARD_NOTIFICATION") is None
 
 
 REFUSED = [

@@ -227,7 +227,6 @@ def turn_post(result: "TendResult") -> Post | None:
         lines=_lines(result, _named(kind, shown)),
         table=_table(result.progress, WIDTH),
         narrow=_table(result.progress, NARROW),
-        footer=None if result.log_dir is None else f"logs: {result.log_dir}",
     )
 
 

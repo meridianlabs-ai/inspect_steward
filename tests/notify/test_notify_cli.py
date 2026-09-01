@@ -37,10 +37,9 @@ from ..schedule.test_tend import prepared, turn
 CHANNEL = "slack://xoxb-1234567890-1234567890-abcdefghij/#general"
 
 
-@pytest.fixture(autouse=True)
-def no_ambient_channel(monkeypatch: pytest.MonkeyPatch) -> None:
-    monkeypatch.delenv(INSPECT_NOTIFICATION, raising=False)
-    monkeypatch.delenv("STEWARD_NOTIFICATION", raising=False)
+# the ambient channel is cleared by `conftest.no_ambient_channel`, which this
+# file used to shadow with a weaker copy — and this is the file that actually
+# sends, so it was the worst place in the suite to be running without the guard
 
 
 @pytest.fixture

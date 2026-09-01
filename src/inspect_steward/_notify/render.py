@@ -4,8 +4,6 @@ Three renderings and four dialects, because HTML is the text rendering wrapped r
 
 **The body never repeats the title.** It is passed to Apprise as a title, and every plugin renders it itself — Slack as an attachment heading, mail as the subject — so a body opening with it arrives as the same line twice. The one plugin family that cannot show a title is handled upstream: Apprise prepends it to the body itself when `title_maxlen` is zero, in the notify format the target declared. So there is nothing here to compensate for, and a renderer that spelled the title anyway would be duplicating it everywhere to serve a case that is already covered.
 
-**The footer is emphasised nowhere, because it ends in a URL.** Slack detects links before it parses emphasis, and an underscore is a legal URL character — so the closing delimiter of `_logs: s3://bucket/run_` is swallowed into the link, and the opening one is left over and shown. Every footer this renders ends in a path, which makes the failure the rule rather than the exception; there is no arrangement that both italicises the line and keeps the location at the end of it, and the location is the part somebody needs.
-
 **`status_markdown` is not reused, and the reason is structural.** That renderer is built from headings, pipe tables, `**bold**` and `[text](url)` — the four constructs that do not survive the trip. What is shared instead is everything below markup: `verdict_line()`, `by_owner()`, and `progress_table()`, so a post and a `status.md` cannot disagree about what a turn found, only about how it is spelled.
 """
 
@@ -58,20 +56,16 @@ def _text(post: Post) -> str:
         parts.append("\n".join(f"  {line}" for line in post.lines))
     if table := post.monospace(narrow=False):
         parts.append("\n".join(f"  {row}" for row in table))
-    if post.footer:
-        parts.append(post.footer)
     return _joined(parts, post)
 
 
 def _markdown(post: Post) -> str:
-    """CommonMark: a bullet per line, a fenced table, a plain footer."""
+    """CommonMark: a bullet per line and a fenced table."""
     parts: list[str] = []
     if post.lines:
         parts.append("\n".join(f"- {line}" for line in post.lines))
     if table := post.monospace(narrow=False):
         parts.append("```\n" + "\n".join(table) + "\n```")
-    if post.footer:
-        parts.append(post.footer)
     return _joined(parts, post)
 
 
@@ -85,8 +79,6 @@ def _mrkdwn(post: Post) -> str:
         parts.append("\n".join(f"• {line}" for line in post.lines))
     if table := post.monospace(narrow=True):
         parts.append("```\n" + "\n".join(table) + "\n```")
-    if post.footer:
-        parts.append(post.footer)
     return _joined(parts, post)
 
 

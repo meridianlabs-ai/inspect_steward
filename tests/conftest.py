@@ -10,6 +10,7 @@ from pathlib import Path
 
 import psutil
 import pytest
+from inspect_steward._cli import main as cli
 from inspect_steward._worker import scan_processes
 
 
@@ -51,9 +52,26 @@ def no_ambient_channel(monkeypatch: pytest.MonkeyPatch) -> None:
     And a test that posts posts **to the real channel**. `establish_channel` falls back to the environment precisely so that declaring the channel inspect's way works, which means a CLI test that resolves one would reach whatever Slack workspace the developer configured. Every test that wants a channel sets its own.
 
     The scan-model spellings are cleared on the same grounds: `establish_scan_model` is reflexive with `SCOUT_SCAN_MODEL` by design, so an ambient value would configure a real (billed) model into any test that scans.
+
+    **Clearing them once is not enough, which is what the wrapper is for.** Every `steward` invocation calls `init_dotenv()` in its group callback — deliberately, because a scheduled tend runs under a stripped environment and needs to see what its workers see — and that reads `.env` again from the cwd upward and puts back exactly what this fixture removed. So any in-process CLI test running from inside the repository had a live channel restored underneath it, and the only thing standing between the suite and a real Slack workspace was which tests happened to resolve one.
+
+    The load still happens, because everything else in `.env` is wanted. What the wrapper does is **restore these four to whatever they were when it was called** — which is absent for most tests, and the test's own value for one that set a channel deliberately. Clearing them outright instead would take those away too, and *no test may have a channel* is a different rule from *no test may inherit one*.
     """
     for name in CHANNELS + SCAN_MODELS:
         monkeypatch.delenv(name, raising=False)
+
+    loaded = cli.init_dotenv
+
+    def guarded() -> None:
+        held = {name: os.environ.get(name) for name in CHANNELS + SCAN_MODELS}
+        loaded()
+        for name, value in held.items():
+            if value is None:
+                os.environ.pop(name, None)
+            else:
+                os.environ[name] = value
+
+    monkeypatch.setattr(cli, "init_dotenv", guarded)
 
 
 @pytest.fixture(scope="session")

@@ -329,7 +329,6 @@ def _post(workspace: Workspace, result: TendResult, signature: Signature) -> Non
                 workspace=workspace.root.name,
                 title=f"signed off by {signature.by} ({exceptions})",
                 lines=[signature.note] if signature.note else [],
-                footer=None if result.log_dir is None else f"logs: {result.log_dir}",
             ),
             workspace.log,
         )

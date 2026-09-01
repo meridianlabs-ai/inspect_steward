@@ -1297,20 +1297,20 @@ def _signoff_summary(summary: Summary, accepted: int) -> str:
 
     A run whose every task finished and one whose last task was accepted as it stands are both ready for the same decision, and they are not the same claim — so the invitation says which it is rather than reporting "every task is complete" over a log somebody knows is short.
 
+    **Two clauses, not four.** *every task is complete (1 of 1) and nothing further will run, so the results are waiting to be accepted* said the same thing three ways: the parenthetical restates the sentence before it, *nothing further will run* is what *complete* means, and both sit directly above a table carrying the counts. This line is read on a phone at 3am and its job is to say a decision is owed.
+
     Args:
         summary: The run's shape.
         accepted: Tasks settled by a decision rather than by finishing (`settled_by_decision`), which is a count the summary cannot supply on its own: an acknowledged stall settles a task and is recorded in the journal rather than in the reconciliation.
     """
     complete = summary.states.get(TaskState.COMPLETE.value, 0)
     if not accepted:
-        return (
-            f"every task is complete ({summary.tasks} of {summary.tasks}) and "
-            f"nothing further will run, so the results are waiting to be accepted"
-        )
+        return "every task is complete; the results are waiting to be accepted"
     return (
         f"{complete} of {summary.tasks} tasks are complete and {accepted} "
-        f"{'is' if accepted == 1 else 'are'} accepted as {'it' if accepted == 1 else 'they'} "
-        f"stand{'s' if accepted == 1 else ''}, so the results are waiting to be accepted"
+        f"accepted as {'it' if accepted == 1 else 'they'} "
+        f"stand{'s' if accepted == 1 else ''}; "
+        f"the results are waiting to be accepted"
     )
 
 

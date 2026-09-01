@@ -149,7 +149,7 @@ def test_the_gate_posts_once_when_the_run_settles(tmp_path: Path) -> None:
     assert turn_post(again) is None
 
 
-def test_the_post_carries_the_verdict_line_and_the_logs(tmp_path: Path) -> None:
+def test_the_post_leads_with_the_verdict_line(tmp_path: Path) -> None:
     workspace, _ = prepared(tmp_path, [DONE])
     turn(workspace)
     write_log(workspace.logs, DONE)
@@ -159,7 +159,6 @@ def test_the_post_carries_the_verdict_line_and_the_logs(tmp_path: Path) -> None:
     assert post is not None
     assert post.glyph == Verdict.COMPLETE.value
     assert post.title == "complete (the results are waiting to be accepted)"
-    assert post.footer is not None and post.footer.startswith("logs: ")
 
 
 def test_the_table_rides_at_two_widths(tmp_path: Path) -> None:

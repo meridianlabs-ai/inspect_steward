@@ -20,7 +20,6 @@ POST = Post(
     ],
     table=["✓ addition@mockllm/model  4/4  100%", "  4/4 samples · 100%"],
     narrow=["✓ addition  4/4  100%", "  4/4 samples · 100%"],
-    footer="logs: s3://bucket/run",
 )
 
 
@@ -30,7 +29,7 @@ def test_every_dialect_carries_the_whole_post(dialect: Dialect) -> None:
 
     for line in POST.lines:
         assert line in body
-    assert "s3://bucket/run" in body
+    assert "4/4  100%" in body
 
 
 @pytest.mark.parametrize("dialect", list(Dialect))
@@ -129,12 +128,12 @@ def test_a_post_with_nothing_but_a_title_renders_as_one() -> None:
 
 
 @pytest.mark.parametrize("dialect", [Dialect.MARKDOWN, Dialect.MRKDWN])
-def test_the_footer_is_not_emphasised(dialect: Dialect) -> None:
-    # Slack detects links before it parses emphasis and an underscore is a
-    # legal URL character, so `_logs: s3://bucket/run_` loses its closing
-    # delimiter into the link and shows the opening one. Every footer ends in a
-    # path, which makes that the rule rather than the exception
+def test_a_post_ends_on_the_table_rather_than_a_path(dialect: Dialect) -> None:
+    # a post carried a `logs:` line for a reader who could not look the
+    # location up. It is the one line nobody reads on a phone, it is long
+    # enough to wrap on every one of them, and the location is in `status.md`
+    # for the reader who actually wants it
     body = render(POST, dialect)
 
-    assert body.endswith("logs: s3://bucket/run")
-    assert "_" not in body
+    assert "logs:" not in body
+    assert body.rstrip().endswith("```")
