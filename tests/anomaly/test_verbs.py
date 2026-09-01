@@ -198,6 +198,50 @@ class TestRule:
         assert "task:vanished (task class)" in output
         assert rulings(workspace) == []
 
+    def test_a_sample_mark_on_a_scan_class_is_recorded(
+        self, workspace: Workspace
+    ) -> None:
+        # a flagged sample is one row in the results, so "1 sample excluded
+        # from scoring" is the true sentence — and refusing it would leave
+        # `accept` and `dismiss` as the only answers to a score known wrong
+        scan = "scan:scoring_integrity:reward_hacking"
+        opened(workspace, scan, count=1, kind="scan")
+
+        code, _ = run(
+            "rule",
+            scan,
+            "--disposition",
+            "exclude",
+            "--reason",
+            "the grader was gamed",
+            "--by",
+            "kaia",
+        )
+
+        assert code == 0
+        assert [entry["disposition"] for entry in rulings(workspace)] == ["exclude"]
+
+    def test_accept_on_a_scan_class_is_allowed(self, workspace: Workspace) -> None:
+        # unlike an `error:` class: the data is there and readable, and the
+        # caveat is what the reader needs rather than a silent exclusion
+        scan = "scan:scoring_integrity:refusal"
+        opened(workspace, scan, count=1, kind="scan")
+
+        code, _ = run(
+            "rule",
+            scan,
+            "--disposition",
+            "accept",
+            "--reason",
+            "the refusal is the result",
+            "--by",
+            "kaia",
+            "--effect",
+            "1 sample scored as recorded",
+        )
+
+        assert code == 0
+
     def test_duplicate_arguments_land_one_ruling(self, workspace: Workspace) -> None:
         # two prefixes naming the same class are one decision, not a ruling
         # immediately superseded by its own copy

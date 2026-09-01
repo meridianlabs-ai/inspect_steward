@@ -20,6 +20,7 @@ They cannot drift, because they are the same code path with one flag. That is wo
 
 import hashlib
 import os
+import time
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -36,6 +37,7 @@ from .._evalset.instances import (
 )
 from .._evalset.manifest import (
     Manifest,
+    ManifestScan,
     definition_hash,
     manifest_digest,
     read_manifest,
@@ -44,11 +46,20 @@ from .._evalset.observe import (
     ObservedLogs,
     ObservedTasks,
     TaskState,
+    UnreadableLog,
     observe_logs,
     observe_tasks,
 )
 from .._notify import establish_channel
-from .._scan import establish_scan_model
+from .._scan import (
+    ScanFindings,
+    establish_scan_model,
+    existing_eval_set_id,
+    merged_scanners,
+    scan_dir_location,
+    scan_findings,
+    sync_scan,
+)
 from .._schedule import (
     Action,
     ArchiveLog,
@@ -118,7 +129,7 @@ from .._workspace import (
     utc_now,
 )
 from .anomalies_md import Caveat, anomalies_markdown, caveats
-from .detect import detect, task_health
+from .detect import detect, scan_attempts, task_health
 from .history import Happened, happened
 from .items import (
     Item,
@@ -129,7 +140,7 @@ from .items import (
     unfinished,
     verdict,
 )
-from .notify import notify_turn
+from .notify import held_tasks, notify_turn
 from .progress import Progress, live_totals, task_progress
 from .render import marks_note, status_markdown
 from .rulings import (
@@ -152,6 +163,13 @@ from .tuning import (
     read_ramp_record,
     signals,
 )
+
+SCAN_FOLD_FAILED = "scan_fold_failed"
+SCAN_FOLD_RESTORED = "scan_fold_restored"
+"""The scan fold's episode edges, on `status_unwritable`'s pattern and folded beside it (`_episodes`).
+
+Bare strings on the `sync_failed` / `status_unwritable` model: an episode is *when this started*, so the pair is a switch, and what it buys is the retry. Without it the fold's cheap `running or departed` gate has a hole with a bad ending — a failure on the departure turn is a fold that never happens, because the reap takes the gate away and the next thing to fold is signoff's terminal finalize, which runs after the gate has already passed.
+"""
 
 
 class TendError(Exception):
@@ -231,6 +249,14 @@ class TendResult:
     Empty on the first turn that records a completion set at all, since there is nothing to diff against and *everything already finished* is not news.
 
     Identifiers rather than the keys a reader recognises, for the reason `_finished` gives: this is diffed against a record an earlier turn wrote, and a display key is computed against whatever else was on screen at the time.
+
+    Held tasks are subtracted (`held`), which is what makes a hold a deferral: the diff is against a set they are also missing from, so they re-enter it every turn until released.
+    """
+
+    held: frozenset[str] = frozenset()
+    """Identifiers whose completion is waiting on an agent's scan investigation (`_notify.held_tasks`).
+
+    Subtracted from `finished` **and** from the completion set the observation records, and both are load-bearing. Subtracting from only the first would spend the diff: the next turn reads the task as already-recorded-complete, and the finish is announced never.
     """
 
     spawned: list[str] = field(default_factory=list[str])
@@ -287,6 +313,24 @@ class TendResult:
     `None` only on a result assembled by hand, which makes no claim about a directory.
     """
 
+    scan: ManifestScan | None = None
+    """What this run scans with, as the committed manifest holds it.
+
+    Carried so signoff can close the scan bracket without re-reading the manifest for the one field it needs — the `scans` redirect, which is the only thing that says where the rows actually are. `None` for a run committed before scanning existed, or a result assembled by hand.
+    """
+
+    scan_id: str | None = None
+    """This run's scan id — its eval set id, as the log directory or the manifest says it.
+
+    Resolved by **reading** rather than by `resolve_eval_set_id`, which mints and writes one: a `status` must leave the log directory exactly as it found it. Carried so the turn's fold and signoff's finalize cannot come to disagree about which directory they are acting on.
+    """
+
+    scan_incomplete: dict[str, int] = field(default_factory=dict[str, int])
+    """Per scanner, transcripts it errored on rather than reaching a verdict (`_scan.findings.ScanFindings.incomplete`).
+
+    Carried because an errored transcript is one nothing scanned, and its absence from the findings is indistinguishable from a clean reading. What `items.SCAN_INCOMPLETE` raises and the gate refuses over until somebody names it.
+    """
+
     journal_damage: list[DamagedLine] = field(default_factory=list[DamagedLine])
     """Journal lines this turn's history read could not turn into events.
 
@@ -297,6 +341,12 @@ class TendResult:
     """When `status.md` stopped being writable, or `None` while it writes.
 
     From the journal's episode record rather than from this turn's own attempt, which happens after the items are computed — so a fresh failure surfaces on the next turn, and a restored one clears the same way. The episode's opening instant, which is what keys the item.
+    """
+
+    fold_failing: str | None = None
+    """When the scan fold started failing, or `None` while it folds.
+
+    Unlike the two beside it this raises no item: what it costs is freshness, and the read it feeds goes on answering from the rows already compacted. What it must not do is go unnoticed at the one moment it changes an answer, so signoff warns on it — a signature taken while rows are still unfolded is a signature over results this run has not finished looking at.
     """
 
     sync_failing: dict[str, str] = field(default_factory=dict[str, str])
@@ -659,6 +709,9 @@ class _History:
     status_failing: str | None = None
     """When `status.md` stopped being writable, or `None` while it writes. The episode's opening edge, as `_write_status` journalled it — what tells this turn whether a failure is news and a success is a recovery."""
 
+    fold_failing: str | None = None
+    """When the scan fold started failing, or `None` while it folds. The same episode mechanics, and what keeps the fold being retried after the cheap `running or departed` gate has stopped firing (`_findings`)."""
+
     sync_failing: dict[str, str] = field(default_factory=dict[str, str])
     """Destinations the propagation has stopped reaching, each with when it stopped. The same episode mechanics as `status_failing`, per target."""
 
@@ -686,7 +739,7 @@ def _history(workspace: Workspace) -> _History:
 
     events = read.events
     armed = read_armed(events)
-    status_failing, sync_failing = _episodes(events)
+    status_failing, fold_failing, sync_failing = _episodes(events)
     breaks_since, breaks = _breaks(events)
     ramp_levels, last_step = read_ramp_record(events)
     pool: Pool | None = None
@@ -741,18 +794,22 @@ def _history(workspace: Workspace) -> _History:
         last_step=last_step,
         damage=read.damage,
         status_failing=status_failing,
+        fold_failing=fold_failing,
         sync_failing=sync_failing,
         breaks=breaks,
         breaks_since=breaks_since,
     )
 
 
-def _episodes(events: list[JournalEvent]) -> tuple[str | None, dict[str, str]]:
-    """The write failures in force: `status.md`'s, and each sync destination's.
+def _episodes(
+    events: list[JournalEvent],
+) -> tuple[str | None, str | None, dict[str, str]]:
+    """The failures in force: `status.md`'s write, the scan fold, and each sync destination's.
 
     An episode opens with the `action` its writer journals on the *first* failure and closes with the `…_restored` its first success writes, so the fold is a switch per subject and the answer is *when it started* — which is what keys the item, and what makes acknowledging one episode not cover the next. Defensive on doubled edges (a crash can repeat one): the episode keeps its original start.
     """
     status_failing: str | None = None
+    fold_failing: str | None = None
     sync_failing: dict[str, str] = {}
     for event in events:
         if event.type != ACTION:
@@ -762,6 +819,10 @@ def _episodes(events: list[JournalEvent]) -> tuple[str | None, dict[str, str]]:
             status_failing = status_failing or event.ts
         elif action == "status_unwritable_restored":
             status_failing = None
+        elif action == SCAN_FOLD_FAILED:
+            fold_failing = fold_failing or event.ts
+        elif action == SCAN_FOLD_RESTORED:
+            fold_failing = None
         elif action in ("sync_failed", "sync_restored"):
             target = event.payload.get("target")
             if not isinstance(target, str) or not target:
@@ -770,7 +831,7 @@ def _episodes(events: list[JournalEvent]) -> tuple[str | None, dict[str, str]]:
                 sync_failing.setdefault(target, event.ts)
             else:
                 sync_failing.pop(target, None)
-    return status_failing, sync_failing
+    return status_failing, fold_failing, sync_failing
 
 
 def _breaks(events: list[JournalEvent]) -> tuple[str | None, int]:
@@ -980,6 +1041,11 @@ def _turn(
         ) from ex
 
     observed = observe_tasks(manifest, logs)
+    # read, never `resolve_eval_set_id`, which mints and *writes* one — a
+    # `status` must leave the log directory exactly as it found it, and a
+    # directory with no id has had no fleet and so no rows. Settled once for
+    # the two readers of it, the fold below and signoff's finalize
+    scan_id = existing_eval_set_id(log_dir) or manifest.eval_set_id
     # the anomaly and applied folds are hoisted above the decision, because the
     # decision consumes them: reconcile forgives attempt history at a rerun
     # ruling's instant and schedules the authorized re-runs first, so it needs
@@ -1022,15 +1088,39 @@ def _turn(
     # the state it *would* hold for a status -- but only an executing turn
     # appends them (below, before the observation)
     classed = read_classed_cache(workspace.classed)
-    detection = detect(
-        observed, logs, inflight, fleet, workers_dir=workspace.workers, cache=classed
+    found = _findings(
+        workspace,
+        manifest,
+        observed,
+        logs,
+        inflight,
+        log_dir,
+        scan_id,
+        execute=execute,
+        fold_failing=history.fold_failing,
     )
-    if detection.unreadable:
+    detection = detect(
+        observed,
+        logs,
+        inflight,
+        fleet,
+        workers_dir=workspace.workers,
+        cache=classed,
+        findings=found.instances,
+    )
+    if detection.unreadable or found.unreadable:
         # summaries damage joins the header damage on the item surface; the
         # summary's count was taken by reconcile before this read and stays a
-        # count of headers
+        # count of headers. Scan rows that would not read join them there too:
+        # the question *what could this run not see* has one answer, and the
+        # signoff gate refuses on it whichever file it was
         observed = replace(
-            observed, unreadable=[*observed.unreadable, *detection.unreadable]
+            observed,
+            unreadable=[
+                *observed.unreadable,
+                *detection.unreadable,
+                *found.unreadable,
+            ],
         )
     pending = absorb(anomalies, detection.batches, task_health(observed), applied)
     if pending:
@@ -1103,6 +1193,10 @@ def _turn(
         progress=progress,
         tuning=plan,
         log_dir=log_dir,
+        scan=manifest.scan,
+        scan_id=scan_id,
+        scan_incomplete=found.incomplete,
+        fold_failing=history.fold_failing,
         journal_damage=history.damage,
         status_failing=history.status_failing,
         sync_failing=history.sync_failing,
@@ -1393,9 +1487,12 @@ def _projected(
         position=max((event.line for event in history.events), default=0),
     )
     current = {item.id for item in items}
+    # after the collection stamp above, which is what the attachment test reads
+    held = held_tasks(result, spent=history.complete or frozenset())
     return replace(
         result,
         items=items,
+        held=held,
         verdict=verdict(
             items,
             paused=result.summary.paused,
@@ -1415,7 +1512,7 @@ def _projected(
         appeared=sorted(current - history.previous),
         resolved=sorted(history.previous - current),
         finished=(
-            sorted(frozenset(_finished(result.progress)) - history.complete)
+            sorted(frozenset(_finished(result.progress)) - history.complete - held)
             if history.complete is not None
             else []
         ),
@@ -1925,8 +2022,14 @@ def _record(
             for anomaly in result.anomalies.open
         },
         # the same, for tasks. `states` counts them, and a count cannot tell one
-        # task finishing while another is reset apart from nothing happening
-        complete=_finished(result.progress),
+        # task finishing while another is reset apart from nothing happening.
+        # A held task is left out so its finish stays unspent — the other half
+        # of the hold, and the half without which it is a suppression
+        complete=[
+            identifier
+            for identifier in _finished(result.progress)
+            if identifier not in result.held
+        ],
         # what this turn ran under, which is what a later turn reads back when
         # `_steward.yaml` will not parse
         settings={
@@ -2080,6 +2183,85 @@ def _live(
         if worker.socket is not None
     ]
     return read_fleet(targets, _locations(logs), stuck_after=stuck_after)
+
+
+def _findings(
+    workspace: Workspace,
+    manifest: Manifest,
+    observed: ObservedTasks,
+    logs: ObservedLogs,
+    inflight: InFlight,
+    log_dir: str,
+    scan_id: str | None,
+    *,
+    execute: bool,
+    fold_failing: str | None,
+) -> ScanFindings:
+    """Fold the workers' buffered scan rows, then read what they flagged.
+
+    The tend's half of the scan bracket (`_scan.summary`), and the second half of it is the reason the first has to happen here: workers in selection mode never enter upstream's `scan_context`, so **nothing but this fold ever compacts a row**. Without it the whole census is blind to scanning until signoff.
+
+    **The fold is an executing turn's, the read is both dispositions'.** A `status` previews the anomalies it would find and mutates nothing, which is the contract every other part of it honours — so it reads whatever the last tend folded and is at worst one interval behind.
+
+    **Folded while the run is not quiescent, or while a fold is owed.** The first is `running or departed`: a worker writes rows as its samples settle, and one that has left but not yet been reaped is the case where the last of them landed after the previous fold. Once the reap lands there is nothing new and a settled campaign pays nothing per turn — which matters, because a mid-run fold re-compacts the whole buffer and its cost grows with the run.
+
+    **The second is an open episode, and without it the cheap gate has a hole that ends at the signature.** A fold that failed on the departure turn is a fold that never happens: the reap lands, the gate stops firing, and rows sit in the buffer through every later tend — until signoff's terminal finalize folds them, *after* the gate has passed, revealing a finding the signature does not cover. So a failure opens an episode (`scan_fold_failed`) that keeps the fold running every turn until one succeeds, on `status.md`'s and the propagation's mechanics exactly.
+
+    Never raises. A directory that will not fold costs this turn's freshness and is retried; one that will not *read* is a different thing entirely and is reported (`ScanFindings.unreadable`), because unread and unflagged are not the same answer.
+    """
+    material = manifest.scan
+    if material is None or scan_id is None:
+        return ScanFindings()
+    scanners = tuple(sorted(merged_scanners(material)))
+    if not scanners:
+        return ScanFindings()
+    scan_dir = scan_dir_location(log_dir=log_dir, scan_id=scan_id, scans=material.scans)
+    if execute and (inflight.running or inflight.departed or fold_failing):
+        started = time.monotonic()
+        try:
+            sync_scan(log_dir=log_dir, scan_id=scan_id, scans=material.scans)
+        except Exception as ex:
+            steward_log(
+                workspace.log,
+                f"the scan rows in {scan_dir} could not be folded: "
+                f"{type(ex).__name__}: {ex}",
+            )
+            if fold_failing is None:
+                _mark(workspace, SCAN_FOLD_FAILED, target=scan_dir)
+        else:
+            # the cost this fold pays is the one step 29 asked to be *measured*
+            # before it is engineered around: it re-compacts the whole buffer,
+            # so it grows with the run rather than with the turn
+            steward_log(
+                workspace.log,
+                f"folded the scan rows in {time.monotonic() - started:.1f}s",
+            )
+            if fold_failing is not None:
+                _mark(workspace, SCAN_FOLD_RESTORED, target=scan_dir)
+    try:
+        return scan_findings(
+            scan_dir, scanners=scanners, attempts=scan_attempts(observed, logs)
+        )
+    except Exception as ex:
+        # the whole directory rather than one scanner's file — a `_scan.json`
+        # that will not open, a store that will not answer. Reported for the
+        # reason a single parquet is: the run would otherwise be signed on the
+        # assumption that nothing was flagged
+        if execute:
+            steward_log(
+                workspace.log,
+                f"the scan rows in {scan_dir} could not be read: "
+                f"{type(ex).__name__}: {ex}",
+            )
+        return ScanFindings(
+            unreadable=[
+                UnreadableLog(
+                    location=scan_dir,
+                    reason=f"{type(ex).__name__}: {ex}",
+                    what="this run's scan results",
+                )
+            ]
+        )
 
 
 def _current_locations(observed: ObservedTasks) -> dict[str, str]:

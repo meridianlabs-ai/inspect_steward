@@ -11,6 +11,7 @@
 **Unless nobody is picking them up, at which point they are the person's after all.** An agent's item is only the agent's while there is an agent — and the thing a person has to do about a workspace nobody has attached to is attach to it. `_unattended` is the whole of that judgement, and it is deliberately made from what the journal already records rather than from a new setting: `collect` stamps the journal, so the collection age is a fact about this run rather than a promise about anyone's tooling.
 """
 
+import time
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
@@ -24,6 +25,7 @@ from .._notify import (
     establish_channel,
     send_post,
 )
+from .._util.duration import seconds_since
 from .._workspace import (
     DEFAULT_TEND_INTERVAL,
     NOTIFIED,
@@ -69,6 +71,16 @@ UNATTENDED_INTERVALS = 2
 **Counted in tends rather than in minutes**, because what is being asked is *has an agent had the chance* — and the chances are turns. A workspace tended every ten minutes and one tended hourly are the same run from the agent's side, and a fixed duration would make the second one shout constantly and the first one stay quiet through most of a working day.
 
 Two, because one is the turn the item appeared on. An agent that collects on the tend after an item arrives is an agent doing its job at the ordinary cadence; the horizon has to leave room for that, and one more turn is the smallest amount of room that does.
+"""
+
+HOLD_TENDS = 6
+"""Tends a landed task's completion waits on an agent's scan investigation before it is posted anyway.
+
+**Why hold at all.** A task whose scan flagged something is not *finished* in the sense a reader takes from a completion post — it is finished and now needs a decision. Posting *finished cybench* and then, twenty minutes later, *a decision needs attention* is two messages about one moment, and the first one is misleading for as long as it stands alone. So where there is an agent to do the investigating, the finish waits for it and the run says one thing once.
+
+**And why hold for a bounded time.** An agent that has attached and then stopped answering would otherwise hold a completion for the rest of the night, which is the failure this whole module exists to prevent. Six is about an hour at the default cadence — long enough for an investigation that involves reading transcripts, short enough that a person who checks after lunch has been told.
+
+Counted in tends rather than minutes for `UNATTENDED_INTERVALS`' reason exactly: the question is how many chances the agent has had, and the chances are turns.
 """
 
 
@@ -201,15 +213,13 @@ def turn_post(result: "TendResult") -> Post | None:
     Returns:
         A post, or `None`. Pure — resolves no channel and sends nothing, so the whole trigger vocabulary is testable without a notifier.
     """
+    arriving = set(result.appeared)
     unattended = _unattended(result)
-    appeared = [item for item in result.items if item.id in set(result.appeared)]
-    # the escalation hands an unattended workspace's agent items to the person
-    # -- except the self-healing ones, which Steward's own respawn is already
-    # resolving and whose durable failure mode arrives as `stalled` instead
+    newly = _newly_unattended(result)
     shown = [
         item
-        for item in appeared
-        if item.owner is not Owner.AGENT or (unattended and not self_healing(item))
+        for item in result.items
+        if _reaches(item, arriving, unattended=unattended, newly=newly)
     ]
     # over every open item rather than the shown ones, which keeps a `clear`
     # from firing on a turn where the agent merely disposed of its own. A human
@@ -228,6 +238,22 @@ def turn_post(result: "TendResult") -> Post | None:
         table=_table(result.progress, WIDTH),
         narrow=_table(result.progress, NARROW),
     )
+
+
+def _reaches(item: Item, arriving: set[str], *, unattended: bool, newly: bool) -> bool:
+    """Whether one item is something to wake a person for, this turn.
+
+    A human item reaches them when it is new, which is the whole of the edge policy: the id changes when the condition materially does, so one post per condition follows for free.
+
+    **An agent item is different, and the difference had a hole in it.** It reaches them only where nobody is picking it up (`_unattended`) — except the self-healing ones, which Steward's own respawn is already resolving. But *newness* and *nobody is picking it up* are two edges that need not coincide: an item that appeared at 11pm to an attending agent is filtered out and spent, so when the agent goes quiet at 2am it is in no later diff and is escalated never. The escalation only ever caught items that happened to arrive after the agent had already gone.
+
+    So the transition itself is an edge, and on that one turn every open agent item is offered — the same *once per condition* policy the ids give everything else, arrived at from the other side. What re-arms it is the workspace becoming unattended rather than the item becoming new.
+    """
+    if item.owner is not Owner.AGENT:
+        return item.id in arriving
+    if not unattended or self_healing(item):
+        return False
+    return newly or item.id in arriving
 
 
 def _named(kind: Kind, shown: list[Item]) -> list[Item]:
@@ -250,6 +276,84 @@ def _unattended(result: "TendResult") -> bool:
     if result.since_collected is None:
         return False
     return result.since_collected >= UNATTENDED_INTERVALS * _cadence(result)
+
+
+def held_tasks(
+    result: "TendResult", *, spent: frozenset[str] = frozenset()
+) -> frozenset[str]:
+    """Tasks whose completion is waiting on an agent's scan investigation.
+
+    **A landed task with a scan finding is not one thing to say, it is two — so it says neither yet.** Posting *finished cybench* while an untriaged flag sits behind it tells the reader the wrong thing for as long as it stands alone, and the correction arrives as a second message about the same moment. Held, the run says one thing once: either the task finished, or it finished and here is what needs deciding.
+
+    Four conditions, and each is doing distinct work. **An agent must be attached**, because a hold with nobody to release it is silence; with no agent the finish posts immediately and the finding escalates on `_unattended`'s own horizon two turns later, which is the right shape for that case. **A `scan:` window must still be open**, so a ruling releases the hold by itself and no separate signal is needed. **The completion must not already be spent**, because there is nothing left to defer once it has been announced. And **it must have been waiting for less than `HOLD_TENDS`**, so an agent that stopped answering cannot hold a completion all night.
+
+    **The clock is the task's own log, not the window's opening.** A `scan:` class is run-wide by design — one reward-hacking decision covers the sweep — so a window opened by the first task to be flagged goes on absorbing the tenth task's findings hours later without its `opened_ts` moving. Measured against that, a task that landed a minute ago is already past the horizon and posts unheld, which is the one case the hold exists for. The log's `mtime` is when the run's own observation says the file last changed, which for a landed attempt is when it landed; where the filesystem does not date it, the window's opening stands in, and for the first task in a class the two are the same instant anyway.
+
+    **Already-spent completions are excluded rather than re-held**, and it is the difference between deferring an announcement and retracting one. The set returned here is subtracted from the completion baseline the next turn diffs against, so holding a task whose finish was announced turns ago removes it from that baseline and the next turn announces it a second time. A late finding on an old completion is still a finding — it opens its window and reaches the agent as an item — but the finish it arrived after is not news twice.
+
+    Args:
+        result: The turn that just ran.
+        spent: Completions already recorded, which is the baseline the diff is taken against (`_History.complete`).
+
+    Returns:
+        Task identifiers to withhold this turn — from the post *and* from the completion set the turn records, or the hold spends the diff instead of deferring it (`_turn`).
+    """
+    if _unattended(result):
+        return frozenset()
+    horizon = HOLD_TENDS * _cadence(result)
+    landed = _landed(result)
+    held: set[str] = set()
+    for anomaly in result.anomalies.open:
+        if anomaly.kind != "scan":
+            continue
+        opened = seconds_since(anomaly.opened_ts)
+        for task in anomaly.evidence.tasks:
+            if task in spent:
+                continue
+            waiting = landed.get(task, opened)
+            if waiting is None or waiting >= horizon:
+                continue
+            held.add(task)
+    return frozenset(held)
+
+
+def _landed(result: "TendResult") -> dict[str, float]:
+    """Per task, how long ago the observation says its current attempt's log last changed.
+
+    In seconds, from the `mtime` the listing reports in milliseconds. Tasks whose attempt carries no `mtime` are absent rather than zero, so the caller falls back to the window rather than treating an undated log as one that landed this instant.
+    """
+    if result.observed is None:
+        return {}
+    now = time.time() * 1000
+    return {
+        task.identifier: (now - task.current.mtime) / 1000
+        for task in result.observed.tasks
+        if task.current is not None and task.current.mtime is not None
+    }
+
+
+def _newly_unattended(result: "TendResult") -> bool:
+    """Whether *this* is the turn on which the agent's items became the person's.
+
+    **Stateless, and it can be**, which is what keeps this module's *no latches of its own* property: `_unattended` is a threshold on the collection age, so the turn that crossed it is the one whose age passed the horizon somewhere inside the gap it is answering for. Nothing has to be remembered about the previous turn.
+
+    **The gap is the real one, not the nominal one**, and that is what makes this survive a missed tend. Against a fixed cadence a timer that skipped a turn — or fired late — puts the age past `horizon + cadence` on the next run, and the handoff is lost silently for the whole of that run: the one item nobody picked up becomes the one item nobody is told about. `Supervision.since_tend` is how long it has actually been since the previous recorded turn, which is exactly the interval this turn is responsible for, so a long gap widens the window it covers by precisely as much as it delayed the crossing. It falls back to the cadence only where there is no previous turn to measure against.
+
+    Two answers are deliberately `False`. A workspace **nobody has ever collected** is unattended from its first turn, so every item is new when it is offered and there is no transition to catch. And an age that cannot be read is history rather than damage, on `_unattended`'s own reasoning.
+    """
+    if result.collected is None or result.since_collected is None:
+        return False
+    horizon = UNATTENDED_INTERVALS * _cadence(result)
+    return horizon <= result.since_collected < horizon + _gap(result)
+
+
+def _gap(result: "TendResult") -> float:
+    """How long it has been since the previous recorded turn — the span this one answers for.
+
+    The cadence stands in where there is no previous turn, and where the record puts two turns at the same instant: a zero-width span would answer for nothing at all, which is the one reading that can never be right.
+    """
+    since = result.supervision.since_tend if result.supervision is not None else None
+    return since if since else _cadence(result)
 
 
 def _cadence(result: "TendResult") -> int:
@@ -326,7 +430,24 @@ def _lines(result: "TendResult", shown: list[Item]) -> list[str]:
         for identifier in result.finished
         if identifier in named
     ]
-    return lines + _capped(finished, "tasks")
+    return lines + _capped(finished, "tasks") + _scan_note(result)
+
+
+def _scan_note(result: "TendResult") -> list[str]:
+    """One line where a task being reported finished still carries an unruled scan flag.
+
+    **The summary line, and nothing per task.** A finish that reached this post either was never held or has run out of hold (`held_tasks`), and in the second case the reader is being told a task is done while a decision about its results is still outstanding — which is one fact about the post, not a qualifier on each row. The windows themselves are items, and say which classes and how many; repeating that here would put the same finding in a phone message twice.
+    """
+    flagged = {
+        task
+        for anomaly in result.anomalies.open
+        if anomaly.kind == "scan"
+        for task in anomaly.evidence.tasks
+    }
+    named = flagged & set(result.finished)
+    if not named:
+        return []
+    return [f"{len(named)} with scan findings nobody has ruled on"]
 
 
 def _keys(progress: Progress) -> dict[str, str]:
@@ -427,10 +548,12 @@ def _shared(progress: Progress) -> str | None:
 
 
 __all__ = [
+    "HOLD_TENDS",
     "LINES",
     "ROWS",
     "SAID",
     "UNATTENDED_INTERVALS",
+    "held_tasks",
     "notify_failure",
     "notify_turn",
     "turn_post",

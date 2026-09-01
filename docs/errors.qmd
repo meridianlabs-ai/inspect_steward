@@ -12,6 +12,8 @@ Errors under Steward come in two tiers, and they are handled by different mechan
 | **Sample errors** | The task keeps running; errored samples are collected in the log | You (or the agent, within your policy) |
 | **Task failures** | The task is re-launched, up to `stall_after` attempts | Steward, then you once the limit is hit |
 
+There is a third thing this page covers that is not an error at all: a sample that ran and scored, whose *score* cannot be trusted. See [scan findings](#scan-findings).
+
 ## Sample errors
 
 A sample that errors never halts its task: Steward runs every task to completion (`continue_on_fail` is forced on in worker mode, and a definition's own setting has no effect under Steward). This is an invariant rather than an option because supervision depends on it — Steward reconciles the run by comparing logs against the manifest, and a task that halted on its first error would be indistinguishable from a structural failure, re-launched, and halted again.
@@ -73,6 +75,27 @@ Each failed attempt is also classed like a sample error is — on the exception 
 The limit exists because a structural failure re-runs to the same place at full price — a definition that will not import fails identically on attempt ten. Steward never retries past the limit on its own; raising `stall_after` in `_steward.yaml` is how you buy more patience for a genuinely flaky environment (a sandbox fleet earns more of it than a deterministic scorer bug).
 
 When a person rules `rerun`, the tend carries the ruling out: samples in a still-running task are requeued in place, and a landed log has exactly the ruled samples invalidated so the next turn re-launches it and re-runs them (reusing everything else). The attempt history before the ruling is cleared — a decision to try again is made by the only party entitled to make one, and what happened before it no longer counts against the task — and authorized re-runs are scheduled ahead of ordinary queued work.
+
+## Scan findings {#scan-findings}
+
+Not every threat to your results is an error. A sample can run perfectly, score cleanly, and still be untrustworthy — the model found a way to read the grader, refused the task while keeping the shape of an answer, or got data out of a sandbox that was supposed to have no route to the internet. Steward runs a **scoring-integrity scanner** over every sample of every run, and it needs no configuration: with no scan model set it reviews with the model already under evaluation.
+
+**A flagged sample becomes an anomaly**, with the same lifecycle as an errored one. The class is the scanner and what it found — `scan:scoring_integrity:reward_hacking` — so five hundred samples gamed the same way are one decision, and every disposition in the table above is available, including `exclude` and `zero` for a score you establish is wrong.
+
+**The window opens when the flag lands, not when somebody decides it is real.** That is deliberate: it makes *nobody looked* and *somebody looked and found nothing* different states, and only the second one is a decision. So *looked, nothing here* is a real ruling —
+
+```bash
+steward rule 'scan:scoring_integrity:reward_hacking' \
+  --disposition dismiss --reason "tried to read the grader, never got it" --by NAME
+```
+
+— and the run cannot be signed while a flag has no ruling either way.
+
+**Expect to dismiss most of them, and expect that to be worth doing.** A model probing a grader it never reaches, or firing curl at a host the sandbox refuses, earned nothing and contaminated nothing — the score stands. What makes dismissing worthwhile rather than paperwork is that the reason survives: when you sign off, Steward tells you how many findings were looked at and dismissed, and your agent is asked to name them. *"The model tried to read the grader on four samples and failed every time"* changes no number and is still something you want to know before you accept the results.
+
+Two things worth knowing about how this behaves. **Rarity is not the signal** — a class covering 197 of 200 samples is the alarming case, not the noisy one, because an exploit that works gets used everywhere. And **only yes/no scanners open anomalies**: a scanner returning a number or a category is recorded and readable, and Steward will not invent a threshold for it.
+
+If an agent is attached when a flagged task finishes, its completion is held back briefly — up to about an hour — so you get one message saying what finished *and* what needs deciding, rather than a cheerful *finished* followed twenty minutes later by a correction. With no agent attached nothing is held.
 
 ## Where errors surface
 

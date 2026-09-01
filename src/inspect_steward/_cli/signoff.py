@@ -82,6 +82,14 @@ def signoff_command(
         # after the detail rather than instead of it, and an error rather than a
         # note: a refusal that exits zero is a refusal a script does not notice
         raise click.ClickException(_refusal(result))
+    if result.unverified is not None:
+        # **a signature that could not be checked exits the same way a refusal
+        # does**, and for the same reason: the run is not finished, the timer
+        # is deliberately still up, and a script told otherwise would move on
+        raise click.ClickException(
+            f"the signature is recorded, but this run is not finished — "
+            f"{result.unverified}"
+        )
 
 
 def _refusal(result: Signoff) -> str:
@@ -135,6 +143,9 @@ def _echo_signoff(result: Signoff, root: Path) -> None:
         )
     if result.disarmed is not None:
         click.echo(f"  disarmed {result.disarmed} — nothing tends this run now")
+    if result.unverified is not None:
+        click.echo(f"  ! {result.unverified}")
+        return
     # **the last word, because it is the one thing signoff does not do.** The
     # journal is the record this attestation lives in, and committing it stays
     # the human's job (workflow.md §18 q4); what the verb owes is that the
@@ -189,6 +200,7 @@ def _signoff_json(result: Signoff) -> str:
             if result.curated is None
             else [destination for _, destination in result.curated.moved],
             "disarmed": result.disarmed,
+            "unverified": result.unverified,
             "warnings": result.warnings,
         },
         indent=2,

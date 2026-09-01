@@ -173,7 +173,7 @@ def test_scanning_rides_the_workers_and_a_relaunch_attaches(
 
     from inspect_scout import Summary
     from inspect_scout._recorder.buffer import RecorderBuffer
-    from inspect_steward._scan import finalize_scan
+    from inspect_steward._scan import finalize_scan, rebuild_summary
 
     fake_cron(monkeypatch)
     clear_credentials(monkeypatch)
@@ -198,13 +198,19 @@ def test_scanning_rides_the_workers_and_a_relaunch_attaches(
     assert set(committed.injected) == {"scoring_integrity"}
 
     settle(workspace)
+
+    # nothing has folded yet, so the compacted rows do not exist at all — the
+    # state that makes the tend's fold load-bearing rather than a convenience
+    assert not (scan_dir / "transcript_echo.parquet").exists()
+
     finished = turn(workspace)
     assert finished.summary.states["complete"] == 2
 
     # record-only workers: one buffer row per transcript per scanner (2
     # addition samples + 1 echo sample × 2 epochs), from two concurrent
-    # writers, and no finalize artifacts — the buffer still holds the rows
-    # because folding them forward is the tend's job, not any worker's
+    # writers. The buffer still holds them after the tend's fold, because that
+    # fold is `complete=False` — a sibling worker's `is_recorded` must keep
+    # answering, and the prune waits for signoff
     def stems(scanner: str) -> set[str]:
         sdir = RecorderBuffer.buffer_dir(str(scan_dir)) / f"scanner={scanner}"
         return {p.stem for p in sdir.glob("*.parquet")} if sdir.exists() else set()
@@ -214,6 +220,12 @@ def test_scanning_rides_the_workers_and_a_relaunch_attaches(
     # the built-in dispatched for every transcript too, reviewing with the
     # ambient model under evaluation (mockllm) — no scan model is configured
     assert stems("scoring_integrity") == echoed
+
+    # and the tend folded them forward on the turn that reaped the workers,
+    # which is what makes a landed task's findings readable within a tend of
+    # its samples settling
+    assert (scan_dir / "transcript_echo.parquet").exists()
+    assert rebuild_summary(str(scan_dir)).scanners["transcript_echo"].scans == 4
 
     # a re-launch attaches: same directory, same spec, rows undisturbed
     relaunched = launch(workspace, definition)

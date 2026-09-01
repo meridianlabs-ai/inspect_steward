@@ -19,6 +19,7 @@ from inspect_steward._anomaly.model import (
     Evidence,
     Ruling,
 )
+from inspect_steward._evalset.classify import kind_of
 from inspect_steward._evalset.instances import Instance, InstanceBatch
 from inspect_steward._evalset.observe import (
     LogAttempt,
@@ -796,6 +797,72 @@ def test_dispositions_count_only_the_current_attempt() -> None:
 
     assert fold.by_task == {IDENT: {"excluded": 2}}
     assert (fold.excluded, fold.zeroed) == (2, 0)
+
+
+SCAN_CLASS = "scan:scoring_integrity:reward_hacking"
+
+
+def flagged(instance: Instance) -> InstanceBatch:
+    """The same sample row, in a second class — what a scanner flagging an errored sample produces."""
+    return InstanceBatch(
+        class_key=SCAN_CLASS,
+        kind="scan",
+        substrate=False,
+        instances=(replace(instance, class_key=SCAN_CLASS),),
+    )
+
+
+def settled(*instances: Instance, key: str, disposition: Disposition) -> Anomaly:
+    """A ruled window of `key` that absorbed exactly these rows."""
+    base = over(*instances, state=AnomalyState.ACCEPTED, disposition=disposition)
+    assert base.ruling is not None
+    return replace(
+        base,
+        class_key=key,
+        kind=kind_of(key),
+        ruling=replace(base.ruling, class_key=key),
+    )
+
+
+def test_one_sample_in_two_classes_leaves_the_scores_once() -> None:
+    # a sample that errored *and* was flagged is one row in the results and two
+    # rows in the census; counting the instances would put "2 excluded" three
+    # lines above a denominator that says one
+    both = inst("s1")
+    fold = dispositions(
+        [*census(both), flagged(both)],
+        Anomalies(
+            settled=(
+                settled(both, key=CLASS, disposition=Disposition.EXCLUDE),
+                settled(both, key=SCAN_CLASS, disposition=Disposition.EXCLUDE),
+            )
+        ),
+        {IDENT: "logs/a.eval"},
+    )
+
+    assert (fold.excluded, fold.zeroed) == (1, 0)
+    # and the errored cell still counts it, because that split is about the
+    # error and one class covers it
+    assert fold.by_task == {IDENT: {"excluded": 1}}
+
+
+def test_two_rulings_that_disagree_about_one_sample_settle_on_the_exclusion() -> None:
+    # a row cannot be both out of the denominator and scored zero inside it;
+    # the exclusion is the one the arithmetic can carry, and both decisions
+    # keep their own entry in `anomalies.md` either way
+    both = inst("s1")
+    fold = dispositions(
+        [*census(both), flagged(both)],
+        Anomalies(
+            settled=(
+                settled(both, key=CLASS, disposition=Disposition.EXCLUDE),
+                settled(both, key=SCAN_CLASS, disposition=Disposition.ZERO),
+            )
+        ),
+        {IDENT: "logs/a.eval"},
+    )
+
+    assert (fold.excluded, fold.zeroed) == (1, 0)
 
 
 def test_a_covered_rerun_failure_takes_the_rerulings_bucket() -> None:

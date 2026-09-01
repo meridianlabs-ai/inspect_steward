@@ -152,12 +152,46 @@ def zero_class(name: str, identifier: str) -> str:
 
     Per task, because the finding is about one task's results; a sweep-wide grader break is many classes and one proposal, which is the grouping layer working as designed.
     """
-    readable = re.sub(r"[^A-Za-z0-9._-]+", "-", name).strip("-")
-    return f"score:zero:{readable or 'task'}:{digest8(identifier)}"
+    return f"score:zero:{_readable(name) or 'task'}:{digest8(identifier)}"
+
+
+def scan_class(scanner: str, label: str | None) -> str:
+    """The class key for samples one scanner flagged.
+
+    **Scanner plus label, and deliberately not per task.** `zero_class` is per task because the finding is *about* one task's results; a scan finding is about a sample, and a model that games a grader games it everywhere — so one decision covering the sweep is the grouping layer working as intended, and a class scoped to a task would put the same judgement in front of somebody once per task.
+
+    The known cost is the mirror of this module's own doctrine: `error:{type}@{frame}` identifies a *mechanism*, where a label names a *category*, so one class can hold two findings that are not the same finding. Over-merging is the recoverable direction — a ruling reads the evidence, and `propose` exists to say that two classes are one decision or that one is really two.
+
+    Args:
+        scanner: The scanner's merge name, as the run committed it.
+        label: The result's own label — `scoring_integrity`'s issue category — or `None` for a scanner that sets none.
+
+    Returns:
+        `scan:{scanner}` or `scan:{scanner}:{label}`.
+    """
+    readable = _segment(scanner) or "scanner"
+    tail = _segment(label or "")
+    return f"scan:{readable}:{tail}" if tail else f"scan:{readable}"
+
+
+def _readable(value: str) -> str:
+    """A key segment reduced to what is safe to print and split on."""
+    return re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-")
+
+
+def _segment(value: str) -> str:
+    """A key segment that is readable where it can be and identity-preserving always.
+
+    **Sanitizing alone merges what it should split.** `unsafe output` and `unsafe-output` are two labels a scanner can plausibly emit and `_readable` maps both to `unsafe-output` — one ruling then settles findings the person who made it never saw, which is the one direction this module's over-merge-is-recoverable doctrine does *not* cover: an over-merged exception class holds two call sites of one failure, where an over-merged label holds two different findings.
+
+    So a value the sanitizer changed carries a digest of its original, and one it left alone carries nothing. The common case — every `IntegrityLabel`, every ordinary scanner name — is untouched and stays typable, and the awkward case is unambiguous rather than pretty. `zero_class` reaches this differently and needs no help: its identity rides in a `digest8` of the task identifier that is always appended.
+    """
+    readable = _readable(value)
+    return readable if readable == value else f"{readable}-{digest8(value)}"
 
 
 def kind_of(class_key: str) -> str:
-    """A class key's kind — its first segment: `error`, `limit`, `task`, or `score`."""
+    """A class key's kind — its first segment: `error`, `limit`, `task`, `score`, or `scan`."""
     return class_key.partition(":")[0]
 
 
@@ -235,6 +269,7 @@ __all__ = [
     "kind_of",
     "no_log_class",
     "parse_error",
+    "scan_class",
     "substrate",
     "task_error_class",
     "zero_class",

@@ -20,7 +20,7 @@ from enum import IntEnum, StrEnum
 from hashlib import sha256
 from typing import TYPE_CHECKING
 
-from .._anomaly.model import Anomalies, Anomaly, AnomalyState
+from .._anomaly.model import Anomalies, Anomaly, AnomalyState, Disposition
 from .._evalset.observe import ObservedTasks, TaskObservation, TaskState
 from .._schedule import InFlight, Summary, attempts_made
 from .._util.duration import format_duration, is_after, seconds_since
@@ -82,6 +82,7 @@ DRIFT = "drift"
 DEGRADED = "degraded"
 ORPHAN_RUNNING = "orphan_running"
 UNREADABLE = "unreadable"
+SCAN_INCOMPLETE = "scan_incomplete"
 ACTION_FAILED = "action_failed"
 UNSUPERVISED = "unsupervised"
 TIMER_DRIFT = "timer_drift"
@@ -101,6 +102,7 @@ OWNERS = {
     DEGRADED: Owner.HUMAN,
     ORPHAN_RUNNING: Owner.HUMAN,
     UNREADABLE: Owner.AGENT,
+    SCAN_INCOMPLETE: Owner.AGENT,
     ACTION_FAILED: Owner.AGENT,
     UNSUPERVISED: Owner.HUMAN,
     TIMER_DRIFT: Owner.HUMAN,
@@ -159,7 +161,9 @@ class Supervision:
     since_tend: float | None
     """Seconds since the previous recorded turn, or `None` where there has not been one.
 
-    Read only by a `status`, and ignored by a tend. A turn asking how long it has been since a turn is asking about the gap *before itself*: on a schedule that is vacuous, and on a tend recovering from a long silence it is a fact about a condition that turn has just ended. The reader who needs telling that supervision stopped is the human typing `status` the next morning, not the timer that is evidently working.
+    Read by a `status` as a *report*: a turn saying how long it has been since a turn is, on a schedule, saying nothing, and on a tend recovering from a long silence it is describing a condition that turn has just ended. The reader who needs telling that supervision stopped is the human typing `status` the next morning, not the timer that is evidently working.
+
+    A tend reads it for the other thing it is: the width of the gap this turn answers for. Any threshold a turn crosses on somebody's behalf was crossed somewhere in here, so a notification that fires on the crossing has to measure against the real gap rather than the nominal cadence or a skipped turn loses it (`notify._newly_unattended`).
     """
 
     since_armed: float | None
@@ -247,6 +251,7 @@ def tend_items(
         *_degraded(result),
         *_orphans(result, lookup),
         *_unreadable(observed),
+        *_scan_incomplete(result),
         *_supervision(result),
         *_failures(result),
         *_journal_damage(result),
@@ -773,10 +778,35 @@ def _unreadable(observed: ObservedTasks) -> list[Item]:
             level=Level.ATTENTION,
             subject=log.location,
             summary=(
-                f"{_basename(log.location)} could not be read as a log ({log.reason})"
+                f"{_basename(log.location)} could not be read as {log.what} "
+                f"({log.reason})"
             ),
         )
         for log in observed.unreadable
+    ]
+
+
+def _scan_incomplete(result: "TendResult") -> list[Item]:
+    """Scanners that recorded an error where a verdict was owed.
+
+    **The one thing about scanning a signature must not be silent on.** A run whose scanners all threw has an empty findings list, which is the same list a run that came back clean has — so without this the attestation says *nothing was flagged* over transcripts nothing ever looked at. Per scanner rather than per transcript, because the decision a person is being asked for is about the scanner: *these results were not fully scanned for this, and they stand anyway*.
+
+    Acknowledgeable, and that is the whole design of it. A hard refusal has no act that answers it — Steward has no verb that re-runs a scan — so it would wedge every run one flaky model call touched. An ack is the gate's ordinary shape instead: a hole with a name on it is signed over and becomes a caveat, and one nobody named is refused.
+    """
+    return [
+        Item(
+            id=f"{SCAN_INCOMPLETE}:{scanner}",
+            kind=SCAN_INCOMPLETE,
+            owner=OWNERS[SCAN_INCOMPLETE],
+            level=Level.ATTENTION,
+            subject=scanner,
+            summary=(
+                f"{scanner} could not scan {errored} "
+                f"transcript{'' if errored == 1 else 's'}, so those samples "
+                f"carry no verdict either way"
+            ),
+        )
+        for scanner, errored in sorted(result.scan_incomplete.items())
     ]
 
 
@@ -1206,7 +1236,9 @@ def _bucket(count: int) -> str:
 def _anomaly_name(class_key: str) -> str:
     """The readable half of an anomaly id: the segment a person will recognise.
 
-    The exception's type where there is one (the segment carrying `@`), the task's name for a score class, the discriminating word otherwise — `vanished`, `no-log`, `operator`.
+    The exception's type where there is one (the segment carrying `@`), the task's name for a score class, the label for a scan class, the discriminating word otherwise — `vanished`, `no-log`, `operator`.
+
+    A scan class takes its **label** rather than its scanner, because a run's scanners are few and its labels are what tell two findings apart: `anomaly:reward_hacking:…` is the id a person recognises where `anomaly:scoring_integrity:…` would be the same word on every one of them. A scanner that sets no label falls back to its own name, which is then the only thing there is.
     """
     segments = class_key.split(":")
     for segment in segments:
@@ -1214,7 +1246,7 @@ def _anomaly_name(class_key: str) -> str:
             name = segment.partition("@")[0]
             break
     else:
-        if segments[0] == "score" and len(segments) >= 3:
+        if segments[0] in ("score", "scan") and len(segments) >= 3:
             name = segments[2]
         else:
             name = segments[1] if len(segments) > 1 else segments[0]
@@ -1232,6 +1264,11 @@ def anomaly_summary(anomaly: Anomaly) -> str:
         line = f"{count} task attempt{plural} failed — {anomaly.class_key}"
     elif anomaly.kind == "score":
         line = f"every score converts to zero — {anomaly.class_key}"
+    elif anomaly.kind == "scan":
+        line = (
+            f"{count} sample{plural} flagged for scoring integrity — "
+            f"{anomaly.class_key}"
+        )
     else:
         line = f"{count} sample{plural} errored the same way — {anomaly.class_key}"
     if anomaly.generation > 1:
@@ -1283,7 +1320,9 @@ def _signoff(result: "TendResult") -> list[Item]:
             owner=OWNERS[SIGNOFF_READY],
             level=Level.INFO,
             subject=result.manifest_digest or "",
-            summary=_signoff_summary(summary, len(decided)),
+            summary=_signoff_summary(
+                summary, len(decided), _dismissed_findings(result.anomalies)
+            ),
             # bare, like every other item action: a placeholder here would be
             # one more thing for a reader to substitute, and this command's
             # arguments are the signer's name and their own words
@@ -1292,25 +1331,51 @@ def _signoff(result: "TendResult") -> list[Item]:
     ]
 
 
-def _signoff_summary(summary: Summary, accepted: int) -> str:
+def _signoff_summary(summary: Summary, accepted: int, dismissed: int) -> str:
     """What is true about the run, naming an accepted hole rather than papering over it.
 
     A run whose every task finished and one whose last task was accepted as it stands are both ready for the same decision, and they are not the same claim — so the invitation says which it is rather than reporting "every task is complete" over a log somebody knows is short.
 
     **Two clauses, not four.** *every task is complete (1 of 1) and nothing further will run, so the results are waiting to be accepted* said the same thing three ways: the parenthetical restates the sentence before it, *nothing further will run* is what *complete* means, and both sit directly above a table carrying the counts. This line is read on a phone at 3am and its job is to say a decision is owed.
 
+    **And a third clause where scan findings were dismissed**, which is the one thing on this line that is not about task counts. A dismissed finding leaves no caveat and reaches `anomalies.md` nowhere — correctly, since the whole content of the dismissal is *this does not change the numbers*. But *the model tried to read the grader and failed* is something the person signing wants to have been told, and this is the sentence that reaches them at the moment they are asked (workflow.md §12.6.1). It says how many and points at the account; the reasons are in the journal and in `analysis.md`.
+
     Args:
         summary: The run's shape.
         accepted: Tasks settled by a decision rather than by finishing (`settled_by_decision`), which is a count the summary cannot supply on its own: an acknowledged stall settles a task and is recorded in the journal rather than in the reconciliation.
+        dismissed: Scan findings looked at and dismissed (`_dismissed_findings`).
     """
     complete = summary.states.get(TaskState.COMPLETE.value, 0)
     if not accepted:
-        return "every task is complete; the results are waiting to be accepted"
+        line = "every task is complete; the results are waiting to be accepted"
+    else:
+        line = (
+            f"{complete} of {summary.tasks} tasks are complete and {accepted} "
+            f"accepted as {'it' if accepted == 1 else 'they'} "
+            f"stand{'s' if accepted == 1 else ''}; "
+            f"the results are waiting to be accepted"
+        )
+    if not dismissed:
+        return line
+    one = dismissed == 1
     return (
-        f"{complete} of {summary.tasks} tasks are complete and {accepted} "
-        f"accepted as {'it' if accepted == 1 else 'they'} "
-        f"stand{'s' if accepted == 1 else ''}; "
-        f"the results are waiting to be accepted"
+        f"{line} ({dismissed} scan finding{'' if one else 's'} "
+        f"{'was' if one else 'were'} looked at and dismissed — read the "
+        f"reason{'' if one else 's'} before you sign)"
+    )
+
+
+def _dismissed_findings(anomalies: Anomalies) -> int:
+    """Instances of settled `scan:` windows a ruling dismissed.
+
+    Counted rather than journalled: a dismissal is already a `ruling` event, so deriving the number from the fold keeps one record of the decision and no second one that could disagree with it.
+    """
+    return sum(
+        anomaly.evidence.count
+        for anomaly in anomalies.settled
+        if anomaly.kind == "scan"
+        and anomaly.ruling is not None
+        and anomaly.ruling.disposition is Disposition.DISMISS
     )
 
 

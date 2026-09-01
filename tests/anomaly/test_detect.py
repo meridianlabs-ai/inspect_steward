@@ -7,8 +7,10 @@ from dataclasses import replace
 from pathlib import Path
 
 from inspect_steward._anomaly.fold import TaskHealth
-from inspect_steward._evalset.instances import ClassedCache
+from inspect_steward._evalset.classify import scan_class
+from inspect_steward._evalset.instances import ClassedCache, Instance
 from inspect_steward._evalset.observe import UnreadableLog, observe_logs, observe_tasks
+from inspect_steward._scan.findings import log_key
 from inspect_steward._schedule.reconcile import (
     DepartedWorker,
     InFlight,
@@ -17,6 +19,7 @@ from inspect_steward._schedule.reconcile import (
 from inspect_steward._tend.detect import (
     UNIFORM_ZERO_MIN,
     detect,
+    scan_attempts,
     task_health,
 )
 from inspect_steward._worker.live import LiveFleet
@@ -54,6 +57,7 @@ def run(
     *,
     inflight: InFlight | None = None,
     workers_dir: Path | None = None,
+    findings: list[Instance] | None = None,
 ):  # noqa: ANN201 -- the Detection type is the assertion surface
     logs = observe_logs(log_dir)
     return detect(
@@ -63,6 +67,7 @@ def run(
         LiveFleet(),
         workers_dir=workers_dir or (log_dir / "workers"),
         cache=ClassedCache(),
+        findings=findings,
     )
 
 
@@ -345,3 +350,118 @@ class TestComposition:
         health = task_health(blinded)
 
         assert health[done.identifier] == TaskHealth(complete=False)
+
+
+class TestScanFindings:
+    """The sixth signature, composed elsewhere and joined here.
+
+    What `_scan.findings` produces is `tests/scan/test_findings.py`'s subject; the claims here are the composition's — that a finding batches like any other instance, that the census keeps recomposing it every turn, and that it does not disturb the five signatures around it.
+    """
+
+    def flagged(self, task: SynthTask, *, label: str, uuid: str = "u1") -> Instance:
+        return Instance(
+            class_key=scan_class("scoring_integrity", label),
+            ref=f"eval-1:s1:1:{uuid}",
+            task=task.identifier,
+            message="it read the grader at [M12]",
+            attempt_created="2026-08-30T11:00:00+00:00",
+            eval_id="eval-1",
+            sample_id="s1",
+            epoch=1,
+            uuid=uuid,
+        )
+
+    def test_a_flagged_sample_joins_the_census_as_its_own_class(
+        self, tmp_path: Path
+    ) -> None:
+        task = SynthTask("probe")
+        write_log(tmp_path, task)
+
+        detection = run(
+            tmp_path, [task], findings=[self.flagged(task, label="reward_hacking")]
+        )
+
+        assert [b.class_key for b in detection.batches] == [
+            "scan:scoring_integrity:reward_hacking"
+        ]
+        batch = detection.batches[0]
+        assert batch.kind == "scan"
+        # never substrate: a scanner's verdict is about the run, and the
+        # machinery under it is not what the scanner was looking at
+        assert batch.substrate is False
+        assert batch.instances[0].task == task.identifier
+
+    def test_two_labels_are_two_decisions(self, tmp_path: Path) -> None:
+        task = SynthTask("probe")
+        write_log(tmp_path, task)
+
+        detection = run(
+            tmp_path,
+            [task],
+            findings=[
+                self.flagged(task, label="reward_hacking", uuid="u1"),
+                self.flagged(task, label="refusal", uuid="u2"),
+            ],
+        )
+
+        assert [b.class_key for b in detection.batches] == [
+            "scan:scoring_integrity:refusal",
+            "scan:scoring_integrity:reward_hacking",
+        ]
+
+    def test_findings_do_not_displace_the_signatures_around_them(
+        self, tmp_path: Path
+    ) -> None:
+        task = SynthTask("probe")
+        write_log(
+            tmp_path,
+            task,
+            error="ScorerError('no grade')",
+            error_traceback=SCORER_TRACEBACK,
+        )
+
+        detection = run(
+            tmp_path, [task], findings=[self.flagged(task, label="reward_hacking")]
+        )
+
+        assert [b.class_key for b in detection.batches] == [
+            "scan:scoring_integrity:reward_hacking",
+            "task:error:evals.scorer.ScorerError@evals/scorer.py:score",
+        ]
+
+    def test_a_run_that_scans_nothing_is_the_census_it_always_was(
+        self, tmp_path: Path
+    ) -> None:
+        task = SynthTask("probe")
+        write_log(tmp_path, task)
+
+        assert census(tmp_path, [task]) == []
+
+
+class TestScanAttempts:
+    def test_the_join_map_is_keyed_the_way_a_scan_row_names_a_log(
+        self, tmp_path: Path
+    ) -> None:
+        task = SynthTask("probe")
+        write_log(tmp_path, task)
+        logs = observe_logs(tmp_path)
+
+        mapped = scan_attempts(observe_tasks(synth_manifest([task]), logs), logs)
+
+        assert set(mapped) == {
+            log_key(attempt.location)
+            for attempts in logs.attempts.values()
+            for attempt in attempts
+        }
+        assert all("/" not in key for key in mapped)
+
+    def test_an_orphans_logs_are_not_in_the_join(self, tmp_path: Path) -> None:
+        # which is how an orphan's findings are dropped: the row names a log
+        # the map does not hold, so it finds nothing rather than being tested
+        # against a second predicate
+        stranger = SynthTask("stranger")
+        write_log(tmp_path, stranger)
+        logs = observe_logs(tmp_path)
+
+        wanted = SynthTask("wanted")
+        assert scan_attempts(observe_tasks(synth_manifest([wanted]), logs), logs) == {}

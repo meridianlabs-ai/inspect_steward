@@ -1,0 +1,722 @@
+"""A scan finding, from a worker's buffered row to the decision it becomes.
+
+Layer 1 like the rest of the item suite, and the whole point of step 30 is that this file is short: the rows are real (scout's own recorder wrote them), the fold is the tend's real fold, the window comes out of the real journal — and *nothing* between the class key and the signoff gate was written for scanning. What is asserted here is that the general machinery holds a finding as well as it holds an error, plus the two things that are genuinely new: the notification hold, and what the signer is told about dismissals.
+"""
+
+import json
+import os
+from pathlib import Path
+from typing import Any
+
+import pytest
+from inspect_ai._util._async import run_coroutine
+from inspect_scout import Result
+from inspect_scout._recorder.file import FileRecorder
+from inspect_scout._scanner.result import Error, ResultReport
+from inspect_scout._transcript.types import TranscriptInfo
+from inspect_steward._evalset.manifest import ManifestScan, write_manifest
+from inspect_steward._scan import initialize_scan, scan_dir_location, sync_scan
+from inspect_steward._schedule import SpawnTask
+from inspect_steward._signoff import UNREAD, UNSCANNED, check
+from inspect_steward._tend import Level, Owner, Verdict, turn_post
+from inspect_steward._tend.items import (
+    ANOMALY,
+    SCAN_INCOMPLETE,
+    SIGNOFF_READY,
+    UNREADABLE,
+    Item,
+)
+from inspect_steward._tend.notify import HOLD_TENDS, UNATTENDED_INTERVALS
+from inspect_steward._worker import record_intent, record_launched
+from inspect_steward._worker.inflight import resolve_inflight
+from inspect_steward._workspace import (
+    ACKNOWLEDGED,
+    COLLECTED,
+    DEFAULT_TEND_INTERVAL,
+    RULING,
+    Workspace,
+    append_event,
+)
+
+from .._logs import SynthTask, write_log
+from ..schedule.test_tend import observations, prepared, turn
+
+SCAN_ID = "run-1"
+SCANNER = "scoring_integrity"
+CLASS = "scan:scoring_integrity:reward_hacking"
+
+MATERIAL = ManifestScan(
+    spec=None,
+    scans=None,
+    injected={SCANNER: {"name": f"inspect_steward/{SCANNER}"}},
+)
+
+
+TASK = SynthTask("probe", samples=4)
+
+
+def scanning(
+    root: Path,
+    *,
+    flagged: int = 2,
+    label: str | None = "reward_hacking",
+    land: bool = True,
+) -> Workspace:
+    """A one-task run whose landed log has real scan rows recorded against it.
+
+    The fixture folds rather than leaving it to the turn, because at this point in a run every worker has been reaped and the tend's fold is correctly a no-op (`test_sync.py` owns the fold's own behaviour). What is under test here is everything downstream of a folded row.
+
+    `land=False` leaves the log unwritten, so a first turn can establish the completion baseline the `finished` diff is taken against — a task that was already complete before Steward ever looked is deliberately not news.
+    """
+    workspace, manifest = prepared(root, [TASK])
+    write_manifest(
+        manifest.model_copy(update={"scan": MATERIAL, "eval_set_id": SCAN_ID}),
+        workspace.manifest,
+    )
+    initialize_scan(MATERIAL, log_dir=str(workspace.logs), scan_id=SCAN_ID)
+    if land:
+        land_it(workspace, flagged=flagged, label=label)
+    return workspace
+
+
+def land_it(
+    workspace: Workspace, *, flagged: int = 2, label: str | None = "reward_hacking"
+) -> None:
+    """The task's log arrives, with its scan rows recorded and folded."""
+    log = write_log(workspace.logs, TASK)
+    for index in range(flagged):
+        record(workspace, str(log), uuid=f"u{index}", value=True, label=label)
+    # one honest sample, so a run is never all-flagged by construction
+    record(workspace, str(log), uuid="clean", value=False, label=None)
+    sync_scan(log_dir=str(workspace.logs), scan_id=SCAN_ID)
+
+
+def record(
+    workspace: Workspace,
+    log: str,
+    *,
+    uuid: str,
+    value: bool | None,
+    label: str | None,
+    error: str | None = None,
+) -> None:
+    """One row, written exactly as a record-only worker writes it.
+
+    `error` is the shape a scanner that threw leaves behind: no result at all, and the exception in its place.
+    """
+    recorder = FileRecorder()
+    scan_dir = scan_dir_location(
+        log_dir=str(workspace.logs), scan_id=SCAN_ID, scans=None
+    )
+    run_coroutine(recorder.attach(scan_dir))
+    run_coroutine(
+        recorder.record(
+            TranscriptInfo(
+                transcript_id=uuid,
+                source_type="eval_log",
+                source_id="eval-1",
+                source_uri=log,
+                task_id=uuid,
+                task_repeat=1,
+            ),
+            SCANNER,
+            [
+                ResultReport(
+                    input_type="messages",
+                    input_ids=[],
+                    input=[],
+                    result=None
+                    if error is not None
+                    else Result(
+                        value=value,
+                        label=label,
+                        explanation="it read the grader at [M12]",
+                    ),
+                    validation=None,
+                    error=None
+                    if error is None
+                    else Error(
+                        transcript_id=uuid,
+                        scanner=SCANNER,
+                        error=error,
+                        traceback="",
+                        refusal=False,
+                    ),
+                    events=[],
+                    model_usage={},
+                )
+            ],
+            metrics=None,
+        )
+    )
+
+
+def anomaly_items(workspace: Workspace) -> list[Item]:
+    return [item for item in turn(workspace).items if item.kind == ANOMALY]
+
+
+def parquet(workspace: Workspace) -> Path:
+    return (
+        Path(
+            scan_dir_location(log_dir=str(workspace.logs), scan_id=SCAN_ID, scans=None)
+        )
+        / f"{SCANNER}.parquet"
+    )
+
+
+def corrupt(workspace: Workspace) -> None:
+    """A compacted parquet nothing can open, which is one file both halves read.
+
+    The fold merges the buffer *into* it and the census projects columns *out* of it, so one damaged file is the whole of both failures — which is the shape a store that goes away has too.
+    """
+    parquet(workspace).write_bytes(b"not a parquet at all")
+
+
+def repair(workspace: Workspace) -> None:
+    parquet(workspace).unlink()
+
+
+def collected(workspace: Workspace) -> None:
+    """Say an agent is attached, which is the whole of the hold's first condition."""
+    append_event(workspace.journal, COLLECTED, position=0)
+
+
+def departed(workspace: Workspace) -> None:
+    """A worker the record accounts for and the process table does not.
+
+    Which is the state a tend finds between a worker exiting and the reap that follows it — and the one turn that must fold, because the last of its rows landed after the previous fold.
+    """
+    selection = workspace.workers / "w1.json"
+    selection.parent.mkdir(parents=True, exist_ok=True)
+    selection.write_text("{}", encoding="utf-8")
+    record_intent(
+        workspace.inflight,
+        worker="w1",
+        tasks=[
+            SpawnTask(
+                identifier=TASK.identifier,
+                key="probe",
+                resume=None,
+                attempt=1,
+                reason=None,
+            )
+        ],
+        selection=selection,
+        argv=["true"],
+        cwd=str(workspace.root),
+        log_dir=str(workspace.logs),
+    )
+    record_launched(workspace.inflight, worker="w1", pid=1)
+
+
+def rule(workspace: Workspace, disposition: str, **fields: Any) -> None:
+    payload: dict[str, Any] = {
+        "class": CLASS,
+        "disposition": disposition,
+        "reason": "the model tried to read the grader and failed",
+        "by": "kaia",
+        **fields,
+    }
+    append_event(workspace.journal, RULING, **payload)
+
+
+def test_a_flagged_sample_is_the_agents_investigation(tmp_path: Path) -> None:
+    workspace = scanning(tmp_path)
+
+    items = anomaly_items(workspace)
+
+    assert len(items) == 1
+    item = items[0]
+    assert item.owner is Owner.AGENT
+    assert item.level is Level.ATTENTION
+    assert item.subject == CLASS
+    # the label is the readable half, not the scanner: every finding in a run
+    # would otherwise carry the same word
+    assert item.id.startswith("anomaly:reward_hacking:")
+    assert "2 samples flagged for scoring integrity" in item.summary
+    assert item.action == f"steward investigate '{CLASS}'"
+    # an ack cannot close it — an anomaly closes on a ruling and nothing else
+    assert not item.acknowledgeable
+
+
+def test_a_scanner_that_said_no_opens_nothing(tmp_path: Path) -> None:
+    workspace = scanning(tmp_path, flagged=0)
+
+    assert anomaly_items(workspace) == []
+
+
+def test_the_window_absorbs_rather_than_reopening_every_turn(tmp_path: Path) -> None:
+    # the census recomposes from the parquet every turn, so idempotence here is
+    # the ordinary case and a regression would double the count hourly
+    workspace = scanning(tmp_path)
+    turn(workspace)
+
+    result = turn(workspace)
+
+    assert observations(workspace)[-1]["anomalies"] == {CLASS: 2}
+    assert result.anomalies.open[0].evidence.count == 2
+
+
+def test_a_dismissal_closes_the_window_and_leaves_the_reason(tmp_path: Path) -> None:
+    workspace = scanning(tmp_path)
+    turn(workspace)
+    rule(workspace, "dismiss")
+
+    result = turn(workspace)
+
+    assert result.anomalies.open == ()
+    settled = result.anomalies.settled[0]
+    assert settled.ruling is not None
+    assert settled.ruling.reason == "the model tried to read the grader and failed"
+
+
+def test_signoff_waits_on_an_untriaged_flag_and_returns_on_the_ruling(
+    tmp_path: Path,
+) -> None:
+    # decision 2b: the window opens on detection, so a flag nobody has looked
+    # at is a hole in the record and the gate says so
+    workspace = scanning(tmp_path)
+
+    assert not [item for item in turn(workspace).items if item.kind == SIGNOFF_READY]
+
+    rule(workspace, "dismiss")
+    result = turn(workspace)
+
+    ready = [item for item in result.items if item.kind == SIGNOFF_READY]
+    assert len(ready) == 1
+    assert result.verdict is Verdict.COMPLETE
+
+
+def test_the_signer_is_told_what_was_dismissed(tmp_path: Path) -> None:
+    # decision 7a: a dismissal is not a caveat and reaches `anomalies.md`
+    # nowhere, but *the model tried to read the grader* is something the person
+    # signing wants to have been told
+    workspace = scanning(tmp_path)
+    turn(workspace)
+    rule(workspace, "dismiss")
+
+    ready = [item for item in turn(workspace).items if item.kind == SIGNOFF_READY]
+
+    assert "2 scan findings were looked at and dismissed" in ready[0].summary
+
+
+@pytest.mark.parametrize(
+    ("disposition", "bucket", "note"),
+    [
+        # an excluded sample leaves the denominator; a zeroed one stays in it
+        # and counts as a miss, which is the whole difference between the two
+        ("exclude", "excluded", "Scores are over 2 of 4 samples (2 excluded)."),
+        ("zero", "zeroed", "Scores are over 4 of 4 samples (2 zeroed)."),
+    ],
+)
+def test_a_confirmed_hack_is_a_sample_the_scores_are_no_longer_over(
+    disposition: str, bucket: str, note: str, tmp_path: Path
+) -> None:
+    # §12.6.1's validity route, and the reason `honest()` admits the sample
+    # marks here at all: a confirmed reward hack is a sample excluded from
+    # scoring exactly as an excluded timeout is, and a ruling that moved no
+    # denominator would be a decision the person made and the numbers never
+    # heard
+    workspace = scanning(tmp_path)
+    turn(workspace)
+    rule(workspace, disposition, effect="2 samples are out of the scores")
+
+    result = turn(workspace)
+
+    assert getattr(result.dispositions, bucket) == 2
+    caveats = workspace.anomalies.read_text(encoding="utf-8")
+    # the denominator moved, and the entry names them as samples rather than as
+    # attempts — one flagged sample is one row out of the scores, not one log
+    assert note in caveats
+    assert "- **Samples** — `u0:1`, `u1:1`" in caveats
+
+
+def test_an_accepted_finding_is_a_caveat_and_a_dismissed_one_is_not(
+    tmp_path: Path,
+) -> None:
+    workspace = scanning(tmp_path)
+    turn(workspace)
+    rule(workspace, "accept", effect="2 samples scored as recorded")
+
+    turn(workspace)
+
+    caveats = (workspace.anomalies).read_text(encoding="utf-8")
+    assert CLASS in caveats
+    assert "2 samples scored as recorded" in caveats
+
+
+def test_a_dismissed_finding_leaves_no_caveat(tmp_path: Path) -> None:
+    workspace = scanning(tmp_path)
+    turn(workspace)
+    rule(workspace, "dismiss")
+
+    turn(workspace)
+
+    assert CLASS not in (workspace.anomalies).read_text(encoding="utf-8")
+
+
+class TestAScannerThatCouldNotScan:
+    """A transcript nobody scanned is not a transcript that came back clean.
+
+    The two are indistinguishable in the findings — an errored row is read past exactly as a `false` one is — so without a count of them a run whose every scan threw reads as a run with nothing to report, and the signature says so.
+    """
+
+    def erroring(self, workspace: Workspace, count: int = 1) -> None:
+        log = write_log(workspace.logs, TASK)
+        for index in range(count):
+            record(
+                workspace,
+                str(log),
+                uuid=f"e{index}",
+                value=None,
+                label=None,
+                error="the grader model timed out",
+            )
+        sync_scan(log_dir=str(workspace.logs), scan_id=SCAN_ID)
+
+    def test_the_scanner_that_threw_is_named_and_counted(self, tmp_path: Path) -> None:
+        workspace = scanning(tmp_path, land=False)
+        self.erroring(workspace, count=2)
+
+        result = turn(workspace)
+
+        assert result.scan_incomplete == {SCANNER: 2}
+        items = [item for item in result.items if item.kind == SCAN_INCOMPLETE]
+        assert [item.id for item in items] == [f"{SCAN_INCOMPLETE}:{SCANNER}"]
+        assert "could not scan 2 transcripts" in items[0].summary
+        assert items[0].owner is Owner.AGENT
+
+    def test_it_refuses_the_signature_until_somebody_names_it(
+        self, tmp_path: Path
+    ) -> None:
+        workspace = scanning(tmp_path, land=False)
+        self.erroring(workspace)
+
+        blockers = check(turn(workspace), None)
+
+        assert [blocker.kind for blocker in blockers] == [UNSCANNED]
+        assert "steward ack scan_incomplete:NAME" in blockers[0].remedy
+
+    def test_naming_it_signs_over_it_and_leaves_the_caveat(
+        self, tmp_path: Path
+    ) -> None:
+        # the gate's ordinary shape rather than an exception to it: a hole with
+        # a name on it is signed over, and one nobody named is refused
+        workspace = scanning(tmp_path, land=False)
+        self.erroring(workspace)
+        item = [
+            entry for entry in turn(workspace).items if entry.kind == SCAN_INCOMPLETE
+        ][0]
+        append_event(
+            workspace.journal,
+            ACKNOWLEDGED,
+            id=item.id,
+            kind=item.kind,
+            subject=item.subject,
+            summary=item.summary,
+            by="kaia",
+            reason="one grader timeout in five hundred; the rest scanned",
+        )
+
+        result = turn(workspace)
+
+        assert check(result, None) == []
+        caveats = workspace.anomalies.read_text(encoding="utf-8")
+        assert f"## `{SCANNER}`" in caveats
+        assert "these samples were never scanned" in caveats
+
+    def test_a_scanner_that_answered_every_transcript_says_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        workspace = scanning(tmp_path)
+
+        result = turn(workspace)
+
+        assert result.scan_incomplete == {}
+        assert not [item for item in result.items if item.kind == SCAN_INCOMPLETE]
+
+
+class TestTheFoldsCadence:
+    """When the tend folds at all, which is the difference between a finding and silence."""
+
+    def test_a_quiescent_run_does_not_fold(self, tmp_path: Path) -> None:
+        # a mid-run fold re-compacts the whole buffer, so a settled campaign
+        # must not pay for one every ten minutes — a row nothing has folded
+        # stays unread until a worker moves again
+        workspace = scanning(tmp_path, land=False)
+        log = write_log(workspace.logs, TASK)
+        record(workspace, str(log), uuid="u0", value=True, label="reward_hacking")
+
+        assert turn(workspace).anomalies.open == ()
+
+    def test_a_departed_worker_is_folded_before_it_is_reaped(
+        self, tmp_path: Path
+    ) -> None:
+        # the case the gate exists for: the last worker's final rows land after
+        # the previous fold, and the turn that reaps it is the one that must
+        # pick them up
+        workspace = scanning(tmp_path, land=False)
+        log = write_log(workspace.logs, TASK)
+        record(workspace, str(log), uuid="u0", value=True, label="reward_hacking")
+        departed(workspace)
+
+        result = turn(workspace)
+
+        assert [anomaly.class_key for anomaly in result.anomalies.open] == [CLASS]
+
+    def test_a_scan_directory_that_will_not_read_costs_the_turn_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        # it costs the turn nothing and it is *said*: a file nobody could open
+        # is not a scanner that found nothing, and the difference is the whole
+        # of what a signature would otherwise be taken over
+        workspace = scanning(tmp_path)
+        corrupt(workspace)
+
+        result = turn(workspace)
+
+        assert result.anomalies.open == ()
+        assert result.summary.states["complete"] == 1
+        unread = [item for item in result.items if item.kind == UNREADABLE]
+        assert [item.id for item in unread] == [f"unreadable:{SCANNER}.parquet"]
+        assert "scoring_integrity's scan results" in unread[0].summary
+
+    def test_scan_results_nobody_could_read_refuse_the_signature(
+        self, tmp_path: Path
+    ) -> None:
+        workspace = scanning(tmp_path)
+        corrupt(workspace)
+
+        blockers = check(turn(workspace), None)
+
+        assert [blocker.kind for blocker in blockers] == [UNREAD]
+
+    def test_a_fold_that_failed_on_the_departure_turn_is_retried(
+        self, tmp_path: Path
+    ) -> None:
+        """The hole the cheap gate would otherwise have, and it ends at the signature.
+
+        A fold that fails on the turn a worker departs is a fold that never happens: the reap lands, `running or departed` stops firing, and the rows sit in the buffer through every later tend — until signoff's terminal finalize folds them, after the gate has passed.
+        """
+        workspace = scanning(tmp_path, land=False)
+        log = write_log(workspace.logs, TASK)
+        record(workspace, str(log), uuid="u0", value=True, label="reward_hacking")
+        corrupt(workspace)
+        departed(workspace)
+
+        assert turn(workspace).anomalies.open == ()
+
+        # the worker is reaped, so nothing is running and nothing has departed:
+        # the open episode is the only thing that can bring the fold back
+        inflight = resolve_inflight(workspace.inflight, workspace.workers)
+        assert not inflight.running and not inflight.departed
+        repair(workspace)
+        result = turn(workspace)
+
+        assert [anomaly.class_key for anomaly in result.anomalies.open] == [CLASS]
+
+
+class TestTheHold:
+    """Decision 4/5/6: a landed task with a finding waits for the agent, briefly.
+
+    Every case runs the same two turns — one before the log lands, so there is a completion baseline for the `finished` diff to be taken against, and one after. What differs is only whether the second turn announces the finish.
+    """
+
+    def landing(self, tmp_path: Path, **kwargs: Any) -> Workspace:
+        workspace = scanning(tmp_path, land=False)
+        turn(workspace)
+        land_it(workspace, **kwargs)
+        return workspace
+
+    def test_a_finish_waits_while_an_agent_is_attached(self, tmp_path: Path) -> None:
+        workspace = self.landing(tmp_path)
+        collected(workspace)
+
+        result = turn(workspace)
+
+        assert result.held == frozenset({TASK.identifier})
+        assert result.finished == []
+        # and the completion is *unspent*: the next turn must be able to
+        # announce it, so it is kept out of the set the diff is taken against
+        assert observations(workspace)[-1]["complete"] == []
+
+    def test_the_hold_is_a_deferral_and_not_a_suppression(self, tmp_path: Path) -> None:
+        workspace = self.landing(tmp_path)
+        collected(workspace)
+        turn(workspace)
+
+        result = turn(workspace)
+
+        assert result.held == frozenset({TASK.identifier})
+        assert result.finished == []
+        assert observations(workspace)[-1]["complete"] == []
+
+    def test_a_ruling_releases_it(self, tmp_path: Path) -> None:
+        workspace = self.landing(tmp_path)
+        collected(workspace)
+        turn(workspace)
+        rule(workspace, "dismiss")
+
+        result = turn(workspace)
+
+        assert result.held == frozenset()
+        assert result.finished == [TASK.identifier]
+
+    def test_nobody_attached_means_nothing_is_held(self, tmp_path: Path) -> None:
+        # a hold with nobody to release it is silence; the finding escalates on
+        # `_unattended`'s own horizon instead
+        workspace = self.landing(tmp_path)
+
+        result = turn(workspace)
+
+        assert result.held == frozenset()
+        assert result.finished == [TASK.identifier]
+
+    def test_a_task_with_no_findings_is_never_held(self, tmp_path: Path) -> None:
+        workspace = self.landing(tmp_path, flagged=0)
+        collected(workspace)
+
+        result = turn(workspace)
+
+        assert result.held == frozenset()
+        assert result.finished == [TASK.identifier]
+
+    def test_the_horizon_releases_an_agent_that_stopped_answering(
+        self, tmp_path: Path
+    ) -> None:
+        workspace = self.landing(tmp_path)
+        collected(workspace)
+        turn(workspace)
+
+        # the completion has been waiting more than `HOLD_TENDS` cadences,
+        # which is the moment the hold gives up and posts it regardless
+        _age_the_wait(workspace, seconds=HOLD_TENDS * DEFAULT_TEND_INTERVAL + 60)
+        result = turn(workspace)
+
+        assert result.held == frozenset()
+        assert result.finished == [TASK.identifier]
+
+    def test_a_task_that_lands_late_into_an_old_class_is_held_too(
+        self, tmp_path: Path
+    ) -> None:
+        """A `scan:` class is run-wide, so its window's age says nothing about this task.
+
+        One reward-hacking decision covers the sweep — that is the class key working as designed — so a window opened by the first task to be flagged goes on absorbing the tenth task's findings hours later without its `opened_ts` moving. Measured against that, a task that landed a minute ago is already past the horizon.
+        """
+        workspace = self.landing(tmp_path)
+        collected(workspace)
+        turn(workspace)
+        # the window has been open longer than the hold would ever wait, and
+        # the completion in front of us arrived just now
+        _age(
+            workspace,
+            seconds=HOLD_TENDS * DEFAULT_TEND_INTERVAL + 60,
+            type="opened",
+            **{"class": CLASS},
+        )
+
+        result = turn(workspace)
+
+        assert result.held == frozenset({TASK.identifier})
+        assert result.finished == []
+
+    def test_a_finish_already_announced_is_not_taken_back(self, tmp_path: Path) -> None:
+        """The hold defers an announcement; it cannot retract one.
+
+        A fold that failed on the departure turn records and announces the completion, and the retry a turn later discovers the finding. Withholding then removes the task from the baseline the next diff is taken against — so ruling the finding announces the same finish a second time.
+        """
+        workspace = scanning(tmp_path, land=False)
+        log = write_log(workspace.logs, TASK)
+        turn(workspace)
+
+        # the completion is spent: recorded, and the diff is taken against it
+        assert TASK.identifier in observations(workspace)[-1]["complete"]
+
+        # and only now does the fold that was owed find the finding
+        record(workspace, str(log), uuid="u0", value=True, label="reward_hacking")
+        sync_scan(log_dir=str(workspace.logs), scan_id=SCAN_ID)
+        collected(workspace)
+        result = turn(workspace)
+
+        assert result.held == frozenset()
+        assert result.finished == []
+        assert TASK.identifier in observations(workspace)[-1]["complete"]
+        # and the finding still reaches somebody — it is the finish that is
+        # not news twice, not the flag
+        assert [anomaly.class_key for anomaly in result.anomalies.open] == [CLASS]
+
+    def test_the_released_post_says_it_once_in_the_summary(
+        self, tmp_path: Path
+    ) -> None:
+        # decision 6: one line about the post, never a qualifier per task row
+        workspace = self.landing(tmp_path)
+
+        post = turn_post(turn(workspace))
+
+        assert post is not None
+        said = [line for line in post.lines if "scan findings" in line]
+        assert said == ["1 with scan findings nobody has ruled on"]
+
+
+def test_an_agent_that_goes_quiet_hands_its_investigation_to_the_person(
+    tmp_path: Path,
+) -> None:
+    """The item was offered once, to somebody who is no longer there.
+
+    An agent-owned item reaches the person by *arriving*, and a scan finding first seen while an agent was attached has already arrived — so without a second way in, the one item nobody picked up is the one item nobody is ever told about.
+    """
+    workspace = scanning(tmp_path)
+    collected(workspace)
+
+    attended = turn_post(turn(workspace))
+
+    # an agent is attached, so the investigation is theirs and the post is
+    # silent about it — which is decision 4 working
+    assert attended is None or not any("integrity" in line for line in attended.lines)
+
+    # **and the silence outlasted more than one interval**, which is the case a
+    # fixed-cadence window loses: the crossing happened three cadences before
+    # this turn, so only a turn measuring the gap it is actually answering for
+    # can still catch it
+    _age_everything(
+        workspace, seconds=(UNATTENDED_INTERVALS + 3) * DEFAULT_TEND_INTERVAL
+    )
+    post = turn_post(turn(workspace))
+
+    assert post is not None
+    assert any("flagged for scoring integrity" in line for line in post.lines)
+
+
+def _age_the_wait(workspace: Workspace, *, seconds: float) -> None:
+    """Move back both instants a completion could have been waiting since.
+
+    The clock the hold reads is the task's own log — when the observation says it landed — with the window's opening standing in where the filesystem does not date it. Ageing both is the whole of simulating an agent that went quiet: no sleeping, and nothing patched.
+    """
+    _age(workspace, seconds=seconds, type="opened", **{"class": CLASS})
+    for log in workspace.logs.iterdir():
+        if log.suffix in (".eval", ".json"):
+            landed = log.stat().st_mtime - seconds
+            os.utime(log, (landed, landed))
+
+
+def _age_everything(workspace: Workspace, *, seconds: float) -> None:
+    """Move the whole record back, which is the whole of a long silence.
+
+    Both clocks, deliberately: an agent that stopped collecting while the timer went on firing every ten minutes is a different story from a workspace nothing touched all night, and it is the second one that loses a handoff measured against a nominal cadence.
+    """
+    _age(workspace, seconds=seconds)
+
+
+def _age(workspace: Workspace, *, seconds: float, **match: Any) -> None:
+    from datetime import datetime, timedelta
+
+    lines = workspace.journal.read_text(encoding="utf-8").splitlines()
+    rewritten: list[str] = []
+    for line in lines:
+        event = json.loads(line)
+        if all(event.get(field) == value for field, value in match.items()):
+            moved = datetime.fromisoformat(event["ts"]) - timedelta(seconds=seconds)
+            event["ts"] = moved.isoformat()
+            line = json.dumps(event)
+        rewritten.append(line)
+    workspace.journal.write_text("\n".join(rewritten) + "\n", encoding="utf-8")

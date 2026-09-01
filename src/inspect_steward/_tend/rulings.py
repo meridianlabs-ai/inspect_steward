@@ -27,6 +27,7 @@ from .._anomaly.applied import RULING_APPLIED, Applied
 from .._anomaly.fold import Pending, covered_refs, unapplied
 from .._anomaly.model import (
     ABSORBING,
+    SAMPLE_SHAPED,
     Anomalies,
     Anomaly,
     AnomalyState,
@@ -795,13 +796,23 @@ def dispositions(
         anomalies: The fold, post-policy — the rulings in force.
         current: Task identifier to its current attempt's log location.
 
+    **The run-wide totals are per sample row, never per instance**, which is what stops one row being counted twice. A batch is a class, and one sample can be in two of them — a sample that errored and was flagged by a scanner, or one two scanners flagged — so summing over instances would report *4 samples excluded* over three rows and put that number three lines above a denominator that disagrees. `by_task` below is unaffected and stays per instance: it is the *errored* cell's split, and classification gives an errored sample exactly one `error:` class.
+
+    Args:
+        batches: Detection's full census.
+        anomalies: The fold, post-policy — the rulings in force.
+        current: Task identifier to its current attempt's log location.
+
     Returns:
-        Bucket counts per task over `error:` instances, the run-wide exclusion and zero totals over error and limit instances, and the samples each class left in the data.
+        Bucket counts per task over `error:` instances, the run-wide exclusion and zero totals over every sample-shaped kind, and the samples each class left in the data.
     """
     by_task: dict[str, dict[str, int]] = {}
-    excluded = zeroed = 0
+    marked: dict[str, str] = {}
     for batch in batches:
-        if batch.kind not in ("error", "limit"):
+        # the totals are about rows in the results, so every kind whose residue
+        # is a sample counts toward them — an excluded reward hack is a sample
+        # excluded from scoring exactly as an excluded timeout is
+        if batch.kind not in SAMPLE_SHAPED:
             continue
         # per instance, the window that covers it decides -- an excluded
         # first generation must not read as undecided because a fresh second
@@ -826,16 +837,28 @@ def dispositions(
             if batch.kind == "error":
                 counts = by_task.setdefault(instance.task, {})
                 counts[bucket] = counts.get(bucket, 0) + 1
-            if bucket == "excluded":
-                excluded += 1
-            elif bucket == "zeroed":
-                zeroed += 1
+            if bucket in MARKS:
+                marked[instance.ref] = _stronger(marked.get(instance.ref), bucket)
     return Dispositions(
         by_task=by_task,
-        excluded=excluded,
-        zeroed=zeroed,
+        excluded=sum(1 for mark in marked.values() if mark == "excluded"),
+        zeroed=sum(1 for mark in marked.values() if mark == "zeroed"),
         affected=affected_refs(batches, current),
     )
+
+
+MARKS = ("excluded", "zeroed")
+"""The two buckets that move the scoring population, strongest first."""
+
+
+def _stronger(mark: str | None, bucket: str) -> str:
+    """Which of two marks on one sample row is the one the numbers describe.
+
+    **Exclusion wins**, and it is the only answer arithmetic admits: `marks_note` subtracts the exclusions from the denominator, so a row counted as both is a row simultaneously in and out of the population being scored. Once a decision has taken a row out of the scores there is nothing left for a second decision to zero, which makes the precedence a statement about the data rather than a tie-break.
+
+    Two rulings this far apart are worth a person's attention, and they get it where it belongs: both classes appear in `anomalies.md` with their own reasons, and the signature names both as exceptions. What is settled here is only what the one denominator line says.
+    """
+    return "excluded" if "excluded" in (mark, bucket) else bucket
 
 
 def _window_bucket(window: Anomaly) -> str:

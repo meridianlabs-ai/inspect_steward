@@ -1,4 +1,12 @@
-"""The durable summary, derived from the rows at the terminal fold.
+"""The tend's half of the bracket: the fold, and the durable summary it derives.
+
+Workers record into scout's buffer and never touch the scan directory (`bracket.py`), so the rows a worker has written are invisible to everything until somebody compacts them. That somebody is the run's single writer, and it acts twice: **`sync_scan` every turn** — the mid-run fold that makes this tend's rows readable, which is what lets a landed task's findings be looked at while the sweep is still running — and **`finalize_scan` once**, at signoff, which folds the last of them, prunes the superseded attempts' rows, and marks the scan complete.
+
+The two differ in exactly one argument, and it carries all of the risk. `complete=False` is three separate refusals: the buffer is not cleaned, so a still-running worker's `is_recorded` keeps answering; orphan rows are not pruned, so a worker finishing while a sibling runs deletes nothing (execution.md §4.2's pinned hazard); and the scan is not marked complete, so a crash leaves it resumable. `complete=True` is the opposite of all three, and is only ever honest when nothing is running.
+
+**A mid-run fold re-compacts the whole buffer**, since nothing is cleaned until the terminal one — so its cost grows with the run rather than with the turn. Measured (the caller logs the elapsed time) and deliberately not engineered around: the alternative is Steward tracking which rows it has already folded, which is scout's bookkeeping reimplemented one directory away.
+
+## The durable summary
 
 Scout's buffer accumulates `_summary.json` per process, and its persistence is last-writer-wins across the record-only workers that share one buffer — so the file undercounts every worker's share but one, and upstream's finalize *copies* that winning file into the scan directory. The rows themselves are never wrong (one parquet per scanner and transcript, each written by exactly one worker), which means the summary is a materialized view being maintained as an accumulator. Steward is the scan's single writer and, today, the only consumer of these directories — so the fix lives here: after the terminal finalize, the summary is **rebuilt from the compacted rows** and written over the copied one.
 
@@ -24,7 +32,7 @@ from inspect_ai.model import ModelUsage
 # so the two ends cannot drift
 from inspect_scout import Summary
 from inspect_scout._recorder.buffer import SCAN_SUMMARY
-from inspect_scout._recorder.file import SCAN_JSON
+from inspect_scout._recorder.file import SCAN_JSON, FileRecorder
 from inspect_scout._recorder.summary import ScannerSummary, add_model_usage
 from inspect_scout._validation.validate import is_positive_value
 from upath import UPath
@@ -40,6 +48,26 @@ SUMMARY_COLUMNS = (
     "scan_model_usage",
 )
 """The projection the rebuild reads — everything a `ScannerSummary` derives from, and none of the columns that carry transcript histories."""
+
+
+def sync_scan(*, log_dir: str, scan_id: str, scans: str | None = None) -> None:
+    """Fold what the workers have buffered into the compacted rows, mid-run.
+
+    The tend's per-turn half of the bracket. Upstream's `FileRecorder.sync` is a static method written to be called while scanning is in flight — compaction runs off the event loop, and the merged output is published by rename locally or by an atomic PUT remotely, so a concurrent reader sees the previous parquet or this one and never a partial. `complete=False` leaves the buffer, the orphan rows and the complete flag alone (see the module docstring).
+
+    Idempotent: a fold with nothing new merges the compacted output with an empty buffer and rewrites the same rows.
+
+    Args:
+        log_dir: The run's log directory.
+        scan_id: The scan id (the run's eval set id).
+        scans: The definition's scans redirect (`Manifest.scan.scans`), or `None` for the default under `log_dir`.
+    """
+    run_coroutine(
+        FileRecorder.sync(
+            scan_dir_location(log_dir=log_dir, scan_id=scan_id, scans=scans),
+            complete=False,
+        )
+    )
 
 
 def finalize_scan(*, log_dir: str, scan_id: str, scans: str | None = None) -> Summary:
@@ -98,7 +126,7 @@ def _folded(parquet: UPath) -> ScannerSummary:
     errors = 0
     tokens = 0
     usage: dict[str, ModelUsage] = {}
-    for row in _rows(parquet):
+    for row in read_columns(parquet, SUMMARY_COLUMNS):
         if row["transcript_id"]:
             transcripts.add(row["transcript_id"])
         if row["scan_error"] is not None:
@@ -119,12 +147,21 @@ def _folded(parquet: UPath) -> ScannerSummary:
     )
 
 
-def _rows(parquet: UPath) -> list[dict[str, Any]]:
+def read_columns(parquet: UPath, wanted: tuple[str, ...]) -> list[dict[str, Any]]:
     """The projected rows — and only them: the read never touches the history columns.
 
+    Shared by the summary rebuild and the findings read (`findings.py`), because both want a handful of narrow columns out of a file whose `input` and `input_data` hold whole transcript histories, and parquet's columnar layout means a projection never touches them.
+
     The filesystem dispatch mirrors scout's own (`_parquet_source`): the schemes pyarrow supports natively read by HTTP range, so the projection fetches only its columns' byte ranges; any other remote scheme reads through fsspec's file object, whose seeks become ranged reads where the store supports them.
+
+    Args:
+        parquet: One scanner's compacted parquet.
+        wanted: The columns to read. Raises where the file does not carry one of them — a caller reading a directory of them is expected to let a single odd file cost its own scanner rather than the read.
+
+    Returns:
+        One dictionary per row, carrying exactly `wanted`.
     """
-    columns = list(SUMMARY_COLUMNS)
+    columns = list(wanted)
     path = parquet.as_posix()
     if path.startswith(("s3://", "gs://", "gcs://", "abfs://", "abfss://")):
         fs, fs_path = pafs.FileSystem.from_uri(path)  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]

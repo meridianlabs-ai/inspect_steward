@@ -69,14 +69,22 @@ class Outcome(StrEnum):
 SAMPLE_MARKS = frozenset({Disposition.EXCLUDE, Disposition.ZERO, Disposition.SCORE})
 """The dispositions that mark per-sample data — meaningful only where the residue is sample-shaped."""
 
+SAMPLE_SHAPED = frozenset({"error", "limit", "scan"})
+"""The kinds whose residue is per-sample, rather than per task attempt.
+
+`scan` belongs here for the reason the other two do: a flagged sample is one row in the results, and a confirmed reward hack is a score that should be excluded or zeroed (workflow.md §12.6.1's validity route). Refusing the marks would leave `accept` and `dismiss` as the only answers to a sample whose score is known to be wrong — accepting a bad number or pretending nobody looked.
+
+**One definition, four readers, and the fourth is why it is a constant.** `honest` decides whether a mark may be *recorded*; `rulings.dispositions` counts what the marks did to the run's totals; and `anomalies_md` twice — whether an entry names samples or attempts, and whether the re-run overcount line applies. Adding a kind to the first three and missing the fourth records an exclusion that no denominator reports and prints it as an *attempt*, which is a caveat list quietly disagreeing with the numbers above it.
+"""
+
 
 def honest(kind: str, disposition: Disposition) -> bool:
     """Whether a disposition can honestly be recorded against a class of this kind.
 
-    The matrix `steward rule` and `propose` refuse on, and the one a policy ruling re-checks at application time — one definition, so a pattern in `_steward.yaml` cannot grant what a person could not type. Two rows: `accept` on an `error:` class is silent exclusion wearing a decision's clothes, and the three sample marks mean nothing where the residue is not sample-shaped.
+    The matrix `steward rule` and `propose` refuse on, and the one a policy ruling re-checks at application time — one definition, so a pattern in `_steward.yaml` cannot grant what a person could not type. Two rows: `accept` on an `error:` class is silent exclusion wearing a decision's clothes, and the three sample marks mean nothing where the residue is not sample-shaped (`SAMPLE_SHAPED`).
 
     Args:
-        kind: The class key's first segment — `error`, `limit`, `task`, or `score`.
+        kind: The class key's first segment — `error`, `limit`, `task`, `score`, or `scan`.
         disposition: The answer being considered.
 
     Returns:
@@ -85,7 +93,7 @@ def honest(kind: str, disposition: Disposition) -> bool:
     if disposition is Disposition.ACCEPT:
         return kind != "error"
     if disposition in SAMPLE_MARKS:
-        return kind in ("error", "limit")
+        return kind in SAMPLE_SHAPED
     return True
 
 
@@ -192,7 +200,7 @@ class Anomaly:
 
     class_key: str
     kind: str
-    """The class key's first segment — `error`, `limit`, `task`, or `score`."""
+    """The class key's first segment — `error`, `limit`, `task`, `score`, or `scan`."""
 
     state: AnomalyState
     evidence: Evidence
@@ -347,6 +355,7 @@ def composed_effect(
 __all__ = [
     "ABSORBING",
     "SAMPLE_MARKS",
+    "SAMPLE_SHAPED",
     "TERMINAL",
     "Anomalies",
     "Anomaly",

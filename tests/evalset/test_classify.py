@@ -17,6 +17,7 @@ from inspect_steward._evalset.classify import (
     kind_of,
     no_log_class,
     parse_error,
+    scan_class,
     substrate,
     task_error_class,
     zero_class,
@@ -165,6 +166,43 @@ class TestScoreAndKind:
         assert key == f"score:zero:swe-bench-hard:{digest8('identifier-a')}"
         assert zero_class("swe bench (hard)", "identifier-b") != key
 
+    def test_scan_class_groups_on_the_scanner_and_its_label(self) -> None:
+        assert (
+            scan_class("scoring_integrity", "reward_hacking")
+            == "scan:scoring_integrity:reward_hacking"
+        )
+        # the same scanner reporting a different category is a different
+        # decision, and a label is the only thing that says so
+        assert scan_class("scoring_integrity", "refusal") != scan_class(
+            "scoring_integrity", "reward_hacking"
+        )
+
+    def test_scan_class_is_not_per_task(self) -> None:
+        # deliberately unlike `zero_class`: a model that games a grader games
+        # it everywhere, so one ruling covers the sweep
+        assert scan_class("integrity", "reward_hacking") == scan_class(
+            "integrity", "reward_hacking"
+        )
+
+    def test_a_scanner_with_no_label_classes_on_its_name_alone(self) -> None:
+        bare = scan_class("integrity", None)
+
+        assert bare == "scan:integrity"
+        assert scan_class("integrity", "") == bare
+
+    def test_sanitizing_a_segment_does_not_merge_two_of_them(self) -> None:
+        # `unsafe output` and `unsafe-output` are two labels a scanner can
+        # plausibly emit, and one ruling settling both would close findings
+        # the person who ruled never saw
+        spaced = scan_class("integrity", "unsafe output")
+        hyphenated = scan_class("integrity", "unsafe-output")
+
+        assert spaced != hyphenated
+        # the readable form still leads, so a prefix still selects it
+        assert spaced.startswith("scan:integrity:unsafe-output")
+        # and the one that needed no repair carries no digest
+        assert hyphenated == "scan:integrity:unsafe-output"
+
     @pytest.mark.parametrize(
         ("key", "kind"),
         [
@@ -173,6 +211,8 @@ class TestScoreAndKind:
             (VANISHED, "task"),
             ("task:no-log", "task"),
             ("score:zero:probe:abcd1234", "score"),
+            ("scan:scoring_integrity:reward_hacking", "scan"),
+            ("scan:bare", "scan"),
         ],
     )
     def test_kind_is_the_first_segment(self, key: str, kind: str) -> None:

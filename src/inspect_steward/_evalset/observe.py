@@ -142,10 +142,16 @@ class LogAttempt:
 
 @dataclass(frozen=True)
 class UnreadableLog:
-    """A file that looked like a log and could not be read as one."""
+    """A file the run's results depend on and that could not be read.
+
+    A log, ordinarily. Also a scan directory's compacted rows, which are a second thing a signature covers and a second hole nobody can size: a parquet that will not read is indistinguishable from a scanner that flagged nothing, and *nothing was flagged* is exactly the answer a signoff must not be allowed to assume.
+    """
 
     location: str
     reason: str
+
+    what: str = "a log"
+    """What the file was being read as, for the item's sentence. The only reason this is a field is that the sentence is read by a person deciding whether to acknowledge it, and *could not be read as a log* over a `.parquet` sends them to look for the wrong thing."""
 
 
 @dataclass(frozen=True)

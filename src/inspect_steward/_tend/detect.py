@@ -2,13 +2,14 @@
 
 This is the projection half of step 23 — the `absorb` step (`_anomaly.fold`) diffs what this module returns against the journal, so `detect()` recomputes **everything observable** every turn, idempotently, and never writes. A `status` runs it and journals nothing; losing the cache re-derives the same census.
 
-Five signatures, each read at the cheapest tier that can answer it:
+Six signatures, each read at the cheapest tier that can answer it:
 
 - `error:{type}@{frame}` and `limit:operator` — sample-level, from `classed_instances`' summaries and single-sample reads (`_evalset.instances`).
 - `task:error[:{type}@{frame}]` — a log that finished `status="error"`, classed from the header's own error, no new read.
 - `task:vanished` — a started log whose worker is gone. The log's contents do not discriminate an OOM from a lost host, so the class does not pretend to.
 - `task:no-log[-exit:{type}@{frame}]` — a departed worker that left no log at all. The only evidence is its output tail, so the tail is what classes it (the exit-status sentry was considered and rejected: tail-only, no spawn changes).
 - `score:zero:{name}:{digest}` — a COMPLETE task whose headline is exactly zero over enough samples, confirmed by the one summaries read its log already got. Narrow by design: headline `0.0`, at least `UNIFORM_ZERO_MIN` samples, and every score converting to zero — a cancellation artifact or a legitimately hard task does not trip it.
+- `scan:{scanner}[:{label}]` — a sample a **boolean** scanner flagged, read off the folded scan rows (`_scan.findings`). The one signature this module does not compose itself: the rows carry the whole of an instance's identity, so the reading is `_scan`'s and only the composition is here.
 
 Orphaned tasks are skipped whole — their logs are leaving, not failing — and cancelled logs contribute no task signature, because cancellation is somebody's decision already.
 """
@@ -41,6 +42,7 @@ from .._evalset.observe import (
     TaskState,
     UnreadableLog,
 )
+from .._scan.findings import log_key
 from .._schedule.reconcile import InFlight
 from .._worker.live import LiveFleet
 
@@ -70,6 +72,7 @@ def detect(
     *,
     workers_dir: Path,
     cache: ClassedCache,
+    findings: list[Instance] | None = None,
 ) -> Detection:
     """Compose the turn's anomaly census.
 
@@ -80,6 +83,7 @@ def detect(
         fleet: The live fleet — its per-task error counts are the gate that keeps a healthy running log unread.
         workers_dir: `.steward/workers/`, where a departed worker's output tail lives.
         cache: What previous turns classified. Filled in as this turn reads; the caller prunes and writes it back on execute.
+        findings: Flagged samples read off the folded scan rows (`_scan.findings.scan_findings`), or `None` for a run that scans nothing. Composed by the caller because the read needs the scan directory, which is the manifest's to name and not this module's to resolve.
 
     Returns:
         One batch per class, and what could not be read.
@@ -93,8 +97,23 @@ def detect(
     instances.extend(_task_failures(tracked, inflight))
     instances.extend(_departed_without_logs(observed, logs, inflight, workers_dir))
     instances.extend(_uniform_zeros(observed, classed.zero))
+    instances.extend(findings or [])
 
     return Detection(batches=_batched(instances), unreadable=classed.unreadable)
+
+
+def scan_attempts(observed: ObservedTasks, logs: ObservedLogs) -> dict[str, LogAttempt]:
+    """The run's log attempts keyed the way a scan row names them (`_scan.findings.log_key`).
+
+    Narrowed through the same `_tracked` every other signature is narrowed through, so a row belonging to an orphan finds nothing here and is dropped — the exclusion arrived at through the join rather than through a second predicate that could come to disagree with the first.
+
+    **Every attempt, superseded ones included**, which is what `classed_instances` does with a superseded log's errored samples and what `_task_failures` does with its header. The census is the run's whole failure history and the narrowing to *what is in the results* happens exactly once, at the reporting layer (`rulings.affected_refs`) — so a finding on an attempt a re-run replaced still asks for a ruling, exactly as that attempt's errors do, and neither is counted into the denominators.
+    """
+    return {
+        log_key(attempt.location): attempt
+        for attempts in _tracked(observed, logs).attempts.values()
+        for attempt in attempts
+    }
 
 
 def task_health(observed: ObservedTasks) -> dict[str, TaskHealth]:
@@ -310,5 +329,6 @@ __all__ = [
     "UNIFORM_ZERO_MIN",
     "Detection",
     "detect",
+    "scan_attempts",
     "task_health",
 ]

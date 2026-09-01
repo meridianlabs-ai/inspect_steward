@@ -233,13 +233,13 @@ my-sweep/
   evalset.py         # authored — scaffolded by `init --type evalset` (or flow)
 
   journal.jsonl      # DURABLE — append-only event log; the source of truth
-  scanning.md        # DURABLE — agent-authored, per task; what the scans found
-  analysis.md        # DURABLE — agent-authored, per task; what any of it meant
+  analysis.md        # DURABLE — agent-authored, per task; what the scans found
+                     #   and what any of it meant
   anomalies.md       # rendered — caveats that reached the final data
   status.md          # rendered by every tend
   steward.log        # rendered — whether the machinery worked; bounded, disposable
   logs/              # the flat log directory — the CURRENT definition's results
-                     #   ...and where scanning.md / analysis.md are mirrored
+                     #   ...and where analysis.md is mirrored
   logs-archive/      # DURABLE — superseded, removed, and failed logs; never deleted
 
   .steward/          # DISPOSABLE — claim, manifest, inflight.jsonl, caches
@@ -263,10 +263,10 @@ The obvious split — "human-readable top level, machine-owned `.steward/`" — 
 |---|---|---|
 | **authored** | `_steward.yaml`, `AGENTS.md`, the definition | the human's own work is gone |
 | **durable machine state** | `journal.jsonl`, `logs/`, `logs-archive/` | the audit trail, or the results, are gone |
-| **authored by the agent** | `scanning.md`, `analysis.md` | the investigation is gone, and it re-runs from scratch |
+| **authored by the agent** | `analysis.md` | the investigation is gone, and it re-runs from scratch |
 | **disposable machine state** | everything in `.steward/`, `status.md`, `anomalies.md`, `steward.log` | rebuilt on the next tend, or simply gone with no loss |
 
-The fourth category is the newest and easy to mislabel as rendered. `scanning.md` and `analysis.md` are folded from the journal and the scan results *in part*, but which findings were noteworthy is judgement, and no replay recovers it — so they sit with the journal on the durable side and are mirrored into the log directory, which is the half of a run that outlives the workspace.
+The fourth category is the newest and easy to mislabel as rendered. `analysis.md` is folded from the journal and the scan results *in part*, but which findings were noteworthy is judgement, and no replay recovers it — so it sits with the journal on the durable side and is mirrored into the log directory, which is the half of a run that outlives the workspace.
 
 `journal.jsonl` therefore sits at the top level, beside the authored files, where a file nobody can regenerate belongs. Nothing in `.steward/` is irreplaceable, which makes it disposable — a property worth more than a tidy listing.
 
@@ -308,11 +308,20 @@ It fails on one property, and the failure is not recoverable by care: **line-del
 
 Its co-writability is worth noting but not worth building for: the need for human annotation was a property of *that* design rather than a requirement anyone stated. If it turns out to be wanted, appending a narrative event to the journal is a small addition at any time.
 
-### 5.4 The one file Steward must never write
+### 5.4 The one file Steward may write but never decide
 
-`status.md`, `anomalies.md`, and `steward.log` are generated, carry a header, and are expendable. `_steward.yaml` is their counterexample, and the reason the line is worth drawing visibly in the directory listing: it is the human's own document, and the one thing Steward only ever *proposes* changes to.
+`status.md`, `anomalies.md`, and `steward.log` are generated, carry a header, and are expendable. `_steward.yaml` is their counterexample, and the reason the line is worth drawing visibly in the directory listing: it is the human's own document, and the one file whose contents are *decisions* rather than observations.
 
-**The rule is under more pressure the more machine-shaped the file gets, and it still holds.** Prose does not invite writing; YAML does, and somebody will want `steward config set max_workers=12` within a week of using it. That pressure went up again when the file stopped being markdown at all (§5.10) — a document that is *entirely* a data structure reads like something a tool should be able to edit. The answer does not change with the format: an edit Steward made to the human's standing rules is, afterwards, indistinguishable from one the human made, and the whole value of the file is that reading it tells you what a person decided. So a command that wants to change a setting **prints the change to make** and lets the person make it. This costs one round trip and buys an artifact nobody has to trust Steward about.
+**The rule was once that Steward never writes it at all, and that was one step too strong.** Prose does not invite writing; YAML does, and somebody will want `steward config set max_workers=12` within a week of using it. That pressure went up again when the file stopped being markdown at all (§5.10) — a document that is *entirely* a data structure reads like something a tool should be able to edit. The objection that carried the earlier rule is real and survives: an edit Steward made to the human's standing rules is, afterwards, indistinguishable from one the human made, and the whole value of the file is that reading it tells you what a person decided.
+
+**But that objection is not special to this file, and everywhere else in the system it was answered rather than obeyed.** `steward rule --by` and `steward signoff --by` both let an agent type what a person decided, and both keep the record honest by naming the decider rather than by forbidding the keystroke. Refusing here while permitting there draws the line at the typing rather than at the authority, which is the wrong place: a signature is the heavier act by a distance, and it is the one that is allowed.
+
+So the rule narrows to the part that was always load-bearing. **The agent proposes the exact text and may write it once the human has answered; the decision is never the agent's.** Two consequences follow, and they are what the earlier rule was protecting by accident:
+
+- **A proposal is a wording, not a question.** *Shall I add a policy about timeouts?* cannot be answered without the human composing the rule themselves, which is the work the proposal was meant to save. What gets a yes or a no is the text to be written.
+- **The file has no `--by`, so visibility substitutes for provenance.** A ruling records who decided; a YAML key cannot. What stands in for it is the repository `init` created: the file is tracked, the edit shows in `git diff`, and the agent says what it wrote. That is weaker than a signed record, and it is exactly why the *decision* has to stay the human's — an unauthorized edit is visible and recoverable, but nothing in the file itself would ever say it was unauthorized.
+
+`preauthorized:` is the sharpest case and worth naming separately, because it is the one key that widens what happens with **nobody present**: Steward rules on matching classes itself and carries the re-runs out, recorded `by: policy`. Approval there has to be to the pattern as written. A human who agrees that provider timeouts are usually worth re-running has not thereby agreed that everything matching `error:*Timeout*` may be re-run at 3am without them, and the gap between those two sentences is where the damage lives.
 
 It applies to the whole file. The settings are more tempting than `policies` because they are the machine-shaped part, which is exactly why it needs saying.
 
@@ -647,7 +656,7 @@ The value has the same shape `log_store` has: a location, `auto` for the derived
 The `.env` rule is correct and it is the easy case. The harder one is that the files being propagated *on purpose* carry material lifted out of transcripts:
 
 - **`journal.jsonl`** holds error text and evidence — tracebacks, model output, sandbox paths, dataset content, and occasionally a credential that a library helpfully interpolated into an exception message.
-- **`analysis.md` and `scanning.md`** are an agent's writeup of what transcripts contained, and a good writeup quotes.
+- **`analysis.md`** is an agent's writeup of what transcripts contained, and a good writeup quotes.
 - **`anomalies.md` and `status.md`** carry error text wherever it is the clearest way to say what happened.
 
 The destination is the log directory, which bounds the audience to the one that already has the transcripts — so this is not a new *audience*. **It is a large change in accessibility.** An `.eval` file is a zip that needs tooling to read; `journal.jsonl` is plain text that anyone with bucket read access can grep. The same information becomes far easier to extract, and easy extraction is what turns a theoretical exposure into a real one.
@@ -1059,6 +1068,18 @@ So the question splits, and only one half is hard:
 
 So **`tend` reports that scan results are ready and which of them look worth a look**, in the same summary that carries everything else. The goal of that signal is precisely stated: *identify where investigation may be fruitful*. It is a shortlist, never a verdict.
 
+#### What was built, and the narrower ground it stands on
+
+The reasoning above is intact and the mechanism is not the one it proposed. Built (step 30) is the **boolean** half alone: a scanner whose `value_type` is `boolean` has already done the judging — its author wrote a question with a yes and a no — so a `true` opens an anomaly window of class `scan:{scanner}[:{label}]`, and everything the anomaly model already does applies to it unchanged. A row of any other type is recorded, readable, and never escalated.
+
+**That is a smaller claim than *narrowing*, and deliberately so.** Distributions were deferred rather than implemented, because reporting one requires deciding what a distribution *of what* means for a scanner whose values Steward has no semantics for, and every version of that decision is a threshold in disguise. The boolean case needs none: the scanner's own author drew the line, and Steward is reading it rather than inventing one. What the design gives up by waiting is recorded in §12.6.1.
+
+**And a boolean finding is an anomaly rather than a shortlist entry**, which is the second departure. A shortlist is a suggestion nobody has to answer; a window is a question the signoff gate refuses to sign around. That is the right shape for the thing being reported — *the score on this sample may not be trustworthy* is not a hint — and it costs nothing, because the whole vocabulary already exists: `investigate`, `propose`, `rule`, the precedent that travels, `anomalies.md`, the gate.
+
+**The window opens on detection, not on escalation.** The alternative — the agent looks first, and opens a window only for what survives — was rejected on one ground: it makes *the agent forgot to look* indistinguishable from *the agent looked and found nothing*, which is precisely the distinction §12.7 says is worth as much as a finding. So a flag is open until somebody rules, and *looked, nothing here* is a `dismiss` ruling with a reason attached. The record then holds the judgement rather than a silence.
+
+**A scan finding is sample-shaped**, so `exclude`, `zero` and `score` are honest against it, unlike a `task:` or `score:` class. A score established to be wrong should not be silently averaged in, and the marks are how a decision about one says so.
+
 #### 12.6.1 What these scanners are actually looking for
 
 The abstraction above is fine but it hides the stakes, and the stakes change what the machinery has to be good at. In practice scanners are looking for **reward hacking, attempts to escape the sandbox, environment misconfiguration, grader gaming or malfunction, and infrastructure failures**. These are not incidental readings; several of them mean the numbers are wrong, and one of them means something happened that a person needs to know about today.
@@ -1075,39 +1096,48 @@ Two things follow that the general treatment above gets wrong.
 
 **Rarity and importance run in opposite directions for the behavioural kind.** One sample attempting to escape its sandbox is *more* significant than forty, not less, and it is worth saying now rather than in the next tend's shortlist. Narrowing by distribution happens to work well here — a rare `True` is exactly what outlier detection finds — but the framing must not imply that a single instance is a weak signal. For this kind, one is a finding.
 
+> **Scoped, on build, to a *successful* escape.** The row as written covers the attempt, and that turns out to be the over-flagging case rather than the important one: a sandbox refusing an outbound request forty times is the sandbox working, and a model probing a grader it never reaches earned nothing, so neither threatens the score. What escalates at n=1 is an escape or an egress that *returned something* — where containment actually failed and the transcript may hold material that is not the agent's own work. A failed attempt is dismissed with a reason instead, and the reason is surfaced to the operator at signoff: it changes no number, and somebody accepting the results still wants to know it happened. The scanner's own prompt already draws this line; what the build added is the investigator's half of it.
+
 **And the blind spot is the headline case, not an edge case.** *Successful* reward hacking is systematic by nature: a model that finds the exploit uses it everywhere, so the scanner returns the same value on every sample and there is no outlier to detect. The most important thing a scan can find is precisely the thing variance-based narrowing cannot see. That is worth stating as a limitation of the mechanism rather than hoping nobody notices.
 
 So the two mitigations are not optional extras, they are what makes the mechanism honest:
 
-- **Report each scanner's distribution unconditionally**, not only its deviations. A uniform 0.0 across every task is then visible in `scanning.md` even though nothing stands out within the run — and a human or agent reading a flat distribution for a reward-hacking detector will recognize it immediately, where a shortlist of outliers would have been empty.
+- **Report each scanner's distribution unconditionally**, not only its deviations. A uniform 0.0 across every task is then visible in `analysis.md` even though nothing stands out within the run — and a human or agent reading a flat distribution for a reward-hacking detector will recognize it immediately, where a shortlist of outliers would have been empty.
 - **Compare against the project's previous runs** once there are any. This is the same cross-run precedent [Tuning precedent is the most reusable kind](#1013-tuning-precedent-is-the-most-reusable-kind) wants for throughput, and for the systematic case it is the only thing that catches a break — "this scanner fired on 4% of samples last month and 81% this month" is the shape a successful new exploit actually has.
+
+> **Neither mitigation is built, and the blind spot is therefore open.** Both need the distribution machinery step 30 declined, and the second needs the cross-run store that is step 33. What stands in for them is one sentence in the agent's brief — *197 of 200 flagged is the alarming case, not the noisy one* — which is a prompt where the design asked for a mechanism, and should be read as owing the mechanism rather than as having replaced it.
+>
+> It is worth being exact about what the boolean build does and does not lose. A systematic exploit that the scanner *recognises* is not invisible: it opens one window covering most of a task, and a class that large is conspicuous in a way a shortlist of outliers would not have been — so for a scanner that fires, the mechanism is arguably better than the one proposed. What stays lost is the case the mitigation was written for: a scanner that quietly answers *false* everywhere because the exploit is one it does not know about. Nothing in the run says so, and only last month's numbers would.
 
 One further consequence, and it sharpens a hazard already recorded. A validity finding is a caveat that belongs *with the data*, which is a second and stronger reason both files are written into the log directory. It also bears directly on publication: [Publication is part of the attestation](#132-publication-is-part-of-the-attestation) already worries that a task signed with accepted exceptions carries a caveat that travels nowhere. When the exception is "this task's grader was gameable", handing another project the log without the footnote is not untidy, it is passing on a known-bad result.
 
-### 12.7 `scanning.md` and `analysis.md` — what investigation produces
+### 12.7 `analysis.md` — what investigation produces
 
-Investigation that leaves no artifact is investigation done again next session. Two files, both **per task**, and both **authored by the agent** — a category the design did not previously have, and the thing that makes the agent's judgement outlive its session:
+Investigation that leaves no artifact is investigation done again next session. One file, **per task**, and **authored by the agent** — a category the design did not previously have, and the thing that makes the agent's judgement outlive its session:
 
 | file | per task, holds | written |
 |---|---|---|
-| `scanning.md` | what the scanners said about this task, and what investigation concluded — including "looked, nothing here", which is worth as much as a finding | as scan passes drain |
-| `analysis.md` | anything noteworthy about this task: what came out of scanning, plus what the journal holds — error classes, rulings, re-runs, accepted exceptions | rolled up from `scanning.md` and the journal |
+| `analysis.md` | anything noteworthy about this task: what the scanners said and what investigation concluded — including "looked, nothing here", which is worth as much as a finding — plus what the journal holds: error classes, rulings, re-runs, accepted exceptions | as scan results land and as the journal grows |
 
 Per task because that is the manifest's unit, the unit a ruling and a re-run act on, and the unit anyone reading results actually thinks in.
 
+> **This was two files, `scanning.md` and `analysis.md`, and the split did not survive contact with the schedule.** It was drawn on *when* rather than on *what*: scanning wrote as passes drained, analysis rolled up afterwards. Online scanning removed the second moment — results now accumulate with the run, and the tail of a run is the agent over the results rather than the scanner over the logs (§12.3's correction) — so the two files would be written in the same sitting, about the same task, by the same author, and the roll-up would be a copy of the file above it. Two artifacts is then two places a reader has to look and two places the two can disagree.
+>
+> Nothing of the content is lost: scanning becomes a section of `analysis.md`, and the "looked, nothing here" entry that was its whole reason for existing is now a `dismiss` ruling with a reason, which the journal carries and this file quotes. What changes is that a task has *one* document, and its name says what it is for.
+
 **This fills a real gap.** The design has produced `status.md` (current state, ephemeral), `anomalies.md` (terse signoff footnotes), and `journal.jsonl` (raw events) — and nothing a person reads to find out *what happened*. `analysis.md` is that document, and its relationship to the journal is the one already established for observations and interpretation: **the journal carries the time series, `analysis.md` carries what it meant.**
 
-#### 12.7.1 They belong in the log directory
+#### 12.7.1 It belongs in the log directory
 
-Both files are written into `log_dir` alongside the results, not only at the workspace root.
+The file is written into `log_dir` alongside the results, not only at the workspace root.
 
 The reason is that **the workspace is often the ephemeral half.** A run on a rented box, an air-gapped runner, or a Hawk pod leaves nothing behind but its log directory — and `log_dir` is frequently S3, which is the artifact people share and the one that is still there in six months. Someone who has the `.eval` files and no workspace has the data and no idea which grader fell over. Analysis has to travel with the results or it does not travel.
 
 It is also consistent rather than novel: Steward already owns the log directory's metadata, writing `eval-set.json` and `logs.json` there. And it is safe — `list_eval_logs` filters by format extension, and `cleanup_older_eval_logs` only ever operates on logs it found through `list_all_eval_logs`, so markdown in the directory is invisible to discovery and never deleted.
 
-They are mirrored on every tend that changes them rather than only at signoff, on the same reasoning that makes the workspace propagation unconditional: a run that dies before signoff is exactly the run whose analysis someone will want. Signoff makes them final, not present.
+It is mirrored on every tend that changes it rather than only at signoff, on the same reasoning that makes the workspace propagation unconditional: a run that dies before signoff is exactly the run whose analysis someone will want. Signoff makes it final, not present.
 
-**Both are durable, not disposable.** They belong in the same category as `journal.jsonl` and for the same reason — the interpretation exists nowhere else. `analysis.md` re-derives partly from the journal, but *which things were noteworthy* is judgement, and judgement is not recoverable by replaying events.
+**It is durable, not disposable.** It belongs in the same category as `journal.jsonl` and for the same reason — the interpretation exists nowhere else. `analysis.md` re-derives partly from the journal, but *which things were noteworthy* is judgement, and judgement is not recoverable by replaying events.
 
 ### 12.8 Precedent travels with the anomaly
 
@@ -1263,7 +1293,7 @@ This is also the argument for the whole workspace being git-friendly: the record
 
 5. **`status.md` staleness.** *Mostly resolved, and it needs two ages rather than one.* The file states how old it is, and separately how long since the last **collection** ([agent.md](agent.md)) — the pair distinguishes a stopped timer from an unattended run, which a single timestamp cannot. This matters most once the file is propagated to a bucket, where a stated age is a remote reader's only evidence that anything has failed. What remains open is presentation: the age must read as a fact about the file rather than as part of the snapshot, or a reader skims past exactly the line that says the snapshot is worthless.
 6. **Multiple runs per directory.** *Resolved, and the question was the wrong shape* — see *A project, not a run*. A workspace is a **project**: one evolving definition, one log directory holding the current definition's results, one archive holding everything superseded, and one journal that is a project history. There is no run entity for anything to be "per", so claims key on the log directory, the manifest is whatever the last `launch` captured, and anomalies scope to the logs they concern. What remains is not a question but a consequence: every fold over the journal spans the project's whole history, which is what makes precedent accumulate.
-7. **How does a scanner result become an anomaly?** *Resolved — see *A scan result is a measurement, and only the agent can read it*.* It does not, mechanically: a result is a reading rather than an event, so no threshold Steward could apply would mean anything. A scanner *erroring* classes like any other error; a scanner *result* is judged by the agent, with Steward narrowing rather than judging — surfacing distributional outliers from `scan_results_df()`, which needs no semantics — and `tend` reporting which results have landed and which look worth a look. The product is `scanning.md` and `analysis.md`, per task, mirrored into the log directory. What survives is sharper than it was: successful reward hacking is *systematic*, so it produces no outlier at all — the most important finding is the one variance cannot see, which is why distributions are reported unconditionally and why cross-run comparison is load-bearing rather than a nicety. Also unresolved: an investigation pass wants different scanners than the broad pass, which a definition's single scanner configuration cannot express.
+7. **How does a scanner result become an anomaly?** *Resolved, and then answered differently on build — see §12.6.* The original answer was that it does not, mechanically: a result is a reading, so no threshold Steward could apply would mean anything, and the product is a shortlist the agent reads. Half of that survives and half was overtaken. **A boolean scanner needs no threshold**, because its author already drew the line, so a `true` becomes an anomaly of class `scan:{scanner}[:{label}]` — a window, a ruling, a caveat, exactly like an error class — and the window opens on *detection* so that *nobody looked* and *somebody looked and found nothing* are distinguishable in the record. Everything else stays a reading: a non-boolean value is recorded, readable, and never escalated, which is the deferral §12.6.1 now owes a mechanism for. A scanner *erroring* still classes like any other error. The product is `analysis.md`, per task, mirrored into the log directory — one file rather than two (§12.7). Still unresolved: an investigation pass wants different scanners than the broad pass, which a definition's single scanner configuration cannot express.
 
 8. **How are the concurrency budgets divided?** *Resolved in [scheduling.md](scheduling.md), *Setting the concurrency knobs*, and the framing was wrong: the three knobs are not one budget to divide.* `max_samples` is per-task and discovered — the tuning loop starts each task at the ramp's floor of 40 and climbs on the absence of rate limits given saturation (saturation alone measures demand, not headroom); `max_connections` is process-global and adaptive, so N controllers on a shared bucket coordinate through 429s and need no division; and `max_sandboxes`, the one that looked like a genuine allocation, is enforced as a cap on the fleet-wide sum of sample setpoints rather than divided at all. Rebalancing dissolves with it. The grader-model question survives as a real gap — a task whose scorer consumes a bucket the manifest never revealed is invisible to all of this.
 

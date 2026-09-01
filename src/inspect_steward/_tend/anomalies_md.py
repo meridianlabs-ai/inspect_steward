@@ -12,10 +12,10 @@ The journal answers *was this run conducted properly*. A different reader asks a
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 
-from .._anomaly.model import Anomalies, Anomaly, Ruling
+from .._anomaly.model import SAMPLE_SHAPED, Anomalies, Anomaly, Ruling
 from .._evalset.instances import InstanceBatch
 from .._workspace.journal import Ack
-from .items import STALLED, UNREADABLE
+from .items import SCAN_INCOMPLETE, STALLED, UNREADABLE
 
 HEADER = "<!-- Written by `steward tend`. Regenerated every turn; edits are lost. -->"
 """The same banner `status.md` carries, and this document needs it more.
@@ -23,12 +23,12 @@ HEADER = "<!-- Written by `steward tend`. Regenerated every turn; edits are lost
 It reads as prose about the results, so the reader most likely to open it is the one writing those results up — and the first instinct on finding a caveat worded awkwardly is to fix the wording. It is regenerable machine state, and the edit would be gone by the next turn with nothing to say it had been made.
 """
 
-MARKED = frozenset({STALLED, UNREADABLE})
+MARKED = frozenset({STALLED, UNREADABLE, SCAN_INCOMPLETE})
 """Item kinds whose acknowledgment left a mark on the results, and therefore becomes a caveat.
 
 An allow-list rather than a deny-list, and one notch stronger than `history._ADMITTED`'s reason: the item vocabulary grows, and the default for a kind this document has never heard of must be *not a caveat* — a caveat list that grows by accident is a caveat list nobody trusts.
 
-Two entries. Acknowledging a **stalled** task says *this will not be run again and the results stand without it*, which is a hole in the data with a name on it. Acknowledging an **unreadable** log says *the numbers are over what could be read*, which moves the denominator. Everything else in the vocabulary is machinery or a decision with no residue: a drift nobody applied, a propagation that stopped, a claim holder that was killed, a tuning proposal, a park, a stuck sample. `anomaly` is absent by construction — an anomaly closes through a ruling and an ack of one is refused, precisely so that no anomaly reaches this file except through a decision with a disposition on it.
+Three entries. Acknowledging a **stalled** task says *this will not be run again and the results stand without it*, which is a hole in the data with a name on it. Acknowledging an **unreadable** log says *the numbers are over what could be read*, which moves the denominator. Acknowledging an **incomplete scan** says *these samples were never scanned and the results stand anyway*, which is a hole in what the run knows about its own integrity rather than in its arithmetic — and the one caveat here that leaves the numbers exactly where they were. Everything else in the vocabulary is machinery or a decision with no residue: a drift nobody applied, a propagation that stopped, a claim holder that was killed, a tuning proposal, a park, a stuck sample. `anomaly` is absent by construction — an anomaly closes through a ruling and an ack of one is refused, precisely so that no anomaly reaches this file except through a decision with a disposition on it.
 """
 
 SAMPLES_NAMED = 50
@@ -200,9 +200,11 @@ def _what(group: _Group, affected: int) -> str:
         line = f"{affected} task attempt{plural} failed"
     elif anomaly.kind == "score":
         line = "every score converts to zero"
+    elif anomaly.kind == "scan":
+        line = f"{affected} sample{plural} flagged for scoring integrity"
     else:
         line = f"{affected} sample{plural} errored the same way"
-    if group.absorbed > affected and anomaly.kind in ("error", "limit"):
+    if group.absorbed > affected and anomaly.kind in SAMPLE_SHAPED:
         line += f" ({group.absorbed} failures in all, counting re-runs)"
     if anomaly.substrate:
         line += "; this looks like the machinery under the run"
@@ -215,7 +217,7 @@ def _scope(group: _Group, affected: int, keys: Mapping[str, str] = {}) -> str:
     A task identifier carries a content hash of the whole task, which is exactly right for keying state and unreadable in a sentence somebody quotes into a write-up.
     """
     tasks = [keys.get(task, task) for task in group.tasks]
-    unit = "sample" if group.anomaly.kind in ("error", "limit") else "attempt"
+    unit = "sample" if group.anomaly.kind in SAMPLE_SHAPED else "attempt"
     if not tasks:
         where = ""
     elif len(tasks) <= 3:
@@ -246,7 +248,7 @@ def _members(
     Returns:
         The names, how many are not named, and how many samples the decision left in the data.
     """
-    if group.anomaly.kind not in ("error", "limit"):
+    if group.anomaly.kind not in SAMPLE_SHAPED:
         if group.logs and current:
             live = tuple(log for log in group.logs if log in set(current.values()))
             return live, 0, len(live)
@@ -296,15 +298,16 @@ def _from_ack(ack: Ack) -> Caveat:
 
     The same five fields as far as they go, and one it cannot carry: nobody composed an `effect`, because an ack has no disposition to compose one from. So the effect is a sentence per kind, which is the difference between the two paths and the only one worth printing.
     """
-    effect = (
-        "the task's results stand as they are, without it"
-        if ack.kind == STALLED
-        else "the numbers are over what could be read"
-    )
+    if ack.kind == STALLED:
+        effect = "the task's results stand as they are, without it"
+    elif ack.kind == SCAN_INCOMPLETE:
+        effect = "these samples were never scanned, and the results stand anyway"
+    else:
+        effect = "the numbers are over what could be read"
     return Caveat(
         subject=ack.subject or ack.id,
         what=ack.summary or ack.id,
-        scope="1 task" if ack.kind == STALLED else "1 log",
+        scope=_ACK_SCOPE.get(ack.kind, "1 log"),
         why=ack.reason,
         who=ack.by,
         when=ack.ts,
@@ -312,6 +315,10 @@ def _from_ack(ack: Ack) -> Caveat:
         decision="acknowledged",
         kind=ack.kind,
     )
+
+
+_ACK_SCOPE = {STALLED: "1 task", SCAN_INCOMPLETE: "1 scanner"}
+"""What an acknowledged item is one *of*, per kind. A log is the default because it is what the vocabulary's other entry is."""
 
 
 def caveat_line(caveat: Caveat) -> str:
@@ -372,7 +379,9 @@ def anomalies_markdown(
         if caveat.members:
             named = ", ".join(f"`{member}`" for member in caveat.members)
             more = f", and {caveat.unnamed} more" if caveat.unnamed else ""
-            what = "Samples" if caveat.kind in ("error", "limit") else "Attempts"
+            # the same predicate `_members` picked the list with, so the label
+            # cannot come to disagree with what is under it
+            what = "Samples" if caveat.kind in SAMPLE_SHAPED else "Attempts"
             lines.append(f"- **{what}** — {named}{more}")
         lines.append("")
     return "\n".join(lines)

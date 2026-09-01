@@ -72,7 +72,7 @@ pip install git+https://github.com/meridianlabs-ai/inspect_steward
 
 To use Steward, create a directory, switch to it, then call `steward init`:
 
-```bash
+```{.bash filename="Terminal"}
 mkdir -p ~/runs/swe-evals
 cd ~/runs/swe-evals
 steward init

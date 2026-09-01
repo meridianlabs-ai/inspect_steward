@@ -11,21 +11,27 @@ import pytest
 from click.testing import CliRunner
 from inspect_steward._cli.main import steward
 from inspect_steward._evalset.archive import archive_dir
+from inspect_steward._evalset.manifest import write_manifest
+from inspect_steward._scan import initialize_scan, scan_dir_location
 from inspect_steward._signoff import (
     FAILED,
     OPEN_WINDOW,
     STANDING,
     UNDECIDED,
+    UNFINALIZED,
     UNREAD,
     UNSETTLED,
+    UNSIGNED,
     Signoff,
     check,
     signoff,
 )
 from inspect_steward._tend import Verdict, status
 from inspect_steward._tend.items import UNREADABLE
+from inspect_steward._tend.turn import SCAN_FOLD_FAILED
 from inspect_steward._workspace import (
     ACKNOWLEDGED,
+    ACTION,
     ARMED,
     PAUSED,
     RULING,
@@ -669,3 +675,268 @@ def test_an_ack_recorded_before_the_verb_existed_no_longer_silences_it(
     )
 
     assert any(item.kind == "signoff_ready" for item in turn(workspace).items)
+
+
+# --- the scan bracket's terminal half ---------------------------------------
+
+
+def scanned(root: Path) -> Workspace:
+    """A signed-off-ready run whose scan directory holds one dismissed finding."""
+    from ..anomaly.test_scan_items import (
+        CLASS as SCAN_CLASS,
+    )
+    from ..anomaly.test_scan_items import (
+        MATERIAL,
+        SCAN_ID,
+        land_it,
+    )
+
+    create_workspace(root, git=False)
+    workspace, manifest = prepared(root, [TASK])
+    write_manifest(
+        manifest.model_copy(update={"scan": MATERIAL, "eval_set_id": SCAN_ID}),
+        workspace.manifest,
+    )
+    initialize_scan(MATERIAL, log_dir=str(workspace.logs), scan_id=SCAN_ID)
+    land_it(workspace)
+    turn(workspace)
+    ruling(workspace, "dismiss", **{"class": SCAN_CLASS})
+    return workspace
+
+
+def test_signing_folds_the_last_rows_and_marks_the_scan_complete(
+    tmp_path: Path,
+) -> None:
+    """The one moment the prune is honest: nothing is running, and this process is the only writer.
+
+    Every tend folds with `complete=False` — deliberately, since a sibling worker might still be recording — so the flag is the observable difference between the two halves of the bracket.
+    """
+    import json
+
+    from ..anomaly.test_scan_items import SCAN_ID
+
+    workspace = scanned(tmp_path)
+    scan_dir = Path(
+        scan_dir_location(log_dir=str(workspace.logs), scan_id=SCAN_ID, scans=None)
+    )
+    assert json.loads((scan_dir / "_summary.json").read_text())["complete"] is False
+
+    result = sign(workspace)
+
+    assert result.blockers == []
+    assert json.loads((scan_dir / "_summary.json").read_text())["complete"] is True
+
+
+def test_a_finalize_that_fails_refuses_and_signs_nothing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Unlike a move that failed, and the difference is what it costs.
+
+    `_rerender`'s reasoning — a filesystem that will not cooperate must not unmake a decision a person made — does not reach this call, which runs *before* the `SIGNOFF` event and so unmakes nothing by stopping. What it costs is not tidiness: rows nothing compacted are rows the census never read, so a signature taken over them says *nothing was flagged* about samples nothing has looked at.
+    """
+    import importlib
+
+    module = importlib.import_module("inspect_steward._signoff.sign")
+    workspace = scanned(tmp_path)
+
+    def refuses(**kwargs: Any) -> None:
+        raise OSError("read-only file system")
+
+    monkeypatch.setattr(module, "finalize_scan", refuses)
+    result = sign(workspace)
+
+    assert kinds(result) == [UNFINALIZED]
+    assert result.signature is None
+    assert read_signoff(read_journal(workspace.journal).events) is None
+    # and it is retryable rather than terminal, which is what keeps a
+    # transient store failure from being a run nobody can ever sign
+    assert "run it again" in result.blockers[0].remedy
+
+
+def test_a_finding_the_terminal_fold_uncovers_un_signs_the_signature(
+    tmp_path: Path,
+) -> None:
+    """The one window between the gate and the return, and what is on the other side of it.
+
+    Every tend's fold can have failed — or, as here, never been due — so the terminal finalize is the first thing to compact a row, and it runs *after* the gate has passed. Reporting success then would leave a signature in the journal, a run that reads unsigned, a disarmed timer and nothing left to notice.
+    """
+    from ..anomaly.test_scan_items import (
+        CLASS as SCAN_CLASS,
+    )
+    from ..anomaly.test_scan_items import (
+        MATERIAL,
+        SCAN_ID,
+        record,
+    )
+
+    create_workspace(tmp_path, git=False)
+    workspace, manifest = prepared(tmp_path, [TASK])
+    write_manifest(
+        manifest.model_copy(update={"scan": MATERIAL, "eval_set_id": SCAN_ID}),
+        workspace.manifest,
+    )
+    initialize_scan(MATERIAL, log_dir=str(workspace.logs), scan_id=SCAN_ID)
+    # real sample uuids, because the terminal finalize prunes rows no surviving
+    # log accounts for — the row has to be one the finalize keeps
+    samples = [SynthSample(id=f"s{index}") for index in range(4)]
+    log = write_log(workspace.logs, TASK, samples=samples)
+    record(
+        workspace, str(log), uuid=samples[0].uuid, value=True, label="reward_hacking"
+    )
+
+    # nothing has run since the row was buffered, so no tend was ever due to
+    # fold it and the gate sees a clean run
+    assert check(turn(workspace), None) == []
+
+    result = sign(workspace)
+
+    # and the reason travels with it: `unsigned` says the signature did not
+    # survive, and the gate re-run over the post-finalize state says what of
+    assert kinds(result) == [UNSIGNED, OPEN_WINDOW]
+    assert SCAN_CLASS in result.blockers[1].summary
+    assert result.signature is None
+    assert [anomaly.class_key for anomaly in result.turn.anomalies.open] == [SCAN_CLASS]
+
+
+def test_an_unreadable_result_the_finalize_leaves_behind_is_not_signed_over(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The other thing the terminal fold can reveal, and the signature stands over neither.
+
+    A window that opens un-signs the run and is caught by `signed_off` alone; results that will not read leave the signature standing and the run reading signed, with a hole in it nobody would ever be shown. One reason a run cannot be signed is every reason, so the gate is asked again rather than one predicate of it.
+    """
+    import importlib
+
+    from ..anomaly.test_scan_items import corrupt
+
+    module = importlib.import_module("inspect_steward._signoff.sign")
+    workspace = scanned(tmp_path)
+    real = module.finalize_scan
+
+    def damages(**kwargs: Any) -> Any:
+        # the compaction is what writes the file the census then projects, so
+        # a truncated write here is the shape of this failure
+        summary = real(**kwargs)
+        corrupt(workspace)
+        return summary
+
+    monkeypatch.setattr(module, "finalize_scan", damages)
+    result = sign(workspace)
+
+    assert kinds(result) == [UNSIGNED, UNREAD]
+    assert result.signature is None
+    assert result.disarmed is None
+
+
+def test_a_scan_nothing_could_re_read_leaves_the_timer_up(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The post-finalize check is the only thing that ever looks at what the fold compacted.
+
+    A turn that raised leaves that question open rather than answered, and taking the timer down is what would turn *unverified* into *unnoticeable*. So the signature stands — it is in the journal — and the two acts that assume it was verified do not happen: the run keeps tending, and the caller is told this one is not finished.
+    """
+    import importlib
+
+    module = importlib.import_module("inspect_steward._signoff.sign")
+    workspace = scanned(tmp_path)
+    append_event(workspace.journal, ARMED, scheduler="cron", interval=600, label="w")
+    real = module.tend
+    turns = 0
+
+    def once(*args: Any, **kwargs: Any) -> Any:
+        nonlocal turns
+        turns += 1
+        if turns > 1:
+            raise OSError("the journal went away between the two turns")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(module, "tend", once)
+    result = sign(workspace)
+
+    assert result.signature is not None
+    assert result.unverified is not None
+    assert result.disarmed is None
+    assert turn(workspace).supervision is not None
+    assert turn(workspace).supervision.armed is not None  # type: ignore[union-attr]
+
+
+def test_a_final_turn_that_cannot_run_leaves_the_signature_standing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A turn that would not run is not a run that was un-signed, and nothing about the run says which.
+
+    The pre-signature turn is what `_rerender` hands back when its own turn raises, and that turn reads unsigned because it ran before the signature existed. Testing it for the signature would report the attestation invalidated over an attestation sitting in the journal — and then leave the timer armed and tell the person nothing was signed.
+    """
+    import importlib
+
+    module = importlib.import_module("inspect_steward._signoff.sign")
+    workspace = done(tmp_path)
+    append_event(workspace.journal, ARMED, scheduler="cron", interval=600, label="w")
+    real = module.tend
+    turns = 0
+
+    def once(*args: Any, **kwargs: Any) -> Any:
+        nonlocal turns
+        turns += 1
+        if turns > 1:
+            raise OSError("the journal went away between the two turns")
+        return real(*args, **kwargs)
+
+    monkeypatch.setattr(module, "tend", once)
+    result = sign(workspace)
+
+    assert result.blockers == []
+    assert result.signature is not None
+    assert result.disarmed == "cron"
+    assert read_signoff(read_journal(workspace.journal).events) is not None
+    assert any("the final turn could not run" in warning for warning in result.warnings)
+
+
+def test_a_finalize_that_worked_stops_the_last_turn_folding_over_it(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The fold episode's one bad ending: a retry that arrives after the terminal act.
+
+    The episode exists so a fold that failed on a departure turn keeps being retried while nothing is running — which is right up to the moment the finalize lands. After it the buffer has been cleaned and the summary rebuilt from the rows, and `_rerender`'s turn would fold once more with `complete=False`, overwriting that summary with an incomplete one counted off a buffer that is no longer there.
+
+    The signoff turn's fold failing and the finalize then working is the one arrangement that leaves the episode open across the finalize — a transient refusal, which is what the one-shot failure here stands for.
+    """
+    import importlib
+    import json
+
+    from ..anomaly.test_scan_items import SCAN_ID
+
+    turn_module = importlib.import_module("inspect_steward._tend.turn")
+    workspace = scanned(tmp_path)
+    scan_dir = Path(
+        scan_dir_location(log_dir=str(workspace.logs), scan_id=SCAN_ID, scans=None)
+    )
+    real = turn_module.sync_scan
+    folds = 0
+
+    def refuses_once(**kwargs: Any) -> None:
+        nonlocal folds
+        folds += 1
+        if folds == 1:
+            raise OSError("the store would not answer")
+        real(**kwargs)
+
+    monkeypatch.setattr(turn_module, "sync_scan", refuses_once)
+    append_event(
+        workspace.journal, ACTION, action=SCAN_FOLD_FAILED, target=str(scan_dir)
+    )
+
+    result = sign(workspace)
+
+    assert result.signature is not None
+    assert folds == 1, "the last turn folded over a scan the finalize had completed"
+    assert json.loads((scan_dir / "_summary.json").read_text())["complete"] is True
+
+
+def test_a_run_that_scans_nothing_finalizes_nothing(tmp_path: Path) -> None:
+    workspace = done(tmp_path)
+
+    result = sign(workspace)
+
+    assert result.blockers == []
+    assert not any("finalized" in warning for warning in result.warnings)

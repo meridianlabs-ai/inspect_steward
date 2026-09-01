@@ -52,7 +52,7 @@ class Workspace:
     def directives(self) -> Path:
         """`_steward.yaml` — this human's standing rules, structured and not.
 
-        Settings Steward acts on unattended, and a `policies` key an agent interprets when it arrives. Steward proposes changes and never writes it (workflow.md, *The one file Steward must never write*) — a rule under more pressure now the whole file is machine-shaped, and no less binding for it. The underscore sorts it to the top of a listing, beside `AGENTS.md`.
+        Settings Steward acts on unattended, and a `policies` key an agent interprets when it arrives. Steward proposes changes and writes only what the human approved (workflow.md, *The one file Steward may write but never decide*) — a rule under more pressure now the whole file is machine-shaped, and no less binding for it. The underscore sorts it to the top of a listing, beside `AGENTS.md`.
         """
         return self.root / "_steward.yaml"
 

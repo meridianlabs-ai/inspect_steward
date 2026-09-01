@@ -15,10 +15,11 @@ Each step carries:
 - **Refs** — numbered sections in the design docs. `exec §7.3` means [execution.md](execution.md) section 7.3.
 - **Done when** — the observable condition that lets the next step start. Almost always a test, because almost everything here is testable without a human.
 
-Two markers appear:
+Three markers appear:
 
 - ⚠ **upstream N** — blocked or degraded pending item N of [execution.md](execution.md) §12. The step says whether a workaround exists. A few steps depend on a change in a *frontend* rather than in Inspect; those say so.
 - 🔧 — **test infrastructure** rather than a user-visible feature. Two steps are largely infrastructure, and both are placed earlier than they look like they belong.
+- ◐ **partial** — part of the step shipped because a later one needed it, and the rest is deferred rather than forgotten. The step names both halves.
 
 Gates **M2**, **M3**, **M4** are [roadmap.md](roadmap.md) §3's milestones, located precisely. **Ship** is not pinned to one of them here; the only thing this document fixes about it is that it falls before §8.
 
@@ -722,7 +723,7 @@ The last two were each an assumption about what another component had already do
 
 **The design pass replaced the boundary mode before it was built.** The original trio ran scans as detached children of the tend — a third `eval_set()` mode over log locations, a drain queue, in-flight accounting — all to keep the scan directory single-writer. The settled design gets single-writer by splitting the contract where the hazards actually sit: the four §4.2 hazards all live in the lifecycle bracket and none in the rows, so workers record (upstream's own per-sample dispatch, currently rejected under selection) and the runner brackets — init at launch from a captured spec, fold and finalize in the tend, no definition ever executed for scanning. Verified in source before settling: recording requires the directory and spec to exist; `FileRecorder.sync`/`status` are static; finalize's orphan cleanup needs scanner *names* only, which `_scan.json` holds; the selection document already carries `eval_set_id`. What the mode would have cost is what this saves: a tend interval of latency on every result, the definition's startup tax per pass (minutes on Hawk), and a second detached-process family. exec §4.2–4.4 and sched §4 rewritten; `INSPECT_EVAL_SET_SCAN` withdrawn unbuilt.
 
-### Step 29 — The scan lifecycle in the tend
+### Step 29 — The scan lifecycle in the tend ◐ partial
 
 **Delivers** results readable mid-run, coverage visible, and the bookkeeping done by the run's one writer.
 
@@ -730,9 +731,15 @@ The last two were each an assumption about what another component had already do
 - **Refs.** sched §4.1–4.2; exec §4.3, §4.4.
 - **Done when** rows land in `scan_results_df` within a tend of their samples settling; a worker killed between logging and scanning leaves a visible coverage gap that its respawn's resume-scan closes; and the terminal finalize prunes exactly the superseded attempts' rows.
 
-The anomaly half leans on step 23, which is being built in parallel — the classes here are consumers of its model, not new machinery.
+**The two halves the fold blocks were built; the two it does not were deferred with step 30.** Nothing in the tend touched the scan directory at all — `finalize_scan` had no caller outside a test — and since workers in selection mode never enter upstream's `scan_context`, *no row was ever compacted* until somebody folded it. That is the whole of what step 30 needed, so it came first: `sync_scan` wraps `FileRecorder.sync(..., complete=False)`, which upstream documents as safe mid-scan, and the tend calls it once a turn while the run is not quiescent — `running or departed`, so the last worker's final rows are folded by the turn that reaps it and a settled campaign pays nothing. The terminal `finalize_scan` is wired at signoff, after curation, where the run is quiescent and single-writer and the prune is therefore honest; it warns rather than refusing, on `_rerender`'s grounds.
 
-### Step 30 — Scan results as leads
+**`complete=False` carries all of the risk and is the one thing to keep stated**: the buffer is not cleaned, so a sibling worker's `is_recorded` keeps answering; orphan rows are not pruned, which is §4.2's pinned hazard; and the scan is not marked complete, so a crash leaves it resumable. The cost is that a mid-run fold re-compacts the whole buffer and so grows with the run — measured into `steward.log` as the step asked, and deliberately not engineered around, since the alternative is Steward reimplementing scout's own bookkeeping one directory away.
+
+**Deferred: coverage, and scanner errors as anomalies.** Neither blocks reading a finding, and both want their own argument — coverage needs a denominator that survives a resume, and a scanner-error class needs to say *scanning is broken* apart from *this scanner hates this transcript*. The step stays open for them.
+
+**One caveat the fold acquires and the design should carry: it is a local-fleet capability.** Scout's buffer lives in a local user data dir, so the tend folds its own machine's workers and no others. A Hawk-dispatched worker's rows would reach the directory only at its own finalize — which is moot while Hawk rejects `scan:` locally (§8), and is the first thing to check when it does not.
+
+### Step 30 — Scan results as leads ✅
 
 **Delivers** scan output the agent can act on.
 
@@ -740,17 +747,29 @@ The anomaly half leans on step 23, which is being built in parallel — the clas
 - **Refs.** workflow §12.6, §12.3, §12.5; agent §1.
 - **Done when** a flat distribution and an outlier distribution over the same scanner produce visibly different leads in the tend summary.
 
-One correction this step owns when it lands: workflow §12.3's *findings arrive last* described the drain design. Findings now accumulate with the run and the shortlist can fire mid-campaign; what arrives last is **investigation** — the run's tail is the agent over the results, not the scanner over the logs. The section's consequence stands unchanged: signoff still sits after scan coverage completes and anomalies settle.
+**The done-when could not be met and should not have been aimed at, which is the step's real finding.** A distribution over values Steward has no semantics for cannot be turned into a lead without a threshold, and every candidate threshold is the category error §12.6 opens by naming. What replaced it: a **boolean** scanner has already done the judging — its author wrote a question with a yes and a no — so a `true` becomes an anomaly of class `scan:{scanner}[:{label}]` and every other value type is recorded, readable, and never escalated. Steward reads a line somebody else drew rather than inventing one. §12.6 and §12.6.1 rewritten; the distribution half is deferred, with what it costs stated rather than dropped.
+
+**And the item is not a new kind.** `scan_finding` was specified as step 14's fifteenth item kind; it turned out to be an *anomaly*, and building it as one was two enum entries and a `honest()` row rather than a vocabulary entry, a renderer branch, an owner policy and an ack rule. What came free is the whole point: `steward investigate` / `propose` / `rule`, precedent travelling across generations, escalation to the person when nobody collects, `anomalies.md` for an accepted one, and a signoff gate that already refuses on an open window. The item's owner is still the agent and its action is still `steward investigate`, exactly as specified — through the general path.
+
+**The window opens on detection rather than on escalation**, which is the decision the rest follows from. Opening only for what survives the agent's review would make *nobody looked* and *somebody looked and found nothing* the same state, which is precisely the distinction §12.7 calls as valuable as a finding. So *looked, nothing here* is a `dismiss` ruling with a reason, and the gate holds the signature until every flag has one. The counterweight, since a dismissal leaves no caveat anywhere: the readiness item **counts the dismissed findings and the runbook tells the agent to name them**, so the operator hears *the model tried to read the grader and failed* at the moment they are asked to sign, rather than finding it later.
+
+**Sample-shaped, so `exclude`/`zero`/`score` are honest against it** — `honest()`'s row widened from `("error", "limit")`. A score established to be wrong should not be silently averaged in, and refusing the marks would have left `accept` and `dismiss` as the only answers to one.
+
+**The notification discipline changed with it.** A landed task carrying an untriaged flag is not one thing to say but two, and *finished cybench* standing alone for twenty minutes before *a decision needs attention* is the wrong first message. So the completion post is **held while an agent is attached** (`_unattended`, unchanged) for at most six tends, and the hold is a deferral rather than a suppression because the held task is kept out of the recorded completion set as well as out of the diff — subtracting from only the first would spend the finish and announce it never. With no agent nothing is held: the finish posts at once, and the finding escalates on the ordinary unattended horizon.
+
+One correction this step owns: workflow §12.3's *findings arrive last* described the drain design. Findings now accumulate with the run and can fire mid-campaign; what arrives last is **investigation** — the run's tail is the agent over the results, not the scanner over the logs. The section's consequence stands unchanged: signoff still sits after scan coverage completes and anomalies settle.
 
 One frontend caveat covering all three: **Hawk rejects `scan:` locally**, so none of this has a Hawk path until §8.
 
-### Step 31 — `scanning.md` and `analysis.md`
+### Step 31 — `analysis.md`
 
 **Delivers** what investigation produces, per task, mirrored where the data lives.
 
 - **Scope.** Skeleton rendering; the unprobed count; adjudicating as you go; mirroring into `log_dir` including on S3. **Produces step 14's item, kind `unwritten`** — owner the agent, one per task section still unwritten (agent §4).
 - **Refs.** workflow §12.7, §12.4.
-- **Done when** both files exist per task and reach the log directory.
+- **Done when** the file exists per task and reaches the log directory.
+
+**One file, settled at step 30 in the design record and still to be built here.** `scanning.md` was retired: the split was drawn on *when* the two were written rather than on what they held, and online scanning collapsed the two moments into one — same sitting, same task, same author, and the roll-up a copy of the file above it. Scanning becomes a section of `analysis.md`, and the "looked, nothing here" entry that justified the second file is now a `dismiss` ruling carrying its reason, which the journal holds and this file quotes.
 
 ### Step 32 — Smoke gate
 

@@ -135,10 +135,10 @@ def verify_scan(
         ScanError: A requested scanner differs from, or is missing against, the one recorded on disk — or the redirect moved while rows remain at the committed location.
         OSError: The scan directory exists but its spec cannot be read.
     """
-    scan_id = _existing_eval_set_id(log_dir) or eval_set_id
+    scan_id = existing_eval_set_id(log_dir) or eval_set_id
     if committed is not None and committed.scans != material.scans:
         previous_dir = committed_log_dir or log_dir
-        previous_id = _existing_eval_set_id(previous_dir) or eval_set_id
+        previous_id = existing_eval_set_id(previous_dir) or eval_set_id
         if previous_id is not None:
             recorded = scan_dir_location(
                 log_dir=previous_dir, scan_id=previous_id, scans=committed.scans
@@ -235,8 +235,11 @@ def _definition_scanners(material: ManifestScan | None) -> dict[str, dict[str, A
     return dict(material.spec.get("scanners", {}))
 
 
-def _existing_eval_set_id(log_dir: str) -> str | None:
-    """The id a previous fleet stamped into the log directory, or `None`."""
+def existing_eval_set_id(log_dir: str) -> str | None:
+    """The id a previous fleet stamped into the log directory, or `None`.
+
+    **Read-only, which is what it is for.** `resolve_eval_set_id` mints and writes one where the directory has none, and both this module and the tend's scan read need the id on paths that must leave the directory exactly as they found it — `verify_scan` runs before the archive gate, and a `status` mutates nothing at all.
+    """
     id_file = f"{log_dir.rstrip('/')}/{EVAL_SET_ID_FILE}"
     if not exists(id_file):
         return None

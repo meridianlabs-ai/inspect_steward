@@ -26,8 +26,12 @@ No situation makes any of these correct.
   adding a comment explaining what the eval set is for: you were never told why
   it exists, and a plausible-but-invented rationale is worse than none, because
   a later reader cannot tell it from the author's.
-- **Write `_steward.yaml`.** Propose; the human writes. The settings as much as
-  the policies.
+- **Write `_steward.yaml` unasked.** Propose the exact text, and write only
+  what the human approved — the settings as much as the policies. Once they
+  have answered, typing it is yours the same way `steward rule --by` and
+  `steward signoff --by` are. What is never yours is the decision: promoting a
+  one-off ruling into a standing rule widens what they have committed to, and
+  the widening is theirs to authorize. See *Writing a standing rule*.
 - **Move or delete a log.** Not even an empty cancelled one, and not into a
   folder named for discards. Resume matches logs where they are.
 - **Pass `steward launch --accept-archive` on your own judgement.** A launch
@@ -224,6 +228,81 @@ nothing inline at all: the operator knows what they did, so it waits in the
 anomalies block for the signoff conversation. Both still take a ruling any time
 someone wants to give one.
 
+### Scan findings: the bar is threatened integrity
+
+A `scan:` class is samples a scanner flagged — `scan:scoring_integrity:reward_hacking`,
+`scan:scoring_integrity:internet_egress`, one class per scanner and label. The
+window opens when the rows land, not when you decide something is wrong, so
+**every flag needs a ruling before the run can be signed**. That is deliberate:
+a flag nobody looked at is a hole in the record, and it should read like one.
+
+Your judgement is the whole product here, because the scanner already did the
+only part that could be automated. It read one transcript; you can read the
+population, the score, and the rest of the run.
+
+- **The bar is whether the score can still be trusted**, not whether the
+  behaviour was interesting. Escalate only where you can name the mechanism,
+  cite the decisive messages, and say what the number would be if the concern
+  is real. If you cannot do all three, the honest ruling is `dismiss`.
+- **A failed attempt is not a finding.** The model tried to read the grader and
+  could not; it tried to reach the network and the sandbox refused it. Nothing
+  was earned and nothing was contaminated, so the score stands. Dismiss it —
+  with the reason written out, because the person signing is told at signoff
+  that these happened and the reason is what they read.
+- **A *successful* escape or a returned egress response is a finding at n=1.**
+  One sample that actually got data from outside the sandbox is worth raising
+  immediately; forty that tried and failed are worth one dismissal.
+- **Rarity is not the signal.** 197 of 200 flagged is the alarming case, not
+  the noisy one — an exploit that works gets used everywhere, so a class
+  covering most of a task is the one to read first, not the one to write off as
+  a chatty scanner.
+- **A confirmed validity finding is sample-shaped**, so `exclude`, `zero` and
+  `score` are all available beside `accept` — unlike an `error:` class. Use
+  them: a score you have established is wrong should not be silently averaged
+  in.
+- **Dismiss on the record, never by silence.**
+  `steward rule <class> --disposition dismiss --reason "..."`. The reason is
+  the entire artifact; a window left open blocks the signature and tells the
+  next session nothing.
+
+Only boolean scanners open windows. A scanner returning a number or a string is
+recorded and readable and never escalated on its own — reading one is your job,
+through the results rather than through the queue.
+
+## Writing a standing rule
+
+When you notice yourself asking the same question twice, or the human answering
+it the same way twice, the answer belongs in `_steward.yaml` rather than in a
+conversation nobody can read afterwards. Two keys take one:
+
+- **`policies:`** — free-form text you apply when you are in session. Steward
+  carries it and never interprets it, so write what a person would need to
+  hear.
+- **`preauthorized:`** — an anomaly class pattern mapped to the disposition it
+  may receive. Steward acts on this one itself, on a timer, with nobody
+  watching.
+
+Propose, get an answer, then write it. Three things go with that.
+
+**Propose the wording, not the idea.** *Shall I add a policy about timeouts?*
+cannot be answered without the human writing it themselves, which is the work
+you were trying to save them. The two lines you intend to add can be answered
+yes or no.
+
+**A `preauthorized:` pattern needs a yes to the pattern.** It is the one key
+that widens what happens unattended, and the gap between them is where the
+damage lives: a human who agrees that provider timeouts are usually worth
+re-running has not thereby agreed that everything matching
+`error:*Timeout*` may be re-run at 3am without them.
+
+**Leave the edit visible.** The workspace is a git repository and this file is
+tracked, so say plainly what you wrote and let `git diff` show it. Unlike a
+ruling, a YAML edit carries no `--by` and the file cannot say afterwards whose
+decision it was.
+
+The rest of the file is unchanged by this: the definition is still never yours
+to edit, and a setting the human has not approved is still not yours to write.
+
 ## Preparing a signoff
 
 When the verdict turns 🏁, the run is finished and nobody has accepted the
@@ -237,6 +316,13 @@ gate refuses over is something you can prepare in advance:
 - **Every anomaly window closed by a ruling**, `limit:operator` included. Those
   raise no inline item on purpose, so they are the ones most easily left open —
   read the anomalies block, not the item list.
+- **Say out loud what the scanners flagged and you dismissed.** The readiness
+  item counts them; you name them. A dismissal leaves no caveat and appears in
+  `anomalies.md` nowhere — correctly, since the whole content of it is *this
+  does not change the numbers* — but "the model tried to read the grader on
+  four samples and failed every time" is something the person signing wants to
+  have heard from you rather than to find later. The reasons are in the journal
+  and in `analysis.md`; put them in the message.
 - **Every errored sample covered by a ruling.** `status` splits the errored
   cell; anything reading `undecided` refuses the signature.
 - **Every task settled** — complete, short with the hole accepted by a ruling,
@@ -248,6 +334,13 @@ gate refuses over is something you can prepare in advance:
   will not read is the one hole nobody can size, so signoff refuses until
   `steward ack unreadable:NAME --by NAME --reason ...` records why the results
   stand without it — and the signature then carries it as a caveat.
+- **Every transcript scanned, or the gap named.** A scanner that threw leaves a
+  sample with no verdict either way, and that is indistinguishable in the
+  findings from a sample that came back clean — so a run whose scans errored
+  would otherwise be signed as *nothing was flagged*. Signoff refuses until
+  `steward ack scan_incomplete:SCANNER --by NAME --reason ...` says why the
+  results stand anyway. Say how many and out of how many: one grader timeout in
+  five hundred is a different decision from a scanner that never ran.
 - **No worker still running a task the definition no longer names.**
 
 One more refuses and is not something to prepare: an action the turn **could
@@ -256,8 +349,8 @@ Run it again; the next turn retries what failed, and one that keeps failing is
 a defect to look at rather than to sign around.
 
 What the signature names as its exceptions is the caveat list, not the ruling
-list: an acknowledged `stalled` task or `unreadable` log left a mark on the
-results and is named there too. Acknowledging one is a decision about the data,
+list: an acknowledged `stalled` task, `unreadable` log or `scan_incomplete`
+scanner left a mark on the results and is named there too. Acknowledging one is a decision about the data,
 so give it the reason you would give a ruling — it ends up quoted in
 `anomalies.md` under the numbers.
 
