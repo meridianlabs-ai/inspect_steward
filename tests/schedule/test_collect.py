@@ -299,15 +299,15 @@ def test_raising_something_that_is_no_longer_open_says_when_it_was_raised(
     workspace: Workspace,
 ) -> None:
     # raising closes nothing, so reaching this message means the item went away
-    # for some other reason — here, the person it was handed to ruled on it
-    run("raise", "signoff", "--note", "sent the results over")
-    run("ack", "signoff", "--reason", "the scores look right")
+    # for some other reason — here, the person it was handed to accepted it
+    run("raise", "drift", "--note", "sent the diff over")
+    run("ack", "drift", "--reason", "the edit was mine")
 
-    result = CliRunner().invoke(steward, ["raise", "signoff"])
+    result = CliRunner().invoke(steward, ["raise", "drift"])
 
     assert result.exit_code != 0
     assert "no longer open" in result.output
-    assert "sent the results over" in result.output
+    assert "sent the diff over" in result.output
 
 
 def test_an_agent_owned_item_cannot_be_raised(workspace: Workspace) -> None:

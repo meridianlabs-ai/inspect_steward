@@ -34,8 +34,14 @@ class Application:
     invalidated: frozenset[str] = frozenset()
     """Sample uuids written invalid into a landed log (or found already invalid — the crash-recovery record)."""
 
+    accepted: frozenset[str] = frozenset()
+    """Tasks an `accept` ruling was carried out on — the log marked `success`, or found needing no mark.
+
+    Task-grained where the two above are sample-grained, because that is the grain of the act: an acceptance decides about a *log*, and the four outcomes that need no write (already `success`, still being written, no log at all, a superseded attempt already answered) are recorded here exactly like the one that does. Without them a `limit:` acceptance over an already-successful log would be re-examined every turn for the life of the run.
+    """
+
     tasks: frozenset[str] = frozenset()
-    """Every task this event covered — requeued, invalidated, or converged with nothing left to do."""
+    """Every task this event covered — requeued, invalidated, accepted, or converged with nothing left to do."""
 
 
 @dataclass(frozen=True)
@@ -64,6 +70,17 @@ class Applied:
             if application.ruling_ts == ruling_ts:
                 uuids |= application.invalidated
         return frozenset(uuids)
+
+    def accepted_tasks(self, class_key: str, ruling_ts: str) -> frozenset[str]:
+        """The tasks this acceptance has already been carried out on.
+
+        The applier's remainder comes off this: an `accept` acts on logs, so what is left is the window's evidence tasks minus these. The log's own status is the second signal and answers a different question — see `_tend.rulings._accept`.
+        """
+        tasks: set[str] = set()
+        for application in self.by_class.get(class_key, ()):
+            if application.ruling_ts == ruling_ts:
+                tasks |= application.accepted
+        return frozenset(tasks)
 
     def witness(self, class_key: str, ruling_ts: str, task: str) -> str | None:
         """When this ruling was last applied to this task, or `None` while it never was.
@@ -102,6 +119,7 @@ def read_applied(events: list[JournalEvent]) -> Applied:
             continue
         requeued = _requeued(event.payload.get("requeued"))
         invalidated, invalidated_tasks = _invalidated(event.payload.get("invalidated"))
+        accepted = _accepted(event.payload.get("accepted"))
         converged = _strings(event.payload.get("converged"))
         by_class.setdefault(class_key, []).append(
             Application(
@@ -109,9 +127,11 @@ def read_applied(events: list[JournalEvent]) -> Applied:
                 ts=event.ts,
                 requeued=requeued,
                 invalidated=invalidated,
+                accepted=accepted,
                 tasks=frozenset(
                     {target[0] for target in requeued}
                     | invalidated_tasks
+                    | accepted
                     | set(converged)
                 ),
             )
@@ -153,6 +173,17 @@ def _invalidated(value: object) -> tuple[frozenset[str], set[str]]:
             tasks.add(task)
         uuids.update(_strings(record.get("uuids")))
     return frozenset(uuids), tasks
+
+
+def _accepted(value: object) -> frozenset[str]:
+    tasks: set[str] = set()
+    for entry in cast(list[object], value) if isinstance(value, list) else []:
+        if not isinstance(entry, dict):
+            continue
+        task = cast(dict[str, Any], entry).get("task")
+        if isinstance(task, str) and task:
+            tasks.add(task)
+    return frozenset(tasks)
 
 
 def _strings(value: object) -> list[str]:

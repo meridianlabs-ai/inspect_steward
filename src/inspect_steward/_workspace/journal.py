@@ -40,6 +40,7 @@ __all__ = [
     "RESOLUTION",
     "RESUMED",
     "RULING",
+    "SIGNOFF",
     "Ack",
     "Armed",
     "Collected",
@@ -52,6 +53,7 @@ __all__ = [
     "Paused",
     "Raised",
     "RampHold",
+    "Signature",
     "append_event",
     "read_acks",
     "read_armed",
@@ -61,6 +63,7 @@ __all__ = [
     "read_pause",
     "read_raised",
     "read_ramp_holds",
+    "read_signoff",
     "summarize",
     "utc_now",
 ]
@@ -214,6 +217,16 @@ RULING = "ruling"
 A ruling closes the class's window: the next instance opens a new generation carrying the old rulings as precedent.
 """
 
+SIGNOFF = "signoff"
+"""Journal event: a person accepted these results. The terminal act.
+
+**There is no un-sign event, and the absence is the design.** A signature is a thing that happened, on a date, by somebody — the journal records it and later facts qualify it rather than erasing it, exactly as a superseded ruling stays in the record. What a second signoff writes is a second signature, and the fold's last word wins.
+
+Carries `by` (free text, a name on a document), an optional `note`, the `digest` of the manifest it covered, the `tasks` and `accepted` counts that were true at the time, the `exceptions` — the class keys whose caveats it signed over — and `curated`, the number of superseded attempts it moved.
+
+**It pins to the manifest digest rather than to a run** (workflow.md §2.4), which is what gives invalidation a precise trigger: the definition changed, so what was signed is no longer what is current.
+"""
+
 RESOLUTION = "resolution"
 """Journal event: what happened after a `rerun` ruling, or a task class healing.
 
@@ -263,6 +276,16 @@ class Ack:
 
     reason: str
     ts: str
+
+    kind: str = ""
+    """The item kind, as the acknowledging verb recorded it.
+
+    Read because an acknowledgment whose subject left a mark on the results is a caveat and belongs in `anomalies.md` exactly as a ruling would (workflow.md §14), and which kinds those are is the routing question. Defaulted because an event written before this field was read is data rather than damage — it simply cannot be routed, which is the honest answer for a record that never said what it was about.
+    """
+
+    subject: str = ""
+    summary: str = ""
+    """What the item said when it was disposed of — the *what happened* line of its caveat entry."""
 
 
 @dataclass(frozen=True)
@@ -329,6 +352,25 @@ class Armed:
 
 
 @dataclass(frozen=True)
+class Signature:
+    """The attestation in force, as the fold reports it."""
+
+    by: str
+    """Who accepted the results. Free text — a name on a document, never a role."""
+
+    note: str
+    """What they wanted said about it, or empty. Optional by design: the account of every decision is already in the journal, and a required field here would collect *results look good* at scale."""
+
+    ts: str
+
+    digest: str
+    """The manifest digest this signature covered. What it is compared against to decide whether it still stands."""
+
+    exceptions: tuple[str, ...] = ()
+    """The class keys whose caveats were signed over — `anomalies.md`'s contents at the moment of signing, by name."""
+
+
+@dataclass(frozen=True)
 class JournalSummary:
     """What a journal says, at a glance."""
 
@@ -377,13 +419,51 @@ def read_acks(events: list[JournalEvent]) -> dict[str, Ack]:
             continue
         by = event.payload.get("by")
         reason = event.payload.get("reason")
+        kind = event.payload.get("kind")
+        subject = event.payload.get("subject")
+        summary = event.payload.get("summary")
         acks[identifier] = Ack(
             id=identifier,
             by=by if isinstance(by, str) else "",
             reason=reason if isinstance(reason, str) else "",
             ts=event.ts,
+            kind=kind if isinstance(kind, str) else "",
+            subject=subject if isinstance(subject, str) else "",
+            summary=summary if isinstance(summary, str) else "",
         )
     return acks
+
+
+def read_signoff(events: list[JournalEvent]) -> Signature | None:
+    """Fold a journal down to the attestation in force.
+
+    Last wins, and there is nothing that clears one: **a signature is a thing that happened**, so a second signoff amends rather than replaces, and both lines stay in the record as what was believed at the time. Whether the standing one still *stands* is a separate question — the digest it pinned and the windows opened since it answer that, and neither is a fold (`_signoff.gate`).
+
+    Args:
+        events: Events in file order, as `read_journal` returns them.
+
+    Returns:
+        The most recent signature, or `None` where nobody has signed.
+    """
+    signature: Signature | None = None
+    for event in events:
+        if event.type != SIGNOFF:
+            continue
+        by = event.payload.get("by")
+        if not isinstance(by, str) or not by:
+            # a payload this version does not understand is data, not damage --
+            # but an attestation with nobody behind it is not an attestation
+            continue
+        note = event.payload.get("note")
+        digest = event.payload.get("digest")
+        signature = Signature(
+            by=by,
+            note=note if isinstance(note, str) else "",
+            ts=event.ts,
+            digest=digest if isinstance(digest, str) else "",
+            exceptions=tuple(_listed(event.payload.get("exceptions"))),
+        )
+    return signature
 
 
 def read_raised(events: list[JournalEvent]) -> dict[str, Raised]:

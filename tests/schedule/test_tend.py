@@ -1018,6 +1018,56 @@ def test_status_md_unwritable_is_an_episode_with_edges(tmp_path: Path) -> None:
     assert "could not write status.md" in workspace.log.read_text(encoding="utf-8")
 
 
+def test_a_turn_reports_which_documents_it_actually_wrote(tmp_path: Path) -> None:
+    """The only honest answer to *did this land*, for the one caller who needs it.
+
+    A failed write never fails a turn — the turn already happened — so a turn
+    that returns proves nothing about the files, and their existence proves
+    less: a stale document from an earlier turn exists. `signoff` disarms the
+    timer straight after its final turn, so nothing will come along to repair
+    what that turn could not write, and it has to be told.
+    """
+    done = SynthTask("done")
+    workspace, _ = prepared(tmp_path, [done])
+    write_log(workspace.logs, done)
+
+    assert turn(workspace).rendered == ["status.md", "anomalies.md"]
+
+    workspace.status.unlink()
+    workspace.status.mkdir()  # every rename onto it now fails
+
+    assert turn(workspace).rendered == ["anomalies.md"]
+
+
+def test_the_other_rendered_file_writing_does_not_close_the_episode(
+    tmp_path: Path,
+) -> None:
+    """A persistent failure must not be rendered as a flapping one.
+
+    `anomalies.md` is written beside `status.md` on the same terms, and both
+    fail together for every cause anybody has. But where only the status is
+    unwritable, the other file's success was recording a *restoration* — so the
+    item vanished, the next turn opened the episode again, and one failure that
+    never stopped arrived as news every second turn.
+    """
+    done = SynthTask("done")
+    workspace, _ = prepared(tmp_path, [done])
+    write_log(workspace.logs, done)
+    turn(workspace)
+
+    workspace.status.unlink()
+    workspace.status.mkdir()  # every rename onto it now fails
+    turn(workspace)
+    turn(workspace)
+    turn(workspace)
+    result = turn(workspace)
+
+    assert workspace.anomalies.exists(), "the premise: the other file still writes"
+    assert of_kind(result, "status_unwritable"), "one episode, still open"
+    assert edges(workspace, "status_unwritable") == [{"action": "status_unwritable"}]
+    assert edges(workspace, "status_unwritable_restored") == []
+
+
 def test_a_fresh_sync_failure_is_an_episode_but_not_yet_an_item(
     tmp_path: Path,
 ) -> None:

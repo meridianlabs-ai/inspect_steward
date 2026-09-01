@@ -31,7 +31,9 @@ class Kind(StrEnum):
     """
 
     SIGNED_OFF = "signed_off"
-    """The run was accepted. Steward's alone, terminal, sent once — and not yet sendable, since `signoff` is a later step. Named here so the vocabulary is complete and so nothing else claims the word."""
+    """The run was accepted. Steward's alone, terminal, sent once.
+
+    **Sent by the verb rather than by a turn**, which is the one kind that works that way and follows from what signing does: `signoff` disarms the timer, so a run that has just been accepted never tends again and a turn-driven post would be a message nothing is left to send. The same fact silences everything after it — a turn over a signed run returns no kind at all, so no cheerful `clear` follows the ending (`_tend.notify._kind`)."""
 
 
 AGENT_KINDS = frozenset({Kind.ATTENTION, Kind.STOPPED})

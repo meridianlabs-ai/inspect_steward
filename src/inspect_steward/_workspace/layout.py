@@ -145,6 +145,14 @@ class Workspace:
         return self.root / "status.md"
 
     @property
+    def anomalies(self) -> Path:
+        """`anomalies.md` — the caveats that reached the final data, rewritten by every tend.
+
+        At the root beside `status.md` rather than under `.steward/`, and that does two things at once: a person reading the directory finds it where a write-up's footnotes belong, and the sync carries every non-dotfile at the top level, so it reaches a remote reader with no propagation rule of its own.
+        """
+        return self.root / "anomalies.md"
+
+    @property
     def log(self) -> Path:
         """`.steward/steward.log` — whether the machinery worked, as opposed to what it found.
 

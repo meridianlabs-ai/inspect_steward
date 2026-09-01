@@ -267,6 +267,13 @@ def _kind(result: "TendResult", shown: list[Item], *, cleared: bool) -> Kind | N
 
     Precedence rather than one post per reason, and the order is by what a reader would want to have been told if they only read the first line. A new decision outranks a finished task; the run reaching its gate outranks both, because it is the one that ends the night.
     """
+    # **a signed run says nothing, including *clear*.** `signoff` sends the one
+    # terminal message itself and then takes the timer down, so anything a turn
+    # posted afterwards would be a cheerful footnote to an ending — and the
+    # ordinary case is exactly that: the signature closes the readiness item, so
+    # the next turn's diff would fire `clear` on a run that is over
+    if result.verdict is Verdict.SIGNED_OFF:
+        return None
     if shown:
         if result.verdict is Verdict.COMPLETE:
             return Kind.GATE
@@ -293,6 +300,7 @@ def _title(result: "TendResult", shown: list[Item]) -> str:
         Verdict.PAUSED,
         Verdict.CLEAR,
         Verdict.COMPLETE,
+        Verdict.SIGNED_OFF,
     ):
         return verdict_text(result.verdict, shown)
     one = len(shown) == 1

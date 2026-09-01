@@ -21,6 +21,7 @@ from .._evalset.observe import TaskState
 from .._schedule import Summary
 from .._util.duration import format_duration
 from .._util.jsonl import utc_now
+from .anomalies_md import caveat_line
 from .items import HEADINGS, by_owner, verdict_line
 from .progress import LIVE_ONLY, compact, short_keys
 
@@ -276,7 +277,7 @@ def _progress(result: "TendResult") -> list[str]:
         # fell back to the first of the first score: a bare number in a column
         # is not self-describing, and two tasks can land on different metrics
         notes.append(f"Score is {' / '.join(sorted(named))}.")
-    marks = _marks_note(result)
+    marks = marks_note(result)
     if marks:
         notes.append(marks)
     if notes:
@@ -301,8 +302,10 @@ def _errored_cell(count: int, split: dict[str, int] | None) -> str:
     return f"{count} ({', '.join(parts)})"
 
 
-def _marks_note(result: "TendResult") -> str | None:
+def marks_note(result: "TendResult") -> str | None:
     """The scoring qualification when exclusions or zeroes are in force.
+
+    Shared with `anomalies.md`, which opens on the same sentence: a reader quoting the numbers and a reader glancing at them must be given the same denominator, and two computations of it are two chances to differ.
 
     The qualification beside the number, never a recomputed number: headline scores still come off the log verbatim, and this line says what population they describe.
     """
@@ -349,8 +352,12 @@ def _anomalies(result: "TendResult") -> list[str]:
     """
     anomalies = result.anomalies
     line = anomalies_line(anomalies)
-    accepted = anomalies.accepted()
-    if line is None and not accepted:
+    # the same caveats `anomalies.md` spells out, decided once by the turn -- so
+    # a disposal that left a mark on the results opens this heading exactly as
+    # an accepted window does, and one the other document drops cannot survive
+    # as a line here
+    marks = result.caveats
+    if line is None and not marks:
         return []
     lines = ["### anomalies", ""]
     if line is not None:
@@ -373,15 +380,11 @@ def _anomalies(result: "TendResult") -> list[str]:
             f"{'class' if covered == 1 else 'classes'} — "
             f"`steward rule --proposal {identifier}`"
         )
-    for anomaly in accepted:
-        ruling = anomaly.ruling
-        if ruling is None:
-            continue
-        mark = anomaly.effect or f"accepted — {ruling.reason}"
-        lines.append(
-            f"- `{anomaly.class_key}` — {mark} "
-            f"(ruled {ruling.disposition.value} by {ruling.by})"
-        )
+    # one line each here against the five fields there — two lengths of one
+    # list, so the glance and the quotation cannot disagree about which windows
+    # left a mark or what their effect sentence says
+    for caveat in marks:
+        lines.append(f"- {caveat_line(caveat)}")
     return lines + [""]
 
 

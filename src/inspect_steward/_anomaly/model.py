@@ -9,6 +9,7 @@ An errored sample is not a bug to fix, it is a question with exactly four honest
 Everything is frozen and pure: state is a fold over the journal (`fold.read_anomalies`), which is what makes crash recovery the ordinary code path and `status` an honest preview.
 """
 
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -250,7 +251,7 @@ class Anomalies:
     """Windows not yet settled — what gates the signoff and drives the verdict."""
 
     settled: tuple[Anomaly, ...] = ()
-    """Terminal windows, for history and (step 26) `anomalies.md`."""
+    """Terminal windows, for history and `anomalies.md`."""
 
     proposals: dict[str, Proposal] = field(default_factory=dict[str, Proposal])
     """Live proposals — those with at least one covered class still awaiting a ruling."""
@@ -261,7 +262,7 @@ class Anomalies:
     """The dedupe ledger: per class, the content-derived ref of every instance the journal has absorbed — across every window, so a ruling that closes one cannot make the same log's errors read as news. Refs rather than counts, deliberately: a count cannot see one sample's failure replaced by another's in the same eval (a requeue's ordinary shape), and a ref diff is exact. What the absorb step diffs detection's projection against."""
 
     def accepted(self) -> tuple[Anomaly, ...]:
-        """Settled windows that carry a mark — the `anomalies.md` filter, ready for step 26."""
+        """Settled windows that carry a mark — the `anomalies.md` filter, and the exceptions a signature names."""
         return tuple(
             anomaly
             for anomaly in self.settled
@@ -293,24 +294,48 @@ class Anomalies:
         )
 
 
-def composed_effect(anomalies: Anomalies, key: str, decided: Disposition) -> str:
+def composed_effect(
+    anomalies: Anomalies,
+    key: str,
+    decided: Disposition,
+    affected: Mapping[str, frozenset[str]] | None = None,
+) -> str:
     """The report-facing sentence a marking disposition composes when nobody wrote one.
 
     One composition shared by `steward rule` and a policy ruling, so the sentence the record carries cannot depend on which path recorded it. Empty for the dispositions that mark nothing — `rerun` and `dismiss` — and for `accept`, whose effect only a person can write.
 
+    **It counts rows in the data, not instances in the window**, and the two come apart exactly where a re-run happened: three samples that failed, were re-run and failed again put six instances in one window and three rows in the results. Composing from the window said *6 samples excluded from scoring* over three excluded samples — a report-facing sentence overstating the mark, printed in `anomalies.md` three lines above a denominator line that said three. So the count comes from `Dispositions.affected`, which is the same narrowing the errored cell and that denominator already use.
+
+    **And it counts this decision's rows, not the class's**, which is the second way the two come apart. A class key outlives its generations: three samples ruled and settled under a prior one, two open under this one, and the class's own current population is five. Counting that composed *5 samples excluded from scoring* as the effect of a ruling whose entry in `anomalies.md` scopes two — one entry contradicting itself, in the document written to be quoted. So the narrowed population is intersected with what the open windows of this class actually cover.
+
     Args:
-        anomalies: The fold, for the class's open population.
+        anomalies: The fold, for the class's open population — the fallback where no census was read.
         key: The class being ruled.
         decided: The disposition being recorded.
+        affected: Per class, the refs it left in the data (`Dispositions.affected`). `None` — a caller with no census — falls back to the window's own population, which overstates a class that has been re-run.
 
     Returns:
         The sentence, or empty where the disposition composes none.
     """
     if decided not in SAMPLE_MARKS:
         return ""
-    count = sum(
-        anomaly.evidence.count for anomaly in anomalies.open if anomaly.class_key == key
-    )
+    if affected is not None and key in affected:
+        covered = frozenset[str]().union(
+            *(
+                anomaly.refs | frozenset(anomaly.failed_refs)
+                for anomaly in anomalies.open
+                if anomaly.class_key == key
+            )
+        )
+        # a window that recorded no refs cannot narrow anything, and the class's
+        # own population is the honest answer rather than an empty intersection
+        count = len(affected[key] & covered) if covered else len(affected[key])
+    else:
+        count = sum(
+            anomaly.evidence.count
+            for anomaly in anomalies.open
+            if anomaly.class_key == key
+        )
     plural = "" if count == 1 else "s"
     if decided is Disposition.EXCLUDE:
         return f"{count} sample{plural} excluded from scoring"

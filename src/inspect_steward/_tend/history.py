@@ -30,6 +30,7 @@ from .._workspace import (
     RAMP_RESUMED,
     RESUMED,
     RULING,
+    SIGNOFF,
     JournalEvent,
 )
 
@@ -46,6 +47,7 @@ _ADMITTED = frozenset(
         DISARMED,
         LAUNCHED,
         RULING,
+        SIGNOFF,
     }
 )
 """Event types this section reports.
@@ -166,6 +168,22 @@ def _describe(event: JournalEvent) -> str:
         if effect:
             line += f" ({effect})"
         return line
+    if event.type == SIGNOFF:
+        # the last line of the story, and the one a reader arriving months
+        # later is looking for: who accepted these numbers, and what they
+        # accepted them *with*
+        by = _text(payload, "by")
+        if not by:
+            return ""
+        exceptions = _strings(payload.get("exceptions"))
+        with_what = (
+            f" with {len(exceptions)} accepted exception"
+            f"{'s' if len(exceptions) != 1 else ''}"
+            if exceptions
+            else " with no exceptions"
+        )
+        note = _text(payload, "note")
+        return f"signed off by {by}{with_what}" + (f" — {note}" if note else "")
     return ""
 
 
@@ -203,16 +221,42 @@ def _action(payload: dict[str, object]) -> str:
         return f"propagation{f' to {target}' if target else ''} recovered"
     if action == "ruling_applied":
         return _applied(payload)
+    if action == "curated":
+        # **counted, where `archive` above is one line per log.** A tend
+        # archives an orphan when it meets one and a reader wants that beside
+        # the turn it happened in; curation is a batch by construction, so one
+        # line saying how many is the whole of what happened
+        logs = payload.get("logs")
+        moved = len(cast(list[object], logs)) if isinstance(logs, list) else 0
+        if not moved:
+            return ""
+        return (
+            f"curated {moved} superseded attempt{'s' if moved != 1 else ''} "
+            f"into the archive, leaving logs/ holding what was signed"
+        )
     return action or ""
 
 
 def _applied(payload: dict[str, object]) -> str:
-    """One line for a rerun ruling the tend carried out.
+    """One line for a ruling the tend carried out.
 
-    The ruled line just above it says what was decided and by whom; this one says what was actually done about it — requeues into a live run, landed logs invalidated for resume, or the discovery that nothing was left to re-run. A deferral tail is provenance, not a promise: the remainder is recomputed next turn from the census, and this line only notes that some of it waited.
+    The ruled line just above it says what was decided and by whom; this one says what was actually done about it — requeues into a live run, landed logs invalidated for resume, logs marked accepted, or the discovery that nothing was left to re-run. A deferral tail is provenance, not a promise: the remainder is recomputed next turn from the census, and this line only notes that some of it waited.
+
+    **The verb comes from the keys present, not from the action name.** Re-runs and acceptances share one `ruling_applied` action, because a second action name would need adding both here and to `_ADMITTED`, and a miss there does not fail — the line silently stops rendering. Sharing costs one branch and cannot go quiet; what it must not do is call an acceptance a re-run, which is why this reads the payload rather than assuming.
     """
     class_key = _text(payload, "class") or "an anomaly"
     parts: list[str] = []
+    accepted = payload.get("accepted")
+    if isinstance(accepted, list) and accepted:
+        entries = [
+            cast(dict[str, object], entry)
+            for entry in cast(list[object], accepted)
+            if isinstance(entry, dict)
+        ]
+        marked = sum(1 for entry in entries if entry.get("flipped") is True)
+        n = len(entries)
+        how = f" ({marked} marked complete)" if marked else " (none needed marking)"
+        parts.append(f"accepted {n} log{'s' if n != 1 else ''}{how}")
     requeued = payload.get("requeued")
     if isinstance(requeued, list) and requeued:
         n = len(cast(list[object], requeued))
@@ -242,7 +286,8 @@ def _applied(payload: dict[str, object]) -> str:
         n = len(cast(list[object], deferred))
         parts.append(f"{n} deferred to the next turn")
     what = f": {', '.join(parts)}" if parts else ""
-    return f"applied the rerun ruling on {class_key}{what}"
+    which = "acceptance" if isinstance(accepted, list) and accepted else "rerun ruling"
+    return f"applied the {which} on {class_key}{what}"
 
 
 def _ramp(payload: dict[str, object]) -> str:

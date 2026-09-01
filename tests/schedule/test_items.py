@@ -53,6 +53,8 @@ from inspect_steward._workspace import (
     ACKNOWLEDGED,
     ARMED,
     DISARMED,
+    LAUNCHED,
+    SIGNOFF,
     Workspace,
     append_event,
 )
@@ -74,10 +76,40 @@ def items(workspace: Workspace) -> dict[str, Item]:
     return {item.kind: item for item in turn(workspace).items}
 
 
-def ack(workspace: Workspace, identifier: str, *, by: str = "human") -> None:
-    """Dispose of an item, as `steward ack` does."""
+def ack(workspace: Workspace, item: Item | str, *, by: str = "human") -> None:
+    """Dispose of an item, as `steward ack` does — kind and subject included.
+
+    The verb records both off the item it matched, and both are load-bearing
+    afterwards: the kind routes a disposal into `anomalies.md`, and the subject
+    is what says which task a stall was about.
+    """
+    fields: dict[str, Any] = (
+        {
+            "id": item.id,
+            "kind": item.kind,
+            "subject": item.subject,
+            "summary": item.summary,
+        }
+        if isinstance(item, Item)
+        else {"id": item}
+    )
+    append_event(workspace.journal, ACKNOWLEDGED, **fields, by=by, reason="because")
+
+
+def sign(workspace: Workspace, item: Item) -> None:
+    """Accept the results, as `steward signoff` records it.
+
+    The digest is taken from the item's own subject, which is what the verb
+    reads off the turn it ran — so a test that signs what it was shown cannot
+    accidentally sign a different task set.
+    """
     append_event(
-        workspace.journal, ACKNOWLEDGED, id=identifier, by=by, reason="because"
+        workspace.journal,
+        SIGNOFF,
+        by="kaia",
+        note="",
+        digest=item.subject,
+        exceptions=[],
     )
 
 
@@ -638,43 +670,44 @@ def test_a_sample_id_is_free_text_and_the_command_survives_it(
     assert item.action == "inspect ctl sample cancel-tool-call T1 'q 1; rm -rf' 1"
 
 
-def test_accepting_results_survives_an_edit_that_produces_no_new_results(
+def test_a_signature_survives_an_edit_that_produces_no_new_results(
     tmp_path: Path,
 ) -> None:
-    """The signoff item is keyed on the manifest, not on the file on disk.
+    """The signature is keyed on the manifest, not on the file on disk.
 
-    What is being accepted is a *set of results*, and results change at a
-    launch. An edit sitting unlaunched in the definition changes nothing on
-    disk — `drift` is what reports it — so keying the acceptance on the live
-    hash re-opened a settled decision every time somebody saved the file.
+    What was accepted is a *set of results*, and results change at a launch. An
+    edit sitting unlaunched in the definition changes nothing on disk — `drift`
+    is what reports it — so keying the attestation on the live hash would
+    re-open a settled decision every time somebody saved the file.
     """
     workspace, _ = prepared(tmp_path, [TASK])
     write_log(workspace.logs, TASK)
-    signoff = items(workspace)[SIGNOFF_READY]
-    ack(workspace, signoff.id)
+    sign(workspace, items(workspace)[SIGNOFF_READY])
 
     (workspace.root / DEFINITION).write_bytes(b"# edited, not launched\n")
-    after = items(workspace)
+    after = turn(workspace)
+    kinds = {item.kind for item in after.items}
 
     # the edit is heard, once, as the thing it actually is
-    assert DRIFT in after
-    assert SIGNOFF_READY not in after
+    assert DRIFT in kinds
+    assert SIGNOFF_READY not in kinds
+    assert after.verdict is Verdict.SIGNED_OFF
 
 
-def test_accepting_one_result_set_does_not_accept_a_different_one(
+def test_signing_one_result_set_does_not_sign_a_different_one(
     tmp_path: Path,
 ) -> None:
     """A byte-identical definition can enumerate different tasks.
 
     Flow arguments live beside the file, an import can change under it, and
     `definition_hash` covers the top-level file and nothing else — so a hash of
-    the definition is not an identity for a *result set*. Keying the acceptance
-    on it let an old acknowledgment silently cover results nobody had looked at.
+    the definition is not an identity for a *result set*. Keying the attestation
+    on it would let an old signature silently cover results nobody had looked at.
     """
     other = SynthTask("second")
     workspace, _ = prepared(tmp_path, [TASK])
     write_log(workspace.logs, TASK)
-    ack(workspace, items(workspace)[SIGNOFF_READY].id)
+    sign(workspace, items(workspace)[SIGNOFF_READY])
 
     # the same definition bytes, and therefore the same content hash, enumerating
     # one more task -- which is what a Flow spec run with different arguments does
@@ -684,7 +717,7 @@ def test_accepting_one_result_set_does_not_accept_a_different_one(
     assert SIGNOFF_READY in items(workspace)
 
 
-def test_accepting_a_short_run_does_not_accept_the_longer_one(
+def test_signing_a_short_run_does_not_sign_the_longer_one(
     tmp_path: Path,
 ) -> None:
     """The identifier deliberately does not move when the sample count does.
@@ -695,12 +728,12 @@ def test_accepting_a_short_run_does_not_accept_the_longer_one(
     computes `samples × epochs` separately and calls a short log `SHORT`. So a
     ten-sample run relaunched for twenty is the same identifier and a genuinely
     different set of results, and a digest over identifiers alone let the first
-    acceptance cover the second in silence.
+    signature cover the second in silence.
     """
     short = SynthTask("probe", samples=4)
     workspace, _ = prepared(tmp_path, [short])
     write_log(workspace.logs, short)
-    ack(workspace, items(workspace)[SIGNOFF_READY].id)
+    sign(workspace, items(workspace)[SIGNOFF_READY])
     assert SIGNOFF_READY not in items(workspace)
 
     longer = SynthTask("probe", samples=8)
@@ -709,6 +742,52 @@ def test_accepting_a_short_run_does_not_accept_the_longer_one(
     write_log(workspace.logs, longer)
 
     assert SIGNOFF_READY in items(workspace)
+
+
+def test_acknowledging_a_stall_settles_the_task_it_names(tmp_path: Path) -> None:
+    """Two acts, one meaning: a decision that a task's results stand without it.
+
+    An `accept` ruling latches a task; acknowledging a stall says *this will not
+    be run again and the results stand without it*, which `anomalies.md` has
+    been printing as a caveat in those words since the file existed. Only the
+    ruling was counted, so an acknowledged stall was work outstanding forever —
+    and the gate's remedy is *rule the class*, which a stall need not have: the
+    guard fires on attempt history, not on an anomaly.
+    """
+    workspace, _ = prepared(tmp_path, [TASK, STUCK])
+    write_log(workspace.logs, TASK)
+    stalling(workspace, 3)
+    stalled = items(workspace)[STALLED]
+    assert SIGNOFF_READY not in items(workspace), "the premise: it reads unfinished"
+
+    ack(workspace, stalled)
+
+    after = items(workspace)
+    assert SIGNOFF_READY in after
+    assert STALLED not in after
+    # the log really is short, and the surface goes on saying so
+    assert turn(workspace).summary.states["incomplete"] == 1
+
+
+def test_relaunching_the_same_manifest_un_signs_it(tmp_path: Path) -> None:
+    """An unchanged task set has an unchanged digest, and a launch still restarts work.
+
+    A launch is the one act that decides desired state — it releases the
+    acceptance latches, so a task somebody accepted is queued again. Judging
+    the signature on the digest alone would leave 🔒 standing over a run that
+    had gone back to work, and the results the signer accepted would be
+    overwritten under an attestation still claiming to cover them.
+    """
+    workspace, _ = prepared(tmp_path, [TASK])
+    write_log(workspace.logs, TASK)
+    sign(workspace, items(workspace)[SIGNOFF_READY])
+    assert turn(workspace).verdict is Verdict.SIGNED_OFF
+
+    append_event(workspace.journal, LAUNCHED, definition="evalset.py", tasks=1)
+
+    after = turn(workspace)
+    assert after.verdict is not Verdict.SIGNED_OFF
+    assert SIGNOFF_READY in {item.kind for item in after.items}
 
 
 # --- the id is the re-notification policy -------------------------------

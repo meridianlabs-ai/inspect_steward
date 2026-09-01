@@ -79,3 +79,9 @@ When a person rules `rerun`, the tend carries the ruling out: samples in a still
 Per-task error counts appear in the status table, and open anomaly classes — with their instance counts, an example message, and any prior rulings — under the *anomalies* heading in `steward status` and `status.md`. Each class is raised once rather than repeated every interval, and again only when it materially changes: a population crossing an order of magnitude, or a re-run that failed. Rulings, their reasons, and who made them are recorded in the journal as they happen, so how the run's errors were handled is part of the run's record — and a run does not read as finished while a class is still waiting for its answer.
 
 Two kinds deliberately stay quieter than that. A worker death Steward's own re-launch absorbs resolves itself without asking anyone, and samples *you* killed (`limit:operator`) never ask inline at all — they wait in the anomalies block and get their ruling as part of accepting the results, since the person who killed them already knows.
+
+## The last place they surface
+
+`steward signoff` refuses while any of it is unnamed, and that refusal is the point at which errors stop being a running concern and become a record. It names every reason at once — anything a ruling has not covered, any window still open, any task not settled — so that fixing one and being refused for the next never happens.
+
+Read it as routing rather than as a bar to clear. What it refuses is not a hole but an **unnamed** hole: `accept` and `dismiss` are answers, and *"2 samples accepted as errored — the provider was down all night"* is a signed statement where the same two passing quietly is what all of this exists to prevent. The classes you accepted then become the entries in `anomalies.md`, each with its reason verbatim, who decided, when, and the effect on the numbers — which is the file somebody quotes when they write the results up.

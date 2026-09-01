@@ -30,7 +30,10 @@ from .._anomaly.fold import Pending, absorb, as_events, read_anomalies
 from .._anomaly.model import Anomalies
 from .._evalset.archive import archive_log
 from .._evalset.cache import read_attempt_cache, write_attempt_cache
-from .._evalset.instances import read_classed_cache, write_classed_cache
+from .._evalset.instances import (
+    read_classed_cache,
+    write_classed_cache,
+)
 from .._evalset.manifest import (
     Manifest,
     definition_hash,
@@ -58,7 +61,7 @@ from .._schedule import (
     reconcile,
     resolve_samples_ramp,
 )
-from .._util.duration import seconds_since
+from .._util.duration import is_after, seconds_since
 from .._worker import (
     DEFAULT_STUCK_AFTER,
     Fleet,
@@ -87,6 +90,7 @@ from .._workspace import (
     Paused,
     Raised,
     RampHold,
+    Signature,
     Workspace,
     acquire,
     append_event,
@@ -103,6 +107,7 @@ from .._workspace import (
     read_pause,
     read_raised,
     read_ramp_holds,
+    read_signoff,
     read_undelivered,
     resolve_log_dir,
     resolve_pool,
@@ -112,14 +117,25 @@ from .._workspace import (
     truncate_log,
     utc_now,
 )
+from .anomalies_md import Caveat, anomalies_markdown, caveats
 from .detect import detect, task_health
 from .history import Happened, happened
-from .items import Item, Supervision, Verdict, tend_items, verdict
+from .items import (
+    Item,
+    Supervision,
+    Verdict,
+    signed_off,
+    tend_items,
+    unfinished,
+    verdict,
+)
 from .notify import notify_turn
 from .progress import Progress, live_totals, task_progress
-from .render import status_markdown
+from .render import marks_note, status_markdown
 from .rulings import (
     Dispositions,
+    accepted_tasks,
+    affected_refs,
     apply_rulings,
     dispositions,
     policy_rulings,
@@ -309,6 +325,61 @@ class TendResult:
 
     stuck_cancel: bool | tuple[str, ...] | None = None
     """Which stuck pending tool calls the agent may cancel, normalized — `True` for any, a tuple of function names, `None` for none. What routes a `stuck` item's owner."""
+
+    observed: ObservedTasks | None = None
+    """The manifest read against the log directory, exactly as this turn read it.
+
+    Carried for `signoff`, which curates the superseded attempts out of `logs/` and must do it against the same observation its gate judged. A second `observe_logs` there would be a second set of numbers — one deciding the run is settled and another deciding which logs it settled on — and the two can disagree about a file a worker landed in between. `None` on a result assembled by hand, which read no directory.
+    """
+
+    acknowledged: dict[str, Ack] = field(default_factory=dict[str, "Ack"])
+    """What has been disposed of, by item id.
+
+    Carried because an acknowledgment is the **second way into `anomalies.md`** — one whose subject left a mark on the results is a caveat exactly as a ruling is (workflow.md §14) — and `status.md` renders the same caveats one line each. Both were reading the fold without it and quietly dropping every acked caveat, which is *removed from the surface* silently meaning *removed from the record*.
+    """
+
+    current_logs: dict[str, str] = field(default_factory=dict[str, str])
+    """Task identifier to its current attempt's log location.
+
+    The narrowing every report-facing count needs: a sample that failed, was re-run and failed again is two instances of one row, and only the current attempt is in the results (`rulings.affected_refs`).
+    """
+
+    rendered: list[str] = field(default_factory=list[str])
+    """The generated documents this turn actually wrote, by name.
+
+    Empty on a `status`, which writes neither by design. **Reported rather than inferred**, because the two ways of guessing are both wrong: a turn that returns proves nothing (`_write_rendered` swallows an `OSError` so a failed write never fails a turn that already happened), and a file's existence proves less — a stale document from an earlier turn exists. `signoff` is the one caller that needs the answer, since it disarms the timer straight afterwards and no later turn will repair what this one could not write.
+    """
+
+    caveats: list[Caveat] = field(default_factory=list["Caveat"])
+    """What reached the final data, decided once (`_tend.anomalies_md.caveats`).
+
+    **The one place three readers agree**: `anomalies.md`'s five-field entries, `status.md`'s one-line marks, and the exceptions a signature names. Deciding what a caveat is needs the census — which of a window's instances are in the *current* attempt — and the census is the largest thing a turn holds and has no business on a value `status --json` prints. So the answer travels rather than the evidence, and a decision this list drops cannot survive as a line under the status heading.
+    """
+
+    signature: Signature | None = None
+    """The most recent attestation, or `None` where nobody has signed.
+
+    The raw record rather than the verdict over it, because the two readers want different halves: the projections ask *does it still stand* (`signed`), and the gate refusing a second signature has to name who signed and when.
+    """
+
+    launched: str | None = None
+    """When this run was most recently launched, or `None` where nothing ever launched it.
+
+    Read by `signed`: a relaunch releases every acceptance latch, so it must also un-sign — and an unchanged manifest relaunched has the same digest, which is the case the digest test alone cannot see.
+    """
+
+    @property
+    def signed(self) -> bool:
+        """Whether an attestation is in force over this run.
+
+        A property rather than a field so that the three surfaces asking it — the verdict, the readiness item, and the signoff gate — cannot answer differently, and so that a result assembled by hand cannot claim to be signed without a signature (`items.signed_off`).
+        """
+        return signed_off(
+            self.signature,
+            digest=self.manifest_digest,
+            anomalies=self.anomalies,
+            launched=self.launched,
+        )
 
 
 def tend(
@@ -555,6 +626,15 @@ class _History:
     ever_launched: bool = False
     """Whether anybody ever launched this run. The other half of the same distinction — see `items.Supervision.ever_launched`."""
 
+    launched: str | None = None
+    """When this run was most recently launched, or `None` where nothing ever launched it.
+
+    The instant rather than the fact, because the acceptance latch releases on it: committing a manifest is the one moment desired state is decided, so a launch that re-asks for an accepted task is what puts it back in play (`_latched`).
+    """
+
+    signature: Signature | None = None
+    """The most recent attestation, or `None` where nobody has signed this run."""
+
     since_tend: float | None = None
     """Seconds since the most recent recorded turn, or `None` where there has not been one."""
 
@@ -637,6 +717,7 @@ def _history(workspace: Workspace) -> _History:
     # records it, which is what stops a condition repeating -- and which would
     # otherwise make one unreachable minute at 2am cost the gate permanently
     owed_items, owed_complete = read_undelivered(events)
+    launched = read_launched(events)
     return _History(
         pool=pool,
         stuck_after=recorded_stuck,
@@ -649,7 +730,9 @@ def _history(workspace: Workspace) -> _History:
         paused=read_pause(events),
         armed=armed,
         ever_armed=any(event.type == ARMED for event in events),
-        ever_launched=read_launched(events) is not None,
+        ever_launched=launched is not None,
+        launched=launched,
+        signature=read_signoff(events),
         since_tend=since,
         since_armed=_elapsed(armed.ts) if armed is not None else None,
         baseline=read_baseline(events),
@@ -912,6 +995,7 @@ def _turn(
         paused=history.paused is not None,
         levels=history.ramp_levels,
         ruled=rerun_ruled(anomalies),
+        accepted=_latched(anomalies, history.launched),
     )
     # one read of the running fleet, feeding both the table's live columns and
     # the block under it -- a second read would be a second set of numbers, and
@@ -952,7 +1036,10 @@ def _turn(
     # next tend will auto-rule must not preview as an open question -- while
     # only an executing turn journals them (and then refolds from the file,
     # because a ruling's recorded instant is its identity)
-    policy, declined = policy_rulings(anomalies, settings.preauthorized)
+    # the narrowed per-class counts, so a policy's composed effect sentence
+    # says what a person's would (`rulings.affected_refs`)
+    affected = affected_refs(detection.batches, _current_locations(observed))
+    policy, declined = policy_rulings(anomalies, settings.preauthorized, affected)
     if policy:
         anomalies = read_anomalies(
             [
@@ -1024,6 +1111,19 @@ def _turn(
             detection.batches, anomalies, _current_locations(observed)
         ),
         stuck_cancel=_cancel_authority(settings.stuck_cancel),
+        observed=observed,
+        acknowledged=dict(history.acknowledged),
+        current_logs=_current_locations(observed),
+        caveats=caveats(
+            anomalies,
+            history.acknowledged,
+            detection.batches,
+            {task.identifier: task.key for task in observed.tasks},
+            _current_locations(observed),
+            _cleared(observed),
+        ),
+        signature=history.signature,
+        launched=history.launched,
     )
     if not execute:
         return _projected(result, observed, inflight, history)
@@ -1149,8 +1249,11 @@ def _turn(
     )
 
     # before the observation, so a crash between the two costs a repeated
-    # observation rather than a snapshot the journal claims was written
+    # observation rather than a snapshot the journal claims was written -- and
+    # after the executor, so a caveat carried out this turn is in the document
+    # this turn rather than one behind the effect it describes
     _write_status(workspace, result, failing_since=history.status_failing)
+    _write_anomalies(workspace, result)
     _record(
         workspace,
         result,
@@ -1293,10 +1396,7 @@ def _projected(
             paused=result.summary.paused,
             running=result.summary.running,
             spawning=result.summary.spawning,
-            unfinished=sum(
-                result.summary.states.get(state.value, 0)
-                for state in (TaskState.MISSING, TaskState.INCOMPLETE)
-            ),
+            unfinished=unfinished(result.summary, result.acknowledged),
             # tasks with nothing left running, which is what makes a park
             # subtract from progress rather than merely accompany it. A task
             # with one sample parked among fifty working is still progressing
@@ -1305,6 +1405,7 @@ def _projected(
                 for row in result.progress.rows
                 if row.parked.total and row.parked.total >= row.running
             ),
+            signed=result.signed,
         ),
         appeared=sorted(current - history.previous),
         resolved=sorted(history.previous - current),
@@ -1851,11 +1952,53 @@ def _write_status(
         result: The turn to render.
         failing_since: The open episode's start, or `None` where the last write worked — what makes a failure the *first* one worth recording and a success a recovery.
     """
-    body = status_markdown(result)
-    temporary = workspace.status.with_name(f".{workspace.status.name}.tmp")
+    if _write_rendered(
+        workspace,
+        workspace.status,
+        status_markdown(result),
+        failing_since=failing_since,
+    ):
+        result.rendered.append(workspace.status.name)
+
+
+def _write_anomalies(workspace: Workspace, result: TendResult) -> None:
+    """Rewrite `anomalies.md` beside the status, on the same terms.
+
+    **Mirrored every turn rather than written at signoff**, because workflow.md §14 makes signoff the moment the caveat list stops changing rather than the moment it exists: a list that appeared only at the end is a list nobody read while there was still time to disagree with it, and one of the two ways into it is an acknowledgment somebody typed at 3am.
+
+    The caveats travel on the result rather than being recomputed here, because `status.md` renders the same list one line each and a second computation is a second chance to disagree. What does *not* travel is the census they were computed from — the largest thing a turn holds, in a value whose whole job is to be small enough to print.
+
+    **It takes no part in the failure episode, and `status.md` alone does.** Both files fail together for every cause anybody has — a full disk takes both, a read-only mount takes both — but they were sharing one *unkeyed* episode, so this file succeeding while the status did not recorded a **restoration** and closed an episode that was still open. The item then vanished and returned every turn, which is a persistent failure rendered as a flapping one. The episode exists because a remote reader detects a dead timer by `status.md` going stale (`items.STATUS_UNWRITABLE`); this file going unwritable alone is worth a line in `steward.log` and not a second item saying the same thing about the same directory.
+    """
+    if _write_rendered(
+        workspace,
+        workspace.anomalies,
+        anomalies_markdown(result.caveats, scored=marks_note(result) or ""),
+        failing_since=None,
+        episode=False,
+    ):
+        result.rendered.append(workspace.anomalies.name)
+
+
+def _write_rendered(
+    workspace: Workspace,
+    path: Path,
+    body: str,
+    *,
+    failing_since: str | None,
+    episode: bool = True,
+) -> bool:
+    """Rewrite one generated document, atomically, and never at the cost of the turn.
+
+    One writer for both files because they fail for the same reason at the same moment — a full disk takes both, a read-only mount takes both — and a second episode mechanism would be a second item saying the same thing about the same directory.
+
+    Returns:
+        Whether the document was written. A failure here never fails the turn — the turn already happened and the journal already recorded it — so the answer is the only thing that distinguishes *written* from *left as it was*, and `signoff` needs that distinction because nothing tends the run afterwards.
+    """
+    temporary = path.with_name(f".{path.name}.tmp")
     try:
         temporary.write_text(body, encoding="utf-8")
-        temporary.replace(workspace.status)
+        temporary.replace(path)
     except OSError as ex:
         # `missing_ok` covers the temporary never having been created; it does
         # not cover the unlink itself failing, and a cleanup that raises out of
@@ -1864,12 +2007,13 @@ def _write_status(
             temporary.unlink(missing_ok=True)
         except OSError:
             pass
-        steward_log(workspace.log, f"could not write {workspace.status.name}: {ex}")
-        if failing_since is None:
+        steward_log(workspace.log, f"could not write {path.name}: {ex}")
+        if episode and failing_since is None:
             _mark(workspace, "status_unwritable")
-        return
-    if failing_since is not None:
+        return False
+    if episode and failing_since is not None:
         _mark(workspace, "status_unwritable_restored")
+    return True
 
 
 def _mark(workspace: Workspace, action: str, **fields: Any) -> None:
@@ -1939,6 +2083,38 @@ def _current_locations(observed: ObservedTasks) -> dict[str, str]:
         task.identifier: task.current.location
         for task in observed.tasks
         if task.current is not None
+    }
+
+
+def _cleared(observed: ObservedTasks) -> set[str]:
+    """The subjects of the two acknowledgeable conditions that have demonstrably stopped being true.
+
+    An acknowledgment names a **condition**, not an instant: *this log will not read*, *this task has stopped making progress*. Both can stop being true afterwards — somebody replaces a truncated upload, a task the guard gave up on is relaunched and finishes — and the caveat then describes a hole the numbers do not have. So `anomalies_md.caveats` drops an acknowledgment once what it acknowledged has cleared, and this is the reading of the directory that answers it (`items.MARKED` names the two kinds).
+
+    **What cleared, rather than what stands**, so a subject this cannot place keeps its caveat. The inverse reads more naturally and fails the wrong way: an acknowledgment recorded against something no longer in the observation at all — a log curated away, an identifier the definition dropped — would vanish from the record silently, and losing a footnote nobody asked to lose is the worse of the two mistakes.
+    """
+    return {
+        attempt.location
+        for task in observed.tasks
+        for attempt in (task.current, *task.superseded)
+        if attempt is not None
+    } | {task.identifier for task in observed.tasks if task.state is TaskState.COMPLETE}
+
+
+def _latched(anomalies: Anomalies, launched: str | None) -> set[str]:
+    """The tasks reconcile stops respawning, with the launch that would put them back in play.
+
+    An acceptance ends a task's attempts, and it stays ended — a person decided the results stand without it, and nothing mechanical should overrule that. **What re-arms it is a launch**, because committing a manifest is the one moment desired state is decided: the same doctrine that makes `restore_log` launch-only. So the latch holds while the accepting ruling postdates the most recent launch, and a relaunch that re-asks for the task simply outdates it — no new record, one comparison, and the same shape as the stall guard's own forgiveness instant.
+
+    **Each task is compared against the decision that accepted *it*.** An earlier version asked whether any settled window postdated the launch and then latched every accepted identifier, which is a different question with the same answer most of the time: after a relaunch, an unrelated `exclude` on the same task was enough to re-latch it and stop its respawns under a decision nobody had made about whether it should run.
+    """
+    settled = accepted_tasks(anomalies)
+    if launched is None:
+        return set(settled)
+    return {
+        identifier
+        for identifier, accepted_ts in settled.items()
+        if is_after(accepted_ts, launched)
     }
 
 

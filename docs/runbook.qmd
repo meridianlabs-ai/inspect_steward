@@ -13,14 +13,14 @@ The agent supplies judgement within bounds: it diagnoses errors, oversees the [c
 
 These are settled and binding, and the runbook states them flatly. No situation makes any of them correct:
 
--   **`steward signoff`.** It is a human attestation that the results are accepted. An agent running it is the one thing that would make the whole record meaningless.
+-   **Decide to sign off.** `steward signoff` records that a *person* accepted the results. Telling you the run is ready is the agent's job, and running the command once you answer is too — with your name in `--by`, the same rule that applies to a ruling it relays. What is never the agent's is the decision: a signature nobody asked for is the one thing that would make the whole record meaningless.
 -   **Edit the definition.** It is your statement of what is being measured. The agent reads it, runs it, and raises anything that looks wrong as a *question*.
 -   **Write `_steward.yaml`.** It proposes; you write. The settings as much as the policies.
 -   **Move or delete a log.** Not even an empty cancelled one. Resume matches logs where they are.
 -   **Answer a tool approval or an `ask_user`.** A worker stopped for a human decision is asking whether the eval may *do* something, and answering is authority over what is being measured. The agent surfaces it — as a blocked item carrying the command that attaches you to that worker — and waits. Steward refuses to let the item be acknowledged: only an answer clears it.
 
 ::: {.callout-note appearance="simple"}
-None of these is enforced by access control, and Steward does not pretend otherwise. `signoff` records who signed; the runbook says plainly that the agent never signs. A forged signature is visible rather than prevented — the same bargain a commit author line makes.
+None of these is enforced by access control, and Steward does not pretend otherwise. `signoff` records who *decided*, whichever process typed it, so a signature stays traceable to a person; the runbook says plainly that the decision is never the agent's. A signature nobody asked for is visible rather than prevented — the same bargain a commit author line makes.
 :::
 
 ## The runbook

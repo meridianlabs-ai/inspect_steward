@@ -14,6 +14,7 @@ from .raise_item import raise_command
 from .ramp import ramp_command
 from .rule import rule_command
 from .runbook import runbook_command
+from .signoff import signoff_command
 from .status import status_command
 from .tasks import tasks_command
 from .tend import tend_command
@@ -44,6 +45,7 @@ steward.add_command(ramp_command)
 steward.add_command(resume_command)
 steward.add_command(rule_command)
 steward.add_command(runbook_command)
+steward.add_command(signoff_command)
 steward.add_command(status_command)
 steward.add_command(tasks_command)
 steward.add_command(tend_command)

@@ -15,7 +15,7 @@ from pathlib import Path
 
 import click
 
-from .._tend import ANOMALY, PARKED, TendResult, status
+from .._tend import ANOMALY, PARKED, SIGNOFF_READY, TendResult, status
 from .._workspace import ACKNOWLEDGED, append_event, read_acks, read_journal
 from .items import match_item
 from .turn import TURN_ERRORS, find_workspace
@@ -126,6 +126,17 @@ def _nothing_matched(journal: Path, item: str, result: TendResult) -> str:
             f"rather than an acknowledgment — `{command} "
             f"--disposition dismiss --reason ... --by ...` "
             f"is the ruling that says you looked and there is nothing here"
+        )
+    if any(entry.kind == SIGNOFF_READY for entry in named):
+        # it *was* acknowledgeable, for as long as there was no verb to run --
+        # and an ack now would record *I have decided* in the one place the
+        # decision is not, leaving the run quiet with no signature, no curation
+        # and nothing in anomalies.md marked final
+        return (
+            f"'{item}' says the results are waiting to be accepted, and "
+            f"accepting them is a signature rather than an acknowledgment — "
+            f"`steward signoff --by NAME` is what closes it, and it records "
+            f"what was accepted"
         )
     if any(entry.kind == PARKED for entry in named):
         return (

@@ -197,8 +197,9 @@ Over everything sits one verdict:
 | 🛑 | nothing is progressing |
 | ⏸ | paused |
 | 🏁 | every task finished, and nobody has accepted the results yet |
+| 🔒 | signed off — a person accepted the results |
 
-🏁 is deliberately not ✅. A finished run owes the most consequential decision in the workflow, and reporting it as all-clear is how a sweep sits unread for a week.
+🏁 is deliberately not ✅. A finished run owes the most consequential decision in the workflow, and reporting it as all-clear is how a sweep sits unread for a week. 🔒 is the only terminal one, and it outranks every other verdict including ⏸: a signed run that somebody then paused is still a signed run.
 
 Beneath the verdict sits a **Logs** line naming this run's log directory. Take it from there rather than assuming `logs/` — under a [log root](#where-your-logs-go) there is no `logs/` in the workspace at all, and a `samples_df` pointed at one would find nothing rather than complain. It is in `steward status --json` too.
 
@@ -334,12 +335,35 @@ Some of it is reading what the [scanners](https://inspect.aisi.org.uk/scanners.h
 A definition that declares a scanner is **refused at `steward launch`** today. One `scans/` directory is shared by a whole eval set and its bookkeeping assumes a single writer, so Steward's concurrent workers would race in it. Until that is fixed upstream, scan the log directory after the run with `scout scan` instead.
 :::
 
+### Signing off
+
+`steward signoff --by NAME` is the attestation, and the end of the run. It runs one last turn, then either refuses or records that you accepted these results:
+
+```bash
+steward signoff --by kaia --note "the two sandbox failures are the known host problem"
+```
+
+What it does, in order: takes the run claim, tends once so every artifact is current, checks the gate, moves superseded attempts into `logs-archive/`, writes the journal entry — who, when, the manifest digest, and the exceptions accepted by name — and disarms the timer, because a signed run that goes on tending every ten minutes is spending money against an explicit instruction.
+
+**The refusal names every reason at once**, so that fixing one and being refused for the next never happens:
+
+```
+this run cannot be signed yet:
+  - 2 errored samples are covered by no ruling
+    rule the classes they belong to — `accept` and `dismiss` are answers, and a
+    signed exception is the point
+```
+
+Read that as a routing instruction rather than a quality bar. What it refuses is not a hole but an **unnamed** hole: "8 samples accepted as truncated by an operator" is a signed statement, and the same eight passing silently is what Steward exists to prevent. `accept` and `dismiss` are answers. If the run is one you are abandoning rather than accepting, end it with `steward pause` or `steward timer disarm` — a project nobody signed publishes nothing, and that is the right outcome.
+
+A signature covers the task set it was taken over, so a later `launch` that changes that set un-signs the run, and so does a finding that arrives afterwards — even one you then rule on, because bringing the old signature back into force over something its signer never saw is exactly the silent certification the attestation is for. The remedy is signing again, and the old signature stays in the journal as what was believed at the time.
+
+**Deciding to sign is yours; typing it need not be.** An agent that notices the run is ready and tells you is doing its job, and running the command once you answer is the same act as relaying a ruling through `steward rule --by` — what goes in `--by` is the name of whoever decided. What would make the record meaningless is not an agent at the keyboard but a signature nobody asked for, and the [Agent Runbook](runbook.qmd) says so flatly.
+
+One thing signoff deliberately does not do: **commit the journal.** Your workspace is your repository, and a verb that made a commit would be reaching into a working tree Steward does not own. What it gives you instead is the property that makes committing safe whenever you get to it — at the moment it returns, the record is complete and nothing further will be written without somebody asking.
+
 ::: {.callout-note appearance="simple"}
 #### Not yet implemented
 
-The two phases that close a run are designed and not yet shipped: **investigation** — reading what the scanners found across the whole run, narrowing it to what is worth a look, and writing up what it meant in `scanning.md` and `analysis.md` — and **`steward signoff`**, the attestation that you accept the results, which unschedules the monitor and curates superseded attempts into `logs-archive/`. `steward launch --smoke`, the bounded rehearsal that catches configuration problems before a full run, is in the same category.
-
-Until then a run ends when you decide it has: read the results, and `steward timer disarm` takes it off the schedule.
+**Investigation** — reading what the scanners found across the whole run, narrowing it to what is worth a look, and writing up what it meant in `scanning.md` and `analysis.md` — is designed and not yet shipped, as is `signoff --publish`, which will index the signed logs into a reuse store. `steward launch --smoke`, the bounded rehearsal that catches configuration problems before a full run, is in the same category.
 :::
-
-Signoff is the one command an agent may never run, and the [Agent Runbook](runbook.qmd) says so flatly — it is a human attestation that the results are accepted, and an agent running it is the one thing that would make the whole record meaningless.

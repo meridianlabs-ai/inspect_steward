@@ -8,6 +8,7 @@ The verb the whole anomaly machinery exists to reach: five hundred errored sampl
 """
 
 import json
+from collections.abc import Mapping
 from typing import Any
 
 import click
@@ -100,7 +101,9 @@ def rule_command(
         decided = Disposition(disposition)
 
     refuse_dishonest(targets, decided)
-    effects = _effects(anomalies, targets, decided, effect)
+    effects = _effects(
+        anomalies, targets, decided, effect, result.dispositions.affected
+    )
 
     persist_windows(workspace.journal, result.anomaly_pending, targets)
     for key in targets:
@@ -216,6 +219,7 @@ def _effects(
     targets: list[str],
     decided: Disposition,
     effect: str | None,
+    affected: Mapping[str, frozenset[str]],
 ) -> dict[str, str]:
     """The report-facing sentence per class, under the per-disposition rules."""
     if decided in (Disposition.RERUN, Disposition.DISMISS):
@@ -236,7 +240,7 @@ def _effects(
         return {key: effect for key in targets}
     # the shared composition, so a person's ruling and a policy's cannot word
     # the same mark differently
-    return {key: composed_effect(anomalies, key, decided) for key in targets}
+    return {key: composed_effect(anomalies, key, decided, affected) for key in targets}
 
 
 def _open_windows(anomalies: Anomalies, key: str) -> list[Anomaly]:

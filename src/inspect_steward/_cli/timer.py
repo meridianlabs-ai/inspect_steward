@@ -2,7 +2,7 @@
 
 An agent is turn-based, so an agent-scheduled run is silent the moment no agent is in session — and silence is indistinguishable from a healthy run (agent.md §2). This is the floor under that: a system timer runs the mechanical half regardless.
 
-**A verb group rather than a flag**, because three different callers need it at three different times. Step 16's `launch` arms as part of starting a run, step 26's signoff disarms as part of ending one, and an operator does either in the middle — and a `--timer` flag on `launch` would serve only the first of the three.
+**A verb group rather than a flag**, because three different callers need it at three different times. `launch` arms as part of starting a run, `signoff` disarms as part of ending one, and an operator does either in the middle — and a `--timer` flag on `launch` would serve only the first of the three.
 
 **Arming refuses when the timer would not inherit this shell's credentials.** A scheduled tend runs under a stripped environment, and the failure that produces is the worst one available: every ten minutes all night, a worker starts, authenticates against nothing, and writes a log that says so. The check is a diff rather than a requirement — see `_timer.env` — and `--no-env-check` is there for the case where running without them is the point.
 """

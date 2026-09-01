@@ -14,6 +14,7 @@ Everything a turn wants to *say* beyond counts is an **item**: a stalled task, a
 """
 
 import shlex
+from collections.abc import Mapping
 from dataclasses import dataclass, replace
 from enum import IntEnum, StrEnum
 from hashlib import sha256
@@ -21,10 +22,10 @@ from typing import TYPE_CHECKING
 
 from .._anomaly.model import Anomalies, Anomaly, AnomalyState
 from .._evalset.observe import ObservedTasks, TaskObservation, TaskState
-from .._schedule import InFlight, attempts_made
-from .._util.duration import format_duration, seconds_since
+from .._schedule import InFlight, Summary, attempts_made
+from .._util.duration import format_duration, is_after, seconds_since
 from .._worker import LiveParked, LiveStuck, acp_sockets
-from .._workspace import DEFAULT_TEND_INTERVAL, Armed
+from .._workspace import DEFAULT_TEND_INTERVAL, Ack, Armed, Signature
 
 if TYPE_CHECKING:
     # the turn assembles its result and then projects it, so the type it passes
@@ -68,6 +69,11 @@ class Verdict(StrEnum):
     """Every task finished and nobody has accepted the results yet.
 
     Not ✅, which claims nothing is owed. A finished run owes the most consequential decision in the workflow, and reporting it as all-clear is how a sweep sits unread for a week. Distinct from ⚠️ for the opposite reason: nothing is wrong, and a warning glyph over a successful run trains a reader to discount warnings."""
+
+    SIGNED_OFF = "🔒"
+    """A person accepted these results, and the signature still stands.
+
+    **Terminal in a way no other verdict is**, which is why it is checked before the pause: everything else here describes a run that could still change, and a paused signed run is a signed run somebody stopped tending — reporting it as ⏸ would put the brake ahead of the attestation. The signature comes off the same way it went on, by something happening: a relaunch that changes the task set, or a window opening after it (workflow.md §13, *It can be invalidated*)."""
 
 
 STALLED = "stalled"
@@ -115,8 +121,10 @@ FIXED_OWNER = frozenset({PARKED})
 One entry, and it is the reason the module docstring says `owner` is a function of *(kind, state, policy)* with an exception. A park is a request for a human decision about what an eval measures, and the agent may never answer one (agent.md §6) — so a `_steward.yaml` that routed it to the agent would not be expressing a preference, it would be asking Steward to answer an approval on a person's behalf.
 """
 
-UNACKNOWLEDGEABLE = frozenset({ACTION_FAILED, PARKED, ANOMALY})
+UNACKNOWLEDGEABLE = frozenset({ACTION_FAILED, PARKED, ANOMALY, SIGNOFF_READY})
 """Kinds that cannot be disposed of, because they have no lifecycle to dispose.
+
+Readiness to sign is the newest member and the one that *changed* category. It was acknowledgeable while `steward signoff` did not exist — the only way a person who had accepted the results could silence a reminder about a command they could not run. Now the command exists, and an ack would be somebody recording *I have decided* in the one place the decision is not: the run would go quiet with no signature, no curation, and nothing in `anomalies.md` marked final, which is precisely the silent certification workflow.md §13 opens by refusing.
 
 An action that failed is a single-turn fact: the next turn either hits it again or does not. Letting it be acknowledged would give it a persistence it does not have, and would silence a recurrence that happens to reuse the same words.
 
@@ -248,10 +256,16 @@ def tend_items(
         *_anomalies(result.anomalies),
         *_signoff(result),
     ]
+    # **the filter is on acknowledgeable kinds, not on ids alone**, and the
+    # narrowing is a migration rather than a tidy-up: `signoff_ready` was
+    # acknowledgeable until the verb existed, so a workspace where somebody
+    # silenced it in October holds an ack whose id still matches. Filtering on
+    # the id alone would leave that run quiet forever and never offer it the
+    # command it was waiting for
     items = [
         replace(item, raised=True) if item.id in raised else item
         for item in items
-        if item.id not in acknowledged
+        if not (item.acknowledgeable and item.id in acknowledged)
     ]
     # owner first so a person meets their own decisions before the agent's,
     # then level so that within a person's own the ones costing something now
@@ -267,10 +281,11 @@ def verdict(
     spawning: int,
     unfinished: int,
     parked: int = 0,
+    signed: bool = False,
 ) -> Verdict:
     """Where the run stands.
 
-    Five states, in the order they override each other. **Paused** wins outright: a run nobody is advancing is not making a claim about its own health. **Stopped** is the one that is *not* `max(level)` over the items — a run can contain nothing blocking and still be going nowhere, which is exactly what a fleet of stalled tasks is. So it is computed from the run rather than from the list: work left, and nothing *effectively* running or about to start.
+    Six states, in the order they override each other. **Signed off** wins outright and is checked first, ahead of the pause: it is the only terminal one, and a signed run that somebody then paused is a signed run — reporting the brake instead of the attestation would put the smaller fact in front. **Paused** is next, for its own version of the same reason: a run nobody is advancing is not making a claim about its own health. **Stopped** is the one that is *not* `max(level)` over the items — a run can contain nothing blocking and still be going nowhere, which is exactly what a fleet of stalled tasks is. So it is computed from the run rather than from the list: work left, and nothing *effectively* running or about to start.
 
     **A park subtracts from `running` rather than deciding the verdict.** `Level.BLOCKING` says an item is in the way of its own subject, which is a statement about ordering; the verdict is a statement about the run, and one blocked worker among twenty is a run that is working with a decision inside it. Twenty of twenty is the same arithmetic reaching zero — which is the sense in which enough parked workers stall a fleet and, at the ceiling, stop it.
 
@@ -285,10 +300,13 @@ def verdict(
         spawning: Workers this turn would start.
         unfinished: Manifest tasks not yet complete.
         parked: In-flight tasks with *nothing left running* — every one of their live samples is waiting on a person. A task with one park among fifty working samples is still progressing and does not count here, though it still produces an item. Defaulted, because a caller assembling a verdict by hand is making no claim about parks.
+        signed: Whether an attestation is in force, as `signed_off` decides it. Defaulted for the same reason `parked` is.
 
     Returns:
         The run's verdict.
     """
+    if signed:
+        return Verdict.SIGNED_OFF
     if paused:
         return Verdict.PAUSED
     if not items:
@@ -327,6 +345,8 @@ def verdict_text(verdict: Verdict, items: list[Item]) -> str:
 
     Split out for the notification title, where the glyph leads the *workspace name* rather than the sentence — `🛑 my-sweep: the tend could not run` — so that a reader scanning a channel sorts on the first character and still learns which run it was. Here rather than by trimming `verdict_line`, because a renderer that took the glyph off a string by counting characters would be one emoji away from silently mangling the line.
     """
+    if verdict is Verdict.SIGNED_OFF:
+        return "signed off (the results were accepted)"
     if verdict is Verdict.PAUSED:
         return "paused (nothing new is being scheduled)"
     if verdict is Verdict.CLEAR or not items:
@@ -346,6 +366,46 @@ def verdict_text(verdict: Verdict, items: list[Item]) -> str:
     if verdict is Verdict.STOPPED:
         return f"nothing is progressing, {counts}"
     return counts
+
+
+def signed_off(
+    signature: Signature | None,
+    *,
+    digest: str | None,
+    anomalies: Anomalies,
+    launched: str | None = None,
+) -> bool:
+    """Whether an attestation is in force over this run.
+
+    Here rather than in `_signoff`, and not because it is convenient: three surfaces ask the question — the verdict, the readiness item, and the gate that refuses a second signature — and a predicate with three copies is a run that can read 🔒 while the verb offers to sign it again.
+
+    Three conditions, all about what the signer could have known.
+
+    **The digest** answers *is this the same set of results*. A project's definition evolves, so an attestation names what it covered (workflow.md §2.4) and a relaunch that changed the task set is no longer covered by it. Keyed on the manifest digest rather than the definition's hash for the reason the readiness item is: an edit sitting unlaunched changes the file and not the results, and a Flow spec relaunched with different arguments changes the results from a byte-identical file.
+
+    **A launch un-signs whatever the digest says**, and the digest alone missed it. Relaunching an *unchanged* manifest produces the same digest — and it deliberately releases every acceptance latch (`turn._latched`), so an accepted short task starts running again while the old signature stands over it. A run reporting 🔒 with workers spawning into it is the attestation claiming something nobody attested to. The comparison is the latch's own, against the record `read_launched` already folds.
+
+    **The window test is temporal, not "nothing is open now"**, and the difference decides a real case. A window that opened at 3am and was ruled at 4am is closed by the time anybody looks, and letting the old signature come back into force over a finding its signer never heard of is exactly the certification-by-default §13 opens by refusing. So a later finding un-signs permanently, even once it is ruled — and the remedy is the honest one, which is signing again.
+
+    Args:
+        signature: The most recent signature, or `None` where nobody has signed.
+        digest: The committed manifest's digest now.
+        anomalies: Every window, open and settled — the settled ones matter, because a window opened after the signature and ruled since is still a finding the signature did not cover.
+        launched: When this run was most recently launched, or `None` where the caller makes no claim about launches.
+
+    Returns:
+        Whether the signature still stands.
+    """
+    if signature is None:
+        return False
+    if not signature.digest or signature.digest != digest:
+        return False
+    if launched is not None and is_after(launched, signature.ts):
+        return False
+    return not any(
+        is_after(anomaly.opened_ts, signature.ts)
+        for anomaly in (*anomalies.open, *anomalies.settled)
+    )
 
 
 def by_owner(items: list[Item]) -> list[tuple[Owner, list[Item]]]:
@@ -744,20 +804,49 @@ def _silence(state: Supervision) -> float | None:
     return min(ages) if ages else None
 
 
+def settled_by_decision(summary: Summary, acknowledged: Mapping[str, Ack]) -> set[str]:
+    """Tasks a person has decided about, whether by ruling or by disposal.
+
+    **Two acts, one meaning.** An `accept` ruling latches a task and says the results stand with a caveat; acknowledging a `stalled` item says *this will not be run again and the results stand without it*, which `anomalies.md` has been printing as a caveat in those words since the file existed. Only the first was counted, so an acknowledged stall was a hole the gate refused over forever — and the refusal's remedy is *rule the class*, which a stall need not have: the guard fires on attempt history, not on an anomaly, so there was no class to rule and no way to finish the run.
+
+    Neither act changes what runs. The latch stops respawns the stall guard had already stopped; what both change is whether the run has anything left outstanding.
+    """
+    return set(summary.accepted) | {
+        ack.subject
+        for ack in acknowledged.values()
+        if ack.kind == STALLED and ack.subject
+    }
+
+
+def unfinished(summary: Summary, acknowledged: Mapping[str, Ack] = {}) -> int:
+    """Manifest tasks that neither finished nor were settled by a decision.
+
+    One function because three callers read it and their disagreeing is the bug: `verdict` calls a run with nothing moving STOPPED, `_supervision` asks for a timer, and `_signoff` holds the invitation back. A task somebody has decided about is not work remaining in any of the three senses — Steward is not going to run it, nobody needs a timer for it, and the attestation covers it — so subtracting it once, here, is what keeps a signable run from reading 🛑 forever and nagging for a schedule it does not want.
+
+    Args:
+        summary: The reconciliation's account of the run.
+        acknowledged: What has been disposed of, by item id — for the stalls among it (`settled_by_decision`). Empty for a caller with no journal, which then counts only the ruled ones.
+    """
+    return max(
+        0,
+        sum(
+            summary.states.get(state.value, 0)
+            for state in (TaskState.MISSING, TaskState.INCOMPLETE)
+        )
+        - len(settled_by_decision(summary, acknowledged)),
+    )
+
+
 def _supervision(result: "TendResult") -> list[Item]:
     """Whether anything is going to run the next turn.
 
-    Only for a run with work left. A finished sweep needs no timer, and signing one off (step 26) disarms it deliberately — reporting that as lost supervision would make the last act of every run produce an item.
+    Only for a run with work left. A finished sweep needs no timer, and signing one off disarms it deliberately — reporting that as lost supervision would make the last act of every run produce an item.
     """
     state = result.supervision
     if state is None:
         return []
 
-    unfinished = sum(
-        result.summary.states.get(task_state.value, 0)
-        for task_state in (TaskState.MISSING, TaskState.INCOMPLETE)
-    )
-    if not unfinished:
+    if not unfinished(result.summary, result.acknowledged):
         return []
 
     if state.armed is None:
@@ -1040,7 +1129,7 @@ def self_healing(item: Item) -> bool:
 
 def _window_items(anomaly: Anomaly) -> list[Item]:
     base = _anomaly_id(anomaly)
-    summary = _anomaly_summary(anomaly)
+    summary = anomaly_summary(anomaly)
     if anomaly.state is AnomalyState.RULED:
         if anomaly.failed_resolutions:
             # the outcome *has* been observed, so the pending-outcome status
@@ -1133,7 +1222,8 @@ def _anomaly_name(class_key: str) -> str:
     return readable or "unclassed"
 
 
-def _anomaly_summary(anomaly: Anomaly) -> str:
+def anomaly_summary(anomaly: Anomaly) -> str:
+    """One sentence saying what happened to a class — shared with `anomalies.md`, so the caveat list and the decision queue cannot word the same finding differently."""
     count = anomaly.evidence.count
     plural = "s" if count != 1 else ""
     if anomaly.kind == "limit":
@@ -1160,15 +1250,22 @@ def _signoff(result: "TendResult") -> list[Item]:
 
     **The gap the verdict had.** A sweep whose every task completed reported ✅ *nothing needs you*, which is false in the one way that matters: the results exist and no person has looked at them. Reporting a finished run as all-clear is how one sits unread for a week.
 
-    **Worded as a state rather than as an instruction, deliberately.** `steward signoff` is step 26, and a surface telling somebody to run a command that does not exist is the same lie as a `_steward.yaml` key that parses and does nothing. So this says what is true — every task is complete and nothing further will run — and gains the command when there is one. It is acknowledgeable meanwhile, which is how a person who has accepted the results silences it today.
+    **Worded as a state and carrying the command.** It said only the state for as long as `steward signoff` did not exist, because a surface telling somebody to run a command that does not exist is the same lie as a `_steward.yaml` key that parses and does nothing. Now there is a verb, so the sentence stays what is true and the action names what answers it — and the item stopped being acknowledgeable in the same move, since an ack would record *I have decided* in the one place the decision is not (`UNACKNOWLEDGEABLE`).
+
+    **A standing signature closes it, and nothing else does.** The `signed` argument is the whole of that: the run reads 🔒, the invitation is gone, and both come off together when a relaunch or a later finding un-signs (`signed_off`).
 
     Fires on completeness alone rather than on *completeness and nothing else wrong* — a run that finished with an unreadable file beside it is still finished, and signoff accepts exceptions (workflow.md, *The attestation*) — **with one exception: an open anomaly**. Every anomaly resolved or accepted is workflow.md §12.2's definition of a resolvable run, so the readiness claim is simply false while a window is open, and a late finding un-readies the run for free: the window opens, this returns nothing, and the item disappears until somebody rules.
 
-    An open `limit:` window deliberately does **not** hold this back. Operator kills are adjudication material — the very conversation this item invites — so gating the invitation on them would hide the one line that leads a person to where they get ruled. Step 26's signoff verb itself still refuses while any window is open.
+    An open `limit:` window deliberately does **not** hold this back. Operator kills are adjudication material — the very conversation this item invites — so gating the invitation on them would hide the one line that leads a person to where they get ruled. The signoff verb itself still refuses while any window is open, which is the other half of the same split: the item invites the conversation, and the signature ends it.
+
+    **A task can be settled by observation or by decision, and this counts both** — either decision, an `accept` ruling or an acknowledged stall (`settled_by_decision`). A log that is short-but-accepted stays `INCOMPLETE` forever, deliberately, because it *is* short and rewriting its results to say otherwise would put a number in the record nobody measured. So completeness alone can never be reached by a run with an accepted hole in it, and gating on completeness alone would make the one workflow §13 was written for — *accepting known holes must be explicit, not blocked* — the one workflow this item could never invite. Counted as a set, so a task somebody both ruled on and acknowledged is one settled task rather than two.
     """
+    if result.signed:
+        return []
     summary = result.summary
-    complete = summary.states.get(TaskState.COMPLETE.value, 0)
-    if not summary.tasks or complete != summary.tasks:
+    decided = settled_by_decision(summary, result.acknowledged)
+    settled = summary.states.get(TaskState.COMPLETE.value, 0) + len(decided)
+    if not summary.tasks or settled != summary.tasks:
         return []
     if any(anomaly.kind != "limit" for anomaly in result.anomalies.open):
         return []
@@ -1186,13 +1283,35 @@ def _signoff(result: "TendResult") -> list[Item]:
             owner=OWNERS[SIGNOFF_READY],
             level=Level.INFO,
             subject=result.manifest_digest or "",
-            summary=(
-                f"every task is complete ({summary.tasks} of {summary.tasks}) "
-                f"and nothing further will run, so the results are waiting to be "
-                f"accepted"
-            ),
+            summary=_signoff_summary(summary, len(decided)),
+            # bare, like every other item action: a placeholder here would be
+            # one more thing for a reader to substitute, and this command's
+            # arguments are the signer's name and their own words
+            action="steward signoff",
         )
     ]
+
+
+def _signoff_summary(summary: Summary, accepted: int) -> str:
+    """What is true about the run, naming an accepted hole rather than papering over it.
+
+    A run whose every task finished and one whose last task was accepted as it stands are both ready for the same decision, and they are not the same claim — so the invitation says which it is rather than reporting "every task is complete" over a log somebody knows is short.
+
+    Args:
+        summary: The run's shape.
+        accepted: Tasks settled by a decision rather than by finishing (`settled_by_decision`), which is a count the summary cannot supply on its own: an acknowledged stall settles a task and is recorded in the journal rather than in the reconciliation.
+    """
+    complete = summary.states.get(TaskState.COMPLETE.value, 0)
+    if not accepted:
+        return (
+            f"every task is complete ({summary.tasks} of {summary.tasks}) and "
+            f"nothing further will run, so the results are waiting to be accepted"
+        )
+    return (
+        f"{complete} of {summary.tasks} tasks are complete and {accepted} "
+        f"{'is' if accepted == 1 else 'are'} accepted as {'it' if accepted == 1 else 'they'} "
+        f"stand{'s' if accepted == 1 else ''}, so the results are waiting to be accepted"
+    )
 
 
 def _failures(result: "TendResult") -> list[Item]:

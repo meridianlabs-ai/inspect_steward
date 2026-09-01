@@ -942,6 +942,90 @@ def test_a_stalled_task_frees_the_slot_it_was_holding(tmp_path: Path) -> None:
     assert keys(planned(result)) == [manifest.tasks[1].key]
 
 
+def test_an_accepted_task_is_neither_spawned_nor_stalled(tmp_path: Path) -> None:
+    """A person ended this task, so Steward stops trying — and stops reporting.
+
+    Both halves matter. Respawning would overrule the only party entitled to
+    end it, and reporting it *stalled* would put the decision back in front of
+    the person who just made it: a stall says somebody should look, which is
+    exactly the question an acceptance answers.
+    """
+    manifest = synth_manifest([TASK])
+    write_log(tmp_path, TASK, total=6)
+    observed = observe_tasks(manifest, observe_logs(tmp_path))
+
+    respawning = reconcile(manifest, InFlight(), observed, pool=POOL)
+    latched = reconcile(
+        manifest, InFlight(), observed, pool=POOL, accepted={TASK.identifier}
+    )
+
+    assert keys(planned(respawning)) == [manifest.tasks[0].key]
+    assert planned(latched) == []
+    assert latched.summary.stalled == []
+    assert latched.summary.accepted == [TASK.identifier]
+
+
+def test_an_accepted_task_that_would_have_stalled_reports_the_decision_instead(
+    tmp_path: Path,
+) -> None:
+    # the guard and the latch answer the same question, so only one may speak
+    manifest = synth_manifest([TASK])
+    attempts(tmp_path, TASK, [4, 4, 4])
+    observed = observe_tasks(manifest, observe_logs(tmp_path))
+
+    guarded = reconcile(manifest, InFlight(), observed, pool=POOL)
+    latched = reconcile(
+        manifest, InFlight(), observed, pool=POOL, accepted={TASK.identifier}
+    )
+
+    assert guarded.summary.stalled == [TASK.identifier]
+    assert latched.summary.stalled == []
+    assert latched.summary.accepted == [TASK.identifier]
+
+
+def test_an_accepted_task_with_a_live_worker_is_left_entirely_alone(
+    tmp_path: Path,
+) -> None:
+    # an acceptance never kills a worker: stopping a process is not a
+    # mechanical act, and one a minute from finishing should finish
+    manifest = synth_manifest([TASK])
+    write_log(tmp_path, TASK, total=6)
+
+    result = reconcile(
+        manifest,
+        InFlight(running=[live(TASK.identifier)]),
+        observe_tasks(manifest, observe_logs(tmp_path)),
+        pool=POOL,
+        accepted={TASK.identifier},
+    )
+
+    assert planned(result) == []
+    assert result.summary.accepted == []
+    assert result.summary.running == 1
+
+
+def test_the_accepted_list_never_names_a_complete_task(tmp_path: Path) -> None:
+    """The invariant the signoff gate's arithmetic rests on.
+
+    It adds complete and accepted to decide the run is settled, which is only
+    sound while the two cannot overlap — and they cannot, because this list is
+    built inside a loop that only ever sees tasks needing work.
+    """
+    manifest = synth_manifest([TASK])
+    write_log(tmp_path, TASK)
+
+    result = reconcile(
+        manifest,
+        InFlight(),
+        observe_tasks(manifest, observe_logs(tmp_path)),
+        pool=POOL,
+        accepted={TASK.identifier},
+    )
+
+    assert result.summary.states[TaskState.COMPLETE.value] == 1
+    assert result.summary.accepted == []
+
+
 def test_a_worker_waiting_on_a_person_is_neither_reaped_nor_replaced(
     tmp_path: Path,
 ) -> None:

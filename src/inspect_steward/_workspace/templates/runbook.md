@@ -14,9 +14,12 @@ particular human wants — settings Steward already enforces on its own, and a
 
 No situation makes any of these correct.
 
-- **`steward signoff`.** It is a human attestation that the results are
-  accepted. An agent running it is the one thing that would make the whole
-  record meaningless.
+- **Decide to sign off.** `steward signoff` records that a *person* accepted
+  these results. Telling the human the run is ready is your job, and running
+  the command once they answer is too — with their name in `--by`, which is the
+  same rule `steward rule` already applies to a decision you are relaying. What
+  is never yours is the decision: a signature nobody asked for is the one thing
+  that would make the whole record meaningless.
 - **Edit the definition.** It is the human's statement of what is being
   measured, and afterwards your edit is indistinguishable from theirs. Read it,
   run it, and raise anything that looks wrong as a *question*. This includes
@@ -220,6 +223,60 @@ question. And a `limit:operator` window (samples an operator killed) asks
 nothing inline at all: the operator knows what they did, so it waits in the
 anomalies block for the signoff conversation. Both still take a ruling any time
 someone wants to give one.
+
+## Preparing a signoff
+
+When the verdict turns 🏁, the run is finished and nobody has accepted the
+results. That is a `signoff_ready` item, and it is the one item you cannot
+acknowledge — the only thing that closes it is `steward signoff`.
+
+**Tell the human.** Notify; do not only say it in the conversation. Then get
+the run into a state where the answer is one command, because everything the
+gate refuses over is something you can prepare in advance:
+
+- **Every anomaly window closed by a ruling**, `limit:operator` included. Those
+  raise no inline item on purpose, so they are the ones most easily left open —
+  read the anomalies block, not the item list.
+- **Every errored sample covered by a ruling.** `status` splits the errored
+  cell; anything reading `undecided` refuses the signature.
+- **Every task settled** — complete, short with the hole accepted by a ruling,
+  or stalled and acknowledged. An accepted hole is what the signature is *for*;
+  an unnamed one is what it refuses. Acknowledging a `stalled` item settles its
+  task: the guard fires on attempt history rather than on an anomaly, so there
+  is often no class to rule and the ack is the decision.
+- **Every log in the directory readable, or its absence named.** A file that
+  will not read is the one hole nobody can size, so signoff refuses until
+  `steward ack unreadable:NAME --by NAME --reason ...` records why the results
+  stand without it — and the signature then carries it as a caveat.
+- **No worker still running a task the definition no longer names.**
+
+One more refuses and is not something to prepare: an action the turn **could
+not carry out** — an acceptance whose log amendment hit a read-only mount, say.
+Run it again; the next turn retries what failed, and one that keeps failing is
+a defect to look at rather than to sign around.
+
+What the signature names as its exceptions is the caveat list, not the ruling
+list: an acknowledged `stalled` task or `unreadable` log left a mark on the
+results and is named there too. Acknowledging one is a decision about the data,
+so give it the reason you would give a ruling — it ends up quoted in
+`anomalies.md` under the numbers.
+
+Then run it when they answer:
+
+```
+steward signoff --by NAME [--note TEXT]
+```
+
+`--by` is the name of whoever decided, never yours and never a role — the same
+rule as `steward rule --by`. The command runs a final turn, refuses with every
+blocker at once if anything is still unnamed, moves superseded attempts into
+`logs-archive/`, records who signed and what they signed over, and takes the
+timer down. After it returns, nothing tends this run.
+
+**It does not commit the journal**, and that is deliberate — the workspace is
+the human's repository. What it guarantees instead is that the record is
+complete and quiescent when it returns, so a commit taken any time afterwards
+captures the same thing. Say so; do not commit on their behalf.
 
 ## Context is the real budget
 

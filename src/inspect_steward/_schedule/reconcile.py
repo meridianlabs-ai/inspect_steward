@@ -12,6 +12,7 @@ What this function decides is mechanical continuity: which workers to spawn and 
 """
 
 from collections.abc import Mapping
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from enum import StrEnum
@@ -311,6 +312,12 @@ class Summary:
     rerunning: int = 0
     """Authorized re-runs among the tasks spawning and queued — invalidated, or covered by a standing `rerun` ruling. The counts line's account of why these go first (scheduling.md §5.5)."""
 
+    accepted: list[str] = field(default_factory=list[str])
+    """Identifiers Steward has stopped respawning because a person accepted the class that keeps them incomplete.
+
+    Distinct from `stalled` in the one way that matters: a stall is work that still needs somebody, and this is work somebody has already settled. **Never overlaps `states[COMPLETE]` by construction** — the list is built inside the spawn loop, which `_spawn_order` has already narrowed to tasks that need work — which is what lets the signoff gate add the two rather than reconcile them.
+    """
+
 
 class Blocked(StrEnum):
     """Which of the two bounds is holding the queue back.
@@ -372,6 +379,7 @@ def reconcile(
     paused: bool = False,
     levels: Mapping[str, int] | None = None,
     ruled: Mapping[str, str] | None = None,
+    accepted: AbstractSet[str] | None = None,
 ) -> Reconciliation:
     """Decide what to do next.
 
@@ -383,6 +391,7 @@ def reconcile(
         paused: Stop scheduling new work. Workers already running finish normally — this is what almost everyone means by pausing a run, and it needs no control channel at all (workflow.md, *What `pause` actually pauses*).
         levels: Where the tuning loop has already climbed each task's sample concurrency, by identifier. A respawn spawns at its task's level rather than restarting at the floor — the climb was earned against measured headroom, and a worker crash does not unmeasure it. Consulted only while a ramp is active, so a pinned run cannot be moved by stale levels.
         ruled: Tasks a standing `rerun` ruling covers, each with the ruling's instant (ISO), folded by the turn. Two effects, both the ruling's application: the stall guard forgives attempt history at or before the instant — the decision to try again was made by the only party entitled to make one — and the covered tasks sort ahead of fresh work, by queue order rather than preemption (scheduling.md §5.5).
+        accepted: Tasks a standing `accept` ruling has settled, folded by the turn. Neither spawned nor stalled: an accepted task's remaining work is work a person decided not to do, so respawning it would be Steward overruling the only party entitled to end it.
 
     Returns:
         Actions to execute, tasks waiting on a slot, and a summary.
@@ -404,11 +413,24 @@ def reconcile(
     width = resolve_max_tasks(manifest, pool)
     ruled = ruled or {}
 
+    settled = accepted or frozenset()
     pending: list[SpawnTask] = []
     stalled: list[str] = []
+    latched: list[str] = []
     warnings: list[str] = []
     for observation in _spawn_order(observed.tasks):
         if observation.identifier in running:
+            # an acceptance never kills a worker: stopping a process is not a
+            # mechanical act, and one a minute from finishing should finish.
+            # The latch takes effect the turn after it exits
+            continue
+        if observation.identifier in settled:
+            # before the stall guard, and never both. The guard's finding is
+            # *respawning this has stopped accomplishing anything and a person
+            # should look*, which is the question an acceptance answers --
+            # reporting both would put a decision back in front of the person
+            # who just made it
+            latched.append(observation.identifier)
             continue
         if _stalled(
             observation,
@@ -475,6 +497,7 @@ def reconcile(
             blocked=poured.blocked,
             capture_rss=manifest.source.capture_rss,
             stalled=stalled,
+            accepted=latched,
             archiving=len(archiving),
             pool=pool,
             max_tasks=width,
@@ -952,6 +975,7 @@ def _summarize(
     max_tasks: int | None,
     paused: bool,
     rerunning: int = 0,
+    accepted: list[str] | None = None,
 ) -> Summary:
     states = {state.value: 0 for state in TaskState}
     reasons = {reason.value: 0 for reason in IncompleteReason}
@@ -983,4 +1007,5 @@ def _summarize(
         capture_rss=capture_rss,
         paused=paused,
         rerunning=rerunning,
+        accepted=accepted or [],
     )

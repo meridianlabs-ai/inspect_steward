@@ -26,8 +26,11 @@ the mechanics, that is worth raising rather than resolving on your own.
 The runbook states these in full. They are repeated here because this is the
 file you are guaranteed to have read.
 
-- **Never run `steward signoff`.** It is a human attestation. An agent running
-  it is the single thing that would make the record meaningless.
+- **Never decide to sign off.** Accepting the results is the human's call, not
+  yours. Telling them the run is ready *is* your job, and so is running
+  `steward signoff` once they answer — with their name in `--by`, never yours.
+  A signature nobody asked for is the single thing that would make the record
+  meaningless.
 - **Never edit the definition.** It is the human's statement of what is being
   measured. Read it, run it, and raise anything that looks wrong as a
   *question*. This includes adding explanatory comments.

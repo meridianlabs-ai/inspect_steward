@@ -15,7 +15,9 @@ from fnmatch import fnmatchcase
 from typing import Any, Protocol
 
 from inspect_ai.log import (
+    MetadataEdit,
     ProvenanceData,
+    edit_eval_log,
     invalidate_samples,
     read_eval_log,
     write_eval_log,
@@ -33,11 +35,18 @@ from .._anomaly.model import (
     composed_effect,
     honest,
 )
+from .._evalset.classify import task_error_class
 from .._evalset.instances import Instance, InstanceBatch
 from .._evalset.observe import ObservedTasks, TaskObservation
 from .._schedule import InFlight
 from .._worker import LiveFleet, Unavailable, requeue_sample
 from .._workspace import ACTION, RULING, Workspace, append_event, steward_log
+
+ACCEPTANCE_KEY = "steward_accepted"
+"""The log-metadata key one acceptance writes. A fixed name rather than one composed from the class, because the reader who wants it months later is grepping for a word, and a key assembled per class would be unfindable."""
+
+FLIPPABLE = frozenset({"error", "cancelled"})
+"""The log statuses an acceptance may amend. `started` is deliberately absent — see `_flip`."""
 
 
 class Acted(Protocol):
@@ -70,8 +79,63 @@ def rerun_ruled(anomalies: Anomalies) -> dict[str, str]:
     return ruled
 
 
+def accepted_tasks(anomalies: Anomalies) -> dict[str, str]:
+    """The tasks a standing `accept` ruling has settled, each with the instant that settled it.
+
+    The counterpart to `rerun_ruled`, in the same shape and for the same reason: a rerun ruling authorizes more attempts, an acceptance ends them, and both have to be told apart from a later decision about something else. `reconcile` neither spawns nor stalls a task named here.
+
+    **`task:` kinds only, and the narrowness is the whole safety property.** A `limit:` or `score:` acceptance is a claim about the data *inside* a log — the operator kills stand, the zero headline stands — and says nothing about whether the task should run again; its task is ordinarily `COMPLETE` anyway. Letting one latch would mean that accepting the operator kills in a task which is *also* short for an unrelated reason silently ended that task, which is a decision nobody made. A `task:` class is the only kind whose subject is the attempt itself.
+
+    **The instant is carried rather than flattened away**, which a set lost. The latch releases on a launch that postdates the accepting ruling — and with only a set of identifiers, `_latched` had to ask whether *any* settled window postdated the launch, so an unrelated `exclude` or `dismiss` recorded on the same task after a relaunch re-latched it and quietly stopped its respawns. Each identifier is now compared against the decision that actually accepted it. The newest wins where two acceptances cover one task, because the latch runs from the latest one.
+
+    The same predicate the executor amends a log on (`_flip`), and the two agree on purpose. The executor once covered every accepted kind, guarded by the log's own status — which held only while *a `limit:` acceptance's log has already succeeded* held, and that is an assumption about a run rather than a property of one.
+    """
+    accepted: dict[str, str] = {}
+    for anomaly in anomalies.settled:
+        ruling = anomaly.ruling
+        if (
+            anomaly.state is not AnomalyState.ACCEPTED
+            or anomaly.kind != "task"
+            or ruling is None
+            or ruling.disposition is not Disposition.ACCEPT
+        ):
+            continue
+        for identifier in anomaly.evidence.tasks:
+            if identifier not in accepted or ruling.ts > accepted[identifier]:
+                accepted[identifier] = ruling.ts
+    return accepted
+
+
+def affected_refs(
+    batches: Sequence[InstanceBatch], current: Mapping[str, str]
+) -> dict[str, frozenset[str]]:
+    """Per class, the instances it left **in the data** — those in a current attempt, by ref.
+
+    The narrowing every report-facing count needs, in one place because three of them need it: the errored cell's split, the effect sentence a ruling composes, and `anomalies.md`'s scope. A window's own `evidence.count` is what it *absorbed*, and a sample that failed, was re-run and failed again is two instances of one row.
+
+    **Refs rather than a count**, because one of the three readers needs to narrow further. A class key outlives its generations, so the class's current population can span a settled generation and an open one — and the effect sentence a new ruling composes is about the windows it is ruling, not about everything the key has ever covered. A count cannot be intersected; the refs can.
+
+    Pure, and cheap: the census holds anomalous instances rather than samples, so this is a pass over the failures rather than over the run.
+
+    Args:
+        batches: Detection's census.
+        current: Task identifier to its current attempt's log location.
+
+    Returns:
+        Class key to the refs of its instances that are in the results.
+    """
+    affected: dict[str, set[str]] = {}
+    for batch in batches:
+        for instance in batch.instances:
+            if instance.location == current.get(instance.task):
+                affected.setdefault(batch.class_key, set()).add(instance.ref)
+    return {key: frozenset(refs) for key, refs in affected.items()}
+
+
 def policy_rulings(
-    anomalies: Anomalies, preauthorized: Mapping[str, str] | None
+    anomalies: Anomalies,
+    preauthorized: Mapping[str, str] | None,
+    affected: Mapping[str, frozenset[str]] | None = None,
 ) -> tuple[list[Pending], list[str]]:
     """The rulings standing pre-authorizations grant this turn, and the grants declined.
 
@@ -140,7 +204,7 @@ def policy_rulings(
                     "disposition": decided.value,
                     "reason": f"preauthorized in _steward.yaml ('{pattern}')",
                     "by": "policy",
-                    "effect": composed_effect(anomalies, key, decided),
+                    "effect": composed_effect(anomalies, key, decided, affected),
                 },
             )
         )
@@ -158,44 +222,26 @@ def apply_rulings(
     spawned: set[str],
     acted: Acted,
 ) -> None:
-    """Carry out every standing `rerun` ruling's unapplied remainder.
+    """Carry out every standing ruling's unapplied remainder — re-runs, and acceptances.
 
-    Per decision — RULED sample-kind windows grouped by `(class, ruling instant)`, since a class-scoped ruling can close two generations at once and they must not double-apply: the ruled population is `unapplied` over the windows' merged refs — the one membership definition the routing and the pass check share — grouped per evidence task and partitioned by liveness. A running task's targets are warm-requeued; a landed one's are invalidated in its current attempt; a task with nothing left and no witness yet gets a `converged` record (a human requeued by hand, or upstream retries absorbed the errors — without the witness the window would stick RULED forever). What could not be reached this turn — a 409 mid-finish, a busy worker, a task a worker was just spawned for — is deferred with **no record**, so exactly the remainder retries next turn.
+    Per decision — windows grouped by `(class, ruling instant)`, since a class-scoped ruling can close two generations at once and they must not double-apply.
 
-    One failing class costs that class, never the turn — the `_act` posture.
+    A **rerun** takes RULED sample-kind windows: the ruled population is `unapplied` over the windows' merged refs — the one membership definition the routing and the pass check share — grouped per evidence task and partitioned by liveness. A running task's targets are warm-requeued; a landed one's are invalidated in its current attempt; a task with nothing left and no witness yet gets a `converged` record (a human requeued by hand, or upstream retries absorbed the errors — without the witness the window would stick RULED forever). What could not be reached this turn — a 409 mid-finish, a busy worker, a task a worker was just spawned for — is deferred with **no record**, so exactly the remainder retries next turn.
+
+    An **acceptance** takes ACCEPTED windows and reads from `anomalies.settled` rather than `.open`, because that is where the fold puts them: every accepting disposition settles its window on the spot (`_ruled_state`), so a carrier looking in `.open` would find nothing at all. **The two differ in the grain of their target, and everything else follows from that.** A rerun acts on samples, so its remainder is `unapplied` over the census; an acceptance acts on *logs*, so its remainder is the window's evidence tasks minus the ones this ruling already reached. Same doctrine one level up: nothing stores *fully applied*, a deferral leaves no record, and one failing class costs that class and never the turn — the `_act` posture.
     """
     census = {batch.class_key: batch for batch in batches}
     lookup = {task.identifier: task for task in observed.tasks}
     unreadable = {entry.location for entry in observed.unreadable}
     running = inflight.running_identifiers
-    # a class-scoped ruling closes every non-terminal window of its class, so
-    # two generations can stand RULED under the same instant -- they are one
-    # decision and get one application: refs and evidence tasks merged, one
-    # `_apply`, one journal event, never a duplicate requeue for a shared task
-    grouped: dict[tuple[str, str], tuple[Anomaly, Ruling, set[str], list[str]]] = {}
-    for anomaly in anomalies.open:
-        ruling = anomaly.ruling
-        if (
-            anomaly.state is not AnomalyState.RULED
-            or ruling is None
-            or ruling.disposition is not Disposition.RERUN
-            or anomaly.kind == "task"
-        ):
+    for anomaly, ruling, refs, tasks in _grouped(
+        anomalies.open, Disposition.RERUN
+    ).values():
+        if anomaly.kind == "task":
+            # a task-kind rerun needs no executor: the errored task respawns
+            # mechanically, and the ruling's whole application is reconcile's
+            # stall-guard forgiveness
             continue
-        entry = grouped.get((anomaly.class_key, ruling.ts))
-        if entry is None:
-            grouped[(anomaly.class_key, ruling.ts)] = (
-                anomaly,
-                ruling,
-                set(covered_refs(anomaly, ruling.ts)),
-                list(anomaly.evidence.tasks),
-            )
-        else:
-            entry[2].update(covered_refs(anomaly, ruling.ts))
-            entry[3].extend(
-                task for task in anomaly.evidence.tasks if task not in entry[3]
-            )
-    for anomaly, ruling, refs, tasks in grouped.values():
         try:
             _apply(
                 workspace,
@@ -219,6 +265,58 @@ def apply_rulings(
             )
             acted.failures.append(failure)
             steward_log(workspace.log, failure)
+
+    for anomaly, ruling, _covered, tasks in _grouped(
+        anomalies.settled, Disposition.ACCEPT
+    ).values():
+        try:
+            _accept(
+                workspace,
+                anomaly,
+                ruling,
+                tasks,
+                applied,
+                running,
+                lookup,
+                spawned,
+                acted,
+            )
+        except Exception as ex:
+            failure = (
+                f"could not apply the acceptance on {anomaly.class_key}: "
+                f"{type(ex).__name__}: {ex}"
+            )
+            acted.failures.append(failure)
+            steward_log(workspace.log, failure)
+
+
+def _grouped(
+    windows: Sequence[Anomaly],
+    disposition: Disposition,
+) -> dict[tuple[str, str], tuple[Anomaly, Ruling, set[str], list[str]]]:
+    """One decision per `(class, ruling instant)`, with its refs and evidence tasks merged.
+
+    A class-scoped ruling closes every non-terminal window of its class, so two generations can stand under the same instant — they are one decision and get one application: refs and evidence tasks merged, one journal event, never a duplicate act for a shared task. Two generations under two *different* rulings are two decisions and stay apart.
+    """
+    grouped: dict[tuple[str, str], tuple[Anomaly, Ruling, set[str], list[str]]] = {}
+    for anomaly in windows:
+        ruling = anomaly.ruling
+        if ruling is None or ruling.disposition is not disposition:
+            continue
+        entry = grouped.get((anomaly.class_key, ruling.ts))
+        if entry is None:
+            grouped[(anomaly.class_key, ruling.ts)] = (
+                anomaly,
+                ruling,
+                set(covered_refs(anomaly, ruling.ts)),
+                list(anomaly.evidence.tasks),
+            )
+        else:
+            entry[2].update(covered_refs(anomaly, ruling.ts))
+            entry[3].extend(
+                task for task in anomaly.evidence.tasks if task not in entry[3]
+            )
+    return grouped
 
 
 def _apply(
@@ -453,6 +551,178 @@ def _landed(
     )
 
 
+def _accept(
+    workspace: Workspace,
+    anomaly: Anomaly,
+    ruling: Ruling,
+    tasks: list[str],
+    applied: Applied,
+    running: set[str],
+    lookup: dict[str, TaskObservation],
+    spawned: set[str],
+    acted: Acted,
+) -> None:
+    """Carry out one acceptance: mark the logs it covers `success`, and record that it landed.
+
+    An acceptance says *this attempt is the result, with a caveat the report carries*. Steward's own machinery already honours that through the latch (`accepted_tasks`), but the log on disk still says `error`, and every downstream reader — `eval_set`, the viewer, `samples_df`, whoever opens the directory in six months — reads the wreckage rather than the decision. So the header is amended to agree with the person who ruled, and the ruling travels inside the log as provenance.
+
+    **Two signals say a task has already been accepted, and they answer different questions.** The journal record (`Applied.accepted_tasks`) is the *memory*: the only thing that can settle a partial application, a deferral or a re-ruling, and the only witness for a `limit:` or `score:` acceptance whose log was already `success` and needed no write at all. The log's own status is the *guard*: a crash between the effect and the journal append leaves the amendment landed and the record missing, and the next turn must find `success` and book it rather than swap a header a second time. This is `_landed`'s "found already invalidated" reasoning applied to a header field instead of a sample field.
+    """
+    key = anomaly.class_key
+    remaining = [
+        identifier
+        for identifier in tasks
+        if identifier not in applied.accepted_tasks(key, ruling.ts)
+    ]
+    accepted: list[dict[str, Any]] = []
+    deferred: list[dict[str, Any]] = []
+    for identifier in remaining:
+        if identifier in running:
+            # a header swap rewrites a zip's central directory in place, and
+            # doing that to a file a live worker holds open is the one way this
+            # executor could destroy a result rather than fail to change one.
+            # The latch has already stopped the respawns, so the wait is
+            # bounded by the worker's own exit
+            deferred.append(_task_deferral(identifier, "a worker is running it"))
+            continue
+        if identifier in spawned:
+            deferred.append(
+                _task_deferral(identifier, "a worker was just spawned for it")
+            )
+            continue
+        accepted.append(_flip(lookup.get(identifier), identifier, anomaly, ruling))
+
+    if accepted:
+        fields: dict[str, Any] = {
+            "action": RULING_APPLIED,
+            "class": key,
+            "for": ruling.ts,
+            "by": ruling.by,
+            "accepted": accepted,
+        }
+        if deferred:
+            # provenance only, never memory: the remainder is recomputed next
+            # turn as evidence-tasks-minus-applied
+            fields["deferred"] = deferred
+        append_event(workspace.journal, ACTION, **fields)
+        acted.journalled = True
+    elif deferred:
+        reasons = "; ".join(f"{entry['task']} ({entry['why']})" for entry in deferred)
+        steward_log(
+            workspace.log, f"deferred applying the acceptance on {key}: {reasons}"
+        )
+
+
+def _flip(
+    observation: TaskObservation | None,
+    identifier: str,
+    anomaly: Anomaly,
+    ruling: Ruling,
+) -> dict[str, Any]:
+    """Amend one landed log to say what was decided about it, where there is one to amend.
+
+    Most outcomes write nothing and still book the task, because *the acceptance landed here* is true whether or not a byte moved: a class whose logs already succeeded (most `limit:` and `score:` acceptances) needs no mark, and re-examining it every turn for the life of the run is the cost of not recording it.
+
+    **Only an acceptance of the log's own failure amends the log**, which is the same predicate the latch uses and no longer the asymmetry the design claimed. The old rule — every accepted kind, guarded by the log's status — rested on *a `limit:` or `score:` acceptance's log has already succeeded*, which is an assumption rather than a guarantee. A log holding operator-killed samples can also terminate with a scorer error, and accepting `limit:operator` then cleared a task failure nobody had ruled on: the halting error went into the acceptance metadata under a decision that was about something else, the header said `success`, and the task went on respawning because a `limit:` acceptance deliberately does not latch. So the gate is the class's own kind, and then the class itself — a task that now fails differently from the failure somebody accepted is the same mistake one level down.
+
+    **A log still being written is accepted without being rewritten.** Upstream's in-place amendment drops `header.json` from the zip and writes a fresh one — and it will happily *create* one in a log whose header is still `_journal/start.json`, which is not editing a finished eval but manufacturing one, with `results` still `None`. The file would then claim `success` and still read as having no results to the very observation that wrote it. `task:vanished` is exactly this case, and the latch is what settles it.
+
+    **Only the current attempt is ever touched.** Which log is current decides which numbers the run reports, so amending a superseded one would change the answer rather than record a decision about it.
+    """
+    current = observation.current if observation is not None else None
+    if current is None:
+        return {"task": identifier, "flipped": False, "note": "no log to accept"}
+
+    if anomaly.kind != "task":
+        return {
+            "task": identifier,
+            "location": current.location,
+            "flipped": False,
+            "note": "the log's own failure is not what was accepted",
+        }
+
+    # header only on both halves, and the write's flag is the one that matters:
+    # a header-only read followed by a full write re-inits the recorder and
+    # persists `samples or []` -- which, over this read, is nothing at all
+    log = read_eval_log(current.location, header_only=True)
+    if log.status == "success":
+        return {
+            "task": identifier,
+            "location": current.location,
+            "flipped": False,
+            "note": "already success",
+        }
+    if log.status not in FLIPPABLE:
+        return {
+            "task": identifier,
+            "location": current.location,
+            "flipped": False,
+            "note": "the log is still being written",
+        }
+    if log.error is not None:
+        # **only where there is a halting error to erase.** A cancelled log
+        # carries none, so there is nothing a mismatched class could cost; an
+        # errored one carries the account of what stopped it, and clearing that
+        # under a ruling about a different failure is this guard's whole point
+        failure = task_error_class(log.error.message, log.error.traceback)
+        if failure != anomaly.class_key:
+            return {
+                "task": identifier,
+                "location": current.location,
+                "flipped": False,
+                "note": f"the log now fails as {failure}, not {anomaly.class_key}",
+            }
+
+    record: dict[str, Any] = {
+        "class": anomaly.class_key,
+        "generation": anomaly.generation,
+        "ruling": ruling.ts,
+        "by": ruling.by,
+        "reason": ruling.reason,
+        "effect": ruling.effect,
+        "status_before": log.status,
+    }
+    if log.error is not None:
+        # the halting error moves rather than being kept or dropped: left
+        # standing under `success` it puts an error payload on a success row in
+        # every listing and the viewer, a contradiction a reader cannot
+        # resolve -- and deleting it would lose the only account of what
+        # happened from the one file that outlives the workspace
+        record["error_before"] = {
+            "message": log.error.message,
+            "traceback": log.error.traceback,
+        }
+    edited = edit_eval_log(
+        log,
+        [MetadataEdit(metadata_set={ACCEPTANCE_KEY: record})],
+        ProvenanceData(
+            author=ruling.by or "steward",
+            reason=ruling.reason or None,
+            metadata={"class": anomaly.class_key, "ruling": ruling.ts},
+        ),
+    )
+    edited = edited.model_copy(update={"status": "success", "error": None})
+    # the ETag is populated by a read from S3 and is a documented no-op
+    # elsewhere, so one call site is a compare-and-swap remotely and
+    # best-effort locally -- where the in-place swap is not atomic, accepted
+    # because it touches only a landed log no worker holds and happens at most
+    # once per (class, ruling, task) for the life of the run
+    write_eval_log(
+        edited, current.location, if_match_etag=edited.etag, header_only=True
+    )
+    return {
+        "task": identifier,
+        "location": current.location,
+        "eval_id": current.eval_id,
+        "from": record["status_before"],
+        "flipped": True,
+    }
+
+
+def _task_deferral(identifier: str, why: str) -> dict[str, Any]:
+    return {"task": identifier, "why": why}
+
+
 def _blinded(observation: TaskObservation | None, unreadable: set[str]) -> bool:
     """Whether any of this task's logs failed to read this turn — its census is then unknown, never authoritative."""
     if observation is None or not unreadable:
@@ -477,7 +747,7 @@ def _deferral(target: Instance, why: str) -> dict[str, Any]:
 class Dispositions:
     """Per task, what each errored sample's class has been ruled — the reporting fold.
 
-    Pure and shared: the markdown table's errored-cell split and `--json` read it now, and step 26's signoff will refuse while anything is `undecided`.
+    Pure and shared: the markdown table's errored-cell split, `--json`, and the signoff gate all read it — the gate refusing while anything is `undecided`.
     """
 
     by_task: dict[str, dict[str, int]] = field(
@@ -490,6 +760,14 @@ class Dispositions:
 
     zeroed: int = 0
     """Samples ruled zeroed, run-wide."""
+
+    affected: dict[str, frozenset[str]] = field(
+        default_factory=dict[str, frozenset[str]]
+    )
+    """Per class, the instances it left **in the data** — those in a current attempt, which is what a ruling's effect sentence is counting.
+
+    **The number a window cannot supply.** `Evidence.count` is what the window absorbed, and a sample that failed, was re-run and failed again is two instances of one row: counting it composes *6 samples excluded from scoring* over three excluded samples, three lines above a denominator line that says three. Computed here because this is the one fold that already holds both the census and the current-attempt map, and read by `composed_effect` so that a person's ruling and a policy's compose the same sentence from the same number.
+    """
 
 
 BUCKETS = {
@@ -518,7 +796,7 @@ def dispositions(
         current: Task identifier to its current attempt's log location.
 
     Returns:
-        Bucket counts per task over `error:` instances, plus the run-wide exclusion and zero totals over error and limit instances.
+        Bucket counts per task over `error:` instances, the run-wide exclusion and zero totals over error and limit instances, and the samples each class left in the data.
     """
     by_task: dict[str, dict[str, int]] = {}
     excluded = zeroed = 0
@@ -552,7 +830,12 @@ def dispositions(
                 excluded += 1
             elif bucket == "zeroed":
                 zeroed += 1
-    return Dispositions(by_task=by_task, excluded=excluded, zeroed=zeroed)
+    return Dispositions(
+        by_task=by_task,
+        excluded=excluded,
+        zeroed=zeroed,
+        affected=affected_refs(batches, current),
+    )
 
 
 def _window_bucket(window: Anomaly) -> str:
@@ -565,8 +848,10 @@ def _window_bucket(window: Anomaly) -> str:
 
 
 __all__ = [
+    "ACCEPTANCE_KEY",
     "BUCKETS",
     "Dispositions",
+    "accepted_tasks",
     "apply_rulings",
     "dispositions",
     "policy_rulings",
