@@ -327,7 +327,7 @@ def _rerender(
         rendered, after = set[str](), before
     else:
         rendered = set(after.rendered)
-    for path in (workspace.status, workspace.anomalies):
+    for path in (workspace.status, workspace.anomalies, workspace.analysis):
         if path.name not in rendered:
             warnings.append(
                 f"the signature is recorded, but {path.name} could not be "
@@ -449,7 +449,7 @@ def _finalize_scan(workspace: Workspace, result: TendResult) -> Blocker | None:
 
     **What the finalize could not do is a refusal and not a warning.** It was a warning on `_rerender`'s reasoning — a filesystem that will not cooperate must not unmake a decision a person made — and that reasoning does not reach this call, which happens *before* the `SIGNOFF` event and so unmakes nothing by stopping. What it costs is not tidiness: rows that were never compacted are rows the census never read, so a signature taken over them says *nothing was flagged* about samples nothing has looked at. `FAILED` is the precedent and the remedy is its: run it again, and one that keeps failing is a defect rather than a state to sign around.
 
-    The *incompleteness* the finalize reports is deliberately not read here. `complete=False` means scanners errored, and those errors are already counted off the compacted rows every turn (`_scan.findings.ScanFindings.incomplete`) — read once, from the record both this verb and the tend share, rather than by a second predicate here that could come to disagree with it.
+    **The *incompleteness* the finalize reports is deliberately not read here**, and the reason is that its two halves already have better homes than a second predicate over a summary file. A scanner that **errored** is a `scanerror:` window, refused by `OPEN_WINDOW` until it is ruled — read off the compacted rows both this verb and the tend share, so the gate and the census cannot come to disagree. A transcript nothing **reached** is a coverage shortfall (`_tend.coverage`), reported on the table and in the note under it and deliberately **not** refused: what would close it is scout's resume over the scan directory, which Steward has no verb for, so a blocker over a scanner added at a re-launch would wedge the run permanently — the same trap the acknowledgeable `scan_incomplete` item was retired for. The person signing is told the number and decides.
 
     Args:
         workspace: The workspace, whose journal carries the episode's edges.

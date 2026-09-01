@@ -6,7 +6,7 @@ One line per task, columns right-aligned on their own widths so the numbers stac
 ⚙ sec_bench_pro[default]@openai/gpt-5   37/183  20%  83r  63q  2e  52/80c  115/300t
 ```
 
-Read left to right it is: what state the task is in, which task, how much of it is done, how much is moving right now, how much is still to come, how much has errored, how hard the model pool is working, and how far into its budget a typical sample is — or, for a finished task, what it scored. Every column is omitted when it has nothing to say — a finished task has no running samples and nothing left to queue, an errored count of zero is the ordinary case, a task with no declared limit has no budget column — so a settled campaign renders as a quiet list rather than a field of zeroes.
+Read left to right it is: what state the task is in, which task, how much of it is done, how much is moving right now, how much is still to come, how much has errored, how hard the model pool is working, how much of what landed the scanners have reached, and how far into its budget a typical sample is — or, for a finished task, what it scored. Every column is omitted when it has nothing to say — a finished task has no running samples and nothing left to queue, an errored count of zero is the ordinary case, a fully scanned run has no gap, a task with no declared limit has no budget column — so a settled campaign renders as a quiet list rather than a field of zeroes.
 
 **Widths are computed per render rather than fixed.** Display keys vary from `addition` to a sweep entry with three arguments and a model, and a column padded for the worst case wastes the terminal on every other line.
 """
@@ -68,8 +68,26 @@ def _cells(row: TaskProgress, key: str, width: int) -> tuple[str, ...]:
         # first question is *which tasks* -- which the totals line cannot say
         f"{row.errored}e" if row.errored else "",
         _connections(row),
+        _scanned(row),
         _outcome(row),
     )
+
+
+def _scanned(row: TaskProgress) -> str:
+    """Transcripts every scanner answered for, against samples landed — `48/50sc`.
+
+    Shown only while there is a gap, which is the one thing a reader can act on: a fully scanned run would otherwise carry a column restating the samples column beside it, on every row, for the whole life of the campaign.
+
+    `sc` rather than `s`, which the time budget already spells — `48/50s` beside `120/300s` is two different questions wearing one suffix.
+    """
+    scanned = row.scanned
+    if scanned is None or scanned.complete:
+        return ""
+    if not scanned.known:
+        # *nothing is known to be scanned* and *nothing was scanned* send a
+        # reader after two different problems, so the cell says which it is
+        return f"?/{scanned.landed}sc"
+    return f"{scanned.scanned}/{scanned.landed}sc"
 
 
 def _outcome(row: TaskProgress) -> str:

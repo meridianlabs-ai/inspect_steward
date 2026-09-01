@@ -22,6 +22,7 @@ from .._schedule import Summary
 from .._util.duration import format_duration
 from .._util.jsonl import utc_now
 from .anomalies_md import caveat_line
+from .coverage import TaskCoverage
 from .items import HEADINGS, by_owner, verdict_line
 from .progress import LIVE_ONLY, compact, short_keys
 
@@ -204,6 +205,10 @@ def _progress(result: "TendResult") -> list[str]:
     errored = any(row.errored for row in rows)
     scored = any(row.headline is not None for row in rows)
     budgeted = any(row.budget is not None for row in rows)
+    # a run that scans nothing has no column; a run that scanned everything has
+    # one saying so, unlike the terminal's, because this document is what a
+    # reader quotes and *48 of 48 scanned* is the sentence they need to quote
+    scanned = any(row.scanned is not None for row in rows)
 
     header = ["task", "samples", "done"]
     align = ["---", "---:", "---:"]
@@ -218,6 +223,9 @@ def _progress(result: "TendResult") -> list[str]:
         align += ["---:"]
     if live:
         header += ["connections"]
+        align += ["---:"]
+    if scanned:
+        header += ["scanned"]
         align += ["---:"]
     if budgeted:
         header += ["limit"]
@@ -257,6 +265,8 @@ def _progress(result: "TendResult") -> list[str]:
                 in_use, limit = row.connections
                 connections = f"{in_use}/{limit}" if limit is not None else str(in_use)
             cells += [connections]
+        if scanned:
+            cells += [_scanned_cell(row.scanned)]
         if budgeted:
             budget = row.budget
             cells += [
@@ -280,10 +290,25 @@ def _progress(result: "TendResult") -> list[str]:
     marks = marks_note(result)
     if marks:
         notes.append(marks)
+    gap = coverage_note(result)
+    if gap:
+        notes.append(gap)
     if notes:
         lines += ["", " ".join(notes)]
 
     return lines + [""]
+
+
+def _scanned_cell(scanned: TaskCoverage | None) -> str:
+    """The scanned cell — `48/50`, or `?/50` where the numerator could not be established.
+
+    A question mark rather than a zero, for the reason `TaskCoverage.known` exists: *nothing is known to be scanned* and *nothing was scanned* are two different problems, and a reader who quotes this table would carry the wrong one into their report.
+    """
+    if scanned is None:
+        return ""
+    if not scanned.known:
+        return f"?/{scanned.landed}"
+    return f"{scanned.scanned}/{scanned.landed}"
 
 
 _BUCKET_ORDER = ("rerunning", "excluded", "zeroed", "scored", "accepted", "undecided")
@@ -320,6 +345,34 @@ def marks_note(result: "TendResult") -> str | None:
     return (
         f"Scores are over {total - excluded} of {total} samples ({', '.join(parts)})."
     )
+
+
+def coverage_note(result: "TendResult") -> str | None:
+    """What the scanners have not reached, or `None` while they have reached everything.
+
+    **Only when there is a gap**, because the column beside it already says the number and a sentence restating a complete coverage is a line a reader learns to skip. What the sentence adds is the reading: *these numbers are over the samples, and the scan findings are over fewer of them*.
+
+    **A task whose coverage could not be checked gets its own sentence** rather than joining the gap. It is not a measured shortfall — it is a measurement that did not happen, and it is left out of the totals precisely so the gap stays a number somebody counted. A reader told *48 of 50* about a run where a third task was never checked has been given a true sentence and a false impression, so the second sentence says how many tasks the first one is not about.
+    """
+    coverage = result.coverage
+    gap = coverage.gap
+    unverified = len(coverage.unverified)
+    if not gap and not unverified:
+        return None
+    notes: list[str] = []
+    if gap:
+        notes.append(
+            f"Scan findings are over {coverage.scanned} of "
+            f"{coverage.landed} samples ({gap} not yet scanned)."
+        )
+    if unverified:
+        plural = "" if unverified == 1 else "s"
+        notes.append(
+            f"Coverage could not be checked for {unverified} task{plural} "
+            f"(shown as `?`) — the current log would not read, and the counted "
+            f"totals exclude {'it' if unverified == 1 else 'them'}."
+        )
+    return " ".join(notes)
 
 
 def anomalies_line(anomalies: Anomalies) -> str | None:

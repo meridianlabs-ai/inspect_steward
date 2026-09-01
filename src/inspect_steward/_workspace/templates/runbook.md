@@ -334,13 +334,28 @@ gate refuses over is something you can prepare in advance:
   will not read is the one hole nobody can size, so signoff refuses until
   `steward ack unreadable:NAME --by NAME --reason ...` records why the results
   stand without it — and the signature then carries it as a caveat.
-- **Every transcript scanned, or the gap named.** A scanner that threw leaves a
+- **Every transcript scanned, or the gap ruled.** A scanner that threw leaves a
   sample with no verdict either way, and that is indistinguishable in the
   findings from a sample that came back clean — so a run whose scans errored
-  would otherwise be signed as *nothing was flagged*. Signoff refuses until
-  `steward ack scan_incomplete:SCANNER --by NAME --reason ...` says why the
-  results stand anyway. Say how many and out of how many: one grader timeout in
-  five hundred is a different decision from a scanner that never ran.
+  would otherwise be signed as *nothing was flagged*. Those samples are their
+  own anomaly class, `scanerror:SCANNER:TYPE@FRAME`, and it refuses the
+  signature until it is ruled like any other. `accept` and `dismiss` are the
+  answers; `rerun`, `exclude` and `zero` are refused, because the samples are
+  fine and only the reading of them failed. The class already says how many and
+  out of what: one grader timeout in five hundred is a class of one, and a
+  scanner that threw on every transcript is a class of five hundred. A scanner
+  that **never ran at all** raises no class — it wrote no rows for one to be
+  built from — and what shows it is the `scanned` column below, which is why
+  reading that column is its own bullet.
+- **Read the `scanned` column, because nothing refuses over it.** It counts
+  transcripts *every* scanner answered for against samples landed, and a
+  shortfall means transcripts nobody looked at — a worker that died between
+  logging and scanning, or a scanner added at a re-launch that will never
+  revisit what already landed. Signoff does **not** block on it, deliberately:
+  nothing Steward can run closes that gap, so a refusal would wedge the run
+  rather than route it. Say the number in the message when you tell them the
+  run is ready. `48 of 50 scanned` is a different thing to sign than `50 of
+  50`.
 - **No worker still running a task the definition no longer names.**
 
 One more refuses and is not something to prepare: an action the turn **could
@@ -349,8 +364,8 @@ Run it again; the next turn retries what failed, and one that keeps failing is
 a defect to look at rather than to sign around.
 
 What the signature names as its exceptions is the caveat list, not the ruling
-list: an acknowledged `stalled` task, `unreadable` log or `scan_incomplete`
-scanner left a mark on the results and is named there too. Acknowledging one is a decision about the data,
+list: an acknowledged `stalled` task or `unreadable` log
+left a mark on the results and is named there too. Acknowledging one is a decision about the data,
 so give it the reason you would give a ruling — it ends up quoted in
 `anomalies.md` under the numbers.
 
@@ -370,6 +385,53 @@ timer down. After it returns, nothing tends this run.
 the human's repository. What it guarantees instead is that the record is
 complete and quiescent when it returns, so a commit taken any time afterwards
 captures the same thing. Say so; do not commit on their behalf.
+
+## Writing `analysis.md`
+
+`status.md` and `anomalies.md` are Steward's; `AGENTS.md` and `_steward.yaml`
+are the human's. `analysis.md` is the one file you and Steward share, and the
+line between you is a pair of HTML comments:
+
+```markdown
+## cybench@openai/gpt-5
+
+<!-- steward:begin cybench_0a1b2c3d -->
+- scanned 48 of 50 transcripts — the rest carry no verdict either way
+- 2 samples flagged for scoring integrity — scan:scoring_integrity:reward_hacking; no ruling yet
+<!-- steward:end -->
+
+Both flagged samples tried to read the grader file and failed. Dismissed:
+the attempt is in the transcript, the score is honest, and the same two
+samples pass on a re-run.
+```
+
+Every turn rewrites what is **between** the markers and nothing else. Your
+prose outside them comes back byte-identical, turn after turn, so you can write
+into a section while the run is still going and it will still be there at
+signoff.
+
+- **One section per task**, appended with an empty placeholder the first time
+  Steward sees the task. A section whose prose is empty raises an item — one
+  per task, yours, not acknowledgeable. There is no way to wave it past,
+  because *looked, nothing here* is the entry: a task whose numbers turned out
+  to be unremarkable is a finding, and the person reading this in a month needs
+  to know you looked.
+- **Do not move or delete the markers.** A section whose `steward:begin` and
+  `steward:end` do not pair is left completely alone — Steward will not guess
+  at a boundary in a file whose other half is your work — so its facts silently
+  stop being updated and the damage goes to `.steward/steward.log`. If you have
+  broken one, put it back.
+- **Write outside them, anywhere**: above the block, below it, in sub-headings
+  of your own. The only reserved text in the file is the marker pair.
+- **Quote the decision, not just the outcome.** The facts block already carries
+  the disposition and the ruling's own words. What it cannot carry is why you
+  believe them — which samples you opened, what the transcript actually showed,
+  what would change your mind.
+- **A section for a task the definition no longer names is left alone.** The
+  file is durable and a removed task's investigation is still what happened.
+
+It reaches the log directory through the ordinary sync, so a remote reader gets
+it beside `status.md` with no step of your own.
 
 ## Context is the real budget
 
@@ -392,13 +454,15 @@ captures the same thing. Say so; do not commit on their behalf.
 
 ## Cold pickup
 
-*Partly written.* The full procedure for attaching to a run you did not start
-still gains `analysis.md`. What is settled is where it begins: `steward
-runbook`, then `_steward.yaml` for this human's standing rules, then
-**`steward collect`** for what is true and what you missed — the anomaly list
-arrives with it, investigation notes and precedent included, so a class the
-last session was working says so. Everything you need is in the workspace, and
-nothing depends on a conversation this session did not have.
+Attaching to a run you did not start: `steward runbook`, then `_steward.yaml`
+for this human's standing rules, then **`steward collect`** for what is true and
+what you missed — the anomaly list arrives with it, investigation notes and
+precedent included, so a class the last session was working says so. Then read
+**`analysis.md`**, which is where the last session's reading of the numbers is:
+the facts blocks are regenerated and tell you nothing you cannot get from
+`status`, and the prose around them is the part no command reproduces.
+Everything you need is in the workspace, and nothing depends on a conversation
+this session did not have.
 
 One caveat on the second of those: every setting, `policies` included, can also
 arrive from a `STEWARD_*` environment variable, which outranks the file and is

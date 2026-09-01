@@ -1031,12 +1031,12 @@ def test_a_turn_reports_which_documents_it_actually_wrote(tmp_path: Path) -> Non
     workspace, _ = prepared(tmp_path, [done])
     write_log(workspace.logs, done)
 
-    assert turn(workspace).rendered == ["status.md", "anomalies.md"]
+    assert turn(workspace).rendered == ["status.md", "anomalies.md", "analysis.md"]
 
     workspace.status.unlink()
     workspace.status.mkdir()  # every rename onto it now fails
 
-    assert turn(workspace).rendered == ["anomalies.md"]
+    assert turn(workspace).rendered == ["anomalies.md", "analysis.md"]
 
 
 def test_the_other_rendered_file_writing_does_not_close_the_episode(

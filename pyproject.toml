@@ -19,7 +19,9 @@ classifiers = [
     "Operating System :: MacOS",
 ]
 dependencies = [
-    "inspect-ai>=0.3.259", # TODO: floor at the first release with eval-set capture (and drop the git source below)
+    # floors, not the pin: what actually resolves is `[tool.uv.sources]` below,
+    # and these become the whole story the day that block is deleted.
+    "inspect-ai>=0.3.259",
     "inspect-scout>=0.4.46",
     "click>=8.0",
     "pyyaml>=6.0",
@@ -147,6 +149,17 @@ override-dependencies = ["inspect-ai"]
 # (the released wheel's fixed name lets concurrent workers error each other's
 # samples). A launch against an older inspect refuses loudly rather than
 # misbehaving: an unknown selection version fails its gate.
+#
+# **The one-line check that says whether this block can go**, since the
+# features are private and no version number announces them:
+#
+#     python -c "from inspect_ai._eval.task.scan import scan_init_from_spec"
+#
+# against the latest released wheel. Last checked 2026-09-01 — inspect-ai
+# 0.3.261 does not carry it (the branch runs 0.3.262.dev), so the pin stands.
+# When it does: raise the two floors above to that release, delete this block
+# and the `override-dependencies` line that exists only to let it win, relock,
+# and run the suite against the wheels.
 [tool.uv.sources]
 inspect-ai = { git = "https://github.com/UKGovernmentBEIS/inspect_ai", branch = "main" }
 inspect-scout = { git = "https://github.com/meridianlabs-ai/inspect_scout", branch = "main" }

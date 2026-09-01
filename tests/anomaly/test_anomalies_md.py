@@ -410,6 +410,43 @@ def test_the_counts_are_what_reached_the_data_not_what_the_window_absorbed() -> 
     assert "6 failures in all, counting re-runs" in caveat.what
 
 
+def test_an_accepted_scan_failure_says_the_scan_failed_and_not_the_sample() -> None:
+    """The sample did not error; its scan did.
+
+    This entry is the report-facing account of what reached the signed data, so
+    a line calling an absent verdict a failed sample sends whoever reads it into
+    the eval after a problem that is in the scan. The kind has to be named here
+    rather than falling through to the error wording, which is the one branch
+    the fallback cannot be right about.
+    """
+    key = "scanerror:scoring_integrity:TimeoutError@openai/_client.py:post"
+    instances = tuple(replace(instance(f"s{n}"), class_key=key) for n in range(2))
+    batch = InstanceBatch(
+        class_key=key, kind="scanerror", substrate=False, instances=instances
+    )
+    settled = window(
+        class_key=key,
+        kind="scanerror",
+        disposition=Disposition.ACCEPT,
+        refs=frozenset(one.ref for one in instances),
+        effect="2 transcripts carry no verdict either way",
+    )
+
+    (caveat,) = caveats(
+        Anomalies(settled=(settled,)),
+        {},
+        [batch],
+        {},
+        {"probe@openai/gpt-4o": "logs/a.eval"},
+    )
+
+    assert "the scanner threw on 2 transcripts" in caveat.what
+    assert "carry no verdict either way" in caveat.what
+    assert "errored" not in caveat.what
+    # and it is still sample-shaped: two transcripts, named
+    assert caveat.members == ("s0:1", "s1:1")
+
+
 def test_an_acknowledged_stall_reaches_the_file_with_its_reason() -> None:
     # a disposal that touched the data is a caveat, or "removed from the
     # surface" would quietly mean "removed from the record"

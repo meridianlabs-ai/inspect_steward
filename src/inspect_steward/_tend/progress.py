@@ -7,7 +7,7 @@ The counts a turn already computes answer *what is Steward doing* — two to spa
 **Settled and live rows are the same shape, filled from different places.** A task whose worker has exited is described entirely by its log; one still running is described by its log for the denominators and by its process for everything that moves. Both produce a `TaskProgress`, so the renderer has no branch and the two cannot drift apart in what they report.
 """
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
 from .._evalset.display import KeyParts, ShortKeys, shorten_keys
@@ -26,6 +26,7 @@ from .._worker import (
     ProcessUsage,
     process_usage,
 )
+from .coverage import TaskCoverage
 
 SUFFIX = {
     "turns": "t",
@@ -155,22 +156,40 @@ class TaskProgress:
     unavailable: str | None = None
     """Why a running worker could not be read — `busy`, `gone`. The row still renders from its log."""
 
+    scanned: TaskCoverage | None = None
+    """How many of this row's landed samples every scanner has answered for, or `None` where the run scans nothing.
+
+    A column rather than a note, because the question it answers is per task: a worker that died between logging its samples and scanning them leaves one row short and the rest whole, and a run-wide figure cannot say which.
+    """
+
     @property
     def fraction(self) -> float:
         return self.completed / self.total if self.total else 0.0
 
 
-def task_progress(observed: ObservedTasks, fleet: LiveFleet) -> list[TaskProgress]:
+def task_progress(
+    observed: ObservedTasks,
+    fleet: LiveFleet,
+    coverage: Mapping[str, TaskCoverage] | None = None,
+) -> list[TaskProgress]:
     """One row per task, in manifest order then orphans.
 
     Args:
         observed: The log directory read against the manifest.
         fleet: What the running workers reported, empty when none are.
+        coverage: Per task, how many of its landed samples the scanners reached. Omitted for a run that scans nothing, which is what takes the column off the table.
 
     Returns:
         A row per observed task.
     """
-    return [_row(task, fleet.tasks.get(task.identifier)) for task in observed.tasks]
+    return [
+        _row(
+            task,
+            fleet.tasks.get(task.identifier),
+            (coverage or {}).get(task.identifier),
+        )
+        for task in observed.tasks
+    ]
 
 
 @dataclass(frozen=True)
@@ -263,12 +282,17 @@ def live_totals(fleet: LiveFleet, pids: Iterable[int] = ()) -> Live | None:
     )
 
 
-def _row(task: TaskObservation, live: LiveTask | None) -> TaskProgress:
+def _row(
+    task: TaskObservation,
+    live: LiveTask | None,
+    scanned: TaskCoverage | None = None,
+) -> TaskProgress:
     attempt = task.current
     answered = live is not None and live.unavailable is None
 
     completed, total, errored = _counts(task, attempt, live if answered else None)
     return TaskProgress(
+        scanned=scanned,
         key=task.key,
         # `display_name or name`, exactly as `compute_display_keys` builds the
         # full key from: a task the manifest calls `Friendly Name` must not

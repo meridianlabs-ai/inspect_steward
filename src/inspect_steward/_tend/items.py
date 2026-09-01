@@ -82,13 +82,13 @@ DRIFT = "drift"
 DEGRADED = "degraded"
 ORPHAN_RUNNING = "orphan_running"
 UNREADABLE = "unreadable"
-SCAN_INCOMPLETE = "scan_incomplete"
 ACTION_FAILED = "action_failed"
 UNSUPERVISED = "unsupervised"
 TIMER_DRIFT = "timer_drift"
 SIGNOFF_READY = "signoff_ready"
 PARKED = "parked"
 TUNING_PROPOSAL = "tuning_proposal"
+UNWRITTEN = "unwritten"
 JOURNAL_DAMAGE = "journal_damage"
 STATUS_UNWRITABLE = "status_unwritable"
 SYNC_FAILED = "sync_failed"
@@ -102,13 +102,13 @@ OWNERS = {
     DEGRADED: Owner.HUMAN,
     ORPHAN_RUNNING: Owner.HUMAN,
     UNREADABLE: Owner.AGENT,
-    SCAN_INCOMPLETE: Owner.AGENT,
     ACTION_FAILED: Owner.AGENT,
     UNSUPERVISED: Owner.HUMAN,
     TIMER_DRIFT: Owner.HUMAN,
     SIGNOFF_READY: Owner.HUMAN,
     PARKED: Owner.HUMAN,
     TUNING_PROPOSAL: Owner.HUMAN,
+    UNWRITTEN: Owner.AGENT,
     JOURNAL_DAMAGE: Owner.AGENT,
     STATUS_UNWRITABLE: Owner.HUMAN,
     SYNC_FAILED: Owner.HUMAN,
@@ -123,8 +123,12 @@ FIXED_OWNER = frozenset({PARKED})
 One entry, and it is the reason the module docstring says `owner` is a function of *(kind, state, policy)* with an exception. A park is a request for a human decision about what an eval measures, and the agent may never answer one (agent.md §6) — so a `_steward.yaml` that routed it to the agent would not be expressing a preference, it would be asking Steward to answer an approval on a person's behalf.
 """
 
-UNACKNOWLEDGEABLE = frozenset({ACTION_FAILED, PARKED, ANOMALY, SIGNOFF_READY})
+UNACKNOWLEDGEABLE = frozenset(
+    {ACTION_FAILED, PARKED, ANOMALY, SIGNOFF_READY, UNWRITTEN}
+)
 """Kinds that cannot be disposed of, because they have no lifecycle to dispose.
+
+An **unwritten** analysis is the one whose refusal is about the deliverable rather than the lifecycle. The item ends when the section has prose in it, and *looked, nothing here* is prose — a whole entry, worth as much as a finding (workflow.md §12.7). An acknowledgment would let the entry be waved past instead of written, which is the one outcome the item exists to prevent.
 
 Readiness to sign is the newest member and the one that *changed* category. It was acknowledgeable while `steward signoff` did not exist — the only way a person who had accepted the results could silence a reminder about a command they could not run. Now the command exists, and an ack would be somebody recording *I have decided* in the one place the decision is not: the run would go quiet with no signature, no curation, and nothing in `anomalies.md` marked final, which is precisely the silent certification workflow.md §13 opens by refusing.
 
@@ -251,7 +255,7 @@ def tend_items(
         *_degraded(result),
         *_orphans(result, lookup),
         *_unreadable(observed),
-        *_scan_incomplete(result),
+        *_unwritten(result),
         *_supervision(result),
         *_failures(result),
         *_journal_damage(result),
@@ -786,27 +790,31 @@ def _unreadable(observed: ObservedTasks) -> list[Item]:
     ]
 
 
-def _scan_incomplete(result: "TendResult") -> list[Item]:
-    """Scanners that recorded an error where a verdict was owed.
+def _unwritten(result: "TendResult") -> list[Item]:
+    """Tasks whose `analysis.md` section carries facts and no reading of them.
 
-    **The one thing about scanning a signature must not be silent on.** A run whose scanners all threw has an empty findings list, which is the same list a run that came back clean has — so without this the attestation says *nothing was flagged* over transcripts nothing ever looked at. Per scanner rather than per transcript, because the decision a person is being asked for is about the scanner: *these results were not fully scanned for this, and they stand anyway*.
+    **The agent's standing work, and not a signoff blocker.** agent.md §6 lists writing this under what an agent does freely; holding a person's attestation hostage to an agent's prose would be the wrong trade, and a run can be signed with the write-up still owed. What it does do is keep the run reading ⚠️ rather than 🏁, which is agent.md §4.3 exactly: unwritten is work outstanding rather than something that happened.
 
-    Acknowledgeable, and that is the whole design of it. A hard refusal has no act that answers it — Steward has no verb that re-runs a scan — so it would wedge every run one flaky model call touched. An ack is the gate's ordinary shape instead: a hole with a name on it is signed over and becomes a caveat, and one nobody named is refused.
+    **Only in a workspace an agent has actually attached to**, which is `Supervision.ever_armed`'s reasoning applied to the other kind of expectation. A run somebody drives by hand is owed no write-up by anybody — there is nobody the item is addressed to — and raising one would put every such run permanently at ⚠️ over work nobody agreed to do. The first `steward collect` is what creates the obligation.
+
+    One per task, keyed on the identifier — the same key its marker carries, so a task renamed in the definition keeps the item it already had rather than closing one and opening another.
     """
+    if result.collected is None:
+        return []
     return [
         Item(
-            id=f"{SCAN_INCOMPLETE}:{scanner}",
-            kind=SCAN_INCOMPLETE,
-            owner=OWNERS[SCAN_INCOMPLETE],
+            id=f"{UNWRITTEN}:{identifier}",
+            kind=UNWRITTEN,
+            owner=OWNERS[UNWRITTEN],
             level=Level.ATTENTION,
-            subject=scanner,
+            subject=identifier,
             summary=(
-                f"{scanner} could not scan {errored} "
-                f"transcript{'' if errored == 1 else 's'}, so those samples "
-                f"carry no verdict either way"
+                f"`{key}` has no write-up in analysis.md — what the numbers "
+                f"mean is still only in the numbers"
             ),
+            action="write the section; *looked, nothing here* is an entry",
         )
-        for scanner, errored in sorted(result.scan_incomplete.items())
+        for identifier, key in sorted(result.unwritten.items(), key=lambda one: one[1])
     ]
 
 
@@ -1268,6 +1276,12 @@ def anomaly_summary(anomaly: Anomaly) -> str:
         line = (
             f"{count} sample{plural} flagged for scoring integrity — "
             f"{anomaly.class_key}"
+        )
+    elif anomaly.kind == "scanerror":
+        line = (
+            f"{count} transcript{plural} could not be scanned, so "
+            f"{'they carry' if count != 1 else 'it carries'} no verdict either "
+            f"way — {anomaly.class_key}"
         )
     else:
         line = f"{count} sample{plural} errored the same way — {anomaly.class_key}"

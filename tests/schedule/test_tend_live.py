@@ -227,6 +227,15 @@ def test_scanning_rides_the_workers_and_a_relaunch_attaches(
     assert (scan_dir / "transcript_echo.parquet").exists()
     assert rebuild_summary(str(scan_dir)).scanners["transcript_echo"].scans == 4
 
+    # coverage off the rows that fold just produced, and the one assertion here
+    # that needs a real two-scanner directory: a transcript counts as recorded
+    # only once *every* scanner has answered for it, which a synthesized
+    # single-scanner fixture cannot establish. Four transcripts across two
+    # tasks — addition's two samples and echo's one sample over two epochs
+    assert finished.coverage.landed == 4
+    assert finished.coverage.gap == 0
+    assert all(entry.complete for entry in finished.coverage.by_task.values())
+
     # a re-launch attaches: same directory, same spec, rows undisturbed
     relaunched = launch(workspace, definition)
     assert isinstance(relaunched, Launch)

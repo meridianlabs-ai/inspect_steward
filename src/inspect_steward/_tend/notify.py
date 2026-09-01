@@ -38,7 +38,15 @@ from .._workspace import (
     read_journal,
     read_notified,
 )
-from .items import FIXED_OWNER, Item, Owner, Verdict, self_healing, verdict_text
+from .items import (
+    FIXED_OWNER,
+    UNWRITTEN,
+    Item,
+    Owner,
+    Verdict,
+    self_healing,
+    verdict_text,
+)
 from .progress import Progress, short_keys
 from .table import progress_table
 
@@ -248,10 +256,12 @@ def _reaches(item: Item, arriving: set[str], *, unattended: bool, newly: bool) -
     **An agent item is different, and the difference had a hole in it.** It reaches them only where nobody is picking it up (`_unattended`) — except the self-healing ones, which Steward's own respawn is already resolving. But *newness* and *nobody is picking it up* are two edges that need not coincide: an item that appeared at 11pm to an attending agent is filtered out and spent, so when the agent goes quiet at 2am it is in no later diff and is escalated never. The escalation only ever caught items that happened to arrive after the agent had already gone.
 
     So the transition itself is an edge, and on that one turn every open agent item is offered — the same *once per condition* policy the ids give everything else, arrived at from the other side. What re-arms it is the workspace becoming unattended rather than the item becoming new.
+
+    **Two kinds are held back from that escalation for two different reasons.** A `task:` window is self-healing — Steward's own respawn is already resolving it. An **unwritten** analysis is the other case: it is standing work the agent does freely rather than an incident, and waking a person at 3am to say *nobody has written up the results yet* is paging them about the absence of prose. It stays on every surface a person can go and look at; it is simply not something a channel interrupts them for.
     """
     if item.owner is not Owner.AGENT:
         return item.id in arriving
-    if not unattended or self_healing(item):
+    if not unattended or self_healing(item) or item.kind == UNWRITTEN:
         return False
     return newly or item.id in arriving
 

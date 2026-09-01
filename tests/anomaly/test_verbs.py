@@ -194,7 +194,7 @@ class TestRule:
         )
 
         assert code != 0
-        assert "no sample population" in output
+        assert "there is nothing to mark" in output
         assert "task:vanished (task class)" in output
         assert rulings(workspace) == []
 
@@ -241,6 +241,70 @@ class TestRule:
         )
 
         assert code == 0
+
+    SCANERROR = "scanerror:scoring_integrity:TimeoutError@openai/_client.py:post"
+
+    @pytest.mark.parametrize(
+        ("disposition", "refused"),
+        [
+            # the marks name a sample's data, and what a failed scan left
+            # behind is a verdict that is *absent* rather than a row that is
+            # wrong -- there is nothing to take out of the scores
+            ("exclude", "there is nothing to mark"),
+            ("zero", "there is nothing to mark"),
+            ("score", "there is nothing to mark"),
+            # and there is nothing to re-run: the eval is fine, only the
+            # reading of it failed, and Steward has no verb that re-scans
+            ("rerun", "the samples behind"),
+        ],
+    )
+    def test_the_only_answers_to_an_unscanned_transcript_are_accept_and_dismiss(
+        self, disposition: str, refused: str, workspace: Workspace
+    ) -> None:
+        opened(workspace, self.SCANERROR, count=2, kind="scanerror")
+
+        code, output = run(
+            "rule",
+            self.SCANERROR,
+            "--disposition",
+            disposition,
+            "--reason",
+            "r",
+            "--by",
+            "b",
+        )
+
+        assert code != 0
+        assert refused in output
+        assert rulings(workspace) == []
+
+    @pytest.mark.parametrize("disposition", ["accept", "dismiss"])
+    def test_accept_and_dismiss_settle_an_unscanned_transcript(
+        self, disposition: str, workspace: Workspace
+    ) -> None:
+        # which is exactly what the retired acknowledgment meant: *these
+        # samples were never scanned and the results stand anyway*, now said
+        # as a ruling with a disposition on it
+        opened(workspace, self.SCANERROR, count=2, kind="scanerror")
+
+        code, _ = run(
+            "rule",
+            self.SCANERROR,
+            "--disposition",
+            disposition,
+            "--reason",
+            "one grader timeout in five hundred; the rest scanned",
+            "--by",
+            "kaia",
+            *(
+                ["--effect", "2 transcripts carry no verdict"]
+                if disposition == "accept"
+                else []
+            ),
+        )
+
+        assert code == 0
+        assert [entry["disposition"] for entry in rulings(workspace)] == [disposition]
 
     def test_duplicate_arguments_land_one_ruling(self, workspace: Workspace) -> None:
         # two prefixes naming the same class are one decision, not a ruling

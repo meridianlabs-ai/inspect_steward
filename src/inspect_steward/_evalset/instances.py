@@ -15,6 +15,7 @@ The cache (`.steward/classed.json`) follows `cache.py`'s discipline exactly: ver
 import json
 import os
 import tempfile
+from collections.abc import Mapping
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -86,6 +87,42 @@ class InstanceBatch:
     kind: str
     substrate: bool
     instances: tuple[Instance, ...]
+
+
+SCAN_SHAPED = frozenset({"scan", "scanerror"})
+"""The kinds whose instances are composed from a scan row rather than from a log read, and so are the ones a resume can strand.
+
+Everything else takes its location from the log it was read out of, which is by construction the attempt it belongs to. A scan row names the log the *scanner* was pointed at, and after a retry that is the superseded file for every sample the retry reused (`in_results`).
+"""
+
+
+def in_results(
+    instance: Instance,
+    current: Mapping[str, str],
+    reused: Mapping[str, frozenset[str]] = {},
+) -> bool:
+    """Whether one instance describes a row that is in the run's results.
+
+    **The narrowing every report-facing count shares**, in one place because four of them need it — the errored cell's split, a ruling's effect sentence, `anomalies.md`'s scope, and coverage — and because a count computed two ways is two numbers that will eventually disagree in print.
+
+    The ordinary answer is *its log is the task's current attempt*, and for everything read out of a log that is exact. A **scan** row is the exception, and the hazard is invisible until it costs a finding: after a retry the new log carries the samples that already succeeded, keeping their uuids, but their scan rows still name the file the scanner read them from — the superseded one. Under the location test alone a scanner's finding on a reused sample silently leaves the results, taking with it the ruling that was supposed to cover it.
+
+    So for a scan-shaped instance the question becomes *is this sample in the current log*, keyed on the uuid, which is the one identity that survives a resume. `reused` carries that set for the tasks it was paid for — a resumed task with scan rows — and a task absent from it is one whose rows and log agree exactly, which is most of them.
+
+    Args:
+        instance: The instance to place.
+        current: Task identifier to its current attempt's log location.
+        reused: Per resumed task, the sample uuids its current log actually holds (`sample_uuids`).
+
+    Returns:
+        Whether the row it describes is part of what the run reports.
+    """
+    if instance.location == current.get(instance.task):
+        return True
+    held = reused.get(instance.task)
+    if held is None or instance.kind not in SCAN_SHAPED:
+        return False
+    return bool(instance.uuid) and instance.uuid in held
 
 
 @dataclass(frozen=True)
@@ -197,6 +234,22 @@ def classed_instances(
             out.instances.extend(entry.instances)
             out.zero[attempt.location] = entry.zero
     return out
+
+
+def sample_uuids(location: str) -> frozenset[str] | None:
+    """The sample uuids one log actually holds, or `None` where its summaries would not read.
+
+    **The only stable identity a resumed task has.** A retry writes a new log carrying the samples that already succeeded — same uuid, new file — beside fresh attempts at the ones that failed, and the header records neither set. So *which samples are in the results* is a question only the summaries answer, and answering it any other way is a count that is wrong by exactly the reused population (scheduling.md §4.2).
+
+    One summaries read, on the discipline this module already states — never a transcript, never a whole log. Deliberately **uncached** and deliberately narrow: the caller pays it only for a task that was actually resumed *and* has scan rows, which is a handful of logs in a run rather than a directory. `None` rather than an empty set for a read that failed, so a caller cannot mistake *would not read* for *holds nothing* and report a coverage of zero over a log full of samples.
+    """
+    try:
+        summaries = read_eval_log_sample_summaries(location)
+    except Exception:
+        return None
+    return frozenset(
+        summary.uuid for summary in summaries if isinstance(summary.uuid, str)
+    )
 
 
 def _settled(attempt: LogAttempt) -> tuple[_LogEntry, bool] | UnreadableLog:
@@ -488,9 +541,12 @@ __all__ = [
     "EXCLUDED_FIELDS",
     "ClassedCache",
     "ClassedLogs",
+    "SCAN_SHAPED",
     "Instance",
     "InstanceBatch",
     "classed_instances",
+    "in_results",
     "read_classed_cache",
+    "sample_uuids",
     "write_classed_cache",
 ]

@@ -13,9 +13,9 @@ from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 
 from .._anomaly.model import SAMPLE_SHAPED, Anomalies, Anomaly, Ruling
-from .._evalset.instances import InstanceBatch
+from .._evalset.instances import InstanceBatch, in_results
 from .._workspace.journal import Ack
-from .items import SCAN_INCOMPLETE, STALLED, UNREADABLE
+from .items import STALLED, UNREADABLE
 
 HEADER = "<!-- Written by `steward tend`. Regenerated every turn; edits are lost. -->"
 """The same banner `status.md` carries, and this document needs it more.
@@ -23,12 +23,12 @@ HEADER = "<!-- Written by `steward tend`. Regenerated every turn; edits are lost
 It reads as prose about the results, so the reader most likely to open it is the one writing those results up — and the first instinct on finding a caveat worded awkwardly is to fix the wording. It is regenerable machine state, and the edit would be gone by the next turn with nothing to say it had been made.
 """
 
-MARKED = frozenset({STALLED, UNREADABLE, SCAN_INCOMPLETE})
+MARKED = frozenset({STALLED, UNREADABLE})
 """Item kinds whose acknowledgment left a mark on the results, and therefore becomes a caveat.
 
 An allow-list rather than a deny-list, and one notch stronger than `history._ADMITTED`'s reason: the item vocabulary grows, and the default for a kind this document has never heard of must be *not a caveat* — a caveat list that grows by accident is a caveat list nobody trusts.
 
-Three entries. Acknowledging a **stalled** task says *this will not be run again and the results stand without it*, which is a hole in the data with a name on it. Acknowledging an **unreadable** log says *the numbers are over what could be read*, which moves the denominator. Acknowledging an **incomplete scan** says *these samples were never scanned and the results stand anyway*, which is a hole in what the run knows about its own integrity rather than in its arithmetic — and the one caveat here that leaves the numbers exactly where they were. Everything else in the vocabulary is machinery or a decision with no residue: a drift nobody applied, a propagation that stopped, a claim holder that was killed, a tuning proposal, a park, a stuck sample. `anomaly` is absent by construction — an anomaly closes through a ruling and an ack of one is refused, precisely so that no anomaly reaches this file except through a decision with a disposition on it.
+Two entries. Acknowledging a **stalled** task says *this will not be run again and the results stand without it*, which is a hole in the data with a name on it. Acknowledging an **unreadable** log says *the numbers are over what could be read*, which moves the denominator. Everything else in the vocabulary is machinery or a decision with no residue: a drift nobody applied, a propagation that stopped, a claim holder that was killed, a tuning proposal, a park, a stuck sample. `anomaly` is absent by construction — an anomaly closes through a ruling and an ack of one is refused, precisely so that no anomaly reaches this file except through a decision with a disposition on it. A scanner that could not scan is absent for the same reason: it is a `scanerror:` window now, and it reaches this file through the ruling that closes it.
 """
 
 SAMPLES_NAMED = 50
@@ -82,6 +82,7 @@ def caveats(
     keys: Mapping[str, str] = {},
     current: Mapping[str, str] = {},
     cleared: Collection[str] = (),
+    reused: Mapping[str, frozenset[str]] = {},
 ) -> list[Caveat]:
     """Every caveat the record carries, from both ways in.
 
@@ -96,6 +97,7 @@ def caveats(
         keys: Task identifier to the display key a person reads. An identifier carries a content hash of the whole task, which is the right thing to key state on and the wrong thing to print in a sentence somebody quotes.
         current: Task identifier to its current attempt's log location — the narrowing. Empty for a caller that has none, which then reports the window's own population.
         cleared: The subjects whose condition demonstrably no longer holds — a log that now reads, a task that has since completed. An acknowledgment names a condition rather than an instant, so one whose condition has cleared is not a caveat: a replaced upload reads, and a stalled task that later finished is in the numbers. Stated as what *cleared* rather than what stands, because a subject nothing here recognises must keep its caveat — dropping a footnote nobody asked to drop is the worse of the two mistakes.
+        reused: Per resumed task, the sample uuids its current log holds — what keeps a scan finding on a reused sample in the entry that covers it.
 
     Returns:
         The caveats, oldest decision first.
@@ -113,7 +115,7 @@ def caveats(
     listed = [
         caveat
         for group in grouped.values()
-        if (caveat := _caveat(group, batches, keys, current)) is not None
+        if (caveat := _caveat(group, batches, keys, current, reused)) is not None
     ]
     listed.sort(key=lambda caveat: (caveat.when, caveat.subject))
     listed.extend(
@@ -162,12 +164,13 @@ def _caveat(
     batches: Sequence[InstanceBatch],
     keys: Mapping[str, str],
     current: Mapping[str, str],
+    reused: Mapping[str, frozenset[str]] = {},
 ) -> Caveat | None:
     """One decision, as the entry a person quotes — or nothing, where it left no mark after all.
 
     **A decision that no longer touches the data is not a caveat**, which is the document's own filter applied to a case the state machine cannot see. A class accepted on one attempt, relaunched, and come home clean has an `accepted` window forever — that is what the fold records — but nothing of it is in the results, and a footnote saying *3 samples excluded* over samples that are not excluded is worse than no footnote. The decision itself is not lost: it is in the journal, and in *what happened*, which is where an acknowledgment with no mark ends up for the same reason.
     """
-    members, unnamed, affected = _members(group, batches, current, keys)
+    members, unnamed, affected = _members(group, batches, current, keys, reused)
     if affected == 0:
         return None
     return Caveat(
@@ -202,6 +205,16 @@ def _what(group: _Group, affected: int) -> str:
         line = "every score converts to zero"
     elif anomaly.kind == "scan":
         line = f"{affected} sample{plural} flagged for scoring integrity"
+    elif anomaly.kind == "scanerror":
+        # **the sample did not error; its scan did**, and the fallback below says
+        # the opposite. This entry is the report-facing account of what reached
+        # the signed data -- describing an absent verdict as a failed sample
+        # sends a reader to the eval looking for a problem that is in the scan
+        carry = "carries" if affected == 1 else "carry"
+        line = (
+            f"the scanner threw on {affected} transcript{plural}, which {carry} "
+            f"no verdict either way — the sample{plural} ran normally"
+        )
     else:
         line = f"{affected} sample{plural} errored the same way"
     if group.absorbed > affected and anomaly.kind in SAMPLE_SHAPED:
@@ -232,6 +245,7 @@ def _members(
     batches: Sequence[InstanceBatch],
     current: Mapping[str, str],
     keys: Mapping[str, str],
+    reused: Mapping[str, frozenset[str]] = {},
 ) -> tuple[tuple[str, ...], int, int]:
     """The samples this decision left in the data, named — and how many there are.
 
@@ -267,7 +281,7 @@ def _members(
             and instance.sample_id
             # a caller with no map narrows nothing, which is the honest answer
             # for one that cannot tell a superseded attempt from a current one
-            and (not current or instance.location == current.get(instance.task))
+            and (not current or in_results(instance, current, reused))
         }
         # **an empty answer here is an answer**, and treating it as *the census
         # is unavailable* resurrected the dead: a class accepted on one attempt,
@@ -300,8 +314,6 @@ def _from_ack(ack: Ack) -> Caveat:
     """
     if ack.kind == STALLED:
         effect = "the task's results stand as they are, without it"
-    elif ack.kind == SCAN_INCOMPLETE:
-        effect = "these samples were never scanned, and the results stand anyway"
     else:
         effect = "the numbers are over what could be read"
     return Caveat(
@@ -317,7 +329,7 @@ def _from_ack(ack: Ack) -> Caveat:
     )
 
 
-_ACK_SCOPE = {STALLED: "1 task", SCAN_INCOMPLETE: "1 scanner"}
+_ACK_SCOPE = {STALLED: "1 task"}
 """What an acknowledged item is one *of*, per kind. A log is the default because it is what the vocabulary's other entry is."""
 
 

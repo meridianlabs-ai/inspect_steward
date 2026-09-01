@@ -53,7 +53,9 @@ Once you have defined your eval set, use a coding agent to launch the evaluation
 ─────────────────────────────────────────────────────────
 ```
 
-The agent is instructed to read the Steward [runbook](runbook.qmd) which provides instructions for conducting the evaluation. The agent will launch all of the tasks, set up a background monitoring process, and respond to alerts that require its intervention. Note that while it is recommended that you keep the agent attached during the evaluation it is not _required_. If you choose not to you should be sure to configure [notifications](#notifications) so you know when to reconnect the agent to handle issues that arise.
+The agent is instructed to read the Steward [runbook](runbook.qmd) which provides instructions for conducting the evaluation. By default the agent will start with a smoke run (2 samples for each task, capped to 10 minutes of working time) to make sure config, infrstructure, and model connectivity is all workign as expected.
+
+After the smoke, the agent will launch all of the tasks, set up a background monitoring process, and respond to alerts that require its intervention. Note that while it is recommended that you keep the agent attached during the evaluation it is not _required_. If you choose not to you should be sure to configure [notifications](#notifications) so you know when to reconnect the agent to handle issues that arise.
 
 ### Tend Loop
 

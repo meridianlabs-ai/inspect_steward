@@ -5,6 +5,7 @@ Layer 1 like the rest of the item suite, and the whole point of step 30 is that 
 
 import json
 import os
+import traceback
 from pathlib import Path
 from typing import Any
 
@@ -17,20 +18,20 @@ from inspect_scout._transcript.types import TranscriptInfo
 from inspect_steward._evalset.manifest import ManifestScan, write_manifest
 from inspect_steward._scan import initialize_scan, scan_dir_location, sync_scan
 from inspect_steward._schedule import SpawnTask
-from inspect_steward._signoff import UNREAD, UNSCANNED, check
-from inspect_steward._tend import Level, Owner, Verdict, turn_post
+from inspect_steward._signoff import OPEN_WINDOW, UNREAD, check
+from inspect_steward._tend import Level, Owner, Verdict, progress_table, turn_post
+from inspect_steward._tend.coverage import Coverage, TaskCoverage
 from inspect_steward._tend.items import (
     ANOMALY,
-    SCAN_INCOMPLETE,
     SIGNOFF_READY,
     UNREADABLE,
     Item,
 )
 from inspect_steward._tend.notify import HOLD_TENDS, UNATTENDED_INTERVALS
+from inspect_steward._tend.render import coverage_note
 from inspect_steward._worker import record_intent, record_launched
 from inspect_steward._worker.inflight import resolve_inflight
 from inspect_steward._workspace import (
-    ACKNOWLEDGED,
     COLLECTED,
     DEFAULT_TEND_INTERVAL,
     RULING,
@@ -38,7 +39,7 @@ from inspect_steward._workspace import (
     append_event,
 )
 
-from .._logs import SynthTask, write_log
+from .._logs import SynthSample, SynthTask, write_log
 from ..schedule.test_tend import observations, prepared, turn
 
 SCAN_ID = "run-1"
@@ -91,6 +92,17 @@ def land_it(
     sync_scan(log_dir=str(workspace.logs), scan_id=SCAN_ID)
 
 
+def thrown(exception: Exception) -> str:
+    """A real `traceback.format_exc()`, which is the only error column that classes.
+
+    Raised and caught rather than hand-written, because `scan_error_class` parses what Python actually prints and a plausible-looking string is the way that test stops testing anything. The raising frame is this file, so every class composed here shares one frame and the exception type is what tells them apart.
+    """
+    try:
+        raise exception
+    except Exception:
+        return traceback.format_exc()
+
+
 def record(
     workspace: Workspace,
     log: str,
@@ -99,6 +111,8 @@ def record(
     value: bool | None,
     label: str | None,
     error: str | None = None,
+    stack: str = "",
+    scanner: str = SCANNER,
 ) -> None:
     """One row, written exactly as a record-only worker writes it.
 
@@ -119,7 +133,7 @@ def record(
                 task_id=uuid,
                 task_repeat=1,
             ),
-            SCANNER,
+            scanner,
             [
                 ResultReport(
                     input_type="messages",
@@ -137,9 +151,9 @@ def record(
                     if error is None
                     else Error(
                         transcript_id=uuid,
-                        scanner=SCANNER,
+                        scanner=scanner,
                         error=error,
-                        traceback="",
+                        traceback=stack,
                         refusal=False,
                     ),
                     events=[],
@@ -209,9 +223,11 @@ def departed(workspace: Workspace) -> None:
     record_launched(workspace.inflight, worker="w1", pid=1)
 
 
-def rule(workspace: Workspace, disposition: str, **fields: Any) -> None:
+def rule(
+    workspace: Workspace, disposition: str, class_key: str = CLASS, **fields: Any
+) -> None:
     payload: dict[str, Any] = {
-        "class": CLASS,
+        "class": class_key,
         "disposition": disposition,
         "reason": "the model tried to read the grader and failed",
         "by": "kaia",
@@ -358,11 +374,14 @@ def test_a_dismissed_finding_leaves_no_caveat(tmp_path: Path) -> None:
 class TestAScannerThatCouldNotScan:
     """A transcript nobody scanned is not a transcript that came back clean.
 
-    The two are indistinguishable in the findings — an errored row is read past exactly as a `false` one is — so without a count of them a run whose every scan threw reads as a run with nothing to report, and the signature says so.
+    The two are indistinguishable in the findings — an errored row is read past exactly as a `false` one is — so a run whose every scan threw would read as a run with nothing to report, and the signature would say so.
+
+    **It is a window like any other**, which is what this class asserts. It was an acknowledgeable item and a blocker of its own for exactly one step; both are gone, because the decision a person is being asked for is *these transcripts carry no verdict and the results stand anyway* — a ruling with a disposition on it, not a wave-past — and two machines refusing over one fact is the shape that lets one of them drift.
     """
 
-    def erroring(self, workspace: Workspace, count: int = 1) -> None:
+    def erroring(self, workspace: Workspace, count: int = 1) -> str:
         log = write_log(workspace.logs, TASK)
+        stack = thrown(TimeoutError("the grader model timed out"))
         for index in range(count):
             record(
                 workspace,
@@ -371,59 +390,87 @@ class TestAScannerThatCouldNotScan:
                 value=None,
                 label=None,
                 error="the grader model timed out",
+                stack=stack,
             )
         sync_scan(log_dir=str(workspace.logs), scan_id=SCAN_ID)
+        return f"scanerror:{SCANNER}:TimeoutError@anomaly/test_scan_items.py:thrown"
 
-    def test_the_scanner_that_threw_is_named_and_counted(self, tmp_path: Path) -> None:
+    def test_the_transcripts_nothing_read_are_one_class(self, tmp_path: Path) -> None:
         workspace = scanning(tmp_path, land=False)
-        self.erroring(workspace, count=2)
+        class_key = self.erroring(workspace, count=2)
 
         result = turn(workspace)
 
-        assert result.scan_incomplete == {SCANNER: 2}
-        items = [item for item in result.items if item.kind == SCAN_INCOMPLETE]
-        assert [item.id for item in items] == [f"{SCAN_INCOMPLETE}:{SCANNER}"]
-        assert "could not scan 2 transcripts" in items[0].summary
+        assert [window.class_key for window in result.anomalies.open] == [class_key]
+        assert result.anomalies.open[0].evidence.count == 2
+        items = [item for item in result.items if item.kind == ANOMALY]
         assert items[0].owner is Owner.AGENT
+        assert "2 transcripts could not be scanned" in items[0].summary
+        # the exception is the recognisable half here, exactly as the label is
+        # for a finding — every scan error in a run would otherwise read alike
+        assert items[0].id.startswith("anomaly:TimeoutError:")
+        # and an ack cannot close it, which is the whole of the retirement
+        assert not items[0].acknowledgeable
 
-    def test_it_refuses_the_signature_until_somebody_names_it(
+    def test_it_refuses_the_signature_once_and_through_the_window(
         self, tmp_path: Path
     ) -> None:
+        # not twice: an `unscanned` blocker beside the open window would be two
+        # refusals over one fact, and the one a person cleared first would
+        # decide which of them they heard about
         workspace = scanning(tmp_path, land=False)
-        self.erroring(workspace)
+        class_key = self.erroring(workspace)
 
         blockers = check(turn(workspace), None)
 
-        assert [blocker.kind for blocker in blockers] == [UNSCANNED]
-        assert "steward ack scan_incomplete:NAME" in blockers[0].remedy
+        assert [blocker.kind for blocker in blockers] == [OPEN_WINDOW]
+        assert class_key in blockers[0].summary
 
-    def test_naming_it_signs_over_it_and_leaves_the_caveat(
+    def test_accepting_it_signs_over_it_and_leaves_the_caveat(
         self, tmp_path: Path
     ) -> None:
         # the gate's ordinary shape rather than an exception to it: a hole with
         # a name on it is signed over, and one nobody named is refused
         workspace = scanning(tmp_path, land=False)
-        self.erroring(workspace)
-        item = [
-            entry for entry in turn(workspace).items if entry.kind == SCAN_INCOMPLETE
-        ][0]
-        append_event(
-            workspace.journal,
-            ACKNOWLEDGED,
-            id=item.id,
-            kind=item.kind,
-            subject=item.subject,
-            summary=item.summary,
-            by="kaia",
+        class_key = self.erroring(workspace)
+        turn(workspace)
+        rule(
+            workspace,
+            "accept",
+            class_key=class_key,
             reason="one grader timeout in five hundred; the rest scanned",
+            effect="1 transcript carries no verdict either way",
         )
 
         result = turn(workspace)
 
         assert check(result, None) == []
         caveats = workspace.anomalies.read_text(encoding="utf-8")
-        assert f"## `{SCANNER}`" in caveats
-        assert "these samples were never scanned" in caveats
+        assert class_key in caveats
+        assert "1 transcript carries no verdict either way" in caveats
+
+    def test_its_members_are_named_as_samples(self, tmp_path: Path) -> None:
+        # it has one instance per transcript, so the entry says *samples* — the
+        # half of `SAMPLE_SHAPED` this kind keeps, where the marks are the half
+        # it refuses
+        workspace = scanning(tmp_path, land=False)
+        class_key = self.erroring(workspace)
+        turn(workspace)
+        rule(
+            workspace,
+            "accept",
+            class_key=class_key,
+            reason="one grader timeout in five hundred",
+            effect="1 transcript carries no verdict either way",
+        )
+
+        result = turn(workspace)
+
+        caveats = workspace.anomalies.read_text(encoding="utf-8")
+        assert "- **Samples** —" in caveats
+        # and nothing was marked: the residue is an absent verdict, not a bad
+        # row, so no denominator moved
+        assert (result.dispositions.excluded, result.dispositions.zeroed) == (0, 0)
 
     def test_a_scanner_that_answered_every_transcript_says_nothing(
         self, tmp_path: Path
@@ -432,8 +479,186 @@ class TestAScannerThatCouldNotScan:
 
         result = turn(workspace)
 
-        assert result.scan_incomplete == {}
-        assert not [item for item in result.items if item.kind == SCAN_INCOMPLETE]
+        assert not [
+            window for window in result.anomalies.open if window.kind == "scanerror"
+        ]
+
+
+class TestCoverage:
+    """Recorded rows against landed samples — how much of what landed was looked at.
+
+    **The number a findings list cannot supply.** *Every scanner answered and found nothing* and *the scanners never ran* produce the same empty list, and a signature over the second says *nothing was flagged* about transcripts nothing looked at.
+
+    The resume is where it gets hard, and the two cases below are the two halves of it. A retry writes a new log carrying the samples that already succeeded — same uuid, new file — while their scan rows go on naming the superseded one; and it re-runs the failures under *fresh* uuids that nothing has scanned yet. Count rows per log and the first half vanishes; count them all and the second half is hidden behind samples that are no longer in the results.
+    """
+
+    FIRST = "2026-08-23T19:00:00+00:00"
+    SECOND = "2026-08-23T20:00:00+00:00"
+
+    def landed(
+        self, workspace: Workspace, samples: list[SynthSample], **fields: Any
+    ) -> Path:
+        return write_log(workspace.logs, TASK, samples=samples, **fields)
+
+    def scanned(
+        self, workspace: Workspace, log: Path, samples: list[SynthSample]
+    ) -> None:
+        for sample in samples:
+            record(workspace, str(log), uuid=sample.uuid, value=False, label=None)
+        sync_scan(log_dir=str(workspace.logs), scan_id=SCAN_ID)
+
+    def whole(self) -> list[SynthSample]:
+        return [SynthSample(f"s{n}") for n in range(4)]
+
+    def test_a_task_whose_every_sample_was_scanned_reports_full(
+        self, tmp_path: Path
+    ) -> None:
+        workspace = scanning(tmp_path, land=False)
+        samples = self.whole()
+        self.scanned(workspace, self.landed(workspace, samples), samples)
+
+        result = turn(workspace)
+
+        assert result.coverage.by_task[TASK.identifier] == TaskCoverage(
+            scanned=4, landed=4
+        )
+        assert result.coverage.gap == 0
+        assert coverage_note(result) is None
+
+    def test_a_worker_that_died_between_logging_and_scanning_shows_a_gap(
+        self, tmp_path: Path
+    ) -> None:
+        # the case the whole column exists for: the samples are in the results
+        # and no scanner ever read two of them
+        workspace = scanning(tmp_path, land=False)
+        samples = self.whole()
+        self.scanned(workspace, self.landed(workspace, samples), samples[:2])
+
+        result = turn(workspace)
+
+        assert result.coverage.by_task[TASK.identifier] == TaskCoverage(
+            scanned=2, landed=4
+        )
+        note = coverage_note(result)
+        assert note is not None
+        assert "over 2 of 4 samples (2 not yet scanned)" in note
+        assert "2/4sc" in " ".join(progress_table(result.progress))
+
+    def test_a_reused_sample_scanned_under_the_old_log_still_counts(
+        self, tmp_path: Path
+    ) -> None:
+        # its row names the superseded file and it is in the results all the
+        # same — a per-log count would report a gap that does not exist and
+        # send somebody looking for a scanner that never failed
+        workspace = scanning(tmp_path, land=False)
+        first = self.whole()
+        old = self.landed(workspace, first, created=self.FIRST, status="error")
+        rerun = [SynthSample("s2", attempt=2), SynthSample("s3", attempt=2)]
+        new = self.landed(workspace, [*first[:2], *rerun], created=self.SECOND)
+        self.scanned(workspace, old, first)
+        self.scanned(workspace, new, rerun)
+
+        result = turn(workspace)
+
+        assert result.coverage.by_task[TASK.identifier] == TaskCoverage(
+            scanned=4, landed=4
+        )
+
+    def test_a_rerun_sample_nothing_has_scanned_yet_is_a_gap(
+        self, tmp_path: Path
+    ) -> None:
+        # and this is what the intersection earns. Four rows were recorded and
+        # four samples landed, so counting rows says *fully scanned* — but two
+        # of those rows are about samples the retry replaced, and the two that
+        # replaced them nothing has read
+        workspace = scanning(tmp_path, land=False)
+        first = self.whole()
+        old = self.landed(workspace, first, created=self.FIRST, status="error")
+        rerun = [SynthSample("s2", attempt=2), SynthSample("s3", attempt=2)]
+        self.landed(workspace, [*first[:2], *rerun], created=self.SECOND)
+        self.scanned(workspace, old, first)
+
+        result = turn(workspace)
+
+        assert result.coverage.by_task[TASK.identifier] == TaskCoverage(
+            scanned=2, landed=4
+        )
+
+    def test_a_current_log_that_will_not_read_reports_unknown_not_full(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # the gap above with its one read failing. Falling back to counting rows
+        # here says 4 of 4 — a run reported as fully scanned on the strength of
+        # rows about samples it replaced, which is the reassuring answer and the
+        # wrong one. Unknown is neither, and every surface has to say so
+        workspace = scanning(tmp_path, land=False)
+        first = self.whole()
+        old = self.landed(workspace, first, created=self.FIRST, status="error")
+        rerun = [SynthSample("s2", attempt=2), SynthSample("s3", attempt=2)]
+        self.landed(workspace, [*first[:2], *rerun], created=self.SECOND)
+        self.scanned(workspace, old, first)
+
+        def unreadable(location: str) -> frozenset[str] | None:
+            return None
+
+        monkeypatch.setattr("inspect_steward._tend.turn.sample_uuids", unreadable)
+
+        result = turn(workspace)
+
+        entry = result.coverage.by_task[TASK.identifier]
+        assert not entry.known
+        assert not entry.complete
+        assert result.coverage.unverified == (TASK.identifier,)
+        # and it is out of the run's totals, so the gap stays a counted number
+        assert (result.coverage.scanned, result.coverage.landed) == (0, 0)
+        assert "?/4sc" in " ".join(progress_table(result.progress))
+        note = coverage_note(result)
+        assert note is not None
+        assert "could not be checked for 1 task" in note
+        # including the file somebody quotes into a write-up
+        assert "could not establish how many of 4 transcripts" in (
+            workspace.analysis.read_text(encoding="utf-8")
+        )
+
+    def test_a_finding_on_a_reused_sample_is_still_in_the_results(
+        self, tmp_path: Path
+    ) -> None:
+        # the same fix from the other side: the finding's row names the
+        # superseded log, and under a location test it would leave the census's
+        # narrowing silently — taking with it the ruling meant to cover it
+        workspace = scanning(tmp_path, land=False)
+        first = self.whole()
+        old = self.landed(workspace, first, created=self.FIRST, status="error")
+        rerun = [SynthSample("s2", attempt=2), SynthSample("s3", attempt=2)]
+        self.landed(workspace, [*first[:2], *rerun], created=self.SECOND)
+        record(
+            workspace, str(old), uuid=first[0].uuid, value=True, label="reward_hacking"
+        )
+        sync_scan(log_dir=str(workspace.logs), scan_id=SCAN_ID)
+        turn(workspace)
+        rule(workspace, "exclude", effect="1 sample is out of the scores")
+
+        result = turn(workspace)
+
+        assert result.dispositions.excluded == 1
+        assert len(result.dispositions.affected[CLASS]) == 1
+        assert CLASS in workspace.anomalies.read_text(encoding="utf-8")
+
+    def test_a_run_that_scans_nothing_reports_no_coverage_at_all(
+        self, tmp_path: Path
+    ) -> None:
+        # and the column and the note go with it: a run with no scan material
+        # has no question here to answer
+        workspace, _ = prepared(tmp_path, [TASK])
+        write_log(workspace.logs, TASK)
+
+        result = turn(workspace)
+
+        assert result.coverage == Coverage()
+        assert coverage_note(result) is None
+        assert not any(
+            "sc" in line.split()[-1] for line in progress_table(result.progress)
+        )
 
 
 class TestTheFoldsCadence:

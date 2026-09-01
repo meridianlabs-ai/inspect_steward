@@ -131,9 +131,20 @@ class SynthSample:
     score: float | str | None = None
     """One `exact` score's value, when the sample has one."""
 
+    attempt: int = 1
+    """Which try at this sample the record is.
+
+    A resumed log carries the samples that already succeeded under their
+    original uuids and re-runs the ones that failed under fresh ones, which is
+    the whole reason a uuid — rather than a location — is the only stable
+    identity across a retry. Bumping this is how a fixture writes the second
+    kind.
+    """
+
     @property
     def uuid(self) -> str:
-        return f"uuid-{self.id}-{self.epoch}"
+        base = f"uuid-{self.id}-{self.epoch}"
+        return base if self.attempt == 1 else f"{base}-{self.attempt}"
 
     def as_sample(self) -> EvalSample:
         return EvalSample(

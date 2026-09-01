@@ -69,22 +69,32 @@ class Outcome(StrEnum):
 SAMPLE_MARKS = frozenset({Disposition.EXCLUDE, Disposition.ZERO, Disposition.SCORE})
 """The dispositions that mark per-sample data — meaningful only where the residue is sample-shaped."""
 
-SAMPLE_SHAPED = frozenset({"error", "limit", "scan"})
-"""The kinds whose residue is per-sample, rather than per task attempt.
+SAMPLE_SHAPED = frozenset({"error", "limit", "scan", "scanerror"})
+"""The kinds whose population is per-sample, rather than per task attempt.
+
+What reads it: `anomalies_md` twice — whether an entry names *samples* or *attempts*, and whether the re-run overcount line applies — and `_members`, which joins a window's refs against the census rather than falling back to logs. The question it answers is only *is there a sample behind each instance*.
+
+**Not the same question as whether a sample mark is honest**, which is `SAMPLE_MARKED`, and `scanerror` is exactly the kind that separates them: it has one instance per transcript and so a sample population, while its residue is a verdict that is *absent* rather than a row that is wrong — nothing to exclude, nothing to zero. The two were one constant while every kind answered both the same way; a kind that does not is what forced them apart.
+"""
+
+SAMPLE_MARKED = frozenset({"error", "limit", "scan"})
+"""The kinds a sample mark can honestly be recorded against.
 
 `scan` belongs here for the reason the other two do: a flagged sample is one row in the results, and a confirmed reward hack is a score that should be excluded or zeroed (workflow.md §12.6.1's validity route). Refusing the marks would leave `accept` and `dismiss` as the only answers to a sample whose score is known to be wrong — accepting a bad number or pretending nobody looked.
 
-**One definition, four readers, and the fourth is why it is a constant.** `honest` decides whether a mark may be *recorded*; `rulings.dispositions` counts what the marks did to the run's totals; and `anomalies_md` twice — whether an entry names samples or attempts, and whether the re-run overcount line applies. Adding a kind to the first three and missing the fourth records an exclusion that no denominator reports and prints it as an *attempt*, which is a caveat list quietly disagreeing with the numbers above it.
+**Two readers, and missing the second is what makes a caveat list disagree with the numbers above it.** `honest` decides whether a mark may be *recorded*; `rulings.dispositions` counts what the marks did to the run's totals. A kind added to the first alone records an exclusion that no denominator reports.
 """
 
 
 def honest(kind: str, disposition: Disposition) -> bool:
     """Whether a disposition can honestly be recorded against a class of this kind.
 
-    The matrix `steward rule` and `propose` refuse on, and the one a policy ruling re-checks at application time — one definition, so a pattern in `_steward.yaml` cannot grant what a person could not type. Two rows: `accept` on an `error:` class is silent exclusion wearing a decision's clothes, and the three sample marks mean nothing where the residue is not sample-shaped (`SAMPLE_SHAPED`).
+    The matrix `steward rule` and `propose` refuse on, and the one a policy ruling re-checks at application time — one definition, so a pattern in `_steward.yaml` cannot grant what a person could not type.
+
+    Three rows. `accept` on an `error:` class is silent exclusion wearing a decision's clothes. The three sample marks mean nothing where the residue is not a sample's data (`SAMPLE_MARKED`) — a `scanerror:` class has a sample behind every instance and still nothing to exclude, because what it left behind is a missing verdict rather than a wrong one. And `rerun` on a `scanerror:` class is a decision that cannot be carried out: the eval is fine and only the scan failed, so there are no samples to requeue, and the retry a re-scan would need is scout's resume rather than a respawn — a mechanism Steward has no verb for (execution.md §13 item 9).
 
     Args:
-        kind: The class key's first segment — `error`, `limit`, `task`, `score`, or `scan`.
+        kind: The class key's first segment — `error`, `limit`, `task`, `score`, `scan`, or `scanerror`.
         disposition: The answer being considered.
 
     Returns:
@@ -93,7 +103,9 @@ def honest(kind: str, disposition: Disposition) -> bool:
     if disposition is Disposition.ACCEPT:
         return kind != "error"
     if disposition in SAMPLE_MARKS:
-        return kind in SAMPLE_SHAPED
+        return kind in SAMPLE_MARKED
+    if disposition is Disposition.RERUN:
+        return kind != "scanerror"
     return True
 
 
@@ -354,6 +366,7 @@ def composed_effect(
 
 __all__ = [
     "ABSORBING",
+    "SAMPLE_MARKED",
     "SAMPLE_MARKS",
     "SAMPLE_SHAPED",
     "TERMINAL",

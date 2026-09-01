@@ -63,6 +63,16 @@ class Workspace:
         return self.root / JOURNAL
 
     @property
+    def analysis(self) -> Path:
+        """`analysis.md` — what the numbers mean, written by the agent and kept current by Steward.
+
+        **Durable, and the only file here that is neither party's alone.** `status.md` and `anomalies.md` are Steward's and are rewritten whole every turn; `AGENTS.md` and `_steward.yaml` are the human's and are never touched. This one is co-authored (workflow.md §12.7): Steward keeps a block of facts current inside each task's section, and every word outside those markers is somebody's investigation — quoted, argued, and not regenerable from anything. Losing it loses work.
+
+        At the root beside `status.md`, so the sync carries it to a remote reader with no rule of its own.
+        """
+        return self.root / "analysis.md"
+
+    @property
     def logs(self) -> Path:
         """`logs/` — the flat log directory holding the current definition's results."""
         return self.root / "logs"

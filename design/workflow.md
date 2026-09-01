@@ -1127,6 +1127,27 @@ Per task because that is the manifest's unit, the unit a ruling and a re-run act
 
 **This fills a real gap.** The design has produced `status.md` (current state, ephemeral), `anomalies.md` (terse signoff footnotes), and `journal.jsonl` (raw events) — and nothing a person reads to find out *what happened*. `analysis.md` is that document, and its relationship to the journal is the one already established for observations and interpretation: **the journal carries the time series, `analysis.md` carries what it meant.**
 
+**Co-authored, and the line between the authors is mechanical.** "Authored by the agent" was the right category and half the story: the facts a section opens with — what the scanners said, what was ruled and by whom, how much was scanned — are all things Steward recomputes every turn, and an agent transcribing them by hand would produce a file that goes stale and disagrees with the table above it. So under each task's heading Steward keeps a **facts block** current between a pair of HTML-comment markers, and every byte outside them belongs to whoever wrote it.
+
+```markdown
+## cybench@openai/gpt-5
+
+<!-- steward:begin cybench_0a1b2c3d -->
+- scanned 48 of 50 transcripts — the rest carry no verdict either way
+- 2 samples flagged for scoring integrity — scan:scoring_integrity:reward_hacking; dismissed by kaia — "the model tried to read the grader and failed"
+<!-- steward:end -->
+
+Both flagged samples opened the grader file and failed to parse it…
+```
+
+Four merge rules, and each one exists to stop a specific loss. A task with **no section** gets one appended — heading, facts, and a comment prompting the write-up. A task **with** a section has only the text between its markers replaced; everything else comes back byte-identical. A section whose markers **do not pair** is left entirely alone with the damage sent to `steward.log`, because guessing at a boundary inside somebody's work is the one mistake here nothing can undo. And a section for a task the manifest **no longer names** is left alone, because the file is durable and a removed task's investigation is still what happened. The marker is keyed on the task **identifier** — stable and content-hashed — while the heading carries the readable display key, so renaming a task in the definition does not orphan its section.
+
+**Byte-identical is a claim about the read as much as the merge.** The merge can only preserve what it is handed, and the ordinary way to read a text file translates line endings on the way in — so a CRLF file read the ordinary way arrives already normalized, and the atomic replace writes every line of somebody's prose back in the endings Steward preferred, over a turn that changed one bullet. The read disables the translation and the write does too. For the same reason a file that will not *decode* is a read failure rather than a crash: a decode error is not an I/O error and escapes an I/O handler entirely, so a document saved in another encoding would fail every `status` and every `tend` on the workspace, over the one file nothing else in the turn depends on.
+
+The same care applies one level up: a file that *exists* and will not read is not treated as an absent one. Composing a document from nothing and writing it atomically would replace an investigation with a stub, so an unreadable `analysis.md` produces no write at all.
+
+**An unwritten section is an item, and deliberately not much more.** One per task whose prose is empty, owner the agent, and **not acknowledgeable** — writing *looked, nothing here* is the deliverable, so there is nothing to wave past. It is **not a signoff blocker** either: holding a person's attestation hostage to an agent's prose is the wrong trade (agent.md §6 lists this under standing work). What it does is keep the run reading ⚠️ rather than 🏁, which is the honest report — *sign it* and *write it up* are two open things, not one. Two gates keep it from being noise: a section arrives with a task's **first log**, since a run has no numbers to explain before it has run; and the item is raised only where an agent has actually **collected**, because a run somebody drives by hand is owed a write-up by nobody. It is also the one agent item held back from the unattended-workspace channel escalation — waking a person at 3am about the absence of prose is not what that path is for.
+
 #### 12.7.1 It belongs in the log directory
 
 The file is written into `log_dir` alongside the results, not only at the workspace root.
@@ -1134,6 +1155,8 @@ The file is written into `log_dir` alongside the results, not only at the worksp
 The reason is that **the workspace is often the ephemeral half.** A run on a rented box, an air-gapped runner, or a Hawk pod leaves nothing behind but its log directory — and `log_dir` is frequently S3, which is the artifact people share and the one that is still there in six months. Someone who has the `.eval` files and no workspace has the data and no idea which grader fell over. Analysis has to travel with the results or it does not travel.
 
 It is also consistent rather than novel: Steward already owns the log directory's metadata, writing `eval-set.json` and `logs.json` there. And it is safe — `list_eval_logs` filters by format extension, and `cleanup_older_eval_logs` only ever operates on logs it found through `list_all_eval_logs`, so markdown in the directory is invisible to discovery and never deleted.
+
+It also cost nothing to build: the workspace propagation already carries every top-level non-dotfile, so `analysis.md` reaches the log directory — S3 included — with no rule of its own.
 
 It is mirrored on every tend that changes it rather than only at signoff, on the same reasoning that makes the workspace propagation unconditional: a run that dies before signoff is exactly the run whose analysis someone will want. Signoff makes it final, not present.
 

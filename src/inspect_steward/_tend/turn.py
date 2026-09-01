@@ -21,6 +21,7 @@ They cannot drift, because they are the same code path with one flag. That is wo
 import hashlib
 import os
 import time
+from collections.abc import Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,6 +34,7 @@ from .._evalset.archive import archive_log
 from .._evalset.cache import read_attempt_cache, write_attempt_cache
 from .._evalset.instances import (
     read_classed_cache,
+    sample_uuids,
     write_classed_cache,
 )
 from .._evalset.manifest import (
@@ -128,7 +130,9 @@ from .._workspace import (
     truncate_log,
     utc_now,
 )
+from .analysis_md import Section, analysis_sections, merge_analysis
 from .anomalies_md import Caveat, anomalies_markdown, caveats
+from .coverage import Coverage, coverage
 from .detect import detect, scan_attempts, task_health
 from .history import Happened, happened
 from .items import (
@@ -325,10 +329,16 @@ class TendResult:
     Resolved by **reading** rather than by `resolve_eval_set_id`, which mints and writes one: a `status` must leave the log directory exactly as it found it. Carried so the turn's fold and signoff's finalize cannot come to disagree about which directory they are acting on.
     """
 
-    scan_incomplete: dict[str, int] = field(default_factory=dict[str, int])
-    """Per scanner, transcripts it errored on rather than reaching a verdict (`_scan.findings.ScanFindings.incomplete`).
+    unwritten: dict[str, str] = field(default_factory=dict[str, str])
+    """Task identifier to display key, for every `analysis.md` section that carries facts and no reading of them.
 
-    Carried because an errored transcript is one nothing scanned, and its absence from the findings is indistinguishable from a clean reading. What `items.SCAN_INCOMPLETE` raises and the gate refuses over until somebody names it.
+    Computed against the file **as this turn's merge leaves it**, which is what makes a `status` honest: a task whose section does not exist yet is a task with nothing written, whether or not the section has been appended.
+    """
+
+    coverage: Coverage = field(default_factory=Coverage)
+    """How much of what landed the scanners actually reached, per task and run-wide (`coverage.Coverage`).
+
+    Empty for a run that scans nothing, which is what keeps the column and the note off a document that has no scanning to report.
     """
 
     journal_damage: list[DamagedLine] = field(default_factory=list[DamagedLine])
@@ -1122,6 +1132,17 @@ def _turn(
                 *found.unreadable,
             ],
         )
+    # one read, two readers: the uuid set a resumed task's current log actually
+    # holds is both coverage's denominator and the narrowing every scan-shaped
+    # report needs -- and computing it twice is how the two come to disagree
+    reused, unverified = _reused_samples(observed, found)
+    scanned = coverage(
+        observed,
+        found.recorded,
+        reused=reused,
+        unverified=unverified,
+        scanning=bool(manifest.scan is not None and scan_id is not None),
+    )
     pending = absorb(anomalies, detection.batches, task_health(observed), applied)
     if pending:
         anomalies = read_anomalies([*history.events, *as_events(pending, utc_now())])
@@ -1133,7 +1154,7 @@ def _turn(
     # because a ruling's recorded instant is its identity)
     # the narrowed per-class counts, so a policy's composed effect sentence
     # says what a person's would (`rulings.affected_refs`)
-    affected = affected_refs(detection.batches, _current_locations(observed))
+    affected = affected_refs(detection.batches, _current_locations(observed), reused)
     policy, declined = policy_rulings(anomalies, settings.preauthorized, affected)
     if policy:
         anomalies = read_anomalies(
@@ -1144,7 +1165,7 @@ def _turn(
             ]
         )
     progress = Progress(
-        rows=task_progress(observed, fleet),
+        rows=task_progress(observed, fleet, scanned.by_task),
         # the pids come from the in-flight record rather than from the fleet,
         # because they answer a different question: a worker too busy to serve
         # its socket, and one that has not bound one yet, are both costing the
@@ -1195,7 +1216,7 @@ def _turn(
         log_dir=log_dir,
         scan=manifest.scan,
         scan_id=scan_id,
-        scan_incomplete=found.incomplete,
+        coverage=scanned,
         fold_failing=history.fold_failing,
         journal_damage=history.damage,
         status_failing=history.status_failing,
@@ -1207,7 +1228,7 @@ def _turn(
         anomalies=anomalies,
         anomaly_pending=pending,
         dispositions=dispositions(
-            detection.batches, anomalies, _current_locations(observed)
+            detection.batches, anomalies, _current_locations(observed), reused
         ),
         stuck_cancel=_cancel_authority(settings.stuck_cancel),
         observed=observed,
@@ -1220,10 +1241,24 @@ def _turn(
             {task.identifier: task.key for task in observed.tasks},
             _current_locations(observed),
             _cleared(observed),
+            reused,
         ),
         signature=history.signature,
         launched=history.launched,
     )
+    # the co-authored document's facts, composed before either disposition
+    # branches: a `status` has to report what is unwritten as surely as a tend
+    # does, and what is unwritten depends on the sections this turn would add.
+    # Composed off the pre-journalling fold, which carries the same rulings the
+    # refold below re-reads -- only their recorded instants differ, and no fact
+    # here reads one.
+    #
+    # **This merge is read for its report and thrown away.** The write happens
+    # at the end of the turn and merges again, against the file as it stands
+    # *then* -- see `_write_analysis`
+    sections = analysis_sections(result)
+    if (authored := _read_authored(workspace.analysis)) is not None:
+        result = replace(result, unwritten=merge_analysis(authored, sections).unwritten)
     if not execute:
         return _projected(result, observed, inflight, history)
 
@@ -1267,7 +1302,7 @@ def _turn(
             result,
             anomalies=anomalies,
             dispositions=dispositions(
-                detection.batches, anomalies, _current_locations(observed)
+                detection.batches, anomalies, _current_locations(observed), reused
             ),
         )
 
@@ -1353,6 +1388,7 @@ def _turn(
     # this turn rather than one behind the effect it describes
     _write_status(workspace, result, failing_since=history.status_failing)
     _write_anomalies(workspace, result)
+    _write_analysis(workspace, result, sections)
     _record(
         workspace,
         result,
@@ -1470,13 +1506,9 @@ def _projected(
 
     Last, because an item can be about something the acting produced — an action that failed is a fact about this turn, not about the directory it read. Which also makes the two dispositions honest against each other: a `status` projects a turn that did nothing, so it reports what is open *now* rather than what would be open afterwards.
     """
-    items = tend_items(
-        result,
-        observed,
-        inflight,
-        frozenset(history.acknowledged),
-        frozenset(history.raised),
-    )
+    # the collection stamp first, because two readers below need it: the hold's
+    # attachment test, and the item that asks an agent for a write-up — which
+    # must not be raised in a workspace no agent was ever attached to
     result = replace(
         result,
         happened=happened(history.events),
@@ -1486,8 +1518,14 @@ def _projected(
         ),
         position=max((event.line for event in history.events), default=0),
     )
+    items = tend_items(
+        result,
+        observed,
+        inflight,
+        frozenset(history.acknowledged),
+        frozenset(history.raised),
+    )
     current = {item.id for item in items}
-    # after the collection stamp above, which is what the attachment test reads
     held = held_tasks(result, spent=history.complete or frozenset())
     return replace(
         result,
@@ -2088,6 +2126,65 @@ def _write_anomalies(workspace: Workspace, result: TendResult) -> None:
         result.rendered.append(workspace.anomalies.name)
 
 
+def _write_analysis(
+    workspace: Workspace, result: TendResult, sections: Sequence[Section]
+) -> None:
+    """Write `analysis.md` back with this turn's facts folded in.
+
+    **The only generated document that is not regenerated.** What is written is the file as it stood with the facts blocks replaced, so an `OSError` here costs one turn's freshness on a facts list and can lose nothing that was written by hand — the merge is pure and the write is atomic, so the previous file survives whole.
+
+    **The file is re-read here rather than reused from the top of the turn**, and the difference is somebody's work. The facts were composed before the turn acted, because the items had to report what is unwritten; everything between then and now is spawns, requeues, invalidations and archive moves, which on a busy turn is minutes. The other author is a person or an agent with the file open, and this write is an atomic replace — so merging a snapshot taken before all of that would overwrite whatever they saved in the meantime. Re-reading narrows the window to the microseconds between this read and the `replace` below, which is the same exposure `status.md` has always had and the smallest one available without taking a lock on a markdown file.
+
+    Out of the failure episode for `anomalies.md`'s reason exactly: the episode exists because a remote reader detects a dead timer by `status.md` going stale, and a second item saying the same thing about the same directory is noise.
+
+    A section whose markers did not pair is reported here rather than fixed. Its text came back byte-identical — the merge declined to guess at a boundary in somebody's work — and the repair is a person putting the marker back.
+
+    A file that exists and would not read (`_read_authored`) is the one case where nothing at all happens: writing what a merge from nothing would have produced would replace an investigation with a stub. An **empty body** is the other silence and a benign one — no file yet, and no task has landed anything to explain.
+    """
+    authored = _read_authored(workspace.analysis)
+    if authored is None:
+        steward_log(
+            workspace.log,
+            f"{workspace.analysis.name} could not be read and was left untouched",
+        )
+        return
+    analysis = merge_analysis(authored, sections)
+    if not analysis.body:
+        return
+    for identifier in analysis.damaged:
+        steward_log(
+            workspace.log,
+            f"the analysis.md section for {identifier} has unpaired "
+            f"`steward:begin`/`steward:end` markers and was left untouched",
+        )
+    if _write_rendered(
+        workspace,
+        workspace.analysis,
+        analysis.body,
+        failing_since=None,
+        episode=False,
+    ):
+        result.rendered.append(workspace.analysis.name)
+
+
+def _read_authored(path: Path) -> str | None:
+    """One co-authored file as it stands: its text, `""` where there is none yet, or `None` where it exists and will not read.
+
+    **The three answers are three different acts, and collapsing two of them destroys somebody's work.** An absent file is composed from scratch and written. A file that reads is merged into and written back. A file that *exists* and will not read is left completely alone — because the merge would compose a fresh document from nothing and the write is an atomic replace, so treating a permissions error or a transient read failure as *empty* would overwrite an investigation with a stub. This is the one generated document whose contents cannot be regenerated, which is exactly why it declines rather than guesses.
+
+    **`newline=""` rather than the default**, because the default is universal-newline mode and the merge downstream promises to return the authored bytes unchanged. Reading a CRLF file with translation on hands the merge a document that already has LF endings, and the atomic replace then writes the whole file back in the endings Steward preferred — churn across every line of somebody's prose, from a turn that changed one bullet.
+
+    **Not decoding is a read failure, not a crash.** `UnicodeDecodeError` is a `ValueError` and so escapes an `OSError` handler entirely: a file saved in latin-1 would take down every `status` and every `tend` on the workspace, on the strength of a document that nothing else in the turn depends on. It is the same answer as a permissions error — *this exists and I cannot read it* — and gets the same one.
+    """
+    try:
+        with path.open(encoding="utf-8", newline="") as file:
+            return file.read()
+    except FileNotFoundError:
+        return ""
+    except (OSError, UnicodeDecodeError):
+        return None
+
+
 def _write_rendered(
     workspace: Workspace,
     path: Path,
@@ -2100,12 +2197,14 @@ def _write_rendered(
 
     One writer for both files because they fail for the same reason at the same moment — a full disk takes both, a read-only mount takes both — and a second episode mechanism would be a second item saying the same thing about the same directory.
 
+    **`newline=""` so the body is written as it was composed.** The default translates every line ending in the body to `os.linesep`, which on Windows would turn `analysis.md`'s byte-preserving merge into a whole-file rewrite the moment a turn ran there — and the two regenerated documents have no reason to want the platform's endings either.
+
     Returns:
         Whether the document was written. A failure here never fails the turn — the turn already happened and the journal already recorded it — so the answer is the only thing that distinguishes *written* from *left as it was*, and `signoff` needs that distinction because nothing tends the run afterwards.
     """
     temporary = path.with_name(f".{path.name}.tmp")
     try:
-        temporary.write_text(body, encoding="utf-8")
+        temporary.write_text(body, encoding="utf-8", newline="")
         temporary.replace(path)
     except OSError as ex:
         # `missing_ok` covers the temporary never having been created; it does
@@ -2271,6 +2370,34 @@ def _current_locations(observed: ObservedTasks) -> dict[str, str]:
         for task in observed.tasks
         if task.current is not None
     }
+
+
+def _reused_samples(
+    observed: ObservedTasks, found: ScanFindings
+) -> tuple[dict[str, frozenset[str]], frozenset[str]]:
+    """Per resumed task with scan rows, the sample uuids its current log actually holds — and the ones that would not read.
+
+    **The one read this turn pays that no other part of it needs**, and it is gated twice so it stays a handful of logs rather than a directory. A task with **no superseded attempt** is skipped: its rows and its log name the same file, so the location test is already exact and a summaries read would buy nothing. A task with **no scan rows** is skipped for the same reason from the other side — nothing scan-shaped exists to be stranded, and its coverage is zero however it is computed.
+
+    What is left is the shape the hazard actually lives in: a task that was retried, whose new log carries the samples that already succeeded under their original uuids, whose scan rows still name the file the scanner read them from. Both readers of this take it — coverage's numerator and `in_results`' narrowing — because a count and the list it summarizes computed from two reads is how the two come to disagree in print.
+
+    **A log that would not read is returned separately, because the two readers owe it opposite answers.** For the narrowing, absent is right: fall back to the location test, which loses nothing that was already found. For coverage it is the one thing that must not be treated as absent — absent means *this task was never resumed, so counting the rows is exact*, and here the rows are the union across attempts and counting them can report a run as fully scanned over samples it replaced.
+
+    Returns:
+        The uuid sets that read, and the identifiers of the resumed tasks whose current log did not.
+    """
+    reused: dict[str, frozenset[str]] = {}
+    unverified: set[str] = set()
+    for task in observed.tasks:
+        if task.current is None or not task.superseded:
+            continue
+        if task.identifier not in found.recorded:
+            continue
+        if (uuids := sample_uuids(task.current.location)) is not None:
+            reused[task.identifier] = uuids
+        else:
+            unverified.add(task.identifier)
+    return reused, frozenset(unverified)
 
 
 def _cleared(observed: ObservedTasks) -> set[str]:

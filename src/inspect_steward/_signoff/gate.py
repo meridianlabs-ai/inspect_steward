@@ -10,7 +10,7 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .._tend.items import ORPHAN_RUNNING, SCAN_INCOMPLETE, UNREADABLE, unfinished
+from .._tend.items import ORPHAN_RUNNING, UNREADABLE, unfinished
 from .._workspace import Signature
 
 if TYPE_CHECKING:
@@ -20,7 +20,6 @@ UNSETTLED = "unsettled"
 ORPHANS = "orphans"
 OPEN_WINDOW = "open_window"
 UNREAD = "unread"
-UNSCANNED = "unscanned"
 UNFINALIZED = "unfinalized"
 """Not raised by `check` at all: the terminal fold happens past the gate, and this is `sign._finalize_scan` refusing in the shape the caller already renders."""
 UNDECIDED = "undecided"
@@ -135,29 +134,6 @@ def check(result: "TendResult", signature: Signature | None) -> list[Blocker]:
                     "`steward ack unreadable:NAME --by NAME --reason ...` records "
                     "why the results stand without it, and the signature then "
                     "carries it as a caveat — or repair the file and tend again"
-                ),
-            )
-        )
-    if unscanned := [item for item in result.items if item.kind == SCAN_INCOMPLETE]:
-        # **the same hole as an unreadable log, one layer in.** There the
-        # contents of a file are unknown; here the verdict on a sample is, and
-        # a signature taken over it says *nothing was flagged* about
-        # transcripts nothing ever looked at. Named, it is signed over like any
-        # other; unnamed, it is the difference between a run that was scanned
-        # and one that merely ran a scanner
-        one = len(unscanned) == 1
-        blockers.append(
-            Blocker(
-                kind=UNSCANNED,
-                summary=(
-                    f"{len(unscanned)} scanner{'' if one else 's'} "
-                    f"{'has' if one else 'have'} results missing: "
-                    + "; ".join(sorted(item.summary for item in unscanned))
-                ),
-                remedy=(
-                    "`steward ack scan_incomplete:NAME --by NAME --reason ...` "
-                    "records why the results stand without them, and the "
-                    "signature then carries it as a caveat"
                 ),
             )
         )

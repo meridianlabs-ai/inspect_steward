@@ -27,7 +27,7 @@ from .._anomaly.applied import RULING_APPLIED, Applied
 from .._anomaly.fold import Pending, covered_refs, unapplied
 from .._anomaly.model import (
     ABSORBING,
-    SAMPLE_SHAPED,
+    SAMPLE_MARKED,
     Anomalies,
     Anomaly,
     AnomalyState,
@@ -37,7 +37,7 @@ from .._anomaly.model import (
     honest,
 )
 from .._evalset.classify import task_error_class
-from .._evalset.instances import Instance, InstanceBatch
+from .._evalset.instances import Instance, InstanceBatch, in_results
 from .._evalset.observe import ObservedTasks, TaskObservation
 from .._schedule import InFlight
 from .._worker import LiveFleet, Unavailable, requeue_sample
@@ -108,11 +108,13 @@ def accepted_tasks(anomalies: Anomalies) -> dict[str, str]:
 
 
 def affected_refs(
-    batches: Sequence[InstanceBatch], current: Mapping[str, str]
+    batches: Sequence[InstanceBatch],
+    current: Mapping[str, str],
+    reused: Mapping[str, frozenset[str]] = {},
 ) -> dict[str, frozenset[str]]:
     """Per class, the instances it left **in the data** — those in a current attempt, by ref.
 
-    The narrowing every report-facing count needs, in one place because three of them need it: the errored cell's split, the effect sentence a ruling composes, and `anomalies.md`'s scope. A window's own `evidence.count` is what it *absorbed*, and a sample that failed, was re-run and failed again is two instances of one row.
+    The narrowing every report-facing count needs, applied through the one predicate that owns it (`_evalset.instances.in_results`) because three readers here need the same answer: the errored cell's split, the effect sentence a ruling composes, and `anomalies.md`'s scope. A window's own `evidence.count` is what it *absorbed*, and a sample that failed, was re-run and failed again is two instances of one row.
 
     **Refs rather than a count**, because one of the three readers needs to narrow further. A class key outlives its generations, so the class's current population can span a settled generation and an open one — and the effect sentence a new ruling composes is about the windows it is ruling, not about everything the key has ever covered. A count cannot be intersected; the refs can.
 
@@ -121,6 +123,7 @@ def affected_refs(
     Args:
         batches: Detection's census.
         current: Task identifier to its current attempt's log location.
+        reused: Per resumed task, the sample uuids its current log holds — what keeps a scan finding on a reused sample from silently leaving the results.
 
     Returns:
         Class key to the refs of its instances that are in the results.
@@ -128,7 +131,7 @@ def affected_refs(
     affected: dict[str, set[str]] = {}
     for batch in batches:
         for instance in batch.instances:
-            if instance.location == current.get(instance.task):
+            if in_results(instance, current, reused):
                 affected.setdefault(batch.class_key, set()).add(instance.ref)
     return {key: frozenset(refs) for key, refs in affected.items()}
 
@@ -786,15 +789,11 @@ def dispositions(
     batches: Sequence[InstanceBatch],
     anomalies: Anomalies,
     current: Mapping[str, str],
+    reused: Mapping[str, frozenset[str]] = {},
 ) -> Dispositions:
     """Fold the census against the rulings in force.
 
-    Only instances in their task's **current** attempt are counted, so the split agrees with the errored cell beside it: the cell counts the current log's samples, and a superseded attempt's instances — still in the census for the routing's sake — are not part of the results being described.
-
-    Args:
-        batches: Detection's full census.
-        anomalies: The fold, post-policy — the rulings in force.
-        current: Task identifier to its current attempt's log location.
+    Only instances **in the results** are counted (`_evalset.instances.in_results`), so the split agrees with the errored cell beside it: the cell counts the current log's samples, and a superseded attempt's instances — still in the census for the routing's sake — are not part of the results being described.
 
     **The run-wide totals are per sample row, never per instance**, which is what stops one row being counted twice. A batch is a class, and one sample can be in two of them — a sample that errored and was flagged by a scanner, or one two scanners flagged — so summing over instances would report *4 samples excluded* over three rows and put that number three lines above a denominator that disagrees. `by_task` below is unaffected and stays per instance: it is the *errored* cell's split, and classification gives an errored sample exactly one `error:` class.
 
@@ -802,6 +801,7 @@ def dispositions(
         batches: Detection's full census.
         anomalies: The fold, post-policy — the rulings in force.
         current: Task identifier to its current attempt's log location.
+        reused: Per resumed task, the sample uuids its current log holds.
 
     Returns:
         Bucket counts per task over `error:` instances, the run-wide exclusion and zero totals over every sample-shaped kind, and the samples each class left in the data.
@@ -809,10 +809,12 @@ def dispositions(
     by_task: dict[str, dict[str, int]] = {}
     marked: dict[str, str] = {}
     for batch in batches:
-        # the totals are about rows in the results, so every kind whose residue
-        # is a sample counts toward them — an excluded reward hack is a sample
-        # excluded from scoring exactly as an excluded timeout is
-        if batch.kind not in SAMPLE_SHAPED:
+        # the totals are about rows in the results, so every kind a mark can
+        # honestly be recorded against counts toward them — an excluded reward
+        # hack is a sample excluded from scoring exactly as an excluded timeout
+        # is. `SAMPLE_MARKED` rather than `SAMPLE_SHAPED`: a `scanerror:` class
+        # has a sample behind every instance and nothing to exclude
+        if batch.kind not in SAMPLE_MARKED:
             continue
         # per instance, the window that covers it decides -- an excluded
         # first generation must not read as undecided because a fresh second
@@ -831,7 +833,7 @@ def dispositions(
             for ref in covered:
                 by_ref[ref] = _window_bucket(window)
         for instance in batch.instances:
-            if instance.location != current.get(instance.task):
+            if not in_results(instance, current, reused):
                 continue
             bucket = by_ref.get(instance.ref, "undecided")
             if batch.kind == "error":
@@ -843,7 +845,7 @@ def dispositions(
         by_task=by_task,
         excluded=sum(1 for mark in marked.values() if mark == "excluded"),
         zeroed=sum(1 for mark in marked.values() if mark == "zeroed"),
-        affected=affected_refs(batches, current),
+        affected=affected_refs(batches, current, reused),
     )
 
 

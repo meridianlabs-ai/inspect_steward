@@ -95,6 +95,33 @@ steward rule 'scan:scoring_integrity:reward_hacking' \
 
 Two things worth knowing about how this behaves. **Rarity is not the signal** — a class covering 197 of 200 samples is the alarming case, not the noisy one, because an exploit that works gets used everywhere. And **only yes/no scanners open anomalies**: a scanner returning a number or a category is recorded and readable, and Steward will not invent a threshold for it.
 
+### When the scanner itself fails
+
+A scanner can throw — the grader model times out, a transcript will not parse — and the transcript is then left with no verdict either way. In the findings that is indistinguishable from a sample that came back clean, so a run whose scans all failed would otherwise be signed as *nothing was flagged*.
+
+Those transcripts get a class of their own, keyed on the scanner and the exception:
+
+```
+scanerror:scoring_integrity:TimeoutError@openai/_client.py:post
+```
+
+The population is the whole story, and you do not have to compute it. One grader timeout in five hundred is a class of one; a scanner throwing on every transcript is a class of five hundred, and both are visible at a glance in the anomalies block.
+
+A scanner that **never ran at all** is a different shape and does not appear here: it wrote no rows, so there is no class to open and nothing to rule. What shows that one is the column below.
+
+It is refused at signoff like any other open window, and the answers are **`accept`** and **`dismiss`**. `rerun`, `exclude` and `zero` are refused, because the samples are fine and only the reading of them failed — there is nothing to take out of the scores and nothing to run again.
+
+```bash
+steward rule 'scanerror:scoring_integrity:TimeoutError@openai/_client.py:post' \
+  --disposition accept --by NAME \
+  --reason "one grader timeout in five hundred; the rest scanned" \
+  --effect "1 transcript carries no verdict either way"
+```
+
+Alongside it, the status table grows a **scanned** column — transcripts *every* scanner has answered for, against samples landed — and a note under the table when there is a gap. That is what tells you the difference between *nothing was found* and *nothing looked*, and it catches the case a scan error cannot: a worker that died between logging its samples and scanning them, or a scanner you added at a re-launch, which will never revisit the transcripts that had already landed.
+
+**That column does not block signoff, and the omission is deliberate.** Nothing Steward can run closes a coverage gap — re-scanning already-landed transcripts is scout's own resume, which Steward has no verb for — so refusing over it would leave a run permanently unsignable rather than routing you to an act that fixes it. You are told the number and you decide. Ask your agent to say it when they tell you the run is ready.
+
 If an agent is attached when a flagged task finishes, its completion is held back briefly — up to about an hour — so you get one message saying what finished *and* what needs deciding, rather than a cheerful *finished* followed twenty minutes later by a correction. With no agent attached nothing is held.
 
 ## Where errors surface

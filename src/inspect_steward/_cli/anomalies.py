@@ -33,7 +33,7 @@ DOCTRINE = (
 def refuse_dishonest(targets: list[str], decided: Disposition) -> None:
     """The disposition-kind pairings refused rather than recorded.
 
-    The matrix itself is `_anomaly.model.honest` — shared with the tend's policy rulings, so a pattern cannot grant what a person could not type. Two rows. `accept` on an `error:` class would leave errored samples in the data with a caveat saying so — silent exclusion wearing a decision's clothes, precisely what the four answers exist to prevent. And the three sample marks (`exclude`, `zero`, `score`) mean nothing where the residue is not sample-shaped: a `task:` or `score:` class has no sample population to mark, and marking one would put a false sentence in the report ("1 sample excluded from scoring" for a failed task attempt).
+    The matrix itself is `_anomaly.model.honest` — shared with the tend's policy rulings, so a pattern cannot grant what a person could not type. Three rows. `accept` on an `error:` class would leave errored samples in the data with a caveat saying so — silent exclusion wearing a decision's clothes, precisely what the four answers exist to prevent. The three sample marks (`exclude`, `zero`, `score`) mean nothing where the residue is not a sample's data: a `task:` or `score:` class has no sample population to mark at all, and a `scanerror:` class has one and still nothing to mark, since what it left behind is a missing verdict rather than a wrong row. And `rerun` on a `scanerror:` class names an act nothing can carry out — the eval is fine and only the reading of it failed, so there are no samples to requeue.
 
     Raises:
         click.ClickException: Naming each refused class and its kind.
@@ -46,9 +46,16 @@ def refuse_dishonest(targets: list[str], decided: Disposition) -> None:
             f"accept is refused for {', '.join(refused)} — {DOCTRINE}"
         )
     kinds = ", ".join(f"{key} ({kind_of(key)} class)" for key in dict.fromkeys(refused))
+    if decided is Disposition.RERUN:
+        raise click.ClickException(
+            f"rerun re-runs samples, and the samples behind {kinds} are fine — "
+            f"only the scan of them failed, and Steward has no verb that "
+            f"re-scans — accept (with --effect) and dismiss are the answers "
+            f"that fit"
+        )
     raise click.ClickException(
-        f"{decided.value} marks samples, and there is no sample "
-        f"population behind {kinds} — rerun, accept (with --effect), "
+        f"{decided.value} marks a sample's data, and there is nothing to mark "
+        f"behind {kinds} — rerun, accept (with --effect), "
         f"and dismiss are the answers that fit"
     )
 

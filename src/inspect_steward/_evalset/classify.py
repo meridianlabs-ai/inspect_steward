@@ -174,6 +174,27 @@ def scan_class(scanner: str, label: str | None) -> str:
     return f"scan:{readable}:{tail}" if tail else f"scan:{readable}"
 
 
+def scan_error_class(scanner: str, traceback: str | None) -> str:
+    """The class key for transcripts one scanner could not scan.
+
+    **Scanner plus exception type, which is the sample-error doctrine applied one layer in** (scheduling.md §4.2). The population it produces is the whole distinction the design asked for and nothing has to compute it: *scanning is broken* is one class spanning five hundred transcripts, *this transcript breaks the scanner* is a class of one, and both read off the window's own evidence.
+
+    **Keyed off the traceback and nothing else**, which is not a preference. Scout writes three error columns and only one of them can be classed: `scan_error` is `str(ex)` where this module's message fallback wants `repr(ex)`, so `parse_error` never matches it; `scan_error_type` is the literal string `"refusal"` on every error row regardless of what happened, so it carries no information at all. `scan_error_traceback` is a real `traceback.format_exc()` and parses exactly as a sample's does.
+
+    Args:
+        scanner: The scanner's merge name, as the run committed it.
+        traceback: The row's `scan_error_traceback`, or `None` where the column is empty.
+
+    Returns:
+        `scanerror:{scanner}:{type}@{frame}`, or `scanerror:{scanner}` where nothing parses.
+    """
+    readable = _segment(scanner) or "scanner"
+    parsed = parse_error(None, traceback)
+    if parsed is None:
+        return f"scanerror:{readable}"
+    return f"scanerror:{readable}:{parsed.type}@{parsed.frame}"
+
+
 def _readable(value: str) -> str:
     """A key segment reduced to what is safe to print and split on."""
     return re.sub(r"[^A-Za-z0-9._-]+", "-", value).strip("-")
@@ -191,7 +212,7 @@ def _segment(value: str) -> str:
 
 
 def kind_of(class_key: str) -> str:
-    """A class key's kind — its first segment: `error`, `limit`, `task`, `score`, or `scan`."""
+    """A class key's kind — its first segment: `error`, `limit`, `task`, `score`, `scan`, or `scanerror`."""
     return class_key.partition(":")[0]
 
 
@@ -270,6 +291,7 @@ __all__ = [
     "no_log_class",
     "parse_error",
     "scan_class",
+    "scan_error_class",
     "substrate",
     "task_error_class",
     "zero_class",
