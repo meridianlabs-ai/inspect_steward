@@ -858,3 +858,85 @@ def test_asking_for_no_arguments_and_for_arguments_at_once_is_a_usage_error(
     assert result.exit_code != 0
     assert "--no-args" in result.output
     assert capture.calls == []
+
+
+# --- docker's address pools, offered once ---------------------------------
+
+
+@pytest.fixture
+def cramped_docker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A daemon on the built-in pools, under a run that wants more than they hold."""
+    import importlib
+
+    from inspect_steward._launch.pools import PoolAdvice
+
+    module = importlib.import_module("inspect_steward._launch.launch")
+
+    def cramped(wanted: int, timeout: float = 0.0) -> PoolAdvice:
+        return PoolAdvice(networks=32, wanted=128, config=Path("/nowhere/daemon.json"))
+
+    monkeypatch.setattr(module, "advise", cramped)
+
+
+def test_a_cramped_daemon_is_named_with_the_json_that_fixes_it(
+    workspace: Workspace, capture: FakeCapture, cramped_docker: None
+) -> None:
+    """Declining is the default, and *no* means *not by you* rather than *never*.
+
+    A person is being asked to let a tool edit their Docker configuration, so
+    what it would write is printed before the question rather than after the
+    yes -- and printed again when they say no, with the file to put it in.
+    """
+    result = run("--no-timer")
+
+    assert result.exit_code == 0, result.output
+    assert "docker will run out of networks" in result.output
+    assert "128 concurrent sandboxes" in result.output
+    # the fix itself, quotable straight out of the terminal
+    assert '"default-address-pools"' in result.output
+    assert '"size": 20' in result.output
+    assert "/nowhere/daemon.json" in result.output
+    # the restart is named and never performed -- it stops every container on
+    # this machine, which on a shared box is somebody else's work. Compared
+    # against the function rather than a literal, because the command differs
+    # per platform and this file runs on all of them
+    from inspect_steward._launch.pools import restart_command
+
+    assert restart_command() in result.output
+
+
+def test_the_pools_are_offered_once_per_workspace(
+    workspace: Workspace, capture: FakeCapture, cramped_docker: None
+) -> None:
+    """The condition belongs to the host, so hearing it twice teaches nothing.
+
+    Somebody who has heard it and left their daemon alone has answered for
+    every later launch too, and advice repeated on each one is what trains a
+    reader to scroll past the output.
+    """
+    first = run("--no-timer")
+    second = run("--no-timer")
+
+    assert "docker will run out of networks" in first.output
+    assert "docker will run out of networks" not in second.output
+
+
+def test_the_advice_reaches_json_for_a_caller_with_no_terminal(
+    workspace: Workspace, capture: FakeCapture, cramped_docker: None
+) -> None:
+    result = run("--no-timer", "--json")
+
+    assert result.exit_code == 0, result.output
+    pools = json.loads(result.output)["pools"]
+    assert (pools["networks"], pools["wanted"]) == (32, 128)
+
+
+def test_a_roomy_daemon_says_nothing(
+    workspace: Workspace, capture: FakeCapture
+) -> None:
+    # the autouse `no_ambient_docker` guard stands in for a daemon with room:
+    # the launch output must carry no advice at all
+    result = run("--no-timer")
+
+    assert result.exit_code == 0, result.output
+    assert "address-pools" not in result.output

@@ -996,6 +996,11 @@ def _turn(
         levels=history.ramp_levels,
         ruled=rerun_ruled(anomalies),
         accepted=_latched(anomalies, history.launched),
+        # the definition's number where it declared one, else what the last turn
+        # read back off the workers -- this turn's live read happens below, and
+        # a spawn decided here cannot wait for it
+        budget=_positive(manifest.options.get("max_sandboxes"))
+        or history.baseline.budget,
     )
     # one read of the running fleet, feeding both the table's live columns and
     # the block under it -- a second read would be a second set of numbers, and

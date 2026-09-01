@@ -276,10 +276,89 @@ def test_the_budget_falls_back_to_what_the_workers_report() -> None:
     assert any("sandbox budget (40/50)" in line for line in result.lines)
 
 
-def test_a_floor_already_over_the_budget_never_steps() -> None:
-    result = plan(sig(sandboxes=(30, 30)), budget=30)
+def test_a_fleet_already_over_the_budget_is_cut_back_to_an_even_share() -> None:
+    # refusing to climb does not bring an over-committed host back, and the
+    # fleet arrives over the budget by default: every worker starts at the
+    # ramp's floor, which knows nothing about the machine
+    result = plan(
+        sig("t1", sandboxes=(30, 28)),
+        sig("t2", pid=2, sandboxes=(30, 28)),
+        budget=28,
+        baseline=base("t1", "t2", pids=(1, 2)),
+        cpu={1: 12.0, 2: 12.0},
+    )
 
-    assert steps(result) == []
+    assert [(move.at, move.to) for move in steps(result)] == [(40, 14), (40, 14)]
+    assert any("over the sandbox budget (80/28)" in line for line in result.lines)
+
+
+def test_the_budget_cut_goes_below_the_ramps_floor() -> None:
+    # the floor is where discovery starts, not a promise the host can afford
+    # it: 28 containers across ten tasks does not divide into a floor of 40,
+    # and a cut clamped at 40 would leave the machine exactly as over-committed
+    fleet = [sig(f"t{n}", pid=n, sandboxes=(30, 28)) for n in range(1, 11)]
+
+    result = plan(
+        *fleet,
+        budget=28,
+        baseline=base(*(f"t{n}" for n in range(1, 11)), pids=tuple(range(1, 11))),
+        cpu={n: 12.0 for n in range(1, 11)},
+    )
+
+    assert {move.to for move in steps(result)} == {2}
+    assert 2 < RAMP[0]
+
+
+def test_a_budget_smaller_than_the_fleet_still_leaves_one_sample_each() -> None:
+    # a task cannot run zero samples, so this fleet is over its budget no
+    # matter what -- one each is the least it can be over by
+    fleet = [sig(f"t{n}", pid=n, sandboxes=(30, 2)) for n in range(1, 6)]
+
+    result = plan(
+        *fleet,
+        budget=2,
+        baseline=base(*(f"t{n}" for n in range(1, 6)), pids=tuple(range(1, 6))),
+        cpu={n: 12.0 for n in range(1, 6)},
+    )
+
+    assert {move.to for move in steps(result)} == {1}
+
+
+def test_a_fleet_inside_its_budget_is_left_alone() -> None:
+    # the cut is for a bound already exceeded, not for an uneven distribution
+    result = plan(sig(sandboxes=(30, 500)), budget=500)
+
+    assert [(move.at, move.to) for move in steps(result)] == [(40, 60)]
+
+
+def test_the_budget_cut_ignores_a_hold() -> None:
+    # a hold freezes the climb; it cannot authorize an over-committed host,
+    # and the cut exists precisely for when nobody is watching
+    result = plan(
+        sig("t1", sandboxes=(30, 28)),
+        sig("t2", pid=2, sandboxes=(30, 28)),
+        budget=28,
+        baseline=base("t1", "t2", pids=(1, 2)),
+        holds=hold(),
+        cpu={1: 12.0, 2: 12.0},
+    )
+
+    assert [move.to for move in steps(result)] == [14, 14]
+
+
+def test_an_elastic_task_is_never_cut_by_the_budget() -> None:
+    # a task reporting no sandbox limiter draws on no host budget, so it is
+    # neither charged for the overshoot nor cut for it
+    result = plan(
+        sig("t1", sandboxes=(30, 28)),
+        sig("t2", pid=2, level=200, in_use=200),
+        budget=28,
+        baseline=base("t1", "t2", level=200, pids=(1, 2)),
+        cpu={1: 12.0, 2: 12.0},
+    )
+
+    cut = [move for move in steps(result) if move.at is not None and move.to < move.at]
+    assert [move.identifier for move in cut] == ["t1"]
 
 
 def test_a_worker_that_did_not_answer_still_holds_its_share() -> None:
@@ -555,6 +634,28 @@ def test_the_baseline_reads_back_what_the_record_wrote(tmp_path: Path) -> None:
     assert baseline.levels == {"t1": 60}
     assert baseline.cpu == {1: 12.0}
     assert baseline.retries == {"t1": 0}
+
+
+def test_the_record_carries_the_budget_forward_for_the_next_spawn(
+    tmp_path: Path,
+) -> None:
+    # the budget is only readable from a running worker, and the decision that
+    # most needs it -- what setpoint to spawn at -- is taken before the next
+    # turn's live read. So the turn that learned it writes it down
+    journal = tmp_path / "journal.jsonl"
+    result = plan(sig(sandboxes=(30, 50)), budget=None)
+    append_event(journal, OBSERVATION, tuning=observation_payload(result, []))
+
+    assert read_baseline(read_journal(journal).events).budget == 50
+
+
+def test_a_record_from_before_the_budget_was_written_reads_as_unbounded(
+    tmp_path: Path,
+) -> None:
+    journal = tmp_path / "journal.jsonl"
+    append_event(journal, OBSERVATION, tuning={"levels": {"t1": 40}})
+
+    assert read_baseline(read_journal(journal).events).budget is None
 
 
 def test_an_observation_without_a_record_is_not_a_window(tmp_path: Path) -> None:

@@ -380,6 +380,7 @@ def reconcile(
     levels: Mapping[str, int] | None = None,
     ruled: Mapping[str, str] | None = None,
     accepted: AbstractSet[str] | None = None,
+    budget: int | None = None,
 ) -> Reconciliation:
     """Decide what to do next.
 
@@ -392,6 +393,7 @@ def reconcile(
         levels: Where the tuning loop has already climbed each task's sample concurrency, by identifier. A respawn spawns at its task's level rather than restarting at the floor — the climb was earned against measured headroom, and a worker crash does not unmeasure it. Consulted only while a ramp is active, so a pinned run cannot be moved by stale levels.
         ruled: Tasks a standing `rerun` ruling covers, each with the ruling's instant (ISO), folded by the turn. Two effects, both the ruling's application: the stall guard forgives attempt history at or before the instant — the decision to try again was made by the only party entitled to make one — and the covered tasks sort ahead of fresh work, by queue order rather than preemption (scheduling.md §5.5).
         accepted: Tasks a standing `accept` ruling has settled, folded by the turn. Neither spawned nor stalled: an accepted task's remaining work is work a person decided not to do, so respawning it would be Steward overruling the only party entitled to end it.
+        budget: The machine's sandbox concurrency budget, where one is known — the definition's `max_sandboxes`, else what the last turn read back off the workers. Spawns are clamped to an even share of it, because a task's containers never exceed its running samples and every worker otherwise starts at a floor that knows nothing about the host (scheduling.md §3.6). `None` where no budget is known, which is an elastic provider, or the first tend of a run whose definition declared none.
 
     Returns:
         Actions to execute, tasks waiting on a slot, and a summary.
@@ -466,11 +468,22 @@ def reconcile(
     )
     queued = poured.queued
     ramp = resolve_samples_ramp(manifest, pool)
+    # only while a ramp is in force: under a pin the level is a number a person
+    # chose, and a pinned fleet overshooting its own `max_sandboxes` is two
+    # numbers the same person owns -- reported rather than resolved (§3.6)
+    share = (
+        _sandbox_share(
+            budget,
+            inflight.running_tasks + sum(len(batch) for batch in poured.workers),
+        )
+        if ramp is not None
+        else None
+    )
     spawning = [
         SpawnWorker(
             tasks=batch,
             max_samples=_spawn_level(
-                batch, max_samples, levels if ramp and levels else {}, ramp
+                batch, max_samples, levels if ramp and levels else {}, ramp, share
             ),
         )
         for batch in poured.workers
@@ -944,12 +957,15 @@ def _spawn_level(
     start: int,
     levels: Mapping[str, int],
     ramp: tuple[int, int] | None,
+    share: int | None = None,
 ) -> int:
     """Where this worker's sample concurrency begins.
 
     The resolved start, or the level the tuning loop already climbed its tasks to — a respawn picks up where the climb left off rather than re-earning it twenty samples at a time. The minimum over a packed batch, because a selection carries one value applied per task: a fresh task must not inherit a sibling's climb, and an under-started climbed task costs one tend before the loop re-raises it, where the other direction would overshoot a level nothing measured.
 
     **A recorded level is clamped into the range in force now**, because the range can be edited between the climb and the respawn. A run that reached 200 under `[40, 300]` and is then narrowed to `[40, 100]` must come back at 100: the journal says what was authorized then, and `_steward.yaml` says what is authorized now, and a spawn answers to the second. Only the replay is clamped — `start` is already the resolved floor.
+
+    **The sandbox share is applied last, over the range clamp rather than inside it**, and that ordering is the whole point. Under Docker every process computes the provider's `2 × cores` for itself, so N workers ask one host for N times what it says it supports — and the ramp's floor, which knows only about discovery, is exactly the number that multiplies. A budget of 28 across ten tasks does not divide into a floor of 40, so the share has to be free to land below it (scheduling.md §3.6).
     """
     recorded = [levels[task.identifier] for task in batch if task.identifier in levels]
     if ramp is not None:
@@ -957,7 +973,21 @@ def _spawn_level(
         recorded = [min(max(level, floor), ceiling) for level in recorded]
     if len(recorded) < len(batch):
         recorded.append(start)
+    if share is not None:
+        recorded.append(share)
     return max(min(recorded), 1)
+
+
+def _sandbox_share(budget: int | None, tasks: int) -> int | None:
+    """One task's even share of the machine's sandbox budget, or `None` for unbounded.
+
+    Divided across every task that will be in flight rather than only the host-bound ones, because which tasks are sandboxed is a thing only a *running* worker reports and this decision is made before any of them has answered. The imprecision is one-directional: a fleet mixing Docker and elastic tasks starts the elastic ones lower than it had to, which costs a tend of throughput where guessing the other way costs the host.
+
+    At least 1, since a task cannot run zero samples — where the budget is smaller than the fleet, one sample each is the least it can be over by, and `plan_tuning`'s block is what reports that.
+    """
+    if budget is None:
+        return None
+    return max(1, budget // tasks) if tasks > 0 else budget
 
 
 def _summarize(

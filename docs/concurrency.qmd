@@ -67,7 +67,7 @@ On **sustained** pushback — episodes in two consecutive windows, the retry sto
 
 Two more bounds cap the climb:
 
-- **`max_sandboxes` is a machine-wide budget.** The fleet-wide sum of sample setpoints never exceeds it — a task's containers never exceed its running samples, so bounding the sum bounds the containers. The budget is your definition's `max_sandboxes` if it sets one, otherwise the sandbox provider's own default; elastic providers (k8s) cap nothing.
+- **`max_sandboxes` is a machine-wide budget.** A task's containers never exceed its running samples, so Steward bounds the fleet-wide sum of sample setpoints instead of the containers: workers start at a share of the budget rather than at the ramp's floor, a fleet found above it is brought back to that share, and no step is admitted that would take it past. That share is free to be smaller than the ramp's floor — the floor is where discovery starts, not a promise your host can afford it. The budget is your definition's `max_sandboxes` if it sets one, otherwise the sandbox provider's own default; elastic providers (k8s) cap nothing. A `max_samples` you pinned yourself is never lowered — if ten pinned tasks ask for more than your `max_sandboxes` allows, Steward reports the contradiction rather than picking which of your two numbers to believe.
 - **The envelope.** The range itself, settable in `_steward.yaml`:
 
 ```{.yaml}
@@ -86,6 +86,36 @@ Every move is recorded three ways: in the eval log (who, when, old → new, and 
 A fleet's demand on a model provider is the product of the knobs above: `max_tasks` tasks, each running `max_samples` samples, is `max_tasks × max_samples` concurrent generate calls against whatever providers the tasks use.
 
 The total is still worth computing before a large run — the ramp's ceiling bounds where discovery can take it, and `max_tasks × 200` is the number the default envelope authorizes. Within one process, inspect's adaptive connection controllers manage the connection pool on their own (AIMD, exactly as TCP shares a link); when a ramp is active Steward raises their scaling ceiling to the ramp's ceiling so the two do not fight, and the ramp moves only the *bounds* while the controllers move within them.
+
+## Docker's address pools
+
+If your tasks use Docker sandboxes, there is a ceiling below all of the above that has nothing to do with your machine's size, and it is worth knowing about before it bites.
+
+Every sandboxed sample gets its own Docker compose project, and every compose project gets its own bridge network. Docker allocates those out of `default-address-pools`, and the built-in value carves two ranges coarsely — sixteen networks each, so **about thirty across the whole host**. It does not scale with your processors. On a 64-core box the Docker provider will happily offer 128 concurrent sandboxes and Docker itself will stop at thirty, failing every sample after that with
+
+```
+could not find an available, non-overlapping IPv4 address pool
+among the defaults to assign to the network
+```
+
+which reads like a network fault rather than a limit somebody is allowed to raise.
+
+`steward launch` checks for this and tells you — once per workspace, and only when the run would actually want more sandboxes than your daemon can give it, so a laptop where thirty is ample hears nothing. It will offer to write the fix into your `daemon.json`, keeping a backup and leaving whatever else is in the file alone:
+
+```{.json}
+{
+  "default-address-pools": [
+    { "base": "172.17.0.0/12", "size": 20 },
+    { "base": "192.168.0.0/16", "size": 24 }
+  ]
+}
+```
+
+The same two ranges Docker already claims, carved finer: 512 networks instead of 32. Declining is the default and prints the same JSON with the file to put it in.
+
+**Steward never restarts the daemon**, and nothing takes effect until you do — a restart stops every running container on the machine, which on a shared box is somebody else's work, so it is yours to time. The launch prints the command for your platform.
+
+Background: [Docker's default address pools](https://straz.to/2021-09-08-docker-address-pools/).
 
 ## One setting, three spellings
 

@@ -147,6 +147,12 @@ class Baseline:
     capacity: frozenset[str] = frozenset()
     """Tasks whose previous window was already clean at a bound. Capacity in two consecutive windows is a proposal; in one, it is a good ten minutes."""
 
+    budget: int | None = None
+    """The machine's sandbox budget as the previous turn resolved it, or `None` where nothing was host-bound.
+
+    Recorded because the number is only *readable* from a running worker, and the decision that most needs it — what setpoint to spawn at — is made before this turn's live read. A definition that declares `max_sandboxes` needs none of this; one that does not gets the clamp from the tend after its first worker answered.
+    """
+
 
 @dataclass(frozen=True)
 class Move:
@@ -269,6 +275,10 @@ def plan_tuning(
         for task in tasks
         if task.sandboxes is not None and task.level is not None
     )
+    # a budget the fleet is *already* past is not capacity being declined; it is
+    # a machine over-committed, and refusing to climb does not bring it back
+    over = sandboxed is not None and committed > sandboxed
+    share = _share(sandboxed, tasks, absent) if sandboxed is not None and over else None
 
     for task in tasks:
         blocked = _window(task, baseline, cpu, now)
@@ -312,6 +322,44 @@ def plan_tuning(
             continue
         if storm:
             lines.append(f"{task.key}: pushback — holding at the floor")
+            continue
+
+        if (
+            share is not None
+            and task.sandboxes is not None
+            and task.level is not None
+            and task.level > share
+        ):
+            # the fleet is over the machine's sandbox budget, which the ramp's
+            # own gate can only stop from getting worse. Same shape as the
+            # narrowed range below and gated the same way -- no window, no
+            # spacing, no hold -- because a bound already exceeded is not
+            # capacity being declined.
+            #
+            # **This is the one move that goes below the ramp's floor**, and it
+            # has to: the floor is where discovery starts, not a guarantee the
+            # host can afford it, and a budget of 28 across ten tasks does not
+            # divide into a floor of 40. The ramp climbs back out through the
+            # gates as tasks finish and the sum falls.
+            moves.append(
+                Move(
+                    identifier=task.identifier,
+                    key=task.key,
+                    task_id=task.task_id,
+                    knob="max_samples",
+                    at=task.level,
+                    to=share,
+                    reason=(
+                        f"the fleet's sample setpoints total {committed} against "
+                        f"a machine sandbox budget of {sandboxed}; bringing this "
+                        f"task back to an even share of it"
+                    ),
+                )
+            )
+            lines.append(
+                f"{task.key}: over the sandbox budget ({committed}/{sandboxed}) "
+                f"— stepping {task.level}→{share}"
+            )
             continue
 
         if task.level is not None and task.level > ceiling:
@@ -427,6 +475,7 @@ def plan_tuning(
             "errors": {task.identifier: task.errored for task in tasks},
             "pushback": sorted(pushback),
             "capacity": sorted(capacity),
+            "budget": sandboxed,
         },
         lines=lines,
     )
@@ -556,6 +605,19 @@ def _budget(tasks: Sequence[TaskSignals], declared: int | None) -> int | None:
     return max(limits) if limits else None
 
 
+def _share(budget: int, tasks: Sequence[TaskSignals], absent: Collection[str]) -> int:
+    """One host-bound task's even share of the machine's sandbox budget.
+
+    Divided across the same population `committed` sums — the tasks reporting a sandbox limiter, plus the ones whose worker did not answer — so the shares add back up to the number they came from. At least 1, because a task cannot run zero samples: where the budget is smaller than the number of host-bound tasks the fleet is over it no matter what, and one sample each is the least it can be over by.
+
+    Even rather than proportional. A proportional cut would preserve a distribution the ramp arrived at against a bound it was measuring wrongly, and the ramp re-earns whatever it should have had — through the gates, one step at a time — as tasks finish and the sum falls.
+    """
+    charged = len(absent) + sum(
+        1 for task in tasks if task.sandboxes is not None and task.level is not None
+    )
+    return max(1, budget // charged) if charged else budget
+
+
 def observation_payload(plan: TuningPlan, applied: Sequence[Move]) -> dict[str, Any]:
     """The `tuning` payload an observation records, after this turn's moves.
 
@@ -595,6 +657,7 @@ def read_baseline(events: list[JournalEvent]) -> Baseline:
         if not isinstance(tuning, dict):
             continue
         recorded = cast(dict[str, Any], tuning)
+        budget = recorded.get("budget")
         return Baseline(
             ts=_unix(event.ts),
             levels=_ints(recorded.get("levels")),
@@ -603,6 +666,9 @@ def read_baseline(events: list[JournalEvent]) -> Baseline:
             errors=_ints(recorded.get("errors")),
             pushback=frozenset(_strings(recorded.get("pushback"))),
             capacity=frozenset(_strings(recorded.get("capacity"))),
+            budget=budget
+            if isinstance(budget, int) and not isinstance(budget, bool)
+            else None,
         )
     return Baseline()
 

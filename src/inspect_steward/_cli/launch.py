@@ -8,6 +8,7 @@ Almost every other surface in Steward is written for a reader who is not there: 
 import dataclasses
 import json
 import os
+import sys
 from pathlib import Path
 from typing import Any, NoReturn
 
@@ -15,10 +16,23 @@ import click
 
 from .._evalset.detect import DefinitionType
 from .._launch import Change, Delta, Launch, LaunchError, launch
+from .._launch.pools import (
+    POOLS_WRITTEN,
+    PoolAdvice,
+    restart_command,
+    write_pools,
+)
 from .._notify import INSPECT_NOTIFICATION, usable_channel
 from .._scan import merged_scanners
 from .._util.duration import format_duration
-from .._workspace import DirectivesError, Held, Workspace, read_directives
+from .._workspace import (
+    ACTION,
+    DirectivesError,
+    Held,
+    Workspace,
+    append_event,
+    read_directives,
+)
 from .options import (
     PassthroughCommand,
     Setting,
@@ -328,6 +342,8 @@ def launch_command(
                 _echo_no_channel(one_launch=notification is not None)
             elif isinstance(durable, str) and not usable_channel(workspace, durable):
                 _echo_unusable_channel()
+        if result.pools is not None:
+            _offer_pools(workspace, result.pools)
 
     if not result.committed:
         # after the delta rather than instead of it, and an error rather than a
@@ -389,6 +405,82 @@ def _echo_unusable_channel() -> None:
         "will reach you if this run needs a person — check the URL, or the "
         "Apprise config file it names"
     )
+
+
+def _offer_pools(workspace: Workspace, advice: PoolAdvice) -> None:
+    """Tell a person their Docker cannot allocate enough networks, and offer the edit.
+
+    **The one place Steward proposes changing something outside the workspace**, which is why the offer is explicit, declining is the default, and what it would write is printed *before* the question rather than after the yes. A person is being asked to let a tool edit their Docker configuration; they get to read it first.
+
+    **Steward writes the file and never restarts the daemon.** The restart is what makes it take effect and it kills every running container on the host, which on a shared box is somebody else's work — not a thing to do behind a `y/n` at launch. So the command is printed and left to the person, who is also the one who knows what else is running.
+
+    Declining prints the same JSON with the file to put it in, because *no* here means *not by you*, not *never*.
+    """
+    where = _pool_shortfall(advice)
+    click.echo(f"\n{where}")
+    click.echo(
+        f"  each sandboxed sample gets its own docker network, and this "
+        f"daemon can allocate about {advice.networks} of them"
+    )
+    click.echo(f"\nthis in {advice.config} raises it to {advice.proposed_networks}:\n")
+    click.echo(_pool_json(advice))
+
+    if not (
+        sys.stdin.isatty()
+        and click.confirm(f"\nwrite that into {advice.config}?", default=False)
+    ):
+        click.echo(
+            f"\nleft alone. Put the above in {advice.config} yourself and run "
+            f"`{restart_command()}` to apply it — "
+            f"https://straz.to/2021-09-08-docker-address-pools/"
+        )
+        return
+
+    try:
+        backup = write_pools(advice)
+    except (OSError, ValueError) as ex:
+        # /etc/docker/daemon.json needs root, which is a refusal to report and
+        # not a privilege to go and acquire
+        click.echo(f"\ncould not write {advice.config}: {ex}")
+        click.echo("put the above in it yourself — it may need sudo")
+        return
+
+    append_event(
+        workspace.journal,
+        ACTION,
+        action=POOLS_WRITTEN,
+        config=str(advice.config),
+        backup=str(backup) if backup is not None else None,
+        networks=advice.proposed_networks,
+    )
+    click.echo(f"\nwritten to {advice.config}")
+    if backup is not None:
+        click.echo(f"  the previous file is at {backup}")
+    click.echo(
+        f"  nothing changes until the daemon restarts — `{restart_command()}`. "
+        f"That stops every running container on this machine, so pick the moment."
+    )
+
+
+def _pool_shortfall(advice: PoolAdvice) -> str:
+    """The headline: what this run wants, against what the daemon can give it."""
+    return (
+        f"docker will run out of networks before this run runs out of room — "
+        f"it wants up to {advice.wanted} concurrent sandboxes"
+    )
+
+
+def _pool_json(advice: PoolAdvice) -> str:
+    """The `default-address-pools` block, indented as a file would hold it."""
+    body = json.dumps(
+        {
+            "default-address-pools": [
+                {"base": base, "size": size} for base, size in advice.proposed
+            ]
+        },
+        indent=2,
+    )
+    return "\n".join(f"  {line}" for line in body.splitlines())
 
 
 def _own_definition(workspace: Workspace) -> Path:

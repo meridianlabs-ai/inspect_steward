@@ -209,6 +209,20 @@ def _action(payload: dict[str, object]) -> str:
         pid = payload.get("pid")
         where = f" (pid {pid})" if isinstance(pid, int) else ""
         return f"killed a wedged claim holder{where} to take the claim"
+    if action == "docker_pools_advised":
+        networks = payload.get("networks")
+        wanted = payload.get("wanted")
+        if not isinstance(networks, int) or not isinstance(wanted, int):
+            return ""
+        return (
+            f"noted that docker can allocate {networks} networks where this run "
+            f"wants {wanted} sandboxes"
+        )
+    if action == "docker_pools_written":
+        # the one act a launch performs outside the workspace, so a reader
+        # working out why this machine's docker changed finds it here
+        config = _text(payload, "config") or "daemon.json"
+        return f"wrote docker's address pools into {config} — pending a daemon restart"
     if action == "status_unwritable":
         return "status.md stopped being writable — the snapshot is frozen"
     if action == "status_unwritable_restored":

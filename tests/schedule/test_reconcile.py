@@ -469,6 +469,89 @@ def test_max_samples(options: dict[str, Any], pool: Pool, expected: int) -> None
     assert spawns(result)[0].max_samples == expected
 
 
+# --- the machine's sandbox budget, applied at spawn -----------------------
+
+
+def test_a_spawn_is_clamped_to_its_share_of_the_sandbox_budget() -> None:
+    # every worker computes the Docker provider's `2 x cores` for itself, so a
+    # fleet that starts each task at the ramp's floor asks one host for N times
+    # what it says it supports. The floor is the number that multiplies
+    manifest = synth_manifest([SynthTask("sweep", args={"n": n}) for n in range(10)])
+
+    result = reconcile(
+        manifest, InFlight(), nothing_run(manifest), pool=Pool(16), budget=28
+    )
+
+    assert [worker.max_samples for worker in spawns(result)] == [2] * 10
+
+
+def test_the_budget_share_may_land_below_the_ramps_floor() -> None:
+    manifest = synth_manifest([TASK])
+
+    unbounded = reconcile(manifest, InFlight(), nothing_run(manifest), pool=POOL)
+    bounded = reconcile(
+        manifest, InFlight(), nothing_run(manifest), pool=POOL, budget=6
+    )
+
+    assert unbounded.actions and spawns(unbounded)[0].max_samples > 6
+    assert spawns(bounded)[0].max_samples == 6
+
+
+def test_no_budget_leaves_the_resolved_level_alone() -> None:
+    # an elastic provider caps nothing, and so does the first tend of a run
+    # whose definition declared no `max_sandboxes`
+    manifest = synth_manifest([TASK])
+
+    result = reconcile(manifest, InFlight(), nothing_run(manifest), pool=POOL)
+
+    assert spawns(result)[0].max_samples == DEFAULT_MAX_SAMPLES
+
+
+def test_the_budget_outranks_a_climbed_level_on_respawn() -> None:
+    # the replay clamps a recorded level into the authorized range, and the
+    # budget clamps what comes out of that -- otherwise a task cut to 3 by an
+    # over-committed host comes back at the range's floor
+    manifest = synth_manifest([TASK])
+
+    result = reconcile(
+        manifest,
+        InFlight(),
+        nothing_run(manifest),
+        pool=POOL,
+        levels={TASK.identifier: 200},
+        budget=5,
+    )
+
+    assert spawns(result)[0].max_samples == 5
+
+
+def test_a_pinned_setpoint_is_not_clamped_by_the_budget() -> None:
+    # a pin is a number a person chose. A pinned fleet can still overshoot its
+    # own `max_sandboxes`, and that is two numbers the same person owns --
+    # reported rather than resolved (scheduling.md §3.6)
+    manifest = synth_manifest([SynthTask("sweep", args={"n": n}) for n in range(10)])
+
+    result = reconcile(
+        manifest,
+        InFlight(),
+        nothing_run(manifest),
+        pool=Pool(16, max_samples=200),
+        budget=28,
+    )
+
+    assert [worker.max_samples for worker in spawns(result)] == [200] * 10
+
+
+def test_a_budget_smaller_than_the_fleet_still_spawns_one_sample_each() -> None:
+    manifest = synth_manifest([SynthTask("sweep", args={"n": n}) for n in range(8)])
+
+    result = reconcile(
+        manifest, InFlight(), nothing_run(manifest), pool=Pool(16), budget=3
+    )
+
+    assert [worker.max_samples for worker in spawns(result)] == [1] * 8
+
+
 NUMBERING: list[tuple[str, list[int], int, int]] = [
     ("nothing has been tried", [], 0, 1),
     ("two attempts left logs", [1, 2], 2, 3),

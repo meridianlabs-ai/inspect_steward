@@ -1,4 +1,5 @@
 import contextlib
+import importlib
 import os
 import shutil
 import signal
@@ -72,6 +73,28 @@ def no_ambient_channel(monkeypatch: pytest.MonkeyPatch) -> None:
                 os.environ[name] = value
 
     monkeypatch.setattr(cli, "init_dotenv", guarded)
+
+
+@pytest.fixture(autouse=True)
+def no_ambient_docker(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the developer's own Docker daemon out of every launch.
+
+    `launch` asks the local daemon what it allocates bridge networks from, and the answer decides whether it prints advice. Two things go wrong if that reaches a real daemon, and they are the two this suite always guards against.
+
+    It is **not deterministic**: whether the advice fires depends on the machine's processor count against its address pools, so the same launch test passes on a laptop and fails on a 64-core CI runner — which is precisely the machine the feature exists for and the one nobody debugs on.
+
+    And it is **a subprocess per launch**, on a daemon that may be absent, wedged, or ten seconds slow. The probe is written not to raise on any of those, so the cost would be silent rather than visible.
+
+    Neutralized at `advise` rather than at `subprocess.run`, because the tests that mean to exercise the probe (`tests/launch/test_pools.py`) patch the subprocess themselves and must keep reaching the real function.
+    """
+    # by name rather than `from inspect_steward._launch import launch`, which
+    # resolves to the *function* the package re-exports under that name
+    module = importlib.import_module("inspect_steward._launch.launch")
+
+    def roomy(wanted: int, timeout: float = 0.0) -> None:
+        return None
+
+    monkeypatch.setattr(module, "advise", roomy)
 
 
 @pytest.fixture(scope="session")

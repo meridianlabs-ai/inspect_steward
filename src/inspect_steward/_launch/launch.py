@@ -61,6 +61,7 @@ from .._worker import (
     stop_workers,
 )
 from .._workspace import (
+    ACTION,
     LAUNCHED,
     LOG_DIR,
     Claim,
@@ -71,6 +72,7 @@ from .._workspace import (
     append_event,
     ensure_gitignore,
     read_directives,
+    read_journal,
     read_overrides,
     resolve_interval,
     resolve_log_dir,
@@ -79,6 +81,7 @@ from .._workspace import (
     steward_log,
 )
 from .delta import Change, Delta, compute_delta
+from .pools import POOLS_ADVISED, PoolAdvice, advise
 
 
 class LaunchError(Exception):
@@ -121,6 +124,12 @@ class Launch:
 
     failures: list[str] = field(default_factory=list[str])
     """Things that did not work but did not stop the launch — a log that would not move, a worker that would not stop. Reported here and in `steward.log`, and left for the next turn, which decides again from what it finds."""
+
+    pools: PoolAdvice | None = None
+    """A host whose Docker will run out of bridge networks before it runs out of room, or `None` where it will not — no Docker, pools already carved finely enough, or a run small enough that thirty networks is ample (`_launch.pools`).
+
+    **Advice rather than an outcome, and offered once per workspace.** Nothing about the launch depends on it: the run starts either way and the fix needs a daemon restart the launch has no business performing. It rides here so the surface that has a person in front of it can offer to write the file, and so `--json` carries it for one that does not.
+    """
 
 
 def launch(
@@ -393,7 +402,49 @@ def _launch(
         # formally present here
         turn=turn if isinstance(turn, TendResult) else None,
         failures=failures,
+        pools=_pool_advice(workspace, manifest),
     )
+
+
+def _pool_advice(workspace: Workspace, manifest: Manifest) -> PoolAdvice | None:
+    """Whether to tell this person about their Docker address pools, and once only.
+
+    Asked after the run is committed rather than before, because the number to compare against is the provider's — `default_concurrency()`, which is what will actually be in force — and asking the provider means the answer tracks whatever inspect_ai is installed rather than a copy of its arithmetic that drifts.
+
+    **Once per workspace**, recorded in the journal. The condition is a property of the host rather than of the run, so a person who has heard it and decided against changing their daemon has answered for every later launch too, and repeating it on each one is how advice becomes something people learn to scroll past.
+    """
+    if any(
+        event.type == ACTION and event.payload.get("action") == POOLS_ADVISED
+        for event in read_journal(workspace.journal).events
+    ):
+        return None
+    advice = advise(_wanted_sandboxes(manifest))
+    if advice is not None:
+        append_event(
+            workspace.journal,
+            ACTION,
+            action=POOLS_ADVISED,
+            networks=advice.networks,
+            wanted=advice.wanted,
+        )
+    return advice
+
+
+def _wanted_sandboxes(manifest: Manifest) -> int:
+    """Concurrent sandboxes this run would use if nothing capped it.
+
+    The definition's `max_sandboxes` where it declared one — a number somebody chose is what will be in force — and otherwise what the Docker provider itself would pick, asked of the provider rather than reimplemented. A fallback of twice the processors is the shape that default has always had, for an inspect_ai whose registry will not answer.
+    """
+    declared = manifest.options.get("max_sandboxes")
+    if isinstance(declared, int) and not isinstance(declared, bool) and declared > 0:
+        return declared
+    try:
+        from inspect_ai.util._sandbox.registry import registry_find_sandboxenv
+
+        default = registry_find_sandboxenv("docker").default_concurrency()
+    except Exception:
+        default = None
+    return default if default is not None else 2 * (os.cpu_count() or 1)
 
 
 def _capture(

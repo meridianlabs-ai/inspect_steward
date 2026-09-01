@@ -696,16 +696,21 @@ The last two were each an assumption about what another component had already do
 
 ## 6. Completeness and trust
 
-### Step 27 — Sandbox division ⚠ upstream 9 + 10
+### Step 27 — The sandbox budget ✅
 
 **Delivers** a fleet that does not ask a Docker host for `workers × 2 × cores` containers.
 
-- **Scope.** Sandbox type from the manifest; elastic versus host-bound; the division and its floor; redistribution when a worker exits.
+- **Scope.** Elastic versus host-bound, read from the live config rather than a manifest field; the budget's three enforcement points — spawn clamp, over-budget cut, step admission; the budget carried across turns; redistribution when a worker exits.
 - **Refs.** sched §3.6, §3.7; exec §12 items 9, 10.
-- **No workaround.** The override does not exist and patching after spawn is too late — the containers are already open.
-- **Done when** the arithmetic is unit-tested and the override is exercised against a real Docker sweep.
+- **Done when** the arithmetic is unit-tested at all three points, a pin is provably not clamped, and the cut is provably free to go below the ramp's floor.
 
-Positioned by an external dependency rather than by design. It is an M2-on-Docker concern: the arithmetic belongs in step 5 and the override in step 6. **k8s and unsandboxed evals are unaffected** — `k8s_sandbox` does not override `default_concurrency`, so the base `None` applies and its sandboxes are elastic.
+**The division died and the step went with it, mostly.** Both upstream dependencies dissolved rather than landing: the `max_sandboxes` override (item 9) is landed and deliberately unwritten, and the per-task sandbox *type* (item 10) is unneeded because the live config read reports each task's effective limiters directly. What replaced the division — bounding the fleet-wide sum of sample setpoints, since a task's containers never exceed its running samples — arrived inside **step 21**, whose retrospective owns the argument. The `⚠ upstream` marking and the *No workaround* line went with the division; **k8s and unsandboxed evals were never affected**, since `k8s_sandbox` does not override `default_concurrency` and the base `None` is elastic.
+
+**What was left over, and is the only code this step added: the sum-cap gated growth but not the starting point.** Step 21 enforced the budget where the ramp asks to climb, which is exactly one of the three places it binds — and not the one that matters first. A fleet does not climb into the multiplication; it starts there, because every worker spawns at the ramp's floor and the floor knows nothing about the host. Ten tasks at 40 against a budget of 28 is the whole 10× overshoot, reached before the ramp is consulted, whereupon the admission rule declines every step and reports a machine already over-committed. So `reconcile` gained the budget and clamps a spawn to an even share of it, `plan_tuning` gained a cut for a fleet already past it, and the tend records the budget it learned so the next spawn can use a number only a running worker can report. sched §3.6 rewritten.
+
+**Two boundaries the new moves respect.** A **pinned** setpoint is never clamped — under a pin the level is a number a person wrote, and a pinned fleet overshooting its own `max_sandboxes` stays the contradiction §3.6 reports rather than resolves; the clamp turns on `resolve_samples_ramp` being active at all, which is `resolve_max_samples`'s own setpoint-versus-starting-point distinction. And the cut is **free to land below the ramp's floor**, which it has to be: 28 across ten tasks does not divide into 40, so a cut clamped at the floor would leave the host exactly as over-committed. It is the one move in the loop that goes under the floor, and the ramp climbs back out through the gates as tasks finish.
+
+**The cgroup wrinkle §3.6 flagged is fixed upstream rather than worked around** — [inspect_ai#5164](https://github.com/UKGovernmentBEIS/inspect_ai/pull/5164) makes `default_concurrency()` (and the docker CLI limiter, and `max_subprocesses`) read the cgroup CPU quota and the affinity mask instead of `os.cpu_count()`, so the number Steward reads back off its workers is the pod's rather than the node's. Nothing here depends on it landing: the budget arithmetic is the same whatever the provider reports, and a wrong provider number was always going to be wrong for the eval running alone too.
 
 ### Step 28 — Online scanning in the fleet ⚠ upstream 20 + 21 + 22
 
