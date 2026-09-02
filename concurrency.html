@@ -162,6 +162,10 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
  <span class="dropdown-text">Error Handling</span></a>
   </li>  
         <li>
+    <a class="dropdown-item" href="./scanners.html">
+ <span class="dropdown-text">Scanners</span></a>
+  </li>  
+        <li>
     <a class="dropdown-item" href="./runbook.html">
  <span class="dropdown-text">Agent Runbook</span></a>
   </li>  
@@ -251,6 +255,12 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <div class="sidebar-item-container"> 
   <a href="./errors.html" class="sidebar-item-text sidebar-link">
  <span class="menu-text">Error Handling</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./scanners.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Scanners</span></a>
   </div>
 </li>
           <li class="sidebar-item">
@@ -453,14 +463,12 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
    
   <ul>
   <li><a href="#overview" id="toc-overview" class="nav-link active" data-scroll-target="#overview">Overview</a></li>
-  <li><a href="#one-process-per-task" id="toc-one-process-per-task" class="nav-link" data-scroll-target="#one-process-per-task">One process per task</a></li>
-  <li><a href="#max_tasks-how-much-runs-at-once" id="toc-max_tasks-how-much-runs-at-once" class="nav-link" data-scroll-target="#max_tasks-how-much-runs-at-once"><code>max_tasks</code> — how much runs at once</a></li>
-  <li><a href="#max_workers-how-many-processes" id="toc-max_workers-how-many-processes" class="nav-link" data-scroll-target="#max_workers-how-many-processes"><code>max_workers</code> — how many processes</a></li>
-  <li><a href="#max_samples-load-within-a-task" id="toc-max_samples-load-within-a-task" class="nav-link" data-scroll-target="#max_samples-load-within-a-task"><code>max_samples</code> — load within a task</a></li>
-  <li><a href="#the-ramp" id="toc-the-ramp" class="nav-link" data-scroll-target="#the-ramp">The ramp</a></li>
-  <li><a href="#provider-load" id="toc-provider-load" class="nav-link" data-scroll-target="#provider-load">Provider load</a></li>
-  <li><a href="#one-setting-three-spellings" id="toc-one-setting-three-spellings" class="nav-link" data-scroll-target="#one-setting-three-spellings">One setting, three spellings</a></li>
-  <li><a href="#inspects-knobs-said-inspects-way" id="toc-inspects-knobs-said-inspects-way" class="nav-link" data-scroll-target="#inspects-knobs-said-inspects-way">Inspect’s knobs, said inspect’s way</a></li>
+  <li><a href="#sandboxes" id="toc-sandboxes" class="nav-link" data-scroll-target="#sandboxes">Sandboxes</a></li>
+  <li><a href="#samples-and-tasks" id="toc-samples-and-tasks" class="nav-link" data-scroll-target="#samples-and-tasks">Samples and Tasks</a></li>
+  <li><a href="#model-connections" id="toc-model-connections" class="nav-link" data-scroll-target="#model-connections">Model Connections</a></li>
+  <li><a href="#automatic-ramp" id="toc-automatic-ramp" class="nav-link" data-scroll-target="#automatic-ramp">Automatic Ramp</a></li>
+  <li><a href="#worker-processes" id="toc-worker-processes" class="nav-link" data-scroll-target="#worker-processes">Worker Processes</a></li>
+  <li><a href="#docker-configuration" id="toc-docker-configuration" class="nav-link" data-scroll-target="#docker-configuration">Docker Configuration</a></li>
   </ul>
 </nav>
     </div>
@@ -488,162 +496,110 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 
 <section id="overview" class="level2">
 <h2 class="anchored" data-anchor-id="overview">Overview</h2>
-<p>Concurrency under Steward has three dimensions, and they are controlled by three different knobs with three different owners:</p>
-<table class="caption-top table">
-<colgroup>
-<col style="width: 33%">
-<col style="width: 33%">
-<col style="width: 33%">
-</colgroup>
-<thead>
-<tr class="header">
-<th>Dimension</th>
-<th>Knob</th>
-<th>Owner</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td>How many tasks run at once</td>
-<td><code>max_tasks</code></td>
-<td>your definition</td>
-</tr>
-<tr class="even">
-<td>How many processes those tasks are divided into</td>
-<td><code>max_workers</code></td>
-<td><code>_steward.yaml</code></td>
-</tr>
-<tr class="odd">
-<td>How many samples run at once within a task</td>
-<td><code>max_samples</code></td>
-<td>your definition</td>
-</tr>
-</tbody>
-</table>
-<p>By default all tasks run at once, each in its own process, with sample concurrency taken from your definition. This page explains what each knob actually does, why they are split the way they are, and how to override them.</p>
+<p>The two most important concurrency dimensions to consider when running agentic evaluations are how many samples can be run in parallel (bounded by compute) and how much inference can be run in parallel (bounded by provider rate limits). It’s important to try to match these well during execution, so that you don’t pay for compute that sits idle while waiting on rate limits.</p>
 </section>
-<section id="one-process-per-task" class="level2">
-<h2 class="anchored" data-anchor-id="one-process-per-task">One process per task</h2>
-<p>Steward runs each task in its own worker process rather than running the eval set in one process. This buys two things:</p>
+<section id="sandboxes" class="level2">
+<h2 class="anchored" data-anchor-id="sandboxes">Sandboxes</h2>
+<p>Sandboxes are either local (e.g.&nbsp;Docker) or remote (e.g.&nbsp;k8s, Daytona). In either case it’s important to optimize allocation of sandboxes. For the local case, available CPU cores and memory create an upper bound. For remote, while you may have infinite elastic capacity you won’t want to pay for an over-allocation of sandboxes idled by model rate limits.</p>
+<p>By default, local sandboxes are limited to 2 * available CPU cores for Docker, and unlimited for other providers. You can set an explicit <code>max_sandboxes</code> to override the default behavior.</p>
+</section>
+<section id="samples-and-tasks" class="level2">
+<h2 class="anchored" data-anchor-id="samples-and-tasks">Samples and Tasks</h2>
+<p>By default, Steward runs 40 samples in parallel for each task (<code>max_samples=40</code>), and runs all tasks in the eval set in parallel (each in their own process). The 40 is a starting point: Steward <a href="#automatic-ramp">ramps sample concurrency</a> toward 200 while the provider keeps up. Set <code>max_samples</code> yourself and Steward honors that number exactly and never ramps.</p>
+<p>You can change these defaults in your call to <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span>:</p>
+<div class="code-with-filename">
+<div class="code-with-filename-file">
+<pre><strong>evalset.py</strong></pre>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1" data-filename="evalset.py"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a>eval_set(</span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>  ...,</span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>  max_tasks<span class="op">=</span><span class="dv">10</span>,    <span class="co"># run only 10 tasks at a time</span></span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a>  max_samples<span class="op">=</span><span class="dv">100</span>  <span class="co"># run 100 samples per task with NO auto-ramp</span></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>For the above configuration, 1,000 samples will be run in parallel, and stay there, because setting <code>max_samples</code> turns the ramp off. Left unset, the same 10 tasks would start at 400 samples and climb toward 2,000. If your sandbox infrastructure can handle that then the next thing to consider is whether your model API can keep up.</p>
+</section>
+<section id="model-connections" class="level2">
+<h2 class="anchored" data-anchor-id="model-connections">Model Connections</h2>
+<p>By default, Steward uses Inspect’s adaptive connections concurrency controller to automatically find the highest sustainable <code>max_connections</code> for the model provider endpoint. You can customize this behavior by either setting a fixed <code>max_connections</code> or a custom configuration for adaptive connections in your call to <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span>:</p>
+<div class="code-with-filename">
+<div class="code-with-filename-file">
+<pre><strong>evalset.py</strong></pre>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2" data-filename="evalset.py"><pre class="sourceCode python code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a>eval_set(</span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a>  ...,</span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a>  max_connections<span class="op">=</span><span class="dv">100</span>  <span class="co"># fixed connections, no adaptive concurrency</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>Sample concurrency and connection concurrency are tuned together: while a ramp is active, Steward raises the adaptive controller’s ceiling to match the ramp’s, so the two do not work against each other.</p>
+</section>
+<section id="automatic-ramp" class="level2">
+<h2 class="anchored" data-anchor-id="automatic-ramp">Automatic Ramp</h2>
+<p>While Steward starts with <code>max_samples=40</code>, it will also attempt to automatically ramp sample concurrency according to how well the model provider is handling the load.</p>
+<p>During each <code>steward tend</code> operation, Steward checks to see if the following is true:</p>
 <ul>
-<li><strong>Fault isolation.</strong> An OOM or a segfault costs one task rather than the run.</li>
-<li><strong>Real CPU parallelism.</strong> A task’s Python work — transcript construction, JSON serialization, <code>.eval</code> compression, non-model scorers — serializes behind the GIL in a single process. Across processes it runs in parallel.</li>
+<li>The sample limiter is saturated (demand for more samples);</li>
+<li>The model provider showed no rate-limit pushback;</li>
+<li>No sample errored, and HTTP retries did not surge;</li>
 </ul>
-<p>The cost is per-process startup: every worker imports your definition and its dependencies before it can run. For plain <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> definitions this is seconds; execution frameworks can charge more (see <a href="./flow.html">Inspect Flow</a> and <a href="./hawk.html">Inspect Hawk</a> for what each costs).</p>
+<p>If all checks pass, then tend adds an additional 20 samples to the limit. This ramp continues up to 200 as long as the checks continue to pass.</p>
+<p>On sustained pushback (rate-limit episodes in two consecutive windows) the ramp reverses. The connection ceiling is clamped down to where Inspect’s own controllers already fell, and sample concurrency steps back down so new samples stop being admitted against capacity that is not there. Samples already running are never interrupted. The way back up is stepwise, through the same gates.</p>
+<p>Set the range with <code>samples_ramp</code> in the Steward config file or the <code>STEWARD_SAMPLES_RAMP</code> environment variable:</p>
+<div class="code-with-filename">
+<div class="code-with-filename-file">
+<pre><strong>_steward.yaml</strong></pre>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3" data-filename="_steward.yaml"><pre class="sourceCode yaml code-with-copy"><code class="sourceCode yaml"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="fu">samples_ramp</span><span class="kw">:</span><span class="at"> </span><span class="kw">[</span><span class="dv">40</span><span class="kw">,</span><span class="at"> </span><span class="dv">300</span><span class="kw">]</span><span class="co">   # explore this range</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="fu">samples_ramp</span><span class="kw">:</span><span class="at"> </span><span class="ch">false</span><span class="co">       # never ramp; tasks stay at 40</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>Narrowing the range works on a live run: a task the ramp had taken to 200 comes back to a new ceiling of 100 at the next tend.</p>
+<p>To freeze the climb without changing configuration:</p>
+<div class="code-with-filename">
+<div class="code-with-filename-file">
+<pre><strong>Terminal</strong></pre>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4" data-filename="Terminal"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="ex">steward</span> ramp hold <span class="at">--reason</span> <span class="st">"provider looks unhappy"</span></span>
+<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="ex">steward</span> ramp resume</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>Note that <code>max_sandboxes</code> is a machine-wide budget that bounds the fleet-wide sum of sample setpoints, where workers start at a share of the budget instead of at 40. The budget is your definition’s <code>max_sandboxes</code> if it sets one, otherwise what the sandbox provider reports (e.g.&nbsp;Docker’s 2 * available CPUs). Elastic providers such as k8s have no limit.</p>
 </section>
-<section id="max_tasks-how-much-runs-at-once" class="level2">
-<h2 class="anchored" data-anchor-id="max_tasks-how-much-runs-at-once"><code>max_tasks</code> — how much runs at once</h2>
-<p><code>max_tasks</code> caps how many tasks are in flight across the whole fleet. Unset, every task runs at once. Set, tasks queue in the order your definition declares them, and each completed task frees a slot for the next.</p>
-<p>It belongs in your definition — <code>eval_set(max_tasks=...)</code> — and <code>_steward.yaml</code> refuses it by name, on the rule that also refuses <code>max_samples</code>: <strong>inspect’s words go in the definition; <code>_steward.yaml</code> holds only words <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> does not know.</strong> For one run you can still say it inspect’s way (see below). Steward reads whichever value is in force and applies it to the fleet, so the number means what it says even though each worker is handed only its own share of it.</p>
-<p>One difference from a plain <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> run worth knowing: leaving it unset means <em>every task at once</em> here, where <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval">eval()</a></span>’s own rule for an unset <code>max_tasks</code> is one at a time. A fleet exists to run wide, and saying nothing is no preference rather than a preference for sequential.</p>
-</section>
-<section id="max_workers-how-many-processes" class="level2">
-<h2 class="anchored" data-anchor-id="max_workers-how-many-processes"><code>max_workers</code> — how many processes</h2>
-<p><code>max_workers</code> divides the in-flight tasks into fewer processes than one each, packing several tasks into each worker. It changes <em>nothing</em> about how much runs at once — that is <code>max_tasks</code> — only how many processes carry it.</p>
-<p>Packing trades away fault isolation to buy back startup cost. It is worth reaching for when per-process startup is expensive (an execution framework that builds a venv per process, a definition with heavy imports) and not otherwise. Unset, every task gets its own process.</p>
-</section>
-<section id="max_samples-load-within-a-task" class="level2">
-<h2 class="anchored" data-anchor-id="max_samples-load-within-a-task"><code>max_samples</code> — load within a task</h2>
-<p>Sample concurrency is a property of the eval — its author knows the workload — so <code>max_samples</code> belongs in your definition and <code>_steward.yaml</code> refuses it by name. An explicit value <strong>pins</strong> the setpoint: Steward honors it as written and never moves it.</p>
-<p>When nobody pins one, sample concurrency is not a fixed default — it is discovered. When a worker is spawned, the number resolves most specific first:</p>
-<table class="caption-top table">
-<colgroup>
-<col style="width: 50%">
-<col style="width: 50%">
-</colgroup>
-<thead>
-<tr class="header">
-<th>Source</th>
-<th>Meaning</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td><code>STEWARD_MAX_SAMPLES</code> in this shell</td>
-<td>an operator typed a number for this turn: pinned, nothing outranks it, and it holds for the rest of the run rather than the turn</td>
-</tr>
-<tr class="even">
-<td><code>steward launch --max-samples</code></td>
-<td>a number typed for this run, recorded in the manifest: pinned</td>
-</tr>
-<tr class="odd">
-<td>the definition’s <code>max_samples</code></td>
-<td>the eval’s own preference: pinned, honored as written</td>
-</tr>
-<tr class="even">
-<td>the ramp</td>
-<td>nobody expressed a preference, so tasks start at <code>40</code> and Steward tunes from there</td>
-</tr>
-</tbody>
-</table>
-<p>The definition’s row is whatever it passes to <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span>, which includes anything the framework running it sets on your behalf. <a href="./hawk.html#hawk-sets-the-concurrency-so-the-ramp-does-not-run">Hawk</a> always supplies a <code>max_samples</code> (default <code>1000</code>), so <strong>Hawk eval sets are always pinned and never ramp</strong> — set the value you want in the Hawk config. Flow specs and plain <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> definitions leave it unset unless you write one, so they ramp.</p>
-</section>
-<section id="the-ramp" class="level2">
-<h2 class="anchored" data-anchor-id="the-ramp">The ramp</h2>
-<p>The right sample concurrency is roughly <em>what the provider will actually serve</em>, which is not a number anyone can look up — it varies by account tier, by model, and by time of day. So by default Steward discovers it: every task starts at the ramp’s floor (<code>40</code>), and each tend buys one <code>+20</code> step toward the ceiling (<code>200</code>) when the task’s window since the last tend was <strong>clean</strong>:</p>
+<section id="worker-processes" class="level2">
+<h2 class="anchored" data-anchor-id="worker-processes">Worker Processes</h2>
+<p>Steward runs each task in its own worker process. This provides two things:</p>
 <ul>
-<li>the sample limiter was saturated — demand exists, so raising it means something;</li>
-<li>the provider showed no rate-limit pushback (inspect’s adaptive connection controllers record every cut they take, so an episode is visible rather than inferred);</li>
-<li>no sample errored, and HTTP retries did not surge (a quarter of a retry per sample slot is the line — not zero, because transient 5xxs and dropped connections are ordinary and a zero-tolerance gate would park the ramp against any imperfect endpoint);</li>
-<li>the worker’s CPU had headroom over the window;</li>
-<li>at least twenty minutes passed since the task’s last step, so a new batch has time to reach steady state before it is measured.</li>
+<li><p>Fault isolation. An OOM or a segfault costs one task, not the run.</p></li>
+<li><p>CPU parallelism. A task’s Python work (transcript construction, JSON serialization, <code>.eval</code> compression, non-model scorers) serializes behind the GIL in a single process, and runs in parallel across several.</p></li>
 </ul>
-<p>On <strong>sustained</strong> pushback — episodes in two consecutive windows, the retry storm that independent per-process controllers cannot escape on their own — the ramp reverses at once: the adaptive connection ceiling is clamped down to where the controllers already fell (backoffs stop in seconds), and sample concurrency steps back down so new samples stop being admitted against connection capacity that is not there. Samples already running are never interrupted; they drain as they finish. The way back up is stepwise, through the same clean-window gates.</p>
-<p>Two more bounds cap the climb:</p>
-<ul>
-<li><strong><code>max_sandboxes</code> is a machine-wide budget.</strong> The fleet-wide sum of sample setpoints never exceeds it — a task’s containers never exceed its running samples, so bounding the sum bounds the containers. The budget is your definition’s <code>max_sandboxes</code> if it sets one, otherwise the sandbox provider’s own default; elastic providers (k8s) cap nothing.</li>
-<li><strong>The envelope.</strong> The range itself, settable in <code>_steward.yaml</code>:</li>
-</ul>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode yaml code-with-copy"><code class="sourceCode yaml"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">samples_ramp</span><span class="kw">:</span><span class="at"> </span><span class="kw">[</span><span class="dv">40</span><span class="kw">,</span><span class="at"> </span><span class="dv">300</span><span class="kw">]</span><span class="co">   # explore this range</span></span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="fu">samples_ramp</span><span class="kw">:</span><span class="at"> </span><span class="ch">false</span><span class="co">       # never ramp; tasks stay at 40</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Every move is recorded three ways: in the eval log (who, when, old → new, and why — inspect’s own retune provenance), in the journal as an action, and in the run history every summary carries (<code>ramped &lt;task&gt; 60→80 — no rate-limit pushback with the limiter saturated…</code>). The tuning block under the status table shows each task’s level and whatever is currently gating its next step.</p>
-<p><strong>Holding the ramp.</strong> An agent (or you) can freeze the climb without touching configuration: <code>steward ramp hold --reason "..."</code> holds the fleet (add a task identifier to hold one arm), and <code>steward ramp resume</code> re-arms it. A hold stops growth only — the defensive cut stays active, because it exists precisely for when nobody is watching.</p>
-<p><strong>When capacity outruns authority.</strong> If a <em>pinned</em> setpoint holds a clean, saturated window for two tends running, or a ramp tops out at its ceiling with pushback still absent, Steward raises a <code>tuning_proposal</code> — the binding constraint is a number a person chose, so only a person may move it. Acknowledge it to say “seen, happy where it is”; the acknowledgment is narrow, because a different level is a different item.</p>
+<p>The cost is startup, since every worker imports your definition and its dependencies before it can run. For plain <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> definitions that is seconds; <a href="./flow.html">Flow</a> and <a href="./hawk.html">Hawk</a> can have longer startup times.</p>
+<p>Where startup is expensive, pack the fleet into fewer processes:</p>
+<div class="code-with-filename">
+<div class="code-with-filename-file">
+<pre><strong>_steward.yaml</strong></pre>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5" data-filename="_steward.yaml"><pre class="sourceCode yaml code-with-copy"><code class="sourceCode yaml"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="fu">max_workers</span><span class="kw">:</span><span class="at"> </span><span class="dv">8</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>This changes nothing about how much runs at once (that is <code>max_tasks</code> and <code>max_samples</code>), only how many processes carry it.</p>
 </section>
-<section id="provider-load" class="level2">
-<h2 class="anchored" data-anchor-id="provider-load">Provider load</h2>
-<p>A fleet’s demand on a model provider is the product of the knobs above: <code>max_tasks</code> tasks, each running <code>max_samples</code> samples, is <code>max_tasks × max_samples</code> concurrent generate calls against whatever providers the tasks use.</p>
-<p>The total is still worth computing before a large run — the ramp’s ceiling bounds where discovery can take it, and <code>max_tasks × 200</code> is the number the default envelope authorizes. Within one process, inspect’s adaptive connection controllers manage the connection pool on their own (AIMD, exactly as TCP shares a link); when a ramp is active Steward raises their scaling ceiling to the ramp’s ceiling so the two do not fight, and the ramp moves only the <em>bounds</em> while the controllers move within them.</p>
-</section>
-<section id="one-setting-three-spellings" class="level2">
-<h2 class="anchored" data-anchor-id="one-setting-three-spellings">One setting, three spellings</h2>
-<p>Every setting Steward owns can be said three ways, and they resolve most specific first — <strong>flag, then variable, then file, then default</strong>:</p>
-<table class="caption-top table">
-<tbody>
-<tr class="odd">
-<td><code>max_workers: 8</code> in <code>_steward.yaml</code></td>
-<td>what this project wants</td>
-</tr>
-<tr class="even">
-<td><code>STEWARD_MAX_WORKERS=8</code></td>
-<td>what this machine or this shell wants</td>
-</tr>
-<tr class="odd">
-<td><code>steward tend --max-workers 8</code></td>
-<td>what this invocation wants</td>
-</tr>
-</tbody>
-</table>
-<p>That holds for every setting Steward owns, with no exceptions to remember — <code>max_workers</code>, <code>stall_after</code>, <code>samples_ramp</code>, <code>tend_interval</code>, and <code>policies</code> among them. All three spellings go through one parser, so a value that is refused in the file is refused the same way and with the same message everywhere else — <code>STEWARD_MAX_WORKERS=yes</code> fails naming the <code>True</code> that YAML made of it, exactly as <code>max_workers: yes</code> does.</p>
-<p>Two details worth knowing. <code>--tend-interval</code> appears on <code>steward launch</code> and <code>steward timer arm</code> but not on <code>tend</code> or <code>status</code>, because those run a single turn and have no cadence to set. And a <code>STEWARD_*</code> name Steward does not recognise is <strong>refused</strong>, not ignored — a misspelled <code>STEWARD_SAMPLE_RAMP</code> that sat inert would be a setting you believed was in force.</p>
-</section>
-<section id="inspects-knobs-said-inspects-way" class="level2">
-<h2 class="anchored" data-anchor-id="inspects-knobs-said-inspects-way">Inspect’s knobs, said inspect’s way</h2>
-<p><code>max_tasks</code> and <code>max_samples</code> are not in that table, and that is the ownership rule rather than an omission: they are words <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> knows, so your definition owns them and Steward mints no synonym. They are still sayable for one run, because <strong>a Steward run is an <code>inspect eval-set</code> invocation with a longer lifetime</strong> — so it reads the environment that CLI documents, and accepts the same options at <code>launch</code>:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="ex">steward</span> launch <span class="at">--epochs</span> 2 <span class="at">--limit</span> 5      <span class="co"># this run</span></span>
-<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="va">INSPECT_EVAL_MAX_SAMPLES</span><span class="op">=</span>20 <span class="ex">steward</span> tend <span class="co"># this shell, and every inspect eval in it</span></span>
-<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="va">STEWARD_MAX_SAMPLES</span><span class="op">=</span>20 <span class="ex">steward</span> tend      <span class="co"># this shell, but only for Steward</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>The last two are the same knob at different scopes, and the narrower wins. Inspect’s variable is broad by construction — exported in a shell it reaches every <code>inspect eval</code> there — so <code>STEWARD_MAX_SAMPLES</code> is how you say it quietly.</p>
-<p>Every identity-neutral <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> argument works this way, not just these two: <code>--epochs</code>, <code>--limit</code>, <code>--sample-id</code>, <code>--max-connections</code>, <code>--sandbox</code>, <code>--tags</code>, and the rest. See <code>steward launch --help</code>, where they sit under their own heading. What you cannot override is anything that changes <strong>task identity</strong> — the model, the solver, the task args, the execution limits — because a worker computing a different identifier than the manifest recorded would write a log nothing ever looks for.</p>
-<p><strong>Each spelling keeps its own syntax, because each is read by its owner.</strong> Inspect’s variables are read by inspect — the same code path <code>inspect eval</code> uses, so <code>INSPECT_EVAL_LIMIT=10-20</code> and <code>INSPECT_EVAL_SAMPLE_ID=a,b</code> mean here exactly what they mean there, including the several whose names read backwards (<code>INSPECT_EVAL_SCORE_DISPLAY</code> is bound to <code>--no-score-display</code>, so setting it turns the display <em>off</em>). Steward’s flag and its <code>STEWARD_*</code> alias go through Steward’s parser, the one <code>_steward.yaml</code> uses, so a range is <code>--limit '[10, 20]'</code> and <code>STEWARD_LIMIT='[10, 20]'</code>. Same knob, same value, and each surface consistent with the rest of itself.</p>
-<p>One of inspect’s words is Steward’s here: <code>notification</code>. See <a href="./workflow.html#getting-told">Getting told</a> — the channel Steward posts to and the channel your workers post from have to be one channel, so Steward owns the setting in all three spellings and both halves are wired from it.</p>
-<p><strong>These are set once, at launch, and recorded in the manifest.</strong> That is what makes them survive to the 02:00 tend, which inherits no shell: the enumeration and the fleet read the same values because the fleet reads the ones the enumeration was made under. <code>tend</code> and <code>status</code> recompute Steward’s own settings every turn and never re-decide the run’s shape.</p>
-<p><strong>These persist across a re-launch, and one flag replaces all of them.</strong> A second <code>steward launch</code> — the amend path, for picking up an edited definition — reuses whatever the committed manifest recorded, the same way it reuses <code>-A</code> arguments, because forgetting a flag should not silently reshape the run. Say any one of them again and the whole set is replaced rather than merged, so <em>this run has no limit</em> stays sayable; <code>--no-overrides</code> goes back to the definition’s own shape and ignores the environment while it does.</p>
-<p><strong>Changing which samples run re-runs the tasks.</strong> <code>limit</code>, <code>sample_id</code> and <code>sample_shuffle</code> sit outside task identity so that raising a limit <em>resumes</em> rather than orphaning what has already run — but that also means a different slice of the same size keeps every identifier and every count. Steward compares a log against the slice the run is now asking for, so a re-launch that reshuffles or moves the range marks those tasks <code>reshaped</code> and runs them again; <code>steward launch</code> reports the change and how many tasks it would redo, and stops the fleet, since a worker’s slice is fixed when it spawns and it would otherwise spend hours producing a log the next tend discards. Overriding <code>--sandbox</code> or <code>--model-base-url</code> also re-runs the tasks, and more sharply: those are marked <code>redirected</code> and started <strong>fresh</strong> rather than resumed. Inspect resumes by looking each sample of the new slice up in the prior log by id, which is exactly what makes a reshape resumable — the samples it keeps are still good answers. A redirect keeps the whole sample set and invalidates every answer in it, so resuming would find all of them, reuse all of them, and finish having run nothing. Only a launch that overrode them counts, since nothing records what a definition asked for. The earlier logs are kept as superseded attempts, as with any re-run — and kept usefully: a shape you return to is answered by the attempt that answered it the first time, so slice A, then B, then A again re-runs nothing on the way back.</p>
-<p><strong>The other is <code>log_dir</code>.</strong> Steward decides where a run’s logs go — the fleet is watched from that directory — so there is no <code>--log-dir</code>, no <code>STEWARD_LOG_DIR</code>, and <code>INSPECT_LOG_DIR</code> is refused at launch rather than quietly ignored. What Steward will not do is <em>override</em> a <code>log_dir</code> your definition names; where your definition names none, see <a href="./workflow.html#where-your-logs-go">Where your logs go</a>, which is the case worth preferring.</p>
-<p><strong>Fleet width lapses; a sample pin does not.</strong> <code>max_tasks</code> is recomputed from scratch every turn, so a value that is not repeated simply stops applying. Sample concurrency is different, because a value there does not just set a number — it pins the setpoint and switches the ramp off. So the pin is remembered for the rest of the run, and the way to release it is a <code>samples_ramp</code> <strong>range</strong>, in whichever spelling suits:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode yaml code-with-copy"><code class="sourceCode yaml"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="fu">samples_ramp</span><span class="kw">:</span><span class="at"> </span><span class="kw">[</span><span class="dv">40</span><span class="kw">,</span><span class="at"> </span><span class="dv">200</span><span class="kw">]</span><span class="co">   # ramp again, whatever an earlier pin set</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Narrowing the range works on a live run too: a task the ramp had taken to 200 is brought back to a new ceiling of 100 at the next tend, and any worker respawned after the edit starts inside the new range.</p>
+<section id="docker-configuration" class="level2">
+<h2 class="anchored" data-anchor-id="docker-configuration">Docker Configuration</h2>
+<p>Docker has a ceiling on concurrent sandboxes that has nothing to do with the size of your machine. Every sandboxed sample gets its own compose project, and every compose project gets its own bridge network, allocated from Docker’s <code>default-address-pools</code>. The built-in value carves two ranges into sixteen networks each, so a host runs about thirty sandboxes however many cores it has. Samples past that fail with:</p>
+<pre><code>could not find an available, non-overlapping IPv4 address pool
+among the defaults to assign to the network</code></pre>
+<p><code>steward launch</code> reads the daemon and tells you when your run wants more sandboxes than it can give, offering to write the fix into your <code>daemon.json</code>:</p>
+<div class="code-with-filename">
+<div class="code-with-filename-file">
+<pre><strong>daemon.json</strong></pre>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7" data-filename="daemon.json"><pre class="sourceCode json code-with-copy"><code class="sourceCode json"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="fu">{</span></span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a>  <span class="dt">"default-address-pools"</span><span class="fu">:</span> <span class="ot">[</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span> <span class="dt">"base"</span><span class="fu">:</span> <span class="st">"172.17.0.0/12"</span><span class="fu">,</span> <span class="dt">"size"</span><span class="fu">:</span> <span class="dv">20</span> <span class="fu">}</span><span class="ot">,</span></span>
+<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a>    <span class="fu">{</span> <span class="dt">"base"</span><span class="fu">:</span> <span class="st">"192.168.0.0/16"</span><span class="fu">,</span> <span class="dt">"size"</span><span class="fu">:</span> <span class="dv">24</span> <span class="fu">}</span></span>
+<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a>  <span class="ot">]</span></span>
+<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a><span class="fu">}</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>That is the same two ranges Docker already claims, carved finer: 512 networks instead of 32. Declining is the default, and prints the JSON along with the file to put it in.</p>
+<p>Steward never restarts the daemon, and nothing takes effect until you do. A restart stops every running container on the machine, so the timing is yours. The launch prints the command for your platform.</p>
+<p>See <a href="https://straz.to/2021-09-08-docker-address-pools/">Docker’s default address pools</a> for background.</p>
 
 
 </section>

@@ -34,43 +34,47 @@
   </url>
   <url>
     <loc>https://meridianlabs-ai.github.io/inspect_steward/hawk.html</loc>
-    <lastmod>2026-08-31T15:15:19.379Z</lastmod>
+    <lastmod>2026-09-02T01:19:41.698Z</lastmod>
   </url>
   <url>
     <loc>https://meridianlabs-ai.github.io/inspect_steward/flow.html</loc>
-    <lastmod>2026-08-31T15:15:19.378Z</lastmod>
+    <lastmod>2026-09-02T00:46:08.296Z</lastmod>
   </url>
   <url>
-    <loc>https://meridianlabs-ai.github.io/inspect_steward/runbook.html</loc>
-    <lastmod>2026-08-31T15:15:19.385Z</lastmod>
-  </url>
-  <url>
-    <loc>https://meridianlabs-ai.github.io/inspect_steward/diagrams/workflow-brief.html</loc>
-    <lastmod>2026-08-31T15:15:19.374Z</lastmod>
-  </url>
-  <url>
-    <loc>https://meridianlabs-ai.github.io/inspect_steward/CHANGELOG.html</loc>
-    <lastmod>2026-08-31T11:34:28.010Z</lastmod>
-  </url>
-  <url>
-    <loc>https://meridianlabs-ai.github.io/inspect_steward/concurrency.html</loc>
-    <lastmod>2026-08-31T15:15:19.373Z</lastmod>
-  </url>
-  <url>
-    <loc>https://meridianlabs-ai.github.io/inspect_steward/errors.html</loc>
-    <lastmod>2026-08-31T15:15:19.378Z</lastmod>
+    <loc>https://meridianlabs-ai.github.io/inspect_steward/index.html</loc>
+    <lastmod>2026-09-02T01:12:30.745Z</lastmod>
   </url>
   <url>
     <loc>https://meridianlabs-ai.github.io/inspect_steward/diagrams/overview-brief.html</loc>
     <lastmod>2026-08-31T15:15:19.373Z</lastmod>
   </url>
   <url>
-    <loc>https://meridianlabs-ai.github.io/inspect_steward/index.html</loc>
-    <lastmod>2026-08-31T15:15:19.379Z</lastmod>
+    <loc>https://meridianlabs-ai.github.io/inspect_steward/errors.html</loc>
+    <lastmod>2026-09-02T00:33:55.651Z</lastmod>
+  </url>
+  <url>
+    <loc>https://meridianlabs-ai.github.io/inspect_steward/concurrency.html</loc>
+    <lastmod>2026-09-01T23:54:46.897Z</lastmod>
+  </url>
+  <url>
+    <loc>https://meridianlabs-ai.github.io/inspect_steward/CHANGELOG.html</loc>
+    <lastmod>2026-08-31T11:34:28.010Z</lastmod>
+  </url>
+  <url>
+    <loc>https://meridianlabs-ai.github.io/inspect_steward/diagrams/workflow-brief.html</loc>
+    <lastmod>2026-08-31T15:15:19.374Z</lastmod>
+  </url>
+  <url>
+    <loc>https://meridianlabs-ai.github.io/inspect_steward/runbook.html</loc>
+    <lastmod>2026-09-02T00:41:10.694Z</lastmod>
+  </url>
+  <url>
+    <loc>https://meridianlabs-ai.github.io/inspect_steward/scanners.html</loc>
+    <lastmod>2026-09-02T00:38:19.433Z</lastmod>
   </url>
   <url>
     <loc>https://meridianlabs-ai.github.io/inspect_steward/workflow.html</loc>
-    <lastmod>2026-08-31T15:15:19.385Z</lastmod>
+    <lastmod>2026-09-02T01:12:30.746Z</lastmod>
   </url>
   <url>
     <loc>https://meridianlabs-ai.github.io/inspect_steward/reference/steward_launch.html</loc>

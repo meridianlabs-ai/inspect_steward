@@ -167,6 +167,10 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
  <span class="dropdown-text">Error Handling</span></a>
   </li>  
         <li>
+    <a class="dropdown-item" href="./scanners.html">
+ <span class="dropdown-text">Scanners</span></a>
+  </li>  
+        <li>
     <a class="dropdown-item" href="./runbook.html">
  <span class="dropdown-text">Agent Runbook</span></a>
   </li>  
@@ -256,6 +260,12 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <div class="sidebar-item-container"> 
   <a href="./errors.html" class="sidebar-item-text sidebar-link">
  <span class="menu-text">Error Handling</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./scanners.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Scanners</span></a>
   </div>
 </li>
           <li class="sidebar-item">
@@ -554,9 +564,14 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>First, install Steward from GitHub with:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">pip</span> install git+https://github.com/meridianlabs-ai/inspect_steward</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <p>To use Steward, create a directory, switch to it, then call <code>steward init</code>:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="fu">mkdir</span> <span class="at">-p</span> ~/runs/swe-evals</span>
+<div class="code-with-filename">
+<div class="code-with-filename-file">
+<pre><strong>Terminal</strong></pre>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2" data-filename="Terminal"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="fu">mkdir</span> <span class="at">-p</span> ~/runs/swe-evals</span>
 <span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="bu">cd</span> ~/runs/swe-evals</span>
 <span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="ex">steward</span> init</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
 <p>This will scaffold up a Steward workspace with a placeholder <code>evalset.py</code>, a <code>_steward.yaml</code> for your standing rules, and an <code>AGENTS.md</code> file that teaches the agent how to use Steward to run an evaluation. First, define your eval set:</p>
 <div class="code-with-filename">
 <div class="code-with-filename-file">
@@ -570,7 +585,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>    model<span class="op">=</span>[<span class="st">"openai/gpt-5.6-sol"</span>, <span class="st">"anthropic/claude-opus-5"</span>],</span>
 <span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
-<p>Steward can manage any evalution defined with a script that ends in a call to <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> or alternatively a <code>flow.py</code> from <a href="https://meridianlabs-ai.github.io/inspect_flow/">Flow</a> or a <code>hawk.yaml</code> from <a href="https://hawk.metr.org">Hawk</a>.</p>
+<p>Steward can manage any evalution defined with a script that ends in a call to <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> or alternatively a <code>config.py</code> from <a href="https://meridianlabs-ai.github.io/inspect_flow/">Flow</a> or a <code>hawk.yaml</code> from <a href="https://hawk.metr.org">Hawk</a>.</p>
 </section>
 <section id="run-the-eval" class="level3">
 <h3 class="anchored" data-anchor-id="run-the-eval">Run the Eval</h3>
@@ -596,7 +611,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <div class="callout-body-container callout-body">
 <p>To be notified when things require your attention, we strongly recommend you also configure a notification channel. Put it in <code>_steward.yaml</code>, or — to keep the token out of your repository — in your <code>.env</code> file:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode ini code-with-copy"><code class="sourceCode ini"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="dt">STEWARD_NOTIFICATION</span><span class="ot">=</span><span class="st">slack://{OAuthToken}/{ChannelID}</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Anything <a href="https://github.com/caronc/apprise">Apprise</a> understands works: Slack, email, SMS, a webhook, or a config file naming several. It configures your workers too, so a sample waiting on your approval reaches the same place. See <a href="./workflow.html#getting-told">Getting told</a>.</p>
+<p>Anything <a href="https://github.com/caronc/apprise">Apprise</a> understands works: Slack, email, SMS, a webhook, or a config file naming several. It configures your workers too, so a sample waiting on your approval reaches the same place. See <a href="./workflow.html#notifications">Notifications</a>.</p>
 </div>
 </div>
 <p>The run depends on neither you nor the agent staying connected. When you come back, ask how it’s going:</p>
@@ -649,6 +664,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <li><p><a href="./workflow.html">Workflow</a> is the comprehensive guide to a Steward run: the workspace directory, launching and tending runs, agent and human decisions, and how a run ends.</p></li>
 <li><p><a href="./concurrency.html">Concurrency</a> describes the various options for tuning concurrency, including automatic ramping behavior and caps on resource utilization.</p></li>
 <li><p><a href="./errors.html">Error Handling</a> covers standing policies for error retries and resolution, including dealing with errors that are never resolved.</p></li>
+<li><p><a href="./scanners.html">Scanners</a> explains how transcripts are scanned for scoring integrity problems as the run proceeds, and what a finding asks of you.</p></li>
 <li><p><a href="./runbook.html">Agent Runbook</a> provides the full operating instructions that coding agents use to supervise and make decisions during runs.</p></li>
 </ul>
 <p>Integrations with execution environments are covered in <a href="./flow.html">Inspect Flow</a> and <a href="./hawk.html">Inspect Hawk</a>.</p>

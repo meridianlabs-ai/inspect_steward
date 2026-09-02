@@ -8,7 +8,7 @@ Read the static definition of an eval set.
 
 Executes the definition in a subprocess with eval-set capture enabled: the definition runs normally (including any side effects) up to its [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) call, which resolves all tasks, writes a manifest, and exits without running anything.
 
-[Source](https://github.com/meridianlabs-ai/inspect_steward/blob/3116da1e7146e5680ec56e251b5f9e630105f4ce/src/inspect_steward/_evalset/read.py#L48)
+[Source](https://github.com/meridianlabs-ai/inspect_steward/blob/83559a02c673f2482e51d17b0e53d5aca0cf0a61/src/inspect_steward/_evalset/read.py#L49)
 
 ``` python
 def read_eval_set(
@@ -44,7 +44,7 @@ Timeout in seconds for executing the definition.
 
 An eval set definition could not be read.
 
-[Source](https://github.com/meridianlabs-ai/inspect_steward/blob/3116da1e7146e5680ec56e251b5f9e630105f4ce/src/inspect_steward/_evalset/read.py#L26)
+[Source](https://github.com/meridianlabs-ai/inspect_steward/blob/83559a02c673f2482e51d17b0e53d5aca0cf0a61/src/inspect_steward/_evalset/read.py#L27)
 
 ``` python
 class ReadEvalSetError(Exception)
@@ -56,7 +56,7 @@ class ReadEvalSetError(Exception)
 
 Static enumeration of an eval set read from a definition.
 
-[Source](https://github.com/meridianlabs-ai/inspect_steward/blob/3116da1e7146e5680ec56e251b5f9e630105f4ce/src/inspect_steward/_evalset/manifest.py#L55)
+[Source](https://github.com/meridianlabs-ai/inspect_steward/blob/83559a02c673f2482e51d17b0e53d5aca0cf0a61/src/inspect_steward/_evalset/manifest.py#L71)
 
 ``` python
 class Manifest(BaseModel)
@@ -95,6 +95,11 @@ Inspect’s words as this run said them, or `None` where the run is the definiti
 
 `MANIFEST_VERSION` deliberately did not move for this, and the `capture_rss` reasoning only half covers it. That argument is about a *new* reader meeting an old manifest, where an absent field means *not measured* and nothing is lost. The other direction is not so comfortable: an **older** reader meeting this field drops it silently, accepts the manifest as version 1, and tends the run on the definition’s own values — a different eval than the one that was captured, with nothing said. What makes that acceptable is only that no such reader exists in the wild; the package is unreleased. The moment one does, this field is the reason to bump.
 
+`scan` ManifestScan \| None  
+The run’s scanning material, or `None` where nothing scans — no scanner in the definition and nothing injected at launch.
+
+Committed by the launch rather than the capture alone, because injection is the launch’s word: capture contributes `spec` and `scans` (`read_eval_set`), and the launch adds `injected` once the merge is settled. `MANIFEST_VERSION` deliberately did not move, on the `capture_rss` reasoning: absence means *this run does not scan*, which is exactly what an older manifest’s absence should mean to a newer tend — nothing to inject, fold, or finalize.
+
 `tasks` list\[[ManifestTask](../reference/enumeration.html.md#manifesttask)\]  
 Resolved tasks in the eval set.
 
@@ -102,7 +107,7 @@ Resolved tasks in the eval set.
 
 The source a manifest was read from: an eval set definition and the arguments it was invoked with.
 
-[Source](https://github.com/meridianlabs-ai/inspect_steward/blob/3116da1e7146e5680ec56e251b5f9e630105f4ce/src/inspect_steward/_evalset/manifest.py#L24)
+[Source](https://github.com/meridianlabs-ai/inspect_steward/blob/83559a02c673f2482e51d17b0e53d5aca0cf0a61/src/inspect_steward/_evalset/manifest.py#L27)
 
 ``` python
 class ManifestSource(BaseModel)
@@ -133,7 +138,7 @@ A fact about *reading* this definition rather than about the eval set, which is 
 
 A resolved task in an eval set manifest.
 
-[Source](https://github.com/meridianlabs-ai/inspect_steward/blob/3116da1e7146e5680ec56e251b5f9e630105f4ce/src/inspect_steward/_evalset/manifest.py#L48)
+[Source](https://github.com/meridianlabs-ai/inspect_steward/blob/83559a02c673f2482e51d17b0e53d5aca0cf0a61/src/inspect_steward/_evalset/manifest.py#L51)
 
 ``` python
 class ManifestTask(EvalSetCaptureTask)

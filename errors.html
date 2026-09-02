@@ -26,6 +26,41 @@ ul.task-list li input[type="checkbox"] {
   margin: 0 0.8em 0.2em -1em; /* quarto-specific, see https://github.com/quarto-dev/quarto-cli/issues/4556 */ 
   vertical-align: middle;
 }
+/* CSS for syntax highlighting */
+html { -webkit-text-size-adjust: 100%; }
+pre > code.sourceCode { white-space: pre; position: relative; }
+pre > code.sourceCode > span { display: inline-block; line-height: 1.25; }
+pre > code.sourceCode > span:empty { height: 1.2em; }
+.sourceCode { overflow: visible; }
+code.sourceCode > span { color: inherit; text-decoration: inherit; }
+div.sourceCode { margin: 1em 0; }
+pre.sourceCode { margin: 0; }
+@media screen {
+div.sourceCode { overflow: auto; }
+}
+@media print {
+pre > code.sourceCode { white-space: pre-wrap; }
+pre > code.sourceCode > span { text-indent: -5em; padding-left: 5em; }
+}
+pre.numberSource code
+  { counter-reset: source-line 0; }
+pre.numberSource code > span
+  { position: relative; left: -4em; counter-increment: source-line; }
+pre.numberSource code > span > a:first-child::before
+  { content: counter(source-line);
+    position: relative; left: -1em; text-align: right; vertical-align: baseline;
+    border: none; display: inline-block;
+    -webkit-touch-callout: none; -webkit-user-select: none;
+    -khtml-user-select: none; -moz-user-select: none;
+    -ms-user-select: none; user-select: none;
+    padding: 0 4px; width: 4em;
+  }
+pre.numberSource { margin-left: 3em;  padding-left: 4px; }
+div.sourceCode
+  {   }
+@media screen {
+pre > code.sourceCode > span > a:first-child::before { text-decoration: underline; }
+}
 </style>
 
 
@@ -36,7 +71,7 @@ ul.task-list li input[type="checkbox"] {
 <script src="site_libs/quarto-search/fuse.min.js"></script>
 <script src="site_libs/quarto-search/quarto-search.js"></script>
 <meta name="quarto:offset" content="./">
-<link href="./runbook.html" rel="next">
+<link href="./scanners.html" rel="next">
 <link href="./concurrency.html" rel="prev">
 <script src="site_libs/quarto-html/quarto.js" type="module"></script>
 <script src="site_libs/quarto-html/tabsets/tabsets.js" type="module"></script>
@@ -125,6 +160,10 @@ ul.task-list li input[type="checkbox"] {
         <li>
     <a class="dropdown-item" href="./errors.html">
  <span class="dropdown-text">Error Handling</span></a>
+  </li>  
+        <li>
+    <a class="dropdown-item" href="./scanners.html">
+ <span class="dropdown-text">Scanners</span></a>
   </li>  
         <li>
     <a class="dropdown-item" href="./runbook.html">
@@ -216,6 +255,12 @@ ul.task-list li input[type="checkbox"] {
   <div class="sidebar-item-container"> 
   <a href="./errors.html" class="sidebar-item-text sidebar-link active">
  <span class="menu-text">Error Handling</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./scanners.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Scanners</span></a>
   </div>
 </li>
           <li class="sidebar-item">
@@ -418,9 +463,12 @@ ul.task-list li input[type="checkbox"] {
    
   <ul>
   <li><a href="#overview" id="toc-overview" class="nav-link active" data-scroll-target="#overview">Overview</a></li>
-  <li><a href="#sample-errors" id="toc-sample-errors" class="nav-link" data-scroll-target="#sample-errors">Sample errors</a></li>
-  <li><a href="#task-failures" id="toc-task-failures" class="nav-link" data-scroll-target="#task-failures">Task failures</a></li>
-  <li><a href="#where-errors-surface" id="toc-where-errors-surface" class="nav-link" data-scroll-target="#where-errors-surface">Where errors surface</a></li>
+  <li><a href="#retry" id="toc-retry" class="nav-link" data-scroll-target="#retry">Retry</a></li>
+  <li><a href="#surface" id="toc-surface" class="nav-link" data-scroll-target="#surface">Surface</a></li>
+  <li><a href="#decide" id="toc-decide" class="nav-link" data-scroll-target="#decide">Decide</a></li>
+  <li><a href="#codify" id="toc-codify" class="nav-link" data-scroll-target="#codify">Codify</a></li>
+  <li><a href="#resolve" id="toc-resolve" class="nav-link" data-scroll-target="#resolve">Resolve</a></li>
+  <li><a href="#stuck-samples" id="toc-stuck-samples" class="nav-link" data-scroll-target="#stuck-samples">Stuck Samples</a></li>
   </ul>
 </nav>
     </div>
@@ -448,7 +496,65 @@ ul.task-list li input[type="checkbox"] {
 
 <section id="overview" class="level2">
 <h2 class="anchored" data-anchor-id="overview">Overview</h2>
-<p>Errors under Steward come in two tiers, and they are handled by different mechanisms with different owners:</p>
+<p>Inspect’s default behavior is to fail fast so that you can see and fix a problem. Steward runs unattended for hours at a time, so it does the opposite: errors never halt a run, retries are automatic, and anything a retry cannot fix becomes a decision that waits in a queue.</p>
+<p>Nothing is dropped silently. Every error is either retried or turned into a decision, and a run cannot be signed off while a decision is unanswered.</p>
+<table class="caption-top table">
+<thead>
+<tr class="header">
+<th>Stage</th>
+<th>What happens</th>
+<th>Who acts</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><a href="#retry">Retry</a></td>
+<td>Samples are retried in the worker, and failed tasks are respawned</td>
+<td>Steward, unattended</td>
+</tr>
+<tr class="even">
+<td><a href="#surface">Surface</a></td>
+<td>What survives retry is grouped into a class and raised as a decision</td>
+<td>Steward and your agent</td>
+</tr>
+<tr class="odd">
+<td><a href="#decide">Decide</a></td>
+<td>A ruling: a disposition, a reason, and a name</td>
+<td>you</td>
+</tr>
+<tr class="even">
+<td><a href="#codify">Codify</a></td>
+<td>Standing rules so the same question stops being asked</td>
+<td>your agent, in <code>_steward.yaml</code></td>
+</tr>
+<tr class="odd">
+<td><a href="#resolve">Resolve</a></td>
+<td>Signoff refuses while anything is still undecided</td>
+<td>you</td>
+</tr>
+</tbody>
+</table>
+<p>Transcript scanning follows the same stages, because a finding becomes a decision the same way an error does. See <a href="./scanners.html">Scanners</a>.</p>
+</section>
+<section id="retry" class="level2">
+<h2 class="anchored" data-anchor-id="retry">Retry</h2>
+<p>Steward runs workers with <code>fail_on_error=False</code>, so a sample that errors never fails its task. Every task runs to completion and its errored samples are collected in the log. Steward decides what to do about them by reading the logs, so a task that stopped on its first error would look like a structural failure and be re-launched.</p>
+<p>This means that completion is not success. A log can finish <code>success</code> while carrying errored samples, so a task whose provider was down for its entire duration still completes.</p>
+<p>Retries then happen at two levels:</p>
+<ul>
+<li><p>Samples are retried inside the worker (by default up to 3 times; set <code>retry_on_error</code> in your <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> call to choose your own number, including 0).</p></li>
+<li><p>Tasks are retried by Steward. Once <code>stall_after</code> attempts get nowhere (default <code>2</code>) the task is marked stalled and becomes a decision.</p></li>
+</ul>
+</section>
+<section id="surface" class="level2">
+<h2 class="anchored" data-anchor-id="surface">Surface</h2>
+<p>Samples that failed the same way are grouped into a class, so a provider outage is one question instead of two hundred. A stalled task is classed the same way, on the exception in its log or on the worker’s output if it died before writing one, so it arrives with its evidence attached.</p>
+<p>Classes appear under the anomalies heading in <code>steward status</code> and <code>status.md</code>, with instance counts, an example message, and any prior rulings. A class is raised once, and again only if it materially changes: the population crosses an order of magnitude, or a re-run fails.</p>
+<p>Your agent works the queue from here. <code>steward investigate</code> marks a class as being worked, and <code>steward propose</code> bundles related classes into one question with the evidence attached.</p>
+</section>
+<section id="decide" class="level2">
+<h2 class="anchored" data-anchor-id="decide">Decide</h2>
+<p>Agents will prompt you for a ruling with one of six answers:</p>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 33%">
@@ -457,45 +563,116 @@ ul.task-list li input[type="checkbox"] {
 </colgroup>
 <thead>
 <tr class="header">
-<th>Tier</th>
-<th>What happens</th>
-<th>Who decides what’s next</th>
+<th>Disposition</th>
+<th>What it means</th>
+<th>What happens to the data</th>
 </tr>
 </thead>
 <tbody>
 <tr class="odd">
-<td><strong>Sample errors</strong></td>
-<td>The task keeps running; errored samples are collected in the log</td>
-<td>You (or the agent, within your policy)</td>
+<td><code>rerun</code></td>
+<td>The failure was transient and the samples should run again</td>
+<td>Steward re-runs them and records whether they passed</td>
 </tr>
 <tr class="even">
-<td><strong>Task failures</strong></td>
-<td>The task is re-launched, up to <code>stall_after</code> attempts</td>
-<td>Steward, then you once the limit is hit</td>
+<td><code>exclude</code></td>
+<td>Leave the samples out of scoring</td>
+<td>The report says how many were excluded</td>
+</tr>
+<tr class="odd">
+<td><code>zero</code></td>
+<td>Count the samples as failures</td>
+<td>Scored zero, with a visible mark</td>
+</tr>
+<tr class="even">
+<td><code>score</code></td>
+<td>The recorded results stand as they are</td>
+<td>Scored as-is, marked</td>
+</tr>
+<tr class="odd">
+<td><code>accept</code></td>
+<td>The data stands with a caveat</td>
+<td>Requires a stated effect, which is the sentence the report carries. Not available for errored samples</td>
+</tr>
+<tr class="even">
+<td><code>dismiss</code></td>
+<td>Looked, nothing here</td>
+<td>No mark; the record keeps who looked and why</td>
 </tr>
 </tbody>
 </table>
+<p>The next tend carries out a <code>rerun</code>. Samples in a running task are requeued in place, and a landed log has the ruled samples invalidated so the task re-runs them and reuses everything else. Authorized re-runs are scheduled ahead of ordinary queued work.</p>
+<p>If the same failure comes back after a ruling, it opens as a new question and carries the old decision with it.</p>
 </section>
-<section id="sample-errors" class="level2">
-<h2 class="anchored" data-anchor-id="sample-errors">Sample errors</h2>
-<p>A sample that errors never halts its task: Steward runs every task to completion (<code>continue_on_fail</code> is forced on in worker mode, and a definition’s own setting has no effect under Steward). This is an invariant rather than an option because supervision depends on it — Steward reconciles the run by comparing logs against the manifest, and a task that halted on its first error would be indistinguishable from a structural failure, re-launched, and halted again.</p>
-<p>The consequence is that <strong>completion is not success</strong>: a log can finish <code>success</code> while carrying errored samples, so a task whose provider was down for its entire duration completes “successfully” with a meaningless score. Read the reported status, not the exit code.</p>
-<p>Two things govern what happens to errored samples:</p>
-<ul>
-<li><strong>Automatic retry</strong> belongs to your definition: set <code>retry_on_error</code> in your <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> call and it is honored exactly as written; when a definition says nothing, Steward workers default to 3 attempts per sample. Retrying samples release their concurrency slot and re-enter at the back of the queue, so retries never block healthy samples — they just tend to finish late in the task.</li>
-<li><strong>Everything past automatic retry is a decision</strong>: re-run the samples, accept them as failed, or exclude them from scoring. The agent groups errored samples into classes (a provider outage is one question, not two hundred) and either acts within your standing policy or asks you.</li>
-</ul>
-<p>To stop a run when error rates climb, write it as a policy rule — e.g.&nbsp;<em>“if more than 10% of the samples in a task error out, pause the run and notify me”</em> — which pauses the whole run reversibly rather than failing one task.</p>
+<section id="codify" class="level2">
+<h2 class="anchored" data-anchor-id="codify">Codify</h2>
+<p>“When you find yourself answering the same question twice, your agent will propose recording it in _steward.yaml so it stops being asked. For example:</p>
+<div class="code-with-filename">
+<div class="code-with-filename-file">
+<pre><strong>_steward.yaml</strong></pre>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1" data-filename="_steward.yaml"><pre class="sourceCode yaml code-with-copy"><code class="sourceCode yaml"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">preauthorized</span><span class="kw">:</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">'error:ReadTimeout@*'</span><span class="kw">:</span><span class="at"> rerun</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>When a new class matches a pattern, the tend records a ruling with <code>by: policy</code> naming the pattern and applies it in the same turn. Nothing is pre-authorized by default, and if a pre-authorized re-run fails, the pattern stops matching that class until a person has looked.</p>
+<p>Anything more nuanced than a pattern goes in <code>policies:</code> as prose, which your agent applies when one is in session:</p>
+<div class="code-with-filename">
+<div class="code-with-filename-file">
+<pre><strong>_steward.yaml</strong></pre>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2" data-filename="_steward.yaml"><pre class="sourceCode yaml code-with-copy"><code class="sourceCode yaml"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="fu">policies</span><span class="kw">:</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> If more than 10% of the samples in a task error out, pause the run and</span></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="at">    notify me right away.</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="kw">-</span><span class="at"> Sandbox startup timeouts under 1% are expected here; invalidate and re-run.</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>Use a policy to stop a run on error rates. Pausing is reversible and stops the whole run, which is usually better than failing one task.</p>
 </section>
-<section id="task-failures" class="level2">
-<h2 class="anchored" data-anchor-id="task-failures">Task failures</h2>
-<p>A task that fails outright — an import error, an OOM, a scorer that throws, a worker process that dies — is re-launched by the next turn of the monitor. Attempts are counted, and after <code>stall_after</code> of them finish nothing new (default: 2) the task is marked <strong>stalled</strong>: it will not be re-launched again, and it is reported as needing a person.</p>
-<p>The limit exists because a structural failure re-runs to the same place at full price — a definition that will not import fails identically on attempt ten. Steward never retries past the limit on its own; raising <code>stall_after</code> in <code>_steward.yaml</code> is how you buy more patience for a genuinely flaky environment (a sandbox fleet earns more of it than a deterministic scorer bug).</p>
-<p>When a person rules on a stalled task — fixing the definition and re-launching, or invalidating samples for a re-run — the attempt history before that ruling is cleared: a decision to try again is made by the only party entitled to make one, and what happened before it no longer counts against the task.</p>
+<section id="resolve" class="level2">
+<h2 class="anchored" data-anchor-id="resolve">Resolve</h2>
+<p><code>steward signoff</code> refuses while any error is still undecided, and lists every reason at once so that fixing one and being refused for the next never happens.</p>
+<p>The refusal tells you what to answer. It is not a quality bar: <code>accept</code> and <code>dismiss</code> are answers, and “2 samples accepted as errored, the provider was down all night” is a signed statement about the results.</p>
+<p>The classes you accepted become the entries in <code>anomalies.md</code>, each with its reason, who decided, when, and the effect on the numbers.</p>
 </section>
-<section id="where-errors-surface" class="level2">
-<h2 class="anchored" data-anchor-id="where-errors-surface">Where errors surface</h2>
-<p>Sample error counts and stalled tasks both appear in <code>steward status</code> and in the questions the agent brings you, each raised once rather than repeated every interval. Decisions and their reasons are recorded in the journal as they happen, so how the run’s errors were handled is part of the run’s record.</p>
+<section id="stuck-samples" class="level2">
+<h2 class="anchored" data-anchor-id="stuck-samples">Stuck Samples</h2>
+<p>One condition never becomes an error: a sample that is alive but not moving, such as a <code>bash</code> command that never returns. Nothing errors, nothing scores, and the task’s clock keeps running.</p>
+<p>A running sample with no activity for longer than <code>stuck_after</code> (default <code>5h</code>) is reported, one item per task, naming the samples and the tool call they are inside. Streaming counts as activity, so a slow but healthy <code>generate</code> is never stuck. A sample parked on an approval is waiting on you, and a provider backoff with a live deadline is waiting on purpose.</p>
+<p><code>stuck_after</code> only reports, and never cancels. To bound how long a sample may work, set <code>working_limit</code> in your definition.</p>
+<p>What to do about a stuck sample is an escalation ladder. The item carries the applicable rung as a command ready to run:</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Rung</th>
+<th>Command</th>
+<th>What it costs</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>Cancel the tool call</td>
+<td><code>inspect ctl sample cancel-tool-call TASK ID EPOCH</code></td>
+<td>The call fails inside the sample, which continues</td>
+</tr>
+<tr class="even">
+<td>Cancel the sample</td>
+<td><code>inspect ctl sample cancel TASK ID EPOCH</code></td>
+<td>The sample stops, recorded as you choose with <code>--action</code></td>
+</tr>
+<tr class="odd">
+<td>Requeue the sample</td>
+<td><code>inspect ctl sample requeue TASK ID EPOCH</code></td>
+<td>The sample’s work is discarded and it runs again from the start</td>
+</tr>
+</tbody>
+</table>
+<p>A cancel is a request. If one was asked for and the call still has not stopped, the item says so, which is your signal to climb a rung.</p>
+<p>You can grant the first rung in advance. <code>stuck_cancel: true</code> lets your agent cancel any stuck tool call itself, and <code>stuck_cancel: [bash]</code> admits only those tools. The higher rungs stay yours, since they discard work.</p>
+<p>A stuck sample is not an anomaly and there is nothing to rule on. It is reported while it holds and gone when the sample moves.</p>
 
 
 </section>
@@ -1020,8 +1197,8 @@ document.addEventListener("DOMContentLoaded", function () {
       </a>          
   </div>
   <div class="nav-page nav-page-next">
-      <a href="./runbook.html" class="pagination-link" aria-label="Agent Runbook">
-        <span class="nav-page-text">Agent Runbook</span> <i class="bi bi-arrow-right-short"></i>
+      <a href="./scanners.html" class="pagination-link" aria-label="Scanners">
+        <span class="nav-page-text">Scanners</span> <i class="bi bi-arrow-right-short"></i>
       </a>
   </div>
 </nav>

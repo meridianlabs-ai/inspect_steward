@@ -128,6 +128,10 @@ ul.task-list li input[type="checkbox"] {
  <span class="dropdown-text">Error Handling</span></a>
   </li>  
         <li>
+    <a class="dropdown-item" href="../scanners.html">
+ <span class="dropdown-text">Scanners</span></a>
+  </li>  
+        <li>
     <a class="dropdown-item" href="../runbook.html">
  <span class="dropdown-text">Agent Runbook</span></a>
   </li>  
@@ -217,6 +221,12 @@ ul.task-list li input[type="checkbox"] {
   <div class="sidebar-item-container"> 
   <a href="../errors.html" class="sidebar-item-text sidebar-link">
  <span class="menu-text">Error Handling</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../scanners.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Scanners</span></a>
   </div>
 </li>
           <li class="sidebar-item">
@@ -485,6 +495,18 @@ ul.task-list li input[type="checkbox"] {
 <td><code>--samples-ramp</code></td>
 <td>value</td>
 <td>Range to discover sample concurrency in, e.g.&nbsp;<code>[40, 300]</code>, or <code>false</code> to fix it. Overrides <code>samples_ramp</code> in <code>_steward.yaml</code> and <code>STEWARD_SAMPLES_RAMP</code>.</td>
+<td>None</td>
+</tr>
+<tr class="even">
+<td><code>--stuck-after</code></td>
+<td>value</td>
+<td>Quiet time before a running sample is reported stuck, with a unit, e.g.&nbsp;<code>5h</code>. Overrides <code>stuck_after</code> in <code>_steward.yaml</code> and <code>STEWARD_STUCK_AFTER</code>.</td>
+<td>None</td>
+</tr>
+<tr class="odd">
+<td><code>--preauthorized</code></td>
+<td>value</td>
+<td>Rulings granted in advance: class patterns to dispositions, e.g.&nbsp;<code>{'error:ReadTimeout@*': rerun}</code>, or <code>false</code> to decline every standing grant for this turn. Overrides <code>preauthorized</code> in <code>_steward.yaml</code> and <code>STEWARD_PREAUTHORIZED</code>.</td>
 <td>None</td>
 </tr>
 <tr class="even">

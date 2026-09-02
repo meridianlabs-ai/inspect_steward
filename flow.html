@@ -162,6 +162,10 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
  <span class="dropdown-text">Error Handling</span></a>
   </li>  
         <li>
+    <a class="dropdown-item" href="./scanners.html">
+ <span class="dropdown-text">Scanners</span></a>
+  </li>  
+        <li>
     <a class="dropdown-item" href="./runbook.html">
  <span class="dropdown-text">Agent Runbook</span></a>
   </li>  
@@ -251,6 +255,12 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <div class="sidebar-item-container"> 
   <a href="./errors.html" class="sidebar-item-text sidebar-link">
  <span class="menu-text">Error Handling</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="./scanners.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Scanners</span></a>
   </div>
 </li>
           <li class="sidebar-item">
@@ -453,10 +463,9 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
    
   <ul>
   <li><a href="#overview" id="toc-overview" class="nav-link active" data-scroll-target="#overview">Overview</a></li>
-  <li><a href="#what-steward-overrides-in-a-worker" id="toc-what-steward-overrides-in-a-worker" class="nav-link" data-scroll-target="#what-steward-overrides-in-a-worker">What Steward overrides in a worker</a></li>
-  <li><a href="#two-declarations-do-not-survive" id="toc-two-declarations-do-not-survive" class="nav-link" data-scroll-target="#two-declarations-do-not-survive">Two declarations do not survive</a></li>
+  <li><a href="#worker-overrides" id="toc-worker-overrides" class="nav-link" data-scroll-target="#worker-overrides">Worker Overrides</a></li>
+  <li><a href="#declarations-that-do-not-survive" id="toc-declarations-that-do-not-survive" class="nav-link" data-scroll-target="#declarations-that-do-not-survive">Declarations That Do Not Survive</a></li>
   <li><a href="#scanners" id="toc-scanners" class="nav-link" data-scroll-target="#scanners">Scanners</a></li>
-  <li><a href="#what-fan-out-costs" id="toc-what-fan-out-costs" class="nav-link" data-scroll-target="#what-fan-out-costs">What fan-out costs</a></li>
   </ul>
 </nav>
     </div>
@@ -485,40 +494,37 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section id="overview" class="level2">
 <h2 class="anchored" data-anchor-id="overview">Overview</h2>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">pip</span> install <span class="st">"inspect-steward[flow]"</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>An <a href="https://github.com/meridianlabs-ai/inspect_flow">Inspect Flow</a> spec is a <a href="./index.html#quick-tour">definition</a> like any other, because <code>flow run</code> is itself a program culminating in one <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> call. So Steward drives <strong>Flow’s own CLI</strong> rather than reaching into its internals, and intercepts at the boundary.</p>
-<p>The division is clean: Flow owns everything up to the <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> call — includes, implicit <code>_flow.py</code> inheritance, defaults merging, <code>NotGiven</code> semantics, <code>@after_load</code> and <code>@after_instantiate</code> hooks, and its <code>FlowOptions</code> mapping — and Steward owns execution from the boundary onward.</p>
-<p>Name the spec <code>flow.yaml</code> in your workspace and everything on the other pages applies unchanged. A Python spec works too; <code>steward tasks flow.py -A key=value</code> passes arguments to a spec function.</p>
-<p>Live <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#task">Task</a></span> and <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.model.html#model">Model</a></span> objects in a spec are supported, incidentally — Flow itself rejects them in venv mode, and Steward’s always-re-execute model handles them naturally.</p>
+<p><a href="https://github.com/meridianlabs-ai/inspect_flow">Inspect Flow</a> specs are fully supported as Steward eval set definitions. Just use a <code>_flow.py</code> within your workspace directory and</p>
 </section>
-<section id="what-steward-overrides-in-a-worker" class="level2">
-<h2 class="anchored" data-anchor-id="what-steward-overrides-in-a-worker">What Steward overrides in a worker</h2>
-<p>Three flags, each for a reason worth knowing:</p>
+<section id="worker-overrides" class="level2">
+<h2 class="anchored" data-anchor-id="worker-overrides">Worker Overrides</h2>
+<p>Steward runs <code>flow run</code> with three options set:</p>
 <table class="caption-top table">
 <thead>
 <tr class="header">
-<th>override</th>
-<th>why</th>
+<th>Override</th>
+<th>Why</th>
 </tr>
 </thead>
 <tbody>
 <tr class="odd">
 <td><code>--set execution_type=inproc</code></td>
-<td>One process per task <strong>is</strong> Steward’s isolation model. A frontend that builds a virtualenv per worker is running a second one against it — and it puts the eval in a grandchild, so the pid Steward recorded and every liveness check keyed on it name the wrong process.</td>
+<td>One process per task is Steward’s own isolation model, and a venv per worker would put the eval in a grandchild process that Steward cannot track.</td>
 </tr>
 <tr class="even">
 <td><code>--log-dir &lt;scratch&gt;</code></td>
-<td>Flow writes <code>flow.yaml</code> and a requirements snapshot into its log directory, and scans that directory for prior logs, all <em>before</em> <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> is reached. Pointing N workers at the run’s directory would mean N concurrent writes to the same two paths and N scans of a directory that grows all run. Each worker gets its own scratch directory instead; the run’s log directory is reached through the selection.</td>
+<td>Flow writes artifacts and scans for prior logs before <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> is reached. Each worker gets its own scratch directory for that; the run’s log directory is set at the <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> call.</td>
 </tr>
 <tr class="odd">
 <td><code>--no-store-read --no-store-write</code></td>
-<td>Flow’s reuse store indexes logs by task identity so an identical task never runs twice. Under fan-out the read half races — N workers issue N identical queries and N copying writes to the same destinations — and the reuse buys nothing, because a worker runs its selected task regardless. Steward will operate both halves itself; until it does, the store is inert for Steward runs.</td>
+<td>Flow’s reuse store would race under fan-out, and buys nothing, since a worker runs the task it was given either way.</td>
 </tr>
 </tbody>
 </table>
-<p>None of this asks anything of Flow. All three are options <code>flow run</code> already ships.</p>
+<p>These are all options <code>flow run</code> already ships.</p>
 </section>
-<section id="two-declarations-do-not-survive" class="level2">
-<h2 class="anchored" data-anchor-id="two-declarations-do-not-survive">Two declarations do not survive</h2>
+<section id="declarations-that-do-not-survive" class="level2">
+<h2 class="anchored" data-anchor-id="declarations-that-do-not-survive">Declarations That Do Not Survive</h2>
 <div class="callout callout-style-default callout-important callout-titled">
 <div class="callout-header d-flex align-content-center">
 <div class="callout-icon-container">
@@ -529,8 +535,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </div>
 </div>
 <div class="callout-body-container callout-body">
-<p>The virtualenv is where Flow applies what a spec declares in <code>dependencies:</code> and <code>python_version:</code>. Steward forces <code>inproc</code>, so those declarations are not applied — <strong>the environment Steward runs in is the environment the eval runs in</strong>, and provisioning it is yours.</p>
-<p>Steward warns once, when the definition is read, if a YAML spec asks for a venv at the top level. It does not refuse: the environment usually <em>does</em> satisfy the spec, since you provisioned it, and the check cannot see a declaration that arrives through an <code>include:</code> or one built in code by a Python spec. So treat the warning as a reminder rather than a guarantee that it fired.</p>
+<p>Flow applies those declarations when it builds the virtualenv. Steward forces <code>inproc</code>, so the environment Steward runs in is the environment the eval runs in, and provisioning it is up to you.</p>
+<p>A spec that builds its <code>FlowSpec</code> in code loses them silently, because Steward reads the definition without executing it. The warning Steward prints for this covers only a top-level declaration in a YAML spec.</p>
 </div>
 </div>
 <div class="callout callout-style-simple callout-note callout-titled">
@@ -543,41 +549,14 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </div>
 </div>
 <div class="callout-body-container callout-body">
-<p>Every <code>flow run</code> records its log directory as a global pointer, and because Steward hands Flow a scratch directory, a Steward run leaves that pointer aimed at a disposable path. A subsequent bare <code>flow run --resume</code> would resume nothing and start over into a directory nobody is watching.</p>
-<p>Steward does not write another tool’s global state to correct it. <strong>Under Steward, the resume path is <code>steward launch</code> against the workspace</strong> — which is also the amend path, and the only one you need.</p>
+<p>Every <code>flow run</code> records its log directory as a global pointer, and Steward hands Flow a scratch directory, so a bare <code>flow run --resume</code> would resume nothing and start over into a directory nobody is watching.</p>
+<p>Under Steward, the resume path is <code>steward launch</code> against the workspace, which is also the amend path.</p>
 </div>
 </div>
 </section>
 <section id="scanners" class="level2">
 <h2 class="anchored" data-anchor-id="scanners">Scanners</h2>
-<p>A spec carrying <code>scanner:</code> cannot be run by Steward yet. Enumeration records that the spec scans, so this is refused early with an explanation rather than discovered when every worker fails.</p>
-</section>
-<section id="what-fan-out-costs" class="level2">
-<h2 class="anchored" data-anchor-id="what-fan-out-costs">What fan-out costs</h2>
-<p>Everything Flow does before reaching <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> happens once per worker. That was measured, against a plain <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> baseline of 3.0s per worker:</p>
-<table class="caption-top table">
-<thead>
-<tr class="header">
-<th></th>
-<th>empty log directory</th>
-<th>150 logs</th>
-</tr>
-</thead>
-<tbody>
-<tr class="odd">
-<td>pointing every worker at the run’s log directory</td>
-<td>4.36s</td>
-<td>4.79s</td>
-</tr>
-<tr class="even">
-<td>a scratch directory per worker</td>
-<td><strong>4.14s</strong></td>
-<td><strong>4.21s</strong></td>
-</tr>
-</tbody>
-</table>
-<p>Two things to read out of it. The term that <em>grew with the run</em> is gone — the old path paid roughly 2.4ms per log already in the directory, which is about twelve seconds per worker at five thousand logs. And the residual ~1.1s is almost entirely the requirements freeze, which shells out twice and cannot be skipped from outside Flow, only redirected.</p>
-<p>Four concurrent Flow workers writing into one flat log directory is verified end to end: four logs, correct identities, and no eval-set metadata written by any worker.</p>
+<p>A spec carrying <code>scanner:</code> cannot be run by Steward yet. This is refused when the definition is read, rather than discovered when every worker fails.</p>
 
 
 </section>

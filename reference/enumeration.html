@@ -163,6 +163,10 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
  <span class="dropdown-text">Error Handling</span></a>
   </li>  
         <li>
+    <a class="dropdown-item" href="../scanners.html">
+ <span class="dropdown-text">Scanners</span></a>
+  </li>  
+        <li>
     <a class="dropdown-item" href="../runbook.html">
  <span class="dropdown-text">Agent Runbook</span></a>
   </li>  
@@ -252,6 +256,12 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <div class="sidebar-item-container"> 
   <a href="../errors.html" class="sidebar-item-text sidebar-link">
  <span class="menu-text">Error Handling</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../scanners.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Scanners</span></a>
   </div>
 </li>
           <li class="sidebar-item">
@@ -501,7 +511,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p>Read the static definition of an eval set.</p>
 <p>Executes the definition in a subprocess with eval-set capture enabled: the definition runs normally (including any side effects) up to its <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> call, which resolves all tasks, writes a manifest, and exits without running anything.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_steward/blob/3116da1e7146e5680ec56e251b5f9e630105f4ce/src/inspect_steward/_evalset/read.py#L48">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_steward/blob/83559a02c673f2482e51d17b0e53d5aca0cf0a61/src/inspect_steward/_evalset/read.py#L49">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="kw">def</span> read_eval_set(</span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a>    definition: <span class="bu">str</span> <span class="op">|</span> Path,</span>
@@ -543,7 +553,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="readevalseterror">ReadEvalSetError</h3>
 <p>An eval set definition could not be read.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_steward/blob/3116da1e7146e5680ec56e251b5f9e630105f4ce/src/inspect_steward/_evalset/read.py#L26">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_steward/blob/83559a02c673f2482e51d17b0e53d5aca0cf0a61/src/inspect_steward/_evalset/read.py#L27">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> ReadEvalSetError(<span class="pp">Exception</span>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </section>
@@ -554,7 +564,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="manifest">Manifest</h3>
 <p>Static enumeration of an eval set read from a definition.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_steward/blob/3116da1e7146e5680ec56e251b5f9e630105f4ce/src/inspect_steward/_evalset/manifest.py#L55">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_steward/blob/83559a02c673f2482e51d17b0e53d5aca0cf0a61/src/inspect_steward/_evalset/manifest.py#L71">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> Manifest(BaseModel)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <section class="level4">
@@ -593,6 +603,11 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <p><strong>The durable copy, and the only one.</strong> A run’s overrides are resolved once, at launch, from flags and the environment — and neither survives to the 02:00 tend that spawns the next worker. They cannot live in <code>.steward/</code> either, which this design tells people they may delete. So they are captured <em>with</em> the manifest, by the same subprocess that honoured them, and every later tend reads them back out of the committed file: the enumeration and the fleet cannot disagree, because the fleet’s copy is the one the enumeration was made under.</p>
 <p><code>MANIFEST_VERSION</code> deliberately did not move for this, and the <code>capture_rss</code> reasoning only half covers it. That argument is about a <em>new</em> reader meeting an old manifest, where an absent field means <em>not measured</em> and nothing is lost. The other direction is not so comfortable: an <strong>older</strong> reader meeting this field drops it silently, accepts the manifest as version 1, and tends the run on the definition’s own values — a different eval than the one that was captured, with nothing said. What makes that acceptable is only that no such reader exists in the wild; the package is unreleased. The moment one does, this field is the reason to bump.</p>
 </dd>
+<dt><code class="ref-definition">scan</code> <span class="element-type"><span class="element-type-name">ManifestScan</span> | <span class="element-type-name">None</span></span></dt>
+<dd>
+<p>The run’s scanning material, or <code>None</code> where nothing scans — no scanner in the definition and nothing injected at launch.</p>
+<p>Committed by the launch rather than the capture alone, because injection is the launch’s word: capture contributes <code>spec</code> and <code>scans</code> (<code>read_eval_set</code>), and the launch adds <code>injected</code> once the merge is settled. <code>MANIFEST_VERSION</code> deliberately did not move, on the <code>capture_rss</code> reasoning: absence means <em>this run does not scan</em>, which is exactly what an older manifest’s absence should mean to a newer tend — nothing to inject, fold, or finalize.</p>
+</dd>
 <dt><code class="ref-definition">tasks</code> <span class="element-type">list[<span class="element-type-name"><a href="../reference/enumeration.html#manifesttask">ManifestTask</a></span>]</span></dt>
 <dd>
 <p>Resolved tasks in the eval set.</p>
@@ -604,7 +619,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="manifestsource">ManifestSource</h3>
 <p>The source a manifest was read from: an eval set definition and the arguments it was invoked with.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_steward/blob/3116da1e7146e5680ec56e251b5f9e630105f4ce/src/inspect_steward/_evalset/manifest.py#L24">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_steward/blob/83559a02c673f2482e51d17b0e53d5aca0cf0a61/src/inspect_steward/_evalset/manifest.py#L27">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> ManifestSource(BaseModel)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <section class="level4">
@@ -639,7 +654,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h3 class="anchored" data-anchor-id="manifesttask">ManifestTask</h3>
 <p>A resolved task in an eval set manifest.</p>
 <div class="source-link">
-<a href="https://github.com/meridianlabs-ai/inspect_steward/blob/3116da1e7146e5680ec56e251b5f9e630105f4ce/src/inspect_steward/_evalset/manifest.py#L48">Source</a>
+<a href="https://github.com/meridianlabs-ai/inspect_steward/blob/83559a02c673f2482e51d17b0e53d5aca0cf0a61/src/inspect_steward/_evalset/manifest.py#L51">Source</a>
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode python doc-declaration code-with-copy"><code class="sourceCode python"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="kw">class</span> ManifestTask(EvalSetCaptureTask)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 <section class="level4">

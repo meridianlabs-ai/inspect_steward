@@ -29,6 +29,8 @@ pip install git+https://github.com/meridianlabs-ai/inspect_steward
 
 To use Steward, create a directory, switch to it, then call `steward init`:
 
+    Terminal
+
 ``` bash
 mkdir -p ~/runs/swe-evals
 cd ~/runs/swe-evals
@@ -49,7 +51,7 @@ eval_set(
 )
 ```
 
-Steward can manage any evalution defined with a script that ends in a call to [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) or alternatively a `flow.py` from [Flow](https://meridianlabs-ai.github.io/inspect_flow/) or a `hawk.yaml` from [Hawk](https://hawk.metr.org).
+Steward can manage any evalution defined with a script that ends in a call to [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) or alternatively a `config.py` from [Flow](https://meridianlabs-ai.github.io/inspect_flow/) or a `hawk.yaml` from [Hawk](https://hawk.metr.org).
 
 ### Run the Eval
 
@@ -73,7 +75,7 @@ The agent will launch all of the tasks, setup a background monitoring process, a
 > STEWARD_NOTIFICATION=slack://{OAuthToken}/{ChannelID}
 > ```
 >
-> Anything [Apprise](https://github.com/caronc/apprise) understands works: Slack, email, SMS, a webhook, or a config file naming several. It configures your workers too, so a sample waiting on your approval reaches the same place. See [Getting told](./workflow.html.md#getting-told).
+> Anything [Apprise](https://github.com/caronc/apprise) understands works: Slack, email, SMS, a webhook, or a config file naming several. It configures your workers too, so a sample waiting on your approval reaches the same place. See [Notifications](./workflow.html.md#notifications).
 
 The run depends on neither you nor the agent staying connected. When you come back, ask how it’s going:
 
@@ -128,6 +130,8 @@ Steward provides a system that is fully unattended by default but which escalate
 
 - [Error Handling](./errors.html.md) covers standing policies for error retries and resolution, including dealing with errors that are never resolved.
 
+- [Scanners](./scanners.html.md) explains how transcripts are scanned for scoring integrity problems as the run proceeds, and what a finding asks of you.
+
 - [Agent Runbook](./runbook.html.md) provides the full operating instructions that coding agents use to supervise and make decisions during runs.
 
 Integrations with execution environments are covered in [Inspect Flow](./flow.html.md) and [Inspect Hawk](./hawk.html.md).
@@ -137,549 +141,504 @@ Integrations with execution environments are covered in [Inspect Flow](./flow.ht
 
 ## Overview
 
-A Steward run is a **project rather than an episode**: one evolving definition, one log directory holding its current results, one archive holding everything superseded, and one journal recording what happened. Work *converges* toward the manifest your definition captured rather than happening in identified attempts — which is why amending a run is just launching again, and why a run nobody touched for six hours is in exactly the state it should be.
+Steward runs evaluations from a workspace directory that includes the eval-set definition, steward-specific options, a journal of the entire run, and human readable documents on run status. Evaluations are launched as background processes and monitored using a scheduled job, with coding agents and humans proactively notified when they are needed for a decision.
 
-Three parties carry a run, and the division between them is what makes walking away safe:
+We’ll walk through the various phases of the workflow below, then cover [options](#steward-options) you can use to customize Steward’s behavior and other [advanced](#advanced) topics like pausing runs and modifying runs in flight.
 
-| party | supplies | how |
-|----|----|----|
-| the timer | the mechanical floor | `steward tend` on an interval, with nobody present |
-| the agent | judgement | diagnoses errors, groups them, oversees the concurrency ramp, investigates, writes up |
-| you | authority | rulings, approvals, and signing off on the results |
+## Workspace
 
-Almost every verb below is one an agent runs. Yours are `init`, signoff, editing the definition and `_steward.yaml`, and asking questions in prose:
+To create a workspace for an evaluation run, use the `steward init` command:
 
-| command | who calls it | what it does |
-|----|----|----|
-| `steward init` | you | Create the workspace: bootstrap, definition placeholder, `_steward.yaml`, a repository, the journal’s first event. Only ever creates. |
-| `steward launch` | agent | Capture the definition, report the delta, commit it as desired state, arm a timer, tend once. The only verb that reads the definition — and therefore the amend path too. |
-| `steward tend` | **a timer** | One turn of the loop: reconcile, spawn, reap, archive, rewrite `status.md`, append to the journal. Never blocks. |
-| `steward status` | either | Where the run stands, and what the next turn would do. `tend --dry-run`, and read-only. |
-| `steward collect` | agent | The agent’s queue, plus everything that happened since it last looked. |
-| `steward ack` / `steward raise` | agent, relaying you | Close an open item, or hand it to the person who can decide it. |
-| `steward pause` / `steward resume` | either | Stop scheduling new work; start again. Work in flight finishes either way. |
-| `steward ramp hold` / `steward ramp resume` | either | Freeze the concurrency climb without touching configuration. |
-| `steward timer arm` / `disarm` / `status` | either | Install, remove, or inspect the schedule. |
-| `steward tasks` | either | Enumerate what a definition resolves to, without running it. |
-| `steward runbook` | agent | The operating instructions, which ship with the package so they cannot go stale. |
+    Terminal
 
-The rest of this page walks the arc of a run in the order you meet it.
+``` bash
+mkdir -p ~/runs/swe-evals
+cd ~/runs/swe-evals
+steward init
+```
 
-## The workspace
+The workspace is initialized with the following files:
 
-The deliverable of `steward init` is a **workspace** — a directory that you and an agent co-inhabit, and that a third party can pick up cold. Everything important is written down in it rather than held in somebody’s session:
+    Workspace
 
 ``` text
-my-sweep/
-  AGENTS.md           # authored  — bootstrap: "you are tending a run; read the runbook"
-  CLAUDE.md           # authored  — symlink to AGENTS.md
-  _steward.yaml       # authored  — your eval policy
-  evalset.py          # authored  — your definition (or flow.py / hawk.yaml)
-  .env                # authored  — credentials, if you keep them here
-
-  journal.jsonl       # DURABLE   — append-only record; the source of truth
-  status.md           # generated — rewritten by every tend
-
-  logs/               # DURABLE   — the flat log directory: the current definition's results
-  logs-archive/       # DURABLE   — superseded, removed, and failed logs; never deleted
-
-  .steward/           # DISPOSABLE — claim, manifest, in-flight record, caches
-    steward.log       #            — whether Steward's own machinery worked
-    timer.log         #            — what a scheduled tend printed before Steward could log
+swe-evals/
+  _steward.yaml       # steward specific options 
+  AGENTS.md           # agent instructions for managing a run
+  CLAUDE.md           # agent instructions for managing a run
+  evalset.py          # eval-set definition (or config.py / hawk.yaml)
+  journal.jsonl       # append-only journal of workspace actions
+  status.md           # human readable current status of run
 ```
 
-The root holds what you authored and what you read, and nothing else: the two machine logs live under `.steward/` with the rest of the disposable state.
+Your eval set definition can be any script which ends with a call to [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) or a [Flow](./flow.html.md) or [Hawk](./hawk.html.md) configuration. For example:
 
-`init` **only ever creates** — a second run reports each path as created or kept rather than restoring a pristine copy over your work. It is safe to run in a directory that already has a definition.
+    evalset.py
 
-### What is safe to delete
+``` python
+from inspect_ai import eval_set
+from inspect_harbor import cais_swebenchpro, datacurve_deep_swe
 
-The categories that matter are about whether a file can be recovered, not who wrote it:
-
-| Category | Files | If you delete it |
-|----|----|----|
-| **authored** | `_steward.yaml`, `AGENTS.md`, the definition | your own work is gone |
-| **durable machine state** | `journal.jsonl`, `logs/`, `logs-archive/` | the audit trail, or the results, are gone |
-| **authored by the agent** | `scanning.md`, `analysis.md` *(not yet implemented)* | the investigation is gone, and re-runs from scratch |
-| **disposable** | everything in `.steward/` (including the two logs), and `status.md` | rebuilt on the next turn, or gone with no loss |
-
-Gitignored is **not** the same as disposable: `logs/` and `logs-archive/` are ignored by git because `.eval` files are large outputs shared through an object store rather than source control — they are still durable. Only `.steward/` is safe to remove, and even that only when nothing is running: a worker that has not yet reached [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) dies with its instructions, and deleting the claim file under a running tend lets a second tend run concurrently.
-
-### The journal
-
-`journal.jsonl` is the append-only record of the run: what was observed, what was done, who decided what, and why. It is the source of truth that everything else is derived from — `status.md` is a rendering of it, and `.steward/` is a cache of it. It is plain JSON lines, so `jq -r '.type' journal.jsonl` works with no Steward installed.
-
-### The three log files
-
-The rule dividing them is one question: is this a fact about **the eval set**, or about **Steward**?
-
-- `status.md` answers the first — where the run stands, rewritten by every tend.
-- `.steward/steward.log` answers the second — a tend that crashed, a spawn that failed. A healthy run writes nothing to it at all.
-- `.steward/timer.log` catches what a scheduled tend printed before Steward could log anything — a Python that would not start, a workspace that moved. Every scheduler creates the directory before redirecting into it, so clearing `.steward/` costs the file’s contents and never the supervision.
-
-The split means *“no tend for four hours”* is computable from the journal’s silence, while *why* is in `steward.log` — a run whose tends were crashing does not look like a run with nothing to report.
-
-It is also why there are two files rather than one type of journal event. `steward.log` can be **truncated** and `journal.jsonl` never can: a failure that repeats every ten minutes — a wedged claim, a bucket that went away — is one line per turn forever, which is a bound away from harmless in a disposable file and unbounded growth of an irreplaceable one anywhere else.
-
-### Where your logs go
-
-**Leave `log_dir` out of your definition.** It is the one argument worth omitting: name one and it is the one Steward uses, forever and everywhere, and you have written a fact about a machine into a file about an eval.
-
-Say nothing and Steward answers in one of two ways:
-
-| you have said | logs go to |
-|----|----|
-| nothing at all | `logs/` in the workspace, with `logs-archive/` beside it |
-| `STEWARD_LOG_ROOT=s3://org-evals/runs` | `s3://org-evals/runs/<workspace directory name>`, archive alongside |
-
-The root is where *this machine* keeps eval logs, so it is usually a shell export rather than a committed setting — one line, and every workspace on the box lands in the bucket under a directory of its own. It can also be `log_root:` in `_steward.yaml` where it is a fact about the project, or `--log-root` for one launch; `--no-log-root` keeps a single run’s logs at home whatever the machine says.
-
-Each workspace gets its **own** directory under the root and needs to: the workspace is mirrored into its log directory (below), so two runs sharing one would overwrite each other’s `status.md`. Two workspaces with the same directory name under one root will collide — name them for what they measure.
-
-Moving a run’s logs after it has started is a **relocation**: nothing is lost, but the results stay where they are and the whole sweep runs again, so `steward launch` reports it and refuses without `--accept-archive`. That applies to changing `STEWARD_LOG_ROOT` exactly as it applies to editing `log_dir`, because the directory a launch resolved is recorded in the run rather than re-derived each turn — which is also what keeps a 02:00 tend, inheriting no shell, reading the directory its workers are writing to.
-
-### The workspace follows its logs
-
-Every tend mirrors the workspace into the run’s log directory: `status.md`, `journal.jsonl`, `steward.log`, your `_steward.yaml` and your definition, and anything else at the top level that you or an agent put there. So a result and the account of how it was produced sit together, and a log directory describes itself wherever it ends up — which on a machine reachable only through an object store is the whole observability channel.
-
-Dotfiles never leave, which is what keeps a stray `.env` on the machine; nor do directories, `AGENTS.md`, symlinks, or anything inspect would read as an eval log. Symlinks are on that list because every other rule is a rule about a *name*, and a `public-config` pointing at `.env` is not a dotfile. Say `sync: false` in `_steward.yaml` (or `--no-sync`, or `STEWARD_SYNC=false`) to decline, or give it a path to send the files somewhere other than the logs — bearing in mind that `journal.jsonl` and an agent’s writeups quote what was in the transcripts, so a destination outside the log bucket widens who can read them.
-
-### Version control
-
-`init` runs `git init` if, and only if, there is no repository already — a workspace created inside an existing project belongs to that repository. It writes a scoped `.gitignore` covering `logs/`, `logs-archive/`, `.env`, `.steward/`, and the machinery logs, so what remains tracked is what you authored plus the journal. `--no-git` skips repository creation entirely.
-
-## Launching
-
-`steward launch` is the only verb that reads your definition, and therefore the only one that *decides* anything — everything else converges toward a manifest somebody else committed. It is one command doing eight things, and the order is load-bearing:
-
-1.  **Take the run claim**, and hold it across all of what follows. A scheduled tend that fires meanwhile is refused, which is the ordinary path rather than a problem: a tend is built to be interrupted, and the next interval converges.
-2.  **Capture the manifest** — execute the definition under inspect’s capture mode and enumerate the tasks it resolves to. This is the same machinery `steward tasks` renders.
-3.  **Compute the delta** between that manifest and the committed one.
-4.  **Gate on it** — refuse to commit anything that would move results out of `logs/` unless you said otherwise.
-5.  **Commit** the manifest as desired state.
-6.  **Restore** logs the archive already holds for identifiers the new manifest asks for. A move rather than a re-run — where the archived log answers the question being asked: one produced under a slice or a gateway the run has since left is left where it is, since restoring it would move a log into `logs/` and re-run the task anyway.
-7.  **Stop** workers running tasks the new manifest no longer names, and **arm the timer**.
-8.  **Tend once**, which is what actually spawns the first workers.
-
-Arming happens *before* the first tend, so a launch whose own turn fails still leaves the run supervised and the next interval picks it up.
-
-### The delta, and the one gate on it
-
-Adding work is what you just asked for; removing work from `logs/` could equally be a typo. A one-character change to a task argument produces a new identifier and reads exactly like a deliberate removal — except that one of the two quietly buys a re-run of everything. So the delta is computed and shown, and it classifies every task into one of five rows:
-
-| Row | Meaning | Additive |
-|----|----|----|
-| **add** | Not in the committed manifest. New work. | yes |
-| **extend** | Same identifier, more work than before — raised epochs, a grown dataset. Nothing already in `logs/` stops counting. | yes |
-| **removed** | Gone from the definition, with nothing of its name and model left. | **archives** |
-| **superseded** | Gone, but a task of the same name and model is still there under a different configuration — what an edit displaced. | **archives** |
-| **restore** | Asked for, and a log for it is sitting in the archive that answers the shape the run is now asking for. | yes |
-
-A **relocation** is the sixth thing and is not a row, because it is not about a task: moving the definition’s `log_dir` leaves every identifier untouched while putting the run’s results in a directory the next tend no longer reads. Nothing is archived, nothing is deleted, and the whole sweep runs again — the archiving case in a different costume, and gated the same way. It also costs the fleet, because a worker’s destination is fixed in its selection document when it spawns: every worker still running is producing a log for a directory the run has stopped reading, so stopping them is part of what a relocation *is*.
-
-**A purely additive delta commits with no ceremony.** Anything else prints what it would move and refuses; `--accept-archive` commits it. The refusal is the mechanism rather than an obstacle to it — the runbook tells the agent that a flag reached for reflexively is the same as no gate, so the agent shows you the delta and lets you answer.
-
-The gate has to sit between the capture and the commit because there is nowhere else it could sit: once desired state says a task is not in the eval set, `tend` archives it as bookkeeping, with nobody present at 02:00.
-
-### Changing the eval set mid-run
-
-There is no `steward amend`. **A second `launch` is the amend path**: edit the definition, launch again, and Steward runs only what is new or changed. Completed work is never re-run, because a task whose identifier survives the edit already has its log in `logs/`.
-
-Two details worth knowing. Definition arguments (`-A key=value`, for a Flow spec function) default to the committed manifest’s on a re-launch, so a bare `launch` cannot silently capture a different eval set; `--no-args` is how you get back to the definition’s own defaults. And an edit you have *not* launched shows up as a `drift` item on every turn — the manifest is what the fleet is converging toward, and a definition that no longer matches it is a fact somebody should know.
-
-### The timer
-
-The timer is what makes the run survive you closing the laptop. `launch` arms one unless told `--no-timer`, choosing a launchd agent, a systemd user timer, or a marked block in the crontab — preferring one that survives a reboot, and telling you plainly when the machine has none of the three rather than substituting something weaker. Arming is idempotent: an existing timer is removed first, so re-arming at a new interval leaves exactly one.
-
-Arming **refuses when a scheduled tend would not inherit this shell’s credentials**, because the alternative is a fleet failing to authenticate every ten minutes all night while `status.md` reports it dutifully trying. The fix is usually to put the credentials in `.env`, which the workers already read; `--no-env-check` overrides the refusal. On a `launch` the check runs *before* the capture, so a Hawk config does not spend five minutes resolving packages on the way to being turned down.
-
-Because a scheduler cannot report its own absence, arming records what it installed, and any turn that finds no tend for **two intervals** reports the run as `unsupervised` — which catches a crontab somebody rewrote by hand as readily as one Steward removed. A `--no-timer` launch is recorded as unsupervised from the start, so it looks like what it is.
-
-## The tend loop
-
-A turn is **observe, decide, act, record**, and `steward tend` is one turn. It reads the log directory against the committed manifest, decides what should change, does it, and writes down what it saw:
-
-- spawns tasks that should be running and are not;
-- reaps workers that exited, recording what they were doing;
-- archives logs the definition no longer asks for;
-- counts a fruitless respawn against a task, and marks it **stalled** once `stall_after` of them get nowhere;
-- steps sample concurrency toward the ceiling when the window was clean, or cuts it on sustained provider pushback;
-- rewrites `status.md` and appends to `journal.jsonl`.
-
-Three properties are what make this safe to put on a timer:
-
-- **A turn never blocks.** Everything with an unbounded duration — a worker, later a scan — is a detached child that some later turn observes finishing. That is what keeps the claim short-lived.
-- **A repeated turn is a no-op**, so calling `tend` by hand while a timer is armed costs nothing.
-- **An interrupted turn is reconciled by the next one.** There is no resume path and no partial-turn state: the next turn re-reads the log directory and the process table and decides again from what it finds.
-
-Only one Steward writes at a time. `launch` and `tend` take the run claim; a holder that dies releases it, and one that wedges is killed so the run keeps converging (`--no-break-claim` refuses instead). `status`, `pause`, and `resume` deliberately take no claim — the moment you most want to pause is the moment a tend is in flight spawning what you want stopped.
-
-Each task runs in its own worker process by default, which buys fault isolation and real CPU parallelism; [Concurrency](./concurrency.html.md) covers how many run at once, how many processes carry them, and how sample concurrency is discovered.
-
-## Where the run stands
-
-`steward status` is the same function as `tend` with its actions discarded — the same reads and the same decision, so the preview cannot describe something other than what happens next. It is read-only: it spawns nothing, moves nothing, writes nothing, and takes no claim, so it is safe to type as often as you like while a tend is in flight.
-
-Over everything sits one verdict:
-
-|     |                                                              |
-|-----|--------------------------------------------------------------|
-| ✅  | nothing needs you                                            |
-| ⚠️  | something does, and work continues                           |
-| 🛑  | nothing is progressing                                       |
-| ⏸   | paused                                                       |
-| 🏁  | every task finished, and nobody has accepted the results yet |
-
-🏁 is deliberately not ✅. A finished run owes the most consequential decision in the workflow, and reporting it as all-clear is how a sweep sits unread for a week.
-
-Beneath the verdict sits a **Logs** line naming this run’s log directory. Take it from there rather than assuming `logs/` — under a [log root](#where-your-logs-go) there is no `logs/` in the workspace at all, and a `samples_df` pointed at one would find nothing rather than complain. It is in `steward status --json` too.
-
-Under the verdict come four sections, in this order:
-
-- **what needs a decision** — the open items, under a heading that says whose they are.
-- **the run** — task states and counts, per-task progress, what is live right now, and the tuning block.
-- **standing rules** — the policies actually in force, which is not always what `_steward.yaml` says (a `STEWARD_POLICIES` variable outranks the file).
-- **what happened** — the history.
-
-Two files-versus-commands distinctions are worth keeping straight. `status.md` is written by every **tend**, so it holds the last turn’s snapshot and can be a full interval stale; `steward status` recomputes. And `--format md` renders the same document as markdown rather than as aligned terminal columns, which is what the runbook asks an agent to relay verbatim when you ask how it’s going.
-
-## Decisions
-
-Everything a turn needs to say beyond a number is an **item**: a stalled task, a definition edited since capture, a file that would not parse, a worker parked on a human decision, a proposal to raise a concurrency bound. One list, filtered rather than duplicated, so the terminal and `status.md` cannot drift apart in what they report.
-
-Each item carries three things:
-
-- **an owner** — yours or the agent’s, computed each turn rather than baked in. One kind is fixed and policy may not move it: a parked worker is always yours, because nobody else may answer it.
-- **a level** — informational, needs attention, or blocking. Blocking says nothing progresses *on that subject*; whether the *run* is stopped is separate arithmetic, because a rule that painted a run red whenever any one thing was blocked would make red mean nothing.
-- **an id chosen so that what re-arms it is what changes it.** A stall keyed on its attempt count comes back when the task fails again; drift keyed on the content hash comes back on the next edit and clears at relaunch for free.
-
-Two acts take an item out of the queue, and which one is right is decided by who owns it:
-
-- **`steward ack <id> --reason "..."`** closes it — the case nothing will clear by itself, like a definition you edited on purpose. The item leaves every surface and the journal keeps the record.
-- **`steward raise <id>`** hands it to the person who can decide it and **closes nothing**. It stays in `status` and still counts toward the verdict; what changes is that `collect` stops offering it back to the agent every time it looks. Only a human-owned item can be raised.
-
-**A parked worker refuses an ack.** A sample stopped on a tool approval or an `ask_user` is waiting for authority over what the eval *does*, and it holds its slot, its sandbox, and its model connections the whole time. So the item carries the command that attaches you to that worker, and nothing but an answer clears it.
-
-For the agent, `steward collect` is the front door: the same three sections `status` prints, plus the one thing a snapshot cannot give — the stretch of history since the last collection. A snapshot cannot say that a task died at 1am and was respawned, or that an error class grew from three instances to forty, and that series is what most judgement calls need. Reading consumes nothing; the cursor governs history alone, so a session that dies mid-investigation finds its work waiting.
-
-What the decisions themselves are about is covered on two other pages: [Error Handling](./errors.html.md) for sample errors and stalled tasks, and [Concurrency](./concurrency.html.md) for the ramp and its tuning proposals.
-
-## Getting told
-
-Everything above is a file or a command, which means it reaches you only when you go and look. A run you left at 6pm that stopped at 2am is indistinguishable, from where you are, from one that is going fine. So set a channel:
-
-    _steward.yaml
-
-``` yaml
-notification: slack://{OAuthToken}/
+eval_set(
+    tasks=[cais_swebenchpro(),  datacurve_deep_swe()],
+    model=["openai/gpt-5.6-sol", "anthropic/claude-opus-5"],
+)
 ```
 
-or, keeping the token out of your repository:
+## Execution
+
+Once you have defined your eval set, use a coding agent to launch the evaluation (you should typically run from a [tmux](https://github.com/tmux/tmux/wiki) detached terminal so the agent is persistent):
+
+    Coding Agent
+
+``` bash
+───────────────────────────────────────────── swe-evals ─
+❯ please run this evaluation.
+─────────────────────────────────────────────────────────
+```
+
+The agent is instructed to read the Steward [runbook](./runbook.html.md) which provides instructions for conducting the evaluation. By default the agent will start with a smoke run (2 samples for each task, under a 15 minute wall-clock cap) to make sure config, infrstructure, and model connectivity is all workign as expected.
+
+The smoke reports what the *samples* did rather than whether the tasks finished, which matters because workers run with `continue_on_fail` on: a wrong key or a sandbox that will not start lands as errored samples inside a log that finished cleanly. Any errored sample fails the rehearsal, and so does a task that finished holding fewer samples than the rehearsal asked it for.
+
+It also checks four things that would not stop the run but would quietly spoil it: that the scanners work and what they flagged, that they reached every transcript rather than silently recording nothing, that every model resolved to a real context window rather than an assumed default, and that reasoning is being replayed to the model on later turns. It leaves a digest at `.steward/smoke/digest.md`, and a failing check stops the launch until you fix it or waive it by name.
+
+After the smoke, the agent will launch all of the tasks, set up a background monitoring process, and respond to alerts that require its intervention. Note that while it is recommended that you keep the agent attached during the evaluation it is not *required*. If you choose not to you should be sure to configure [notifications](#notifications) so you know when to reconnect the agent to handle issues that arise.
+
+### Tend Loop
+
+As the run proceeds, the `steward tend` command runs on a timer set up by `steward launch`. By default this timer runs every 10 minutes. The tend command performs the following actions automatically:
+
+- Spawns or restarts tasks that should be running and are not.
+- Automatically tunes concurrency based on available sandbox capacity and observed model throughput.
+- Notes anomalies and other conditions (model or infra errors, stuck samples, scoring integrity issues, etc.) and either handles them automatically or escalates them for agent or human consideration.
+- Rewrites `status.md` and appends to `journal.jsonl`.
+
+Note that you or an agent can call `steward tend` at any time to get the current status of the run.
+
+### Agent Decisions
+
+After tend runs, agents call `steward collect`, which reports the open decisions along with everything that has happened since it last looked. The agent handles the following on its own:
+
+- Diagnoses errors and groups them into classes, and proposes what should be done about them (re-run, exclude, zero, score, accept, or dismiss) for you to rule on.
+- Oversees the concurrency ramp, holding the climb when something looks wrong and tuning a worker down while containing an incident.
+- Raises anything that needs you, and notifies you through the configured channel when it cannot proceed without an answer.
+- Writes up the overall run investigation in `analysis.md` once the run is complete.
+
+### Human Decisions
+
+There are some things within a run that require your judgement or the establishment of a policy that can be applied to all similar judgements. Both `steward tend` and the agent can raise things for human input, asking you to:
+
+- Rule on the error classes the agent proposes, choosing to re-run, exclude, zero, or re-score the samples, or to accept or dismiss the class outright.
+- Answer tool call approvals that have escalated to human review.
+- Decide what to do with a task that has stalled, or a sample stuck past the point the agent may act on it.
+- Sign off on the final results after reviewing anomalies and transcript analysis.
+
+### Notifications
+
+Steward uses [Apprise](https://github.com/caronc/apprise) for sending notifications to human operators. You can configure Apprise to send Slack messages, emails, AWS SES or SNS messages, or many other types of message. Configure notifications by setting the `STEWARD_NOTIFICATION` environment variable or setting the `notification` option in `_steward.yaml`. For example:
 
     .env
 
 ``` ini
-STEWARD_NOTIFICATION=slack://{OAuthToken}/
+STEWARD_NOTIFICATION=slack://{OAuthToken}/{ChannelID}
 ```
 
-It takes anything [Apprise](https://github.com/caronc/apprise) does — one URL, several separated by commas, or a path to an Apprise config file that names them — so Slack, email, SMS, Discord, a desktop notifier, or a webhook all work the same way. `steward launch --notification …` sets it for one run, and `notification: false` declines the whole thing. A launch with no channel prints one line saying so, once — as does a launch whose channel came only from the flag, since that one reaches the launch’s own turn and none of the scheduled ones.
+It is strongly recommended that you configure notifications. If you don’t, you should just reconnect to your agent periodically and ask how things are going:
 
-**Prefer the file or `.env` over exporting it in your shell.** A scheduled tend at 02:00 inherits almost nothing, and a channel that lives only in the shell you launched from is one the 02:00 turn does not have. `steward launch` refuses to arm a timer when it spots that, the same way it does for an API key.
+    Coding Agent
 
-**One channel, two directions.** Steward posts what a turn found. Your *workers* post what a sample asked — an `ask_user()` question, a tool approval waiting on a human — and those block the sample until somebody answers. Setting `notification` wires both, so there is no arrangement where the fleet is asking and nobody is being told. That is also why `notification: false` and `--no-notification` silence Steward’s posts only, and still hand your workers the channel: silencing a blocking approval would hang a sample all night with nobody told. Setting inspect’s own `INSPECT_EVAL_NOTIFICATION` instead works too, and Steward will post there.
+``` bash
+───────────────────────────────────────────── swe-evals ─
+❯ how is the eval going?
+─────────────────────────────────────────────────────────
+```
 
-**What actually fires.** At most one message per tend, whatever changed, because the tend is already the clock:
+## Signoff
 
-|  |  |
+Once all tasks are completed (with errors/anomalies decided on) and their transcripts scanned for scoring integrity issues, the run is eligible for signoff. If you have a coding agent managing the run then it will prompt you for signoff at the appropriate time. If not, you can manually run signoff with:
+
+    Terminal
+
+``` bash
+steward signoff --by "norah"
+```
+
+Signoff verifies that the run is eligible for signoff, ensures a clean final log directory, finalizes the journal and status, and disarms the tend loop timer. If you have a [Log Store](#log-store) configured it will also write your logs into the log store.
+
+## Eval Logs
+
+- where logs go
+- log store
+
+## Options
+
+Steward’s options can be specified in `_steward.yaml` in the root of the workspace or set with `STEWARD_*` environment variables in an `.env` file within the workspace or a parent directory.
+
+| Option | Environment | Default | Description |
+|----|----|----|----|
+| `notification` | `STEWARD_NOTIFICATION` | none | Where Steward posts what it cannot decide: an Apprise URL, several separated by commas, or an Apprise config file. `false` for nowhere. |
+| `log_root` | `STEWARD_LOG_ROOT` | none | Where this machine keeps logs, one directory per workspace. Read only where your definition names no `log_dir`. |
+| `log_store` | `STEWARD_LOG_STORE` | none | Where to look for logs this run does not have to produce. |
+| `tend_interval` | `STEWARD_TEND_INTERVAL` | `10m` | How often a scheduled tend runs. Always written with a unit. |
+| `samples_ramp` | `STEWARD_SAMPLES_RAMP` | `[40, 200]` | Range to discover sample concurrency in; `false` to fix it at the floor. |
+| `max_workers` | `STEWARD_MAX_WORKERS` | one per task | Pack the run into this many worker processes. |
+| `stall_after` | `STEWARD_STALL_AFTER` | `2` | Fruitless respawns before a task is given up on and reported. |
+| `stuck_after` | `STEWARD_STUCK_AFTER` | `5h` | Report a running sample that has gone this long without activity. A reporting threshold, never a limit. |
+| `stuck_cancel` | `STEWARD_STUCK_CANCEL` | none | Stuck tool calls the agent may cancel without asking (`true` for any, or a list of tool names). |
+| `sync` | `STEWARD_SYNC` | the log directory | Where the workspace’s own files are mirrored to; `false` for nowhere. |
+| `scan_model` | `STEWARD_SCAN_MODEL` | the sample’s own model | The model scanners use. `false` clears an ambient `SCOUT_SCAN_MODEL`. |
+
+The [Concurrency](./concurrency.html.md) and [Error Handling](./errors.html.md) articles include additional details on how some of these options fit within the broader execution plan for a Steward run.
+
+## Advanced
+
+### Agent Oversight
+
+An agent does not need to stay attached: `steward tend` runs on its timer either way. An agent adds judgement, diagnosing errors, proposing what to do about them, and escalating what needs you. There are three ways to work:
+
+- Attached and reactive: the agent watches for new activity and responds immediately. Best for a run you are watching closely.
+- Attached and periodic: the agent wakes on its own schedule, and can run `steward tend` to take a turn early.
+- Disconnected: nobody is attached, and the next session picks up whatever accumulated. This is the common case.
+
+An agent attaching to a run it did not start begins here:
+
+    Terminal
+
+``` bash
+steward runbook             # the mechanics, which ship with the package
+steward collect --since 0   # everything that has happened so far
+```
+
+along with `_steward.yaml` for the project’s standing rules. Reading consumes nothing: an open decision leaves the queue only when somebody acts on it.
+
+While nothing is attached the run keeps converging, but anomalies accumulate without proposals and items sit unraised. If no agent has collected in the last two tends, Steward routes the agent’s items to you as well.
+
+### Inflight Changes
+
+There is no amend command. To change an eval set that is already running, edit the definition and launch again. Steward compares the new definition against the one it committed and runs only what is new or changed; a task whose identifier survives the edit already has its log and is not re-run.
+
+Launch reports the delta before committing it:
+
+| Row | Meaning |
 |----|----|
-| something new needs a person | as it appears — once, not every ten minutes |
-| a worker parked on a human decision | as it parks |
-| tasks finished | one message per turn, naming all of them |
-| the decision queue emptied | once |
-| the run reached its gate | once, and again after a re-launch changes the work |
-| a tend that could not run at all | once per distinct reason, until a turn succeeds again |
+| `add` | New work, not in the previous definition. |
+| `extend` | Same task, more work than before (raised epochs, a grown dataset). |
+| `removed` | Gone from the definition; its logs move to `logs-archive/`. |
+| `superseded` | Displaced by a task of the same name and model under a different configuration; the old logs move to `logs-archive/`. |
+| `restore` | Asked for again, and an archived log answers it; moved back instead of re-run. |
 
-**What does not fire is the agent’s half of the queue.** Some of what a tend finds is routed to the agent rather than to you — an unreadable log, an action that failed — and waking you for those is the channel advertising work you were told not to do. They still show in `status.md`, grouped by owner, where you can go and look on purpose.
+A purely additive delta is committed without comment. Anything that would move results out of the log directory prints what it would move and refuses; `--accept-archive` commits it. The gate exists because a one-character change to a task argument produces a new identifier and looks the same as a deliberate removal, while costing a re-run of everything.
 
-They *do* reach you when nobody is picking them up: no `steward collect` in the last two tends, or none ever. An agent’s item is only the agent’s while there is an agent, and what you have to do about a workspace nothing is attached to is attach something. The message says so rather than making you infer it.
+An edit you have not launched is reported on every turn as drift.
 
-Every message opens with a verdict line and carries the progress table, so the last message in the channel is true modulo whatever you have since answered. Every message is named by the workspace directory it is about, since one channel serves however many runs you have going: `my-sweep: ⚠️ 2 decisions need attention`. It counts what *you* have to act on, where `status` splits the same items into yours and the agent’s because one of its readers is the agent. Tasks are named as shortly as the table names them — a model every task shares is said once, under the table, rather than after every name — long lines are trimmed and long lists are counted. `status.md` has the whole of everything, including the exception text behind a log that would not parse. Slack, email, and plain-text targets each get the markup they actually understand; a workspace posting to several gets each rendered properly rather than all reduced to the worst of them.
+### Pausing Runs
 
-**The agent has its own verb.** `steward notify "the sonnet arm is failing systematically, I've paused it"` carries judgement rather than a condition, which is the half of this that a trigger cannot produce. It takes `--kind attention` (default) or `--kind stopped`, and `--detail` for supporting lines. The four kinds Steward computes are refused there: a hand-sent claim that the run is finished is a claim nobody computed.
+`steward pause --reason "..."` stops new work from being scheduled. Workers already running finish normally, and every turn reports the run as paused and spawns nothing. `steward resume` starts scheduling again, and the next tend converges from whatever it finds by then.
 
-**The value never travels.** Nothing prints it, and the `_steward.yaml` copy that Steward [propagates into the log directory](#the-workspace-follows-its-logs) has the key replaced by a note saying it was left behind — that path ends in an object store, and an Apprise URL is a bearer token. The scrubbed copy is read back before it is sent, and a file the channel could not be taken out of is held back entirely rather than sent as it is, with a line in `steward.log` saying which file and why. What is lost then is a remote reader’s copy of settings `status.md` also carries; what is prevented is a credential nobody can recall.
+`steward ramp hold --reason "..."` freezes the concurrency climb without pausing the run, and `steward ramp resume` re-arms it. A hold stops growth only: the defensive cut on provider pushback stays active.
 
-## Standing rules
+### Timers
 
-`_steward.yaml` is your eval policy, in two halves that live in one file so that a decision and its reasoning stay next to each other. The settings are what Steward executes by itself at 3am; `policies` is free-form text the agent applies when one is in session.
+`steward launch` installs the timer that runs `steward tend`, using a launchd agent, a systemd user timer, or a marked block in your crontab. Arming is idempotent, so re-arming at a new interval leaves exactly one. Manage it directly with `steward timer arm`, `disarm`, and `status`, or launch without one using `--no-timer`.
 
-| Setting | Default | Meaning |
-|----|----|----|
-| `tend_interval` | `10m` | How often a scheduled tend runs. Always written with a unit. |
-| `max_workers` | one process per task | Pack the fleet into this many worker processes. |
-| `stall_after` | `2` | Fruitless respawns before a task is given up on and reported. |
-| `samples_ramp` | `[40, 200]` | Range to discover sample concurrency in; `false` to fix it. |
-| `log_store` | none | Where to look for logs this run does not have to produce. Recorded now, read when signoff can publish to it. |
-| `policies` | none | Prose, or a list of rules. Steward carries the text and never interprets it. |
+Arming refuses if a scheduled tend would not inherit this shell’s credentials, since the alternative is a fleet that fails to authenticate all night. Put them in `.env`, which the workers already read, or pass `--no-env-check`.
 
-A file with both halves in it:
-
-    _steward.yaml
-
-``` yaml
-tend_interval: 10m
-stall_after: 3
-max_workers: 8
-
-policies:
-  - If more than 10% of the samples in a task error out, pause the run
-    and notify me right away. Otherwise, batch up questions for the end
-    of the run.
-  - A re-run that would replay more than 200 samples needs my approval
-    first.
-  - If a task's score looks implausible (e.g. near zero on a task that
-    usually scores well), investigate the transcripts before proposing
-    a re-run.
-```
-
-What is worth writing as a policy is whatever you would otherwise answer twice: failures you already know about and do not want to be woken for, what always reaches you regardless, rulings granted in advance, and what this eval set is *for* — the thing a third party picking up the directory cold cannot get from anywhere else.
-
-Two rules govern the file. **Steward never writes it** — it proposes changes and you decide, because promoting a one-off ruling into a standing rule widens what you have committed to. And **it may say only what your definition cannot**: `log_dir`, `model`, `epochs`, `max_samples`, `max_tasks`, `retry_on_error` and the rest of inspect’s vocabulary are refused *by name*, with a message saying where they belong, and an unrecognised key is refused outright rather than sitting inert. Refused here does not mean unsayable — `steward launch` accepts inspect’s own options for a single run, said inspect’s way. Every setting can also be said as a `STEWARD_*` variable or a command-line flag, resolving most specific first — see [One setting, three spellings](./concurrency.html.md#one-setting-three-spellings).
-
-`init` scaffolds the file with every setting commented out, which parses as *no preferences expressed* — a template shipping live values would make Steward’s defaults look like decisions you had made. An empty file is a valid one, and everything then escalates to you. Rules accumulate as you notice yourself answering the same question twice, and the run gets quieter as they do.
-
-## Pausing
-
-`steward pause --reason "..."` stops scheduling new work. Every later turn reports the run as paused and spawns nothing; workers already in flight are left alone, because stopping one is not a mechanical act and it is not what pausing means. That is what almost everyone wants, since the money is mostly on work not yet started.
-
-The pause is recorded in the journal rather than in `.steward/`, which is disposable — a pause that a cleared cache silently undid would resume an expensive run with nobody watching. `steward resume` starts scheduling again, and the next tend converges from whatever it finds, which is not necessarily where the run was when it was paused: logs landed, workers exited, and the definition may have been relaunched in between.
-
-## Picking up a run cold
-
-Nothing about a run lives in a conversation, which is the whole point of writing it all into the workspace. An agent — or a colleague — attaching to a run they did not start begins in the same three places:
-
-1.  `steward runbook` for the mechanics, which ship with the package and so can never be a version behind the CLI.
-2.  `_steward.yaml` for this project’s standing rules. One caveat: any setting, `policies` included, can also arrive from a `STEWARD_*` variable that is not in the workspace at all, so read the file for the reasoning and `steward status` for what is actually in force.
-3.  `steward collect --since 0` for the whole history, or a bare `collect` for what has accumulated since the last one.
-
-## How a run ends
-
-When every task has finished, the verdict turns 🏁 and the run raises a `signoff_ready` item. What remains is the part only a person can do.
-
-Some of it is reading what the [scanners](https://inspect.aisi.org.uk/scanners.html) found. Scanning is not a phase Steward runs: scanners are attached to your definition — `eval_set(scanner=...)`, like every other property of what is being measured — and they run **online**, reviewing each transcript as its sample completes, with findings written to `<log_dir>/scans/` alongside the logs. So the transcripts are already scanned by the time the last task lands. What is left is the *reading*: one worker sees one transcript, while Steward sees the distribution across the whole run, which is what turns a pile of measurements into a shortlist worth investigating.
-
-> **WARNING:**
->
-> A definition that declares a scanner is **refused at `steward launch`** today. One `scans/` directory is shared by a whole eval set and its bookkeeping assumes a single writer, so Steward’s concurrent workers would race in it. Until that is fixed upstream, scan the log directory after the run with `scout scan` instead.
-
-> **NOTE: NoteNot yet implemented**
->
-> The two phases that close a run are designed and not yet shipped: **investigation** — reading what the scanners found across the whole run, narrowing it to what is worth a look, and writing up what it meant in `scanning.md` and `analysis.md` — and **`steward signoff`**, the attestation that you accept the results, which unschedules the monitor and curates superseded attempts into `logs-archive/`. `steward launch --smoke`, the bounded rehearsal that catches configuration problems before a full run, is in the same category.
->
-> Until then a run ends when you decide it has: read the results, and `steward timer disarm` takes it off the schedule.
-
-Signoff is the one command an agent may never run, and the [Agent Runbook](./runbook.html.md) says so flatly — it is a human attestation that the results are accepted, and an agent running it is the one thing that would make the whole record meaningless.
+If no tend runs for two intervals, the run reports itself unsupervised.
 
 
 # Concurrency – Inspect Steward
 
 ## Overview
 
-Concurrency under Steward has three dimensions, and they are controlled by three different knobs with three different owners:
+The two most important concurrency dimensions to consider when running agentic evaluations are how many samples can be run in parallel (bounded by compute) and how much inference can be run in parallel (bounded by provider rate limits). It’s important to try to match these well during execution, so that you don’t pay for compute that sits idle while waiting on rate limits.
 
-| Dimension | Knob | Owner |
-|----|----|----|
-| How many tasks run at once | `max_tasks` | your definition |
-| How many processes those tasks are divided into | `max_workers` | `_steward.yaml` |
-| How many samples run at once within a task | `max_samples` | your definition |
+## Sandboxes
 
-By default all tasks run at once, each in its own process, with sample concurrency taken from your definition. This page explains what each knob actually does, why they are split the way they are, and how to override them.
+Sandboxes are either local (e.g. Docker) or remote (e.g. k8s, Daytona). In either case it’s important to optimize allocation of sandboxes. For the local case, available CPU cores and memory create an upper bound. For remote, while you may have infinite elastic capacity you won’t want to pay for an over-allocation of sandboxes idled by model rate limits.
 
-## One process per task
+By default, local sandboxes are limited to 2 \* available CPU cores for Docker, and unlimited for other providers. You can set an explicit `max_sandboxes` to override the default behavior.
 
-Steward runs each task in its own worker process rather than running the eval set in one process. This buys two things:
+## Samples and Tasks
 
-- **Fault isolation.** An OOM or a segfault costs one task rather than the run.
-- **Real CPU parallelism.** A task’s Python work — transcript construction, JSON serialization, `.eval` compression, non-model scorers — serializes behind the GIL in a single process. Across processes it runs in parallel.
+By default, Steward runs 40 samples in parallel for each task (`max_samples=40`), and runs all tasks in the eval set in parallel (each in their own process). The 40 is a starting point: Steward [ramps sample concurrency](#automatic-ramp) toward 200 while the provider keeps up. Set `max_samples` yourself and Steward honors that number exactly and never ramps.
 
-The cost is per-process startup: every worker imports your definition and its dependencies before it can run. For plain [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) definitions this is seconds; execution frameworks can charge more (see [Inspect Flow](./flow.html.md) and [Inspect Hawk](./hawk.html.md) for what each costs).
+You can change these defaults in your call to [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set):
 
-## `max_tasks` — how much runs at once
+    evalset.py
 
-`max_tasks` caps how many tasks are in flight across the whole fleet. Unset, every task runs at once. Set, tasks queue in the order your definition declares them, and each completed task frees a slot for the next.
+``` python
+eval_set(
+  ...,
+  max_tasks=10,    # run only 10 tasks at a time
+  max_samples=100  # run 100 samples per task with NO auto-ramp
+)
+```
 
-It belongs in your definition — `eval_set(max_tasks=...)` — and `_steward.yaml` refuses it by name, on the rule that also refuses `max_samples`: **inspect’s words go in the definition; `_steward.yaml` holds only words [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) does not know.** For one run you can still say it inspect’s way (see below). Steward reads whichever value is in force and applies it to the fleet, so the number means what it says even though each worker is handed only its own share of it.
+For the above configuration, 1,000 samples will be run in parallel, and stay there, because setting `max_samples` turns the ramp off. Left unset, the same 10 tasks would start at 400 samples and climb toward 2,000. If your sandbox infrastructure can handle that then the next thing to consider is whether your model API can keep up.
 
-One difference from a plain [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) run worth knowing: leaving it unset means *every task at once* here, where [eval()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval)’s own rule for an unset `max_tasks` is one at a time. A fleet exists to run wide, and saying nothing is no preference rather than a preference for sequential.
+## Model Connections
 
-## `max_workers` — how many processes
+By default, Steward uses Inspect’s adaptive connections concurrency controller to automatically find the highest sustainable `max_connections` for the model provider endpoint. You can customize this behavior by either setting a fixed `max_connections` or a custom configuration for adaptive connections in your call to [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set):
 
-`max_workers` divides the in-flight tasks into fewer processes than one each, packing several tasks into each worker. It changes *nothing* about how much runs at once — that is `max_tasks` — only how many processes carry it.
+    evalset.py
 
-Packing trades away fault isolation to buy back startup cost. It is worth reaching for when per-process startup is expensive (an execution framework that builds a venv per process, a definition with heavy imports) and not otherwise. Unset, every task gets its own process.
+``` python
+eval_set(
+  ...,
+  max_connections=100  # fixed connections, no adaptive concurrency
+)
+```
 
-## `max_samples` — load within a task
+Sample concurrency and connection concurrency are tuned together: while a ramp is active, Steward raises the adaptive controller’s ceiling to match the ramp’s, so the two do not work against each other.
 
-Sample concurrency is a property of the eval — its author knows the workload — so `max_samples` belongs in your definition and `_steward.yaml` refuses it by name. An explicit value **pins** the setpoint: Steward honors it as written and never moves it.
+## Automatic Ramp
 
-When nobody pins one, sample concurrency is not a fixed default — it is discovered. When a worker is spawned, the number resolves most specific first:
+While Steward starts with `max_samples=40`, it will also attempt to automatically ramp sample concurrency according to how well the model provider is handling the load.
 
-| Source | Meaning |
-|----|----|
-| `STEWARD_MAX_SAMPLES` in this shell | an operator typed a number for this turn: pinned, nothing outranks it, and it holds for the rest of the run rather than the turn |
-| `steward launch --max-samples` | a number typed for this run, recorded in the manifest: pinned |
-| the definition’s `max_samples` | the eval’s own preference: pinned, honored as written |
-| the ramp | nobody expressed a preference, so tasks start at `40` and Steward tunes from there |
+During each `steward tend` operation, Steward checks to see if the following is true:
 
-The definition’s row is whatever it passes to [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set), which includes anything the framework running it sets on your behalf. [Hawk](./hawk.html.md#hawk-sets-the-concurrency-so-the-ramp-does-not-run) always supplies a `max_samples` (default `1000`), so **Hawk eval sets are always pinned and never ramp** — set the value you want in the Hawk config. Flow specs and plain [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) definitions leave it unset unless you write one, so they ramp.
+- The sample limiter is saturated (demand for more samples);
+- The model provider showed no rate-limit pushback;
+- No sample errored, and HTTP retries did not surge;
 
-## The ramp
+If all checks pass, then tend adds an additional 20 samples to the limit. This ramp continues up to 200 as long as the checks continue to pass.
 
-The right sample concurrency is roughly *what the provider will actually serve*, which is not a number anyone can look up — it varies by account tier, by model, and by time of day. So by default Steward discovers it: every task starts at the ramp’s floor (`40`), and each tend buys one `+20` step toward the ceiling (`200`) when the task’s window since the last tend was **clean**:
+On sustained pushback (rate-limit episodes in two consecutive windows) the ramp reverses. The connection ceiling is clamped down to where Inspect’s own controllers already fell, and sample concurrency steps back down so new samples stop being admitted against capacity that is not there. Samples already running are never interrupted. The way back up is stepwise, through the same gates.
 
-- the sample limiter was saturated — demand exists, so raising it means something;
-- the provider showed no rate-limit pushback (inspect’s adaptive connection controllers record every cut they take, so an episode is visible rather than inferred);
-- no sample errored, and HTTP retries did not surge (a quarter of a retry per sample slot is the line — not zero, because transient 5xxs and dropped connections are ordinary and a zero-tolerance gate would park the ramp against any imperfect endpoint);
-- the worker’s CPU had headroom over the window;
-- at least twenty minutes passed since the task’s last step, so a new batch has time to reach steady state before it is measured.
+Set the range with `samples_ramp` in the Steward config file or the `STEWARD_SAMPLES_RAMP` environment variable:
 
-On **sustained** pushback — episodes in two consecutive windows, the retry storm that independent per-process controllers cannot escape on their own — the ramp reverses at once: the adaptive connection ceiling is clamped down to where the controllers already fell (backoffs stop in seconds), and sample concurrency steps back down so new samples stop being admitted against connection capacity that is not there. Samples already running are never interrupted; they drain as they finish. The way back up is stepwise, through the same clean-window gates.
-
-Two more bounds cap the climb:
-
-- **`max_sandboxes` is a machine-wide budget.** The fleet-wide sum of sample setpoints never exceeds it — a task’s containers never exceed its running samples, so bounding the sum bounds the containers. The budget is your definition’s `max_sandboxes` if it sets one, otherwise the sandbox provider’s own default; elastic providers (k8s) cap nothing.
-- **The envelope.** The range itself, settable in `_steward.yaml`:
+    _steward.yaml
 
 ``` yaml
 samples_ramp: [40, 300]   # explore this range
 samples_ramp: false       # never ramp; tasks stay at 40
 ```
 
-Every move is recorded three ways: in the eval log (who, when, old → new, and why — inspect’s own retune provenance), in the journal as an action, and in the run history every summary carries (`ramped <task> 60→80 — no rate-limit pushback with the limiter saturated…`). The tuning block under the status table shows each task’s level and whatever is currently gating its next step.
+Narrowing the range works on a live run: a task the ramp had taken to 200 comes back to a new ceiling of 100 at the next tend.
 
-**Holding the ramp.** An agent (or you) can freeze the climb without touching configuration: `steward ramp hold --reason "..."` holds the fleet (add a task identifier to hold one arm), and `steward ramp resume` re-arms it. A hold stops growth only — the defensive cut stays active, because it exists precisely for when nobody is watching.
+To freeze the climb without changing configuration:
 
-**When capacity outruns authority.** If a *pinned* setpoint holds a clean, saturated window for two tends running, or a ramp tops out at its ceiling with pushback still absent, Steward raises a `tuning_proposal` — the binding constraint is a number a person chose, so only a person may move it. Acknowledge it to say “seen, happy where it is”; the acknowledgment is narrow, because a different level is a different item.
-
-## Provider load
-
-A fleet’s demand on a model provider is the product of the knobs above: `max_tasks` tasks, each running `max_samples` samples, is `max_tasks × max_samples` concurrent generate calls against whatever providers the tasks use.
-
-The total is still worth computing before a large run — the ramp’s ceiling bounds where discovery can take it, and `max_tasks × 200` is the number the default envelope authorizes. Within one process, inspect’s adaptive connection controllers manage the connection pool on their own (AIMD, exactly as TCP shares a link); when a ramp is active Steward raises their scaling ceiling to the ramp’s ceiling so the two do not fight, and the ramp moves only the *bounds* while the controllers move within them.
-
-## One setting, three spellings
-
-Every setting Steward owns can be said three ways, and they resolve most specific first — **flag, then variable, then file, then default**:
-
-|                                     |                                       |
-|-------------------------------------|---------------------------------------|
-| `max_workers: 8` in `_steward.yaml` | what this project wants               |
-| `STEWARD_MAX_WORKERS=8`             | what this machine or this shell wants |
-| `steward tend --max-workers 8`      | what this invocation wants            |
-
-That holds for every setting Steward owns, with no exceptions to remember — `max_workers`, `stall_after`, `samples_ramp`, `tend_interval`, and `policies` among them. All three spellings go through one parser, so a value that is refused in the file is refused the same way and with the same message everywhere else — `STEWARD_MAX_WORKERS=yes` fails naming the `True` that YAML made of it, exactly as `max_workers: yes` does.
-
-Two details worth knowing. `--tend-interval` appears on `steward launch` and `steward timer arm` but not on `tend` or `status`, because those run a single turn and have no cadence to set. And a `STEWARD_*` name Steward does not recognise is **refused**, not ignored — a misspelled `STEWARD_SAMPLE_RAMP` that sat inert would be a setting you believed was in force.
-
-## Inspect’s knobs, said inspect’s way
-
-`max_tasks` and `max_samples` are not in that table, and that is the ownership rule rather than an omission: they are words [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) knows, so your definition owns them and Steward mints no synonym. They are still sayable for one run, because **a Steward run is an `inspect eval-set` invocation with a longer lifetime** — so it reads the environment that CLI documents, and accepts the same options at `launch`:
+    Terminal
 
 ``` bash
-steward launch --epochs 2 --limit 5      # this run
-INSPECT_EVAL_MAX_SAMPLES=20 steward tend # this shell, and every inspect eval in it
-STEWARD_MAX_SAMPLES=20 steward tend      # this shell, but only for Steward
+steward ramp hold --reason "provider looks unhappy"
+steward ramp resume
 ```
 
-The last two are the same knob at different scopes, and the narrower wins. Inspect’s variable is broad by construction — exported in a shell it reaches every `inspect eval` there — so `STEWARD_MAX_SAMPLES` is how you say it quietly.
+Note that `max_sandboxes` is a machine-wide budget that bounds the fleet-wide sum of sample setpoints, where workers start at a share of the budget instead of at 40. The budget is your definition’s `max_sandboxes` if it sets one, otherwise what the sandbox provider reports (e.g. Docker’s 2 \* available CPUs). Elastic providers such as k8s have no limit.
 
-Every identity-neutral [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) argument works this way, not just these two: `--epochs`, `--limit`, `--sample-id`, `--max-connections`, `--sandbox`, `--tags`, and the rest. See `steward launch --help`, where they sit under their own heading. What you cannot override is anything that changes **task identity** — the model, the solver, the task args, the execution limits — because a worker computing a different identifier than the manifest recorded would write a log nothing ever looks for.
+## Worker Processes
 
-**Each spelling keeps its own syntax, because each is read by its owner.** Inspect’s variables are read by inspect — the same code path `inspect eval` uses, so `INSPECT_EVAL_LIMIT=10-20` and `INSPECT_EVAL_SAMPLE_ID=a,b` mean here exactly what they mean there, including the several whose names read backwards (`INSPECT_EVAL_SCORE_DISPLAY` is bound to `--no-score-display`, so setting it turns the display *off*). Steward’s flag and its `STEWARD_*` alias go through Steward’s parser, the one `_steward.yaml` uses, so a range is `--limit '[10, 20]'` and `STEWARD_LIMIT='[10, 20]'`. Same knob, same value, and each surface consistent with the rest of itself.
+Steward runs each task in its own worker process. This provides two things:
 
-One of inspect’s words is Steward’s here: `notification`. See [Getting told](./workflow.html.md#getting-told) — the channel Steward posts to and the channel your workers post from have to be one channel, so Steward owns the setting in all three spellings and both halves are wired from it.
+- Fault isolation. An OOM or a segfault costs one task, not the run.
 
-**These are set once, at launch, and recorded in the manifest.** That is what makes them survive to the 02:00 tend, which inherits no shell: the enumeration and the fleet read the same values because the fleet reads the ones the enumeration was made under. `tend` and `status` recompute Steward’s own settings every turn and never re-decide the run’s shape.
+- CPU parallelism. A task’s Python work (transcript construction, JSON serialization, `.eval` compression, non-model scorers) serializes behind the GIL in a single process, and runs in parallel across several.
 
-**These persist across a re-launch, and one flag replaces all of them.** A second `steward launch` — the amend path, for picking up an edited definition — reuses whatever the committed manifest recorded, the same way it reuses `-A` arguments, because forgetting a flag should not silently reshape the run. Say any one of them again and the whole set is replaced rather than merged, so *this run has no limit* stays sayable; `--no-overrides` goes back to the definition’s own shape and ignores the environment while it does.
+The cost is startup, since every worker imports your definition and its dependencies before it can run. For plain [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) definitions that is seconds; [Flow](./flow.html.md) and [Hawk](./hawk.html.md) can have longer startup times.
 
-**Changing which samples run re-runs the tasks.** `limit`, `sample_id` and `sample_shuffle` sit outside task identity so that raising a limit *resumes* rather than orphaning what has already run — but that also means a different slice of the same size keeps every identifier and every count. Steward compares a log against the slice the run is now asking for, so a re-launch that reshuffles or moves the range marks those tasks `reshaped` and runs them again; `steward launch` reports the change and how many tasks it would redo, and stops the fleet, since a worker’s slice is fixed when it spawns and it would otherwise spend hours producing a log the next tend discards. Overriding `--sandbox` or `--model-base-url` also re-runs the tasks, and more sharply: those are marked `redirected` and started **fresh** rather than resumed. Inspect resumes by looking each sample of the new slice up in the prior log by id, which is exactly what makes a reshape resumable — the samples it keeps are still good answers. A redirect keeps the whole sample set and invalidates every answer in it, so resuming would find all of them, reuse all of them, and finish having run nothing. Only a launch that overrode them counts, since nothing records what a definition asked for. The earlier logs are kept as superseded attempts, as with any re-run — and kept usefully: a shape you return to is answered by the attempt that answered it the first time, so slice A, then B, then A again re-runs nothing on the way back.
+Where startup is expensive, pack the fleet into fewer processes:
 
-**The other is `log_dir`.** Steward decides where a run’s logs go — the fleet is watched from that directory — so there is no `--log-dir`, no `STEWARD_LOG_DIR`, and `INSPECT_LOG_DIR` is refused at launch rather than quietly ignored. What Steward will not do is *override* a `log_dir` your definition names; where your definition names none, see [Where your logs go](./workflow.html.md#where-your-logs-go), which is the case worth preferring.
-
-**Fleet width lapses; a sample pin does not.** `max_tasks` is recomputed from scratch every turn, so a value that is not repeated simply stops applying. Sample concurrency is different, because a value there does not just set a number — it pins the setpoint and switches the ramp off. So the pin is remembered for the rest of the run, and the way to release it is a `samples_ramp` **range**, in whichever spelling suits:
+    _steward.yaml
 
 ``` yaml
-samples_ramp: [40, 200]   # ramp again, whatever an earlier pin set
+max_workers: 8
 ```
 
-Narrowing the range works on a live run too: a task the ramp had taken to 200 is brought back to a new ceiling of 100 at the next tend, and any worker respawned after the edit starts inside the new range.
+This changes nothing about how much runs at once (that is `max_tasks` and `max_samples`), only how many processes carry it.
+
+## Docker Configuration
+
+Docker has a ceiling on concurrent sandboxes that has nothing to do with the size of your machine. Every sandboxed sample gets its own compose project, and every compose project gets its own bridge network, allocated from Docker’s `default-address-pools`. The built-in value carves two ranges into sixteen networks each, so a host runs about thirty sandboxes however many cores it has. Samples past that fail with:
+
+    could not find an available, non-overlapping IPv4 address pool
+    among the defaults to assign to the network
+
+`steward launch` reads the daemon and tells you when your run wants more sandboxes than it can give, offering to write the fix into your `daemon.json`:
+
+    daemon.json
+
+``` json
+{
+  "default-address-pools": [
+    { "base": "172.17.0.0/12", "size": 20 },
+    { "base": "192.168.0.0/16", "size": 24 }
+  ]
+}
+```
+
+That is the same two ranges Docker already claims, carved finer: 512 networks instead of 32. Declining is the default, and prints the JSON along with the file to put it in.
+
+Steward never restarts the daemon, and nothing takes effect until you do. A restart stops every running container on the machine, so the timing is yours. The launch prints the command for your platform.
+
+See [Docker’s default address pools](https://straz.to/2021-09-08-docker-address-pools/) for background.
 
 
 # Error Handling – Inspect Steward
 
 ## Overview
 
-Errors under Steward come in two tiers, and they are handled by different mechanisms with different owners:
+Inspect’s default behavior is to fail fast so that you can see and fix a problem. Steward runs unattended for hours at a time, so it does the opposite: errors never halt a run, retries are automatic, and anything a retry cannot fix becomes a decision that waits in a queue.
 
-| Tier | What happens | Who decides what’s next |
+Nothing is dropped silently. Every error is either retried or turned into a decision, and a run cannot be signed off while a decision is unanswered.
+
+| Stage | What happens | Who acts |
 |----|----|----|
-| **Sample errors** | The task keeps running; errored samples are collected in the log | You (or the agent, within your policy) |
-| **Task failures** | The task is re-launched, up to `stall_after` attempts | Steward, then you once the limit is hit |
+| [Retry](#retry) | Samples are retried in the worker, and failed tasks are respawned | Steward, unattended |
+| [Surface](#surface) | What survives retry is grouped into a class and raised as a decision | Steward and your agent |
+| [Decide](#decide) | A ruling: a disposition, a reason, and a name | you |
+| [Codify](#codify) | Standing rules so the same question stops being asked | your agent, in `_steward.yaml` |
+| [Resolve](#resolve) | Signoff refuses while anything is still undecided | you |
 
-## Sample errors
+Transcript scanning follows the same stages, because a finding becomes a decision the same way an error does. See [Scanners](./scanners.html.md).
 
-A sample that errors never halts its task: Steward runs every task to completion (`continue_on_fail` is forced on in worker mode, and a definition’s own setting has no effect under Steward). This is an invariant rather than an option because supervision depends on it — Steward reconciles the run by comparing logs against the manifest, and a task that halted on its first error would be indistinguishable from a structural failure, re-launched, and halted again.
+## Retry
 
-The consequence is that **completion is not success**: a log can finish `success` while carrying errored samples, so a task whose provider was down for its entire duration completes “successfully” with a meaningless score. Read the reported status, not the exit code.
+Steward runs workers with `fail_on_error=False`, so a sample that errors never fails its task. Every task runs to completion and its errored samples are collected in the log. Steward decides what to do about them by reading the logs, so a task that stopped on its first error would look like a structural failure and be re-launched.
 
-Two things govern what happens to errored samples:
+This means that completion is not success. A log can finish `success` while carrying errored samples, so a task whose provider was down for its entire duration still completes.
 
-- **Automatic retry** belongs to your definition: set `retry_on_error` in your [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) call and it is honored exactly as written; when a definition says nothing, Steward workers default to 3 attempts per sample. Retrying samples release their concurrency slot and re-enter at the back of the queue, so retries never block healthy samples — they just tend to finish late in the task.
-- **Everything past automatic retry is a decision**: re-run the samples, accept them as failed, or exclude them from scoring. The agent groups errored samples into classes (a provider outage is one question, not two hundred) and either acts within your standing policy or asks you.
+Retries then happen at two levels:
 
-To stop a run when error rates climb, write it as a policy rule — e.g. *“if more than 10% of the samples in a task error out, pause the run and notify me”* — which pauses the whole run reversibly rather than failing one task.
+- Samples are retried inside the worker (by default up to 3 times; set `retry_on_error` in your [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) call to choose your own number, including 0).
 
-## Task failures
+- Tasks are retried by Steward. Once `stall_after` attempts get nowhere (default `2`) the task is marked stalled and becomes a decision.
 
-A task that fails outright — an import error, an OOM, a scorer that throws, a worker process that dies — is re-launched by the next turn of the monitor. Attempts are counted, and after `stall_after` of them finish nothing new (default: 2) the task is marked **stalled**: it will not be re-launched again, and it is reported as needing a person.
+## Surface
 
-The limit exists because a structural failure re-runs to the same place at full price — a definition that will not import fails identically on attempt ten. Steward never retries past the limit on its own; raising `stall_after` in `_steward.yaml` is how you buy more patience for a genuinely flaky environment (a sandbox fleet earns more of it than a deterministic scorer bug).
+Samples that failed the same way are grouped into a class, so a provider outage is one question instead of two hundred. A stalled task is classed the same way, on the exception in its log or on the worker’s output if it died before writing one, so it arrives with its evidence attached.
 
-When a person rules on a stalled task — fixing the definition and re-launching, or invalidating samples for a re-run — the attempt history before that ruling is cleared: a decision to try again is made by the only party entitled to make one, and what happened before it no longer counts against the task.
+Classes appear under the anomalies heading in `steward status` and `status.md`, with instance counts, an example message, and any prior rulings. A class is raised once, and again only if it materially changes: the population crosses an order of magnitude, or a re-run fails.
 
-## Where errors surface
+Your agent works the queue from here. `steward investigate` marks a class as being worked, and `steward propose` bundles related classes into one question with the evidence attached.
 
-Sample error counts and stalled tasks both appear in `steward status` and in the questions the agent brings you, each raised once rather than repeated every interval. Decisions and their reasons are recorded in the journal as they happen, so how the run’s errors were handled is part of the run’s record.
+## Decide
+
+Agents will prompt you for a ruling with one of six answers:
+
+| Disposition | What it means | What happens to the data |
+|----|----|----|
+| `rerun` | The failure was transient and the samples should run again | Steward re-runs them and records whether they passed |
+| `exclude` | Leave the samples out of scoring | The report says how many were excluded |
+| `zero` | Count the samples as failures | Scored zero, with a visible mark |
+| `score` | The recorded results stand as they are | Scored as-is, marked |
+| `accept` | The data stands with a caveat | Requires a stated effect, which is the sentence the report carries. Not available for errored samples |
+| `dismiss` | Looked, nothing here | No mark; the record keeps who looked and why |
+
+The next tend carries out a `rerun`. Samples in a running task are requeued in place, and a landed log has the ruled samples invalidated so the task re-runs them and reuses everything else. Authorized re-runs are scheduled ahead of ordinary queued work.
+
+If the same failure comes back after a ruling, it opens as a new question and carries the old decision with it.
+
+## Codify
+
+“When you find yourself answering the same question twice, your agent will propose recording it in \_steward.yaml so it stops being asked. For example:
+
+    _steward.yaml
+
+``` yaml
+preauthorized:
+  'error:ReadTimeout@*': rerun
+```
+
+When a new class matches a pattern, the tend records a ruling with `by: policy` naming the pattern and applies it in the same turn. Nothing is pre-authorized by default, and if a pre-authorized re-run fails, the pattern stops matching that class until a person has looked.
+
+Anything more nuanced than a pattern goes in `policies:` as prose, which your agent applies when one is in session:
+
+    _steward.yaml
+
+``` yaml
+policies:
+  - If more than 10% of the samples in a task error out, pause the run and
+    notify me right away.
+  - Sandbox startup timeouts under 1% are expected here; invalidate and re-run.
+```
+
+Use a policy to stop a run on error rates. Pausing is reversible and stops the whole run, which is usually better than failing one task.
+
+## Resolve
+
+`steward signoff` refuses while any error is still undecided, and lists every reason at once so that fixing one and being refused for the next never happens.
+
+The refusal tells you what to answer. It is not a quality bar: `accept` and `dismiss` are answers, and “2 samples accepted as errored, the provider was down all night” is a signed statement about the results.
+
+The classes you accepted become the entries in `anomalies.md`, each with its reason, who decided, when, and the effect on the numbers.
+
+## Stuck Samples
+
+One condition never becomes an error: a sample that is alive but not moving, such as a `bash` command that never returns. Nothing errors, nothing scores, and the task’s clock keeps running.
+
+A running sample with no activity for longer than `stuck_after` (default `5h`) is reported, one item per task, naming the samples and the tool call they are inside. Streaming counts as activity, so a slow but healthy `generate` is never stuck. A sample parked on an approval is waiting on you, and a provider backoff with a live deadline is waiting on purpose.
+
+`stuck_after` only reports, and never cancels. To bound how long a sample may work, set `working_limit` in your definition.
+
+What to do about a stuck sample is an escalation ladder. The item carries the applicable rung as a command ready to run:
+
+| Rung | Command | What it costs |
+|----|----|----|
+| Cancel the tool call | `inspect ctl sample cancel-tool-call TASK ID EPOCH` | The call fails inside the sample, which continues |
+| Cancel the sample | `inspect ctl sample cancel TASK ID EPOCH` | The sample stops, recorded as you choose with `--action` |
+| Requeue the sample | `inspect ctl sample requeue TASK ID EPOCH` | The sample’s work is discarded and it runs again from the start |
+
+A cancel is a request. If one was asked for and the call still has not stopped, the item says so, which is your signal to climb a rung.
+
+You can grant the first rung in advance. `stuck_cancel: true` lets your agent cancel any stuck tool call itself, and `stuck_cancel: [bash]` admits only those tools. The higher rungs stay yours, since they discard work.
+
+A stuck sample is not an anomaly and there is nothing to rule on. It is reported while it holds and gone when the sample moves.
+
+
+# Scanners – Inspect Steward
+
+## Overview
+
+A sample can run, score cleanly, and still be untrustworthy: the model read the grader, refused the task while producing something that looks like an answer, or retrieved remote data from inside a sandbox that should have had no route to the internet.
+
+Scanners review transcripts for these problems. Under Steward they run as the samples they review complete, so the transcripts are already scanned by the time the run finishes.
+
+Steward runs a scoring integrity scanner over every sample of every run. It requires no configuration.
+
+## Scan Model
+
+By default a scanner reviews with the model already under evaluation, so an unconfigured run still scans. To use a different model, set `scan_model` in `_steward.yaml` or `STEWARD_SCAN_MODEL` in your `.env`:
+
+    _steward.yaml
+
+``` yaml
+scan_model: anthropic/claude-opus-5
+```
+
+A scanner that names its own model in the definition keeps it.
+
+## Adding Scanners
+
+Your definition is the normal place to say what scans your eval set:
+
+    evalset.py
+
+``` python
+eval_set(
+    tasks=[cais_swebenchpro(), datacurve_deep_swe()],
+    model=["openai/gpt-5.6-sol", "anthropic/claude-opus-5"],
+    scanner=[my_scanner()],
+)
+```
+
+## Findings
+
+A flagged sample becomes an anomaly and is decided the same way an error is, as described in [Error Handling](./errors.html.md). Samples flagged the same way are one class and one decision, and every disposition is available, including excluding or zeroing a score you establish is wrong.
+
+Dismissing is an answer too, and a run cannot be signed off while a finding has no ruling either way. You will dismiss most of them: a model that probed a grader it never reached earned nothing, and the score stands. At signoff Steward tells you how many findings were dismissed, and your agent is asked to name them.
 
 
 # Agent Runbook – Inspect Steward
 
 ## Overview
 
-Steward is built to be operated by a coding agent: almost every verb is one an agent runs, while yours are `init`, `signoff`, editing the definition and `_steward.yaml`, and asking questions in prose. The agent’s operating instructions ship with the package — `steward runbook` prints them — so an agent can never follow last year’s instructions against this year’s CLI. Your workspace’s `AGENTS.md` tells the agent to read them; you never need to run the command yourself.
+Steward is designed to be operated by a coding agent. The agent launches the run, works the decision queue, tunes concurrency within the bounds you set, and brings you the questions only you can answer.
 
-The agent supplies judgement within bounds: it diagnoses errors, oversees the [concurrency ramp](./concurrency.html.md#the-ramp) (holding the climb when the run argues for caution), investigates findings, and writes up what happened — acting on its own where your [eval policy](./workflow.html.md#standing-rules) pre-authorizes it, and bringing you a question where it does not.
+The agent’s operating instructions ship with the package and are printed by `steward runbook`, so they always match the version of the CLI you are running. The `AGENTS.md` file in your workspace tells the agent to read them, so you never need to run the command yourself.
 
-## What it may never do
-
-These are settled and binding, and the runbook states them flatly. No situation makes any of them correct:
-
-- **`steward signoff`.** It is a human attestation that the results are accepted. An agent running it is the one thing that would make the whole record meaningless.
-- **Edit the definition.** It is your statement of what is being measured. The agent reads it, runs it, and raises anything that looks wrong as a *question*.
-- **Write `_steward.yaml`.** It proposes; you write. The settings as much as the policies.
-- **Move or delete a log.** Not even an empty cancelled one. Resume matches logs where they are.
-- **Answer a tool approval or an `ask_user`.** A worker stopped for a human decision is asking whether the eval may *do* something, and answering is authority over what is being measured. The agent surfaces it — as a blocked item carrying the command that attaches you to that worker — and waits. Steward refuses to let the item be acknowledged: only an answer clears it.
-
-> **NOTE:**
->
-> None of these is enforced by access control, and Steward does not pretend otherwise. `signoff` records who signed; the runbook says plainly that the agent never signs. A forged signature is visible rather than prevented — the same bargain a commit author line makes.
-
-## The runbook
-
-What follows is the runbook itself, reproduced verbatim from the copy that ships with the package — the same text `steward runbook` prints — so you can see exactly what your agent has been told.
-
-------------------------------------------------------------------------
+What follows is that text, reproduced verbatim.
 
 # Steward runbook
 
@@ -691,11 +650,38 @@ How Steward works. This ships with the package, so it can never be out of date w
 
 No situation makes any of these correct.
 
-- **`steward signoff`.** It is a human attestation that the results are accepted. An agent running it is the one thing that would make the whole record meaningless.
+- **Decide to sign off.** `steward signoff` records that a *person* accepted these results. Telling the human the run is ready is your job, and running the command once they answer is too — with their name in `--by`, which is the same rule `steward rule` already applies to a decision you are relaying. What is never yours is the decision: a signature nobody asked for is the one thing that would make the whole record meaningless.
 - **Edit the definition.** It is the human’s statement of what is being measured, and afterwards your edit is indistinguishable from theirs. Read it, run it, and raise anything that looks wrong as a *question*. This includes adding a comment explaining what the eval set is for: you were never told why it exists, and a plausible-but-invented rationale is worse than none, because a later reader cannot tell it from the author’s.
-- **Write `_steward.yaml`.** Propose; the human writes. The settings as much as the policies.
+- **Write `_steward.yaml` unasked.** Propose the exact text, and write only what the human approved — the settings as much as the policies. Once they have answered, typing it is yours the same way `steward rule --by` and `steward signoff --by` are. What is never yours is the decision: promoting a one-off ruling into a standing rule widens what they have committed to, and the widening is theirs to authorize. See *Writing a standing rule*.
 - **Move or delete a log.** Not even an empty cancelled one, and not into a folder named for discards. Resume matches logs where they are.
 - **Pass `steward launch --accept-archive` on your own judgement.** A launch that would move results out of `logs/` prints what it would move and refuses. Adding work is different: if the delta is purely additive, `launch` commits it and you needed nobody’s permission — the human asked for the work, and checking whether they meant it is the interruption Steward exists to remove. But a one-character change to a task argument reads exactly like a deliberate removal, and only one of the two quietly buys a re-run of everything. So show the human the delta and let them answer. **The refusal is the mechanism, not an obstacle to it**: a flag reached for reflexively is the same as no gate.
+
+## Rehearse before you commit a night to it
+
+`steward launch --smoke` runs a couple of samples per task under a wall-clock cap, into `.steward/smoke/`, and tells you whether the run is ready. It is the default first step, and the artifact it leaves is `.steward/smoke/digest.md`.
+
+It launches nothing. Two invocations: `--smoke` answers *is this ready*, and a plain `steward launch` acts on the answer. A launch with no passing smoke for its tasks says so and proceeds anyway — that is a warning, not a gate, because re-launching after a fix and resuming are both legitimate.
+
+Give it the flags the launch will get. It rehearses what the launch will run, so `--scan-model`, `--notification` and `--max-workers` belong here too; arguments and overrides you do not repeat are taken from the committed manifest, exactly as a re-launch takes them. Flags that shape the *launch* rather than the run — `--no-timer`, `--sync`, `--log-root`, `--tend-interval`, `--samples-ramp` and the like — are refused here rather than ignored, because `--smoke` launches nothing. Pass them to `steward launch` when you run it. The launch also warns when the last smoke covered the same tasks at a different *shape* — a grown dataset or a raised `epochs` keeps every task identifier while changing what the night costs — and when it ran different scanners or scanned with a different model.
+
+The slice is taken inside whatever your run already selects, so a run limited to `(100, 200)` rehearses the front of that window rather than samples nobody will run.
+
+**What it catches that a run does not.** Most of the list is things that stop a run: a definition that will not import, a wrong model name or key, a sandbox image that will not start, a scorer that throws.
+
+None of those actually stop a *task*, which is why the digest reports what the **samples** did rather than whether the tasks finished. Workers run with `continue_on_fail` on, so every one of them lands as errored samples inside a log that finished `success`. Any errored sample fails the rehearsal, and unlike the checks below it cannot be waived — read the class it names, because that is the failure you were rehearsing to find. So does a task that finished holding fewer samples than the slice asked it for: nothing errored, nothing is marked, and a sample went missing anyway.
+
+Four more are worse still, because they do not stop anything — they produce an eval that completes, scores, and is quietly wrong:
+
+- **the scanners ran**, and what they flagged in the rehearsal. Two flagged samples before the sweep are worth more than two hundred after.
+- **the scanners reached every transcript.** A scan that recorded nothing looks exactly like a scan that found nothing, so a clean findings list is only good news beside a full coverage. A definition that filters what its scanners see will leave a real gap here — that one is yours to waive by name.
+- **every model resolved to a context window.** A model that resolves to none runs at an assumed 128000 whatever its real window is, and stops shrinking oversized tool output entirely. A model with no database entry whose provider aliased it onto the current frontier is *fine* — the digest names which entry it landed on, so read that line rather than assuming.
+- **reasoning is replayed to the model.** Checked in the conversation and again in the raw request body, because a provider can drop on the wire what Inspect kept.
+
+**A failed check stops the launch.** Say what failed when you tell the human, and fix it rather than routing around it. Three answers are not failures: `unexercised` means there was nothing to check — a non-reasoning model has no reasoning to replay — and `undetermined` means the check could not run here, usually a provider package this machine does not have. `--accept CHECK` waives one by name and records the waiver in the journal, so use it when you know why and never to make a red line go away.
+
+**Do not project the run’s spend from it, and do not ask the digest to.** A rehearsal is a couple of samples off the front of each dataset, which is not a sample of the run in any sense that supports multiplying. The digest says how many samples the run will produce; that count is a fact and everything past it would be a guess wearing a number.
+
+**Stop and ask if a smoke fails twice.** A rehearsal that keeps failing is a problem to understand, not to retry. And notify: before the first worker of the real run starts there is no tend, no `status.md` and nothing posting, so a launch blocked here is silent unless somebody says so.
 
 ## Trust the artifact, not the exit code
 
@@ -733,16 +719,135 @@ Two acts take an item out of the queue, and which one is right is decided by who
 
   **Only a human-owned item can be raised**, and the command refuses the rest. Raising takes something out of your queue without closing it, which is safe only because somebody else is going to close it — do that to your own item and it is stranded: open forever, and gone from the one list that would have brought it back to you. If you are stuck on an agent-owned item, that is a question to ask in the conversation, not a hand-off to record.
 
-**A parked worker is the one item that refuses an ack.** A sample stopped on a tool approval or an `ask_user` is waiting for authority over what the eval does, which is the human’s alone — and it holds its slot, its sandbox and its model connections the whole time. So `ack` refuses it whatever reason you give. Raise it, pass on the attach command the item carries (`inspect acp`, whose picker floats the samples waiting on a person to the top), and leave it open: it clears when somebody answers it, and nothing else clears it.
+**A parked worker refuses an ack.** A sample stopped on a tool approval or an `ask_user` is waiting for authority over what the eval does, which is the human’s alone — and it holds its slot, its sandbox and its model connections the whole time. So `ack` refuses it whatever reason you give. Raise it, pass on the attach command the item carries (`inspect acp`, whose picker floats the samples waiting on a person to the top), and leave it open: it clears when somebody answers it, and nothing else clears it.
+
+**An anomaly refuses an ack too — it closes through a ruling.** See the next section; the dismissal that says *looked, nothing here* is `steward rule <class> --disposition dismiss`, recorded with a reason, never a wave-past.
 
 An item comes back if the condition **changes**, because its id encodes the instance rather than the condition: a task that stalls again at attempt 3 has a different id from the one that stalled at attempt 2, so it arrives as new work, while an unchanged condition stays raised and stays quiet.
 
 **Nothing `collect` sets aside is dropped silently.** A shortened section says how much it left out and how to see it. Take those counts literally: `1 raised, awaiting a person` under an otherwise empty decisions section means there *is* an open decision, and it is not yours.
 
+## A sample that has stopped moving
+
+A **stuck** item names samples that are alive but idle past `stuck_after` — nothing failed, nothing is waiting on a person, the task’s clock just keeps running. One item per task, and it is not an anomaly: nothing is broken and there is nothing to rule on. It clears on its own the moment the sample moves.
+
+The remedy is a ladder, cheapest rung first, and the item carries the applicable command ready to run:
+
+- **Cancel the pending tool call** (`inspect ctl sample cancel-tool-call ...`) — the call fails inside the sample, which continues and works with the failure. This rung is yours **only when** the human granted it in advance (`stuck_cancel:` in `_steward.yaml`), and the item says so by arriving agent-owned. Run the command it carries, then record what you did: `steward ack <id> --by agent --reason "cancelled bash in <task>"`. This is the narrow `--by agent` exception — something you did yourself — and the recorded reason is what keeps the next session from asking again.
+- **Everything above that is the human’s.** Cancelling the sample records an outcome (`--action score|error|cancel` is a judgement about the eval’s data), and a requeue discards everything the sample did. Raise the item and pass on the command it carries.
+
+**Ask once.** A cancel is a request, and the feedback is explicit: if it was asked and the call has not stopped, the item comes back with `:asked` in its id and human-owned — *a cancel was asked and it did not stop*. That is the signal to climb a rung, never to repeat the ask.
+
+## Anomalies: from failure to ruling
+
+Failures that mean the same thing share a **class** — an exception type at a raising frame (`error:TimeoutError@openai/_client.py:post`), a task that died a particular way (`task:no-log-exit:...`), an operator kill (`limit:operator`), a task whose every score is zero. A class absorbs instances until somebody rules on it; `status` lists what is open with counts, an example message, and any prior rulings attached.
+
+Your verbs, in the order a night usually uses them:
+
+    steward investigate <class> --note "..."   # mark it worked, so the next session does not redo you
+    steward propose <class>... --action <d> --reason "..."   # these classes are one decision
+    steward rule <class> --disposition <d> --reason "..." --by <person>   # record the decision
+
+- **Investigate freely.** The note is a hand-off to the next session, not a diary. Prefixes work everywhere a class key does.
+- **Propose freely.** One action per proposal; classes wanting different answers are different proposals. The proposal becomes one consolidated question for the human, answerable whole or in part (`steward rule --proposal <id> [<class>...]`).
+- **A ruling is never yours.** `--by` names the person who decided — you relaying their answer is the ordinary path, and the record still says whose decision it was. The dispositions: `rerun`, `exclude`, `zero`, `score` for errored samples; `accept` (with `--effect`, the sentence the report carries) and `dismiss` for anomaly-level closure. `accept` is refused for `error:` classes — accepting errored samples as-is is exclusion wearing a decision’s clothes.
+- **A substrate-flagged class gets no re-run proposal.** Credentials, disk, storage: re-running into broken machinery burns the work twice. Verify first; a person ruling `rerun` directly is that verification.
+
+After a `rerun` ruling the tend carries it out itself: samples in a still-running task are requeued in place, and a landed log has exactly the ruled samples invalidated so the next turn re-launches it, reusing everything else. **There is nothing for you to run** — the window stays open while the re-run is in flight (the status says so), resolves itself when its tasks come home clean, and the same samples failing again comes back to the human as *the ruling’s premise did not hold*. A ruling can also arrive from a standing `preauthorized:` pattern in `_steward.yaml`; the record then says `by: policy`, and it is the same decision made earlier, not yours to make. Recurrence after any ruling opens a new generation carrying every prior ruling as precedent — so read the precedent lines before proposing; the 11pm decision usually answers the 2am question.
+
+Two classes deliberately make less noise than the rest. A `task:` window resolves itself once Steward’s own respawn brings the task home — leave it alone unless it is not healing, in which case the `stalled` item is the real question. And a `limit:operator` window (samples an operator killed) asks nothing inline at all: the operator knows what they did, so it waits in the anomalies block for the signoff conversation. Both still take a ruling any time someone wants to give one.
+
+### Scan findings: the bar is threatened integrity
+
+A `scan:` class is samples a scanner flagged — `scan:scoring_integrity:reward_hacking`, `scan:scoring_integrity:internet_egress`, one class per scanner and label. The window opens when the rows land, not when you decide something is wrong, so **every flag needs a ruling before the run can be signed**. That is deliberate: a flag nobody looked at is a hole in the record, and it should read like one.
+
+Your judgement is the whole product here, because the scanner already did the only part that could be automated. It read one transcript; you can read the population, the score, and the rest of the run.
+
+- **The bar is whether the score can still be trusted**, not whether the behaviour was interesting. Escalate only where you can name the mechanism, cite the decisive messages, and say what the number would be if the concern is real. If you cannot do all three, the honest ruling is `dismiss`.
+- **A failed attempt is not a finding.** The model tried to read the grader and could not; it tried to reach the network and the sandbox refused it. Nothing was earned and nothing was contaminated, so the score stands. Dismiss it — with the reason written out, because the person signing is told at signoff that these happened and the reason is what they read.
+- **A *successful* escape or a returned egress response is a finding at n=1.** One sample that actually got data from outside the sandbox is worth raising immediately; forty that tried and failed are worth one dismissal.
+- **Rarity is not the signal.** 197 of 200 flagged is the alarming case, not the noisy one — an exploit that works gets used everywhere, so a class covering most of a task is the one to read first, not the one to write off as a chatty scanner.
+- **A confirmed validity finding is sample-shaped**, so `exclude`, `zero` and `score` are all available beside `accept` — unlike an `error:` class. Use them: a score you have established is wrong should not be silently averaged in.
+- **Dismiss on the record, never by silence.** `steward rule <class> --disposition dismiss --reason "..."`. The reason is the entire artifact; a window left open blocks the signature and tells the next session nothing.
+
+Only boolean scanners open windows. A scanner returning a number or a string is recorded and readable and never escalated on its own — reading one is your job, through the results rather than through the queue.
+
+## Writing a standing rule
+
+When you notice yourself asking the same question twice, or the human answering it the same way twice, the answer belongs in `_steward.yaml` rather than in a conversation nobody can read afterwards. Two keys take one:
+
+- **`policies:`** — free-form text you apply when you are in session. Steward carries it and never interprets it, so write what a person would need to hear.
+- **`preauthorized:`** — an anomaly class pattern mapped to the disposition it may receive. Steward acts on this one itself, on a timer, with nobody watching.
+
+Propose, get an answer, then write it. Three things go with that.
+
+**Propose the wording, not the idea.** *Shall I add a policy about timeouts?* cannot be answered without the human writing it themselves, which is the work you were trying to save them. The two lines you intend to add can be answered yes or no.
+
+**A `preauthorized:` pattern needs a yes to the pattern.** It is the one key that widens what happens unattended, and the gap between them is where the damage lives: a human who agrees that provider timeouts are usually worth re-running has not thereby agreed that everything matching `error:*Timeout*` may be re-run at 3am without them.
+
+**Leave the edit visible.** The workspace is a git repository and this file is tracked, so say plainly what you wrote and let `git diff` show it. Unlike a ruling, a YAML edit carries no `--by` and the file cannot say afterwards whose decision it was.
+
+The rest of the file is unchanged by this: the definition is still never yours to edit, and a setting the human has not approved is still not yours to write.
+
+## Preparing a signoff
+
+When the verdict turns 🏁, the run is finished and nobody has accepted the results. That is a `signoff_ready` item, and it is the one item you cannot acknowledge — the only thing that closes it is `steward signoff`.
+
+**Tell the human.** Notify; do not only say it in the conversation. Then get the run into a state where the answer is one command, because everything the gate refuses over is something you can prepare in advance:
+
+- **Every anomaly window closed by a ruling**, `limit:operator` included. Those raise no inline item on purpose, so they are the ones most easily left open — read the anomalies block, not the item list.
+- **Say out loud what the scanners flagged and you dismissed.** The readiness item counts them; you name them. A dismissal leaves no caveat and appears in `anomalies.md` nowhere — correctly, since the whole content of it is *this does not change the numbers* — but “the model tried to read the grader on four samples and failed every time” is something the person signing wants to have heard from you rather than to find later. The reasons are in the journal and in `analysis.md`; put them in the message.
+- **Every errored sample covered by a ruling.** `status` splits the errored cell; anything reading `undecided` refuses the signature.
+- **Every task settled** — complete, short with the hole accepted by a ruling, or stalled and acknowledged. An accepted hole is what the signature is *for*; an unnamed one is what it refuses. Acknowledging a `stalled` item settles its task: the guard fires on attempt history rather than on an anomaly, so there is often no class to rule and the ack is the decision.
+- **Every log in the directory readable, or its absence named.** A file that will not read is the one hole nobody can size, so signoff refuses until `steward ack unreadable:NAME --by NAME --reason ...` records why the results stand without it — and the signature then carries it as a caveat.
+- **Every transcript scanned, or the gap ruled.** A scanner that threw leaves a sample with no verdict either way, and that is indistinguishable in the findings from a sample that came back clean — so a run whose scans errored would otherwise be signed as *nothing was flagged*. Those samples are their own anomaly class, `scanerror:SCANNER:TYPE@FRAME`, and it refuses the signature until it is ruled like any other. `accept` and `dismiss` are the answers; `rerun`, `exclude` and `zero` are refused, because the samples are fine and only the reading of them failed. The class already says how many and out of what: one grader timeout in five hundred is a class of one, and a scanner that threw on every transcript is a class of five hundred. A scanner that **never ran at all** raises no class — it wrote no rows for one to be built from — and what shows it is the `scanned` column below, which is why reading that column is its own bullet.
+- **Read the `scanned` column, because nothing refuses over it.** It counts transcripts *every* scanner answered for against samples landed, and a shortfall means transcripts nobody looked at — a worker that died between logging and scanning, or a scanner added at a re-launch that will never revisit what already landed. Signoff does **not** block on it, deliberately: nothing Steward can run closes that gap, so a refusal would wedge the run rather than route it. Say the number in the message when you tell them the run is ready. `48 of 50 scanned` is a different thing to sign than `50 of 50`. The signature carries the shortfall by name among its exceptions, so it is durable whether or not anybody said it out loud — but the point of saying it is that they hear it *before* they answer, not after.
+- **No worker still running a task the definition no longer names.**
+- **Something to sign for at all.** A capture that enumerated no tasks, or tasks that finished and produced no samples, is refused: a signature over no results is not a caveated attestation, it is a statement about nothing. This is the one refusal with no act that answers it — go and find out why the capture is empty.
+
+One more refuses and is not something to prepare: an action the turn **could not carry out** — an acceptance whose log amendment hit a read-only mount, say. Run it again; the next turn retries what failed, and one that keeps failing is a defect to look at rather than to sign around.
+
+What the signature names as its exceptions is the caveat list, not the ruling list: an acknowledged `stalled` task or `unreadable` log left a mark on the results and is named there too. Acknowledging one is a decision about the data, so give it the reason you would give a ruling — it ends up quoted in `anomalies.md` under the numbers.
+
+Then run it when they answer:
+
+    steward signoff --by NAME [--note TEXT]
+
+`--by` is the name of whoever decided, never yours and never a role — the same rule as `steward rule --by`. The command runs a final turn, refuses with every blocker at once if anything is still unnamed, moves superseded attempts into `logs-archive/`, records who signed and what they signed over, and takes the timer down. After it returns, nothing tends this run.
+
+**It does not commit the journal**, and that is deliberate — the workspace is the human’s repository. What it guarantees instead is that the record is complete and quiescent when it returns, so a commit taken any time afterwards captures the same thing. Say so; do not commit on their behalf.
+
+## Writing `analysis.md`
+
+`status.md` and `anomalies.md` are Steward’s; `AGENTS.md` and `_steward.yaml` are the human’s. `analysis.md` is the one file you and Steward share, and the line between you is a pair of HTML comments:
+
+``` markdown
+## cybench@openai/gpt-5
+
+<!-- steward:begin cybench_0a1b2c3d -->
+- scanned 48 of 50 transcripts — the rest carry no verdict either way
+- 2 samples flagged for scoring integrity — scan:scoring_integrity:reward_hacking; no ruling yet
+<!-- steward:end -->
+
+Both flagged samples tried to read the grader file and failed. Dismissed:
+the attempt is in the transcript, the score is honest, and the same two
+samples pass on a re-run.
+```
+
+Every turn rewrites what is **between** the markers and nothing else. Your prose outside them comes back byte-identical, turn after turn, so you can write into a section while the run is still going and it will still be there at signoff.
+
+- **One section per task**, appended with an empty placeholder the first time Steward sees the task. A section whose prose is empty raises an item — one per task, yours, not acknowledgeable. There is no way to wave it past, because *looked, nothing here* is the entry: a task whose numbers turned out to be unremarkable is a finding, and the person reading this in a month needs to know you looked.
+- **Do not move or delete the markers.** A section whose `steward:begin` and `steward:end` do not pair is left completely alone — Steward will not guess at a boundary in a file whose other half is your work — so its facts silently stop being updated and the damage goes to `.steward/steward.log`. If you have broken one, put it back.
+- **Write outside them, anywhere**: above the block, below it, in sub-headings of your own. The only reserved text in the file is the marker pair.
+- **Quote the decision, not just the outcome.** The facts block already carries the disposition and the ruling’s own words. What it cannot carry is why you believe them — which samples you opened, what the transcript actually showed, what would change your mind.
+- **A section for a task the definition no longer names is left alone.** The file is durable and a removed task’s investigation is still what happened.
+
+It reaches the log directory through the ordinary sync, so a remote reader gets it beside `status.md` with no step of your own.
+
 ## Context is the real budget
 
 - **Take the log directory from the summary, never from the workspace.** The `Logs` line in `status.md` is where this run’s results are, and it is often not `logs/` here — a definition can name its own, and a machine can put every run under a shared root. Anything you point at `logs/` on the assumption that it exists will find nothing rather than fail.
-- **Never read a full eval log.** Use `header_only=True` for status and counts; `read_eval_log_sample_summaries` or `samples_df` for per-sample data. A full read pulls the whole archive for what the header already has.
+- **Never read a full eval log.** Use `header_only=True` for status and counts; `read_eval_log_sample_summaries` or `samples_df` for per-sample data. A full read pulls the whole archive for what the header already has. Steward’s own detection already read each errored sample once and put the evidence in the anomaly — start an investigation from the evidence, not by re-reading logs.
 - **Transcript analysis goes through a scan**, never a raw log read.
 - **Narrow an anomaly before opening it.**
 
@@ -752,7 +857,7 @@ An item comes back if the condition **changes**, because its id encodes the inst
 
 ## Cold pickup
 
-*Partly written.* The full procedure for attaching to a run you did not start depends on machinery that does not exist yet — the anomaly list and `analysis.md`. What is settled is where it begins: `steward runbook`, then `_steward.yaml` for this human’s standing rules, then **`steward collect`** for what is true and what you missed. Everything you need is in the workspace, so nothing depends on a conversation this session did not have.
+Attaching to a run you did not start: `steward runbook`, then `_steward.yaml` for this human’s standing rules, then **`steward collect`** for what is true and what you missed — the anomaly list arrives with it, investigation notes and precedent included, so a class the last session was working says so. Then read **`analysis.md`**, which is where the last session’s reading of the numbers is: the facts blocks are regenerated and tell you nothing you cannot get from `status`, and the prose around them is the part no command reproduces. Everything you need is in the workspace, and nothing depends on a conversation this session did not have.
 
 One caveat on the second of those: every setting, `policies` included, can also arrive from a `STEWARD_*` environment variable, which outranks the file and is not in the workspace at all. `steward status` reports the standing rules actually in force, so read the file for the reasoning behind them and `status` for what is set.
 
@@ -803,147 +908,65 @@ The other four kinds — `progress`, `clear`, `gate`, `signed_off` — are Stewa
 pip install "inspect-steward[flow]"
 ```
 
-An [Inspect Flow](https://github.com/meridianlabs-ai/inspect_flow) spec is a [definition](./index.html.md#quick-tour) like any other, because `flow run` is itself a program culminating in one [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) call. So Steward drives **Flow’s own CLI** rather than reaching into its internals, and intercepts at the boundary.
+[Inspect Flow](https://github.com/meridianlabs-ai/inspect_flow) specs are fully supported as Steward eval set definitions. Just use a `_flow.py` within your workspace directory and
 
-The division is clean: Flow owns everything up to the [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) call — includes, implicit `_flow.py` inheritance, defaults merging, `NotGiven` semantics, `@after_load` and `@after_instantiate` hooks, and its `FlowOptions` mapping — and Steward owns execution from the boundary onward.
+## Worker Overrides
 
-Name the spec `flow.yaml` in your workspace and everything on the other pages applies unchanged. A Python spec works too; `steward tasks flow.py -A key=value` passes arguments to a spec function.
+Steward runs `flow run` with three options set:
 
-Live [Task](https://inspect.aisi.org.uk/reference/inspect_ai.html#task) and [Model](https://inspect.aisi.org.uk/reference/inspect_ai.model.html#model) objects in a spec are supported, incidentally — Flow itself rejects them in venv mode, and Steward’s always-re-execute model handles them naturally.
-
-## What Steward overrides in a worker
-
-Three flags, each for a reason worth knowing:
-
-| override | why |
+| Override | Why |
 |----|----|
-| `--set execution_type=inproc` | One process per task **is** Steward’s isolation model. A frontend that builds a virtualenv per worker is running a second one against it — and it puts the eval in a grandchild, so the pid Steward recorded and every liveness check keyed on it name the wrong process. |
-| `--log-dir <scratch>` | Flow writes `flow.yaml` and a requirements snapshot into its log directory, and scans that directory for prior logs, all *before* [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) is reached. Pointing N workers at the run’s directory would mean N concurrent writes to the same two paths and N scans of a directory that grows all run. Each worker gets its own scratch directory instead; the run’s log directory is reached through the selection. |
-| `--no-store-read --no-store-write` | Flow’s reuse store indexes logs by task identity so an identical task never runs twice. Under fan-out the read half races — N workers issue N identical queries and N copying writes to the same destinations — and the reuse buys nothing, because a worker runs its selected task regardless. Steward will operate both halves itself; until it does, the store is inert for Steward runs. |
+| `--set execution_type=inproc` | One process per task is Steward’s own isolation model, and a venv per worker would put the eval in a grandchild process that Steward cannot track. |
+| `--log-dir <scratch>` | Flow writes artifacts and scans for prior logs before [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) is reached. Each worker gets its own scratch directory for that; the run’s log directory is set at the [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) call. |
+| `--no-store-read --no-store-write` | Flow’s reuse store would race under fan-out, and buys nothing, since a worker runs the task it was given either way. |
 
-None of this asks anything of Flow. All three are options `flow run` already ships.
+These are all options `flow run` already ships.
 
-## Two declarations do not survive
+## Declarations That Do Not Survive
 
 > **IMPORTANT: Importantexecution_type: venv loses dependencies and python_version**
 >
-> The virtualenv is where Flow applies what a spec declares in `dependencies:` and `python_version:`. Steward forces `inproc`, so those declarations are not applied — **the environment Steward runs in is the environment the eval runs in**, and provisioning it is yours.
+> Flow applies those declarations when it builds the virtualenv. Steward forces `inproc`, so the environment Steward runs in is the environment the eval runs in, and provisioning it is up to you.
 >
-> Steward warns once, when the definition is read, if a YAML spec asks for a venv at the top level. It does not refuse: the environment usually *does* satisfy the spec, since you provisioned it, and the check cannot see a declaration that arrives through an `include:` or one built in code by a Python spec. So treat the warning as a reminder rather than a guarantee that it fired.
+> A spec that builds its `FlowSpec` in code loses them silently, because Steward reads the definition without executing it. The warning Steward prints for this covers only a top-level declaration in a YAML spec.
 
 > **NOTE: Noteflow run --resume will not resume a Steward run**
 >
-> Every `flow run` records its log directory as a global pointer, and because Steward hands Flow a scratch directory, a Steward run leaves that pointer aimed at a disposable path. A subsequent bare `flow run --resume` would resume nothing and start over into a directory nobody is watching.
+> Every `flow run` records its log directory as a global pointer, and Steward hands Flow a scratch directory, so a bare `flow run --resume` would resume nothing and start over into a directory nobody is watching.
 >
-> Steward does not write another tool’s global state to correct it. **Under Steward, the resume path is `steward launch` against the workspace** — which is also the amend path, and the only one you need.
+> Under Steward, the resume path is `steward launch` against the workspace, which is also the amend path.
 
 ## Scanners
 
-A spec carrying `scanner:` cannot be run by Steward yet. Enumeration records that the spec scans, so this is refused early with an explanation rather than discovered when every worker fails.
-
-## What fan-out costs
-
-Everything Flow does before reaching [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) happens once per worker. That was measured, against a plain [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) baseline of 3.0s per worker:
-
-|  | empty log directory | 150 logs |
-|----|----|----|
-| pointing every worker at the run’s log directory | 4.36s | 4.79s |
-| a scratch directory per worker | **4.14s** | **4.21s** |
-
-Two things to read out of it. The term that *grew with the run* is gone — the old path paid roughly 2.4ms per log already in the directory, which is about twelve seconds per worker at five thousand logs. And the residual ~1.1s is almost entirely the requirements freeze, which shells out twice and cannot be skipped from outside Flow, only redirected.
-
-Four concurrent Flow workers writing into one flat log directory is verified end to end: four logs, correct identities, and no eval-set metadata written by any worker.
+A spec carrying `scanner:` cannot be run by Steward yet. This is refused when the definition is read, rather than discovered when every worker fails.
 
 
 # Inspect Hawk – Inspect Steward
 
 ## Overview
 
-``` bash
-pip install "inspect-steward[hawk]"
-```
+[Hawk](https://github.com/METR/hawk) eval set configs are supported as Steward definitions. Name the config `hawk.yaml` in your workspace and the rest of the documentation applies unchanged.
 
-A [Hawk](https://github.com/METR/hawk) eval set config is a [definition](./index.html.md#quick-tour) like any other, because `hawk local eval-set` is itself a program culminating in one [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) call. So Steward drives **Hawk’s own CLI** rather than parsing configs itself.
+Steward runs `hawk local eval-set --direct` and takes over at the [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) call, so Hawk still does its own work first: the tasks by solvers by models crossing, secrets resolution, the provider environment for gateway routing, and its sandbox annotations. Steward sees the fully lowered task list and owns execution from there.
 
-That matters more here than for other formats. An earlier implementation did parse `EvalSetConfig` and reimplement Hawk’s lowering, and it diverged from a real Hawk run in ways a task list cannot show: the infra config was invisible to it, `runner.environment` was ignored, and secrets resolution was absent. All three dissolve when Hawk’s own runner does the work, because all three happen before the [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) call.
+This page is about running a Hawk config from an ordinary machine. Running Steward inside a Hawk runner pod is not supported yet.
 
-So Hawk keeps its tasks × solvers/agents × models crossing, its secrets resolution, its provider environment for gateway routing, its sandbox annotations, and its refusal of configs it does not support. Steward sees the fully-lowered task list and owns execution from there.
+## Concurrency
 
-Name the config `hawk.yaml` in your workspace and the rest of the documentation applies unchanged.
+A Hawk infra config always supplies `max_samples`, defaulting to `1000`, and Steward honors an explicit value as written. Sample concurrency is therefore pinned, the [automatic ramp](./concurrency.html.md#automatic-ramp) does not run, and `samples_ramp` has nothing to govern. Set the number you want in the Hawk config, alongside the rest of your infra settings.
 
-## Installation is stricter than Steward’s own
+`max_sandboxes` comes from the infra config as well. `max_tasks` is honored as fleet width, the same as for any other definition.
 
-> **IMPORTANT: Important**
->
-> **Hawk requires Python 3.13; Steward requires 3.12.** The extra is marker-gated, so Hawk’s floor binds only those who ask for Hawk — on 3.12 the extra resolves to nothing and Hawk support is simply unavailable, with no error at install time.
->
-> The extra also carries `uv`, which Hawk shells out to on every invocation but does not declare. Declaring it is necessary but not sufficient: pip installs `uv` beside the interpreter, and Hawk resolves a bare `uv` through `PATH`, which contains that directory only when the virtualenv happens to be activated. Steward prepends the interpreter’s directory to the Hawk child’s `PATH` — which is Steward’s to do, because Steward chose the interpreter.
-
-## What Steward passes
-
-`--direct` is not optional. Without it Hawk builds a fresh virtualenv per worker, which is a second isolation model running against Steward’s own — and it puts the eval in a grandchild process, so the pid Steward recorded and every liveness check keyed on it name the wrong process.
-
-Steward also overrides `log_dir` and the eval-set id through the selection each worker reads, because Hawk exposes no log-directory option: a local run synthesizes a fresh `logs/<random job id>/` relative to the working directory.
-
-### Hawk sets the concurrency, so the ramp does not run
-
-Hawk’s infra config always supplies `max_samples` — the default is `1000` — and Steward honors it exactly as it honors any other definition’s explicit value: the setpoint is **pinned**, and the [sample-concurrency ramp](./concurrency.html.md#the-ramp) does not apply. `samples_ramp` in `_steward.yaml` has nothing to govern under a Hawk config and is ignored there.
-
-That is Hawk’s policy to set, and Steward’s job is to run what the config asks for rather than to second-guess it. What it means in practice is worth knowing before a large run, because the number is per task and Steward runs a poolful:
+## Local Limitations
 
 |  |  |
 |----|----|
-| `max_samples` | pinned from the infra config (default `1000`) — no ramp, no discovery |
-| `max_sandboxes` | from the infra config, which computes one; bounds containers per process |
-| `max_tasks` | honored as fleet width, the same as any other definition’s (see [Concurrency](./concurrency.html.md)) |
+| `scan:` | Hawk’s local path rejects online scanning, so a config declaring it cannot run locally at all |
+| `isolation: strict` | needs an environment variable that only Hawk’s Helm template sets |
+| eval-set hooks | a Steward worker runs an [eval()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval) rather than an eval set, so handlers registered at eval-set scope never fire. This costs Hawk’s completion metrics and its stuck-eval watchdog. Run- and sample-scoped handlers are unaffected, which is what keeps token refresh and `hawk stop` working. |
 
-If you want a different sample concurrency, set it in the Hawk config where the rest of your infra settings live. `steward launch --max-samples N` also outranks it for a run, and — as everywhere — pins rather than ramps.
+## Startup Cost
 
-## What fan-out costs
+Every worker runs `hawk local eval-set`, so Hawk’s setup work happens once per worker. The `uv pip install` it performs is a no-op, because reading the config has already installed into the same interpreter, and uv takes an exclusive lock on the environment so concurrent installs queue instead of racing.
 
-`--direct` means *install into the current interpreter* rather than *skip installing*, so every worker runs `uv pip install` on startup. Three things make that redundant rather than dangerous, and the first two were verified rather than reasoned about:
-
-- **uv takes an exclusive lock on the target environment.** Two concurrent installs into one virtualenv serialize — the second waits for the lock and both succeed. They do not interleave.
-- **Enumeration has already installed**, in Steward’s own interpreter, before `launch` spawns anything. So every worker’s install is a satisfied no-op.
-- Warm, a Hawk worker costs about 0.5s over a plain script — *cheaper* than Flow, because Flow pays two `uv` shell-outs where Hawk’s install is a no-op.
-
-What is genuinely multiplied is the remote work: a config with `secrets:` makes a Secrets Manager round trip **per worker**, and provider environment setup calls the gateway per worker, all at once. Throttling is the plausible failure and it would present as a confusing burst of worker startup failures. Nothing Steward can do about it from outside, because what those produce is process state rather than files — there is no directory to redirect and nothing to hand on unless Hawk reports it.
-
-Two concurrent Hawk workers writing into one flat log directory is verified end to end, both logs stamped with the eval-set id Steward assigned rather than Hawk’s synthetic one. Higher fan-out is not yet verified, and this is the first thing to suspect if it misbehaves.
-
-> **NOTE:**
->
-> One ambient hazard, unrelated to fan-out: against a PyPI-versioned `inspect-ai`, Hawk emits an exact pin and installs it into the interpreter the runner is executing in. That happens at a single invocation — `steward tasks` triggers it — so it belongs with the general hazards of driving Hawk in-process rather than with anything Steward’s fan-out causes.
-
-## Local caveats
-
-Two things a Hawk config can ask for that a local run cannot provide:
-
-|  |  |
-|----|----|
-| `isolation: strict` | hard-fails without an environment variable that only Hawk’s Helm template sets |
-| `scan:` | rejected locally, as it is for every definition type today |
-
-A third is inert but worth knowing about: Hawk’s cloud path honours a declared `eval_set_id`, and its local path ignores it, synthesizing a throwaway `local-eval-set-<uuid>` fresh on every invocation. Nothing reads that field today — workers take their id from Steward — so it costs nothing now. It will matter when a resumed run has to land in the same place as the original.
-
-## What each side gains
-
-Worth stating plainly, because the integration is not one-directional.
-
-Hawk gains three things it does not have:
-
-- **Failure granularity.** Today the recovery unit is the whole pod: `restartPolicy: Never` plus `backoffLimit: 3` means one OOM restarts the world. Per-task workers make the blast radius one task.
-- **A structural record of re-run cost.** Hawk has code whose only job is to *log* this — its docstring reports a production run where three OOM kills turned 4,588 logical samples into 6,013 attempts, and nothing said so. Steward’s journal is that record, kept as it happens.
-- **Adjudication and signoff**, which have no equivalent at all. Job-complete currently means the eval loop returned; it says nothing about whether the data is usable.
-
-It pays with the per-worker startup above, and with one silent loss worth knowing:
-
-> **IMPORTANT: ImportantEval-set-scoped hooks do not fire**
->
-> A Steward worker runs an [eval()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval), not an eval set, so it never reaches the eval-set lifecycle events. Run- and sample-scoped handlers are unaffected and fire in every worker, which is what keeps token refresh and `hawk stop` working with no cooperation from Steward at all.
->
-> But handlers registered at **eval-set** scope are silently dropped. In Hawk’s case that costs a Datadog gauge, a CloudWatch completion metric, and — the one that matters, because it is a safety mechanism rather than a metric — the stuck eval watchdog is never armed. Steward’s own tend loop covers much of the same ground, since a worker that stops making progress is exactly what reconciliation notices, but “covered by something else” is a claim to verify rather than assume.
-
-## Steward inside a Hawk pod
-
-Not yet. Running a Hawk config *outside* the pod is what this page describes, and it needs nothing from Hawk. Running Steward *inside* the runner pod — a blocking launch that holds the pod open for the whole lifecycle Steward defines, an in-pod timer, and a relay surface an external agent drives it through — is designed but deliberately scheduled after everything else, and it is the one piece that needs a change on Hawk’s side.
+What is genuinely multiplied is remote work. A config with `secrets:` makes a Secrets Manager round trip per worker, and provider setup calls the gateway per worker, all at once. Throttling is the plausible failure, and it would show up as a burst of worker startup failures.

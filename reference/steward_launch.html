@@ -128,6 +128,10 @@ ul.task-list li input[type="checkbox"] {
  <span class="dropdown-text">Error Handling</span></a>
   </li>  
         <li>
+    <a class="dropdown-item" href="../scanners.html">
+ <span class="dropdown-text">Scanners</span></a>
+  </li>  
+        <li>
     <a class="dropdown-item" href="../runbook.html">
  <span class="dropdown-text">Agent Runbook</span></a>
   </li>  
@@ -217,6 +221,12 @@ ul.task-list li input[type="checkbox"] {
   <div class="sidebar-item-container"> 
   <a href="../errors.html" class="sidebar-item-text sidebar-link">
  <span class="menu-text">Error Handling</span></a>
+  </div>
+</li>
+          <li class="sidebar-item">
+  <div class="sidebar-item-container"> 
+  <a href="../scanners.html" class="sidebar-item-text sidebar-link">
+ <span class="menu-text">Scanners</span></a>
   </div>
 </li>
           <li class="sidebar-item">
@@ -549,6 +559,18 @@ ul.task-list li input[type="checkbox"] {
 <td><code>False</code></td>
 </tr>
 <tr class="even">
+<td><code>--scan-model</code></td>
+<td>value</td>
+<td>Model scanners use, for this launch’s own turn. Reaches every worker too. Overrides <code>scan_model</code> in <code>_steward.yaml</code> and <code>STEWARD_SCAN_MODEL</code>.</td>
+<td>None</td>
+</tr>
+<tr class="odd">
+<td><code>--no-scan-model</code></td>
+<td>boolean</td>
+<td>Configure no scan model — scanners use each sample’s own model under evaluation.</td>
+<td><code>False</code></td>
+</tr>
+<tr class="even">
 <td><code>--max-workers</code></td>
 <td>integer range (<code>1</code> and above)</td>
 <td>Worker processes, or unset for a process per task. Overrides <code>max_workers</code> in <code>_steward.yaml</code> and <code>STEWARD_MAX_WORKERS</code>.</td>
@@ -564,6 +586,18 @@ ul.task-list li input[type="checkbox"] {
 <td><code>--samples-ramp</code></td>
 <td>value</td>
 <td>Range to discover sample concurrency in, e.g.&nbsp;<code>[40, 300]</code>, or <code>false</code> to fix it. Overrides <code>samples_ramp</code> in <code>_steward.yaml</code> and <code>STEWARD_SAMPLES_RAMP</code>.</td>
+<td>None</td>
+</tr>
+<tr class="odd">
+<td><code>--stuck-after</code></td>
+<td>value</td>
+<td>Quiet time before a running sample is reported stuck, with a unit, e.g.&nbsp;<code>5h</code>. Overrides <code>stuck_after</code> in <code>_steward.yaml</code> and <code>STEWARD_STUCK_AFTER</code>.</td>
+<td>None</td>
+</tr>
+<tr class="even">
+<td><code>--preauthorized</code></td>
+<td>value</td>
+<td>Rulings granted in advance: class patterns to dispositions, e.g.&nbsp;<code>{'error:ReadTimeout@*': rerun}</code>, or <code>false</code> to decline every standing grant for this turn. Overrides <code>preauthorized</code> in <code>_steward.yaml</code> and <code>STEWARD_PREAUTHORIZED</code>.</td>
 <td>None</td>
 </tr>
 <tr class="odd">
@@ -583,6 +617,30 @@ ul.task-list li input[type="checkbox"] {
 <td>boolean</td>
 <td>Leave the workspace on this machine, whatever this project configured.</td>
 <td><code>False</code></td>
+</tr>
+<tr class="even">
+<td><code>--smoke</code></td>
+<td>boolean</td>
+<td>Rehearse first instead of launching: a few samples per task under a cap, into .steward/smoke/.</td>
+<td><code>False</code></td>
+</tr>
+<tr class="odd">
+<td><code>--samples</code></td>
+<td>integer range (<code>1</code> and above)</td>
+<td>Samples per task in a smoke (default 2).</td>
+<td>None</td>
+</tr>
+<tr class="even">
+<td><code>--cap</code></td>
+<td>integer range (<code>0</code> and above)</td>
+<td>Wall-clock minutes a smoke may take, 0 for none (default 15).</td>
+<td>None</td>
+</tr>
+<tr class="odd">
+<td><code>--accept</code></td>
+<td>choice (<code>context_window</code> | <code>reasoning</code> | <code>reasoning_api</code> | <code>scan_coverage</code>)</td>
+<td>Record a smoke check as waived rather than failing on it. Repeatable.</td>
+<td>None</td>
 </tr>
 <tr class="even">
 <td><code>--no-break-claim</code></td>

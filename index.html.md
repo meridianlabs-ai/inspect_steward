@@ -23,6 +23,8 @@ pip install git+https://github.com/meridianlabs-ai/inspect_steward
 
 To use Steward, create a directory, switch to it, then call `steward init`:
 
+    Terminal
+
 ``` bash
 mkdir -p ~/runs/swe-evals
 cd ~/runs/swe-evals
@@ -43,7 +45,7 @@ eval_set(
 )
 ```
 
-Steward can manage any evalution defined with a script that ends in a call to [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) or alternatively a `flow.py` from [Flow](https://meridianlabs-ai.github.io/inspect_flow/) or a `hawk.yaml` from [Hawk](https://hawk.metr.org).
+Steward can manage any evalution defined with a script that ends in a call to [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) or alternatively a `config.py` from [Flow](https://meridianlabs-ai.github.io/inspect_flow/) or a `hawk.yaml` from [Hawk](https://hawk.metr.org).
 
 ### Run the Eval
 
@@ -67,7 +69,7 @@ The agent will launch all of the tasks, setup a background monitoring process, a
 > STEWARD_NOTIFICATION=slack://{OAuthToken}/{ChannelID}
 > ```
 >
-> Anything [Apprise](https://github.com/caronc/apprise) understands works: Slack, email, SMS, a webhook, or a config file naming several. It configures your workers too, so a sample waiting on your approval reaches the same place. See [Getting told](./workflow.html.md#getting-told).
+> Anything [Apprise](https://github.com/caronc/apprise) understands works: Slack, email, SMS, a webhook, or a config file naming several. It configures your workers too, so a sample waiting on your approval reaches the same place. See [Notifications](./workflow.html.md#notifications).
 
 The run depends on neither you nor the agent staying connected. When you come back, ask how it’s going:
 
@@ -121,6 +123,8 @@ Steward provides a system that is fully unattended by default but which escalate
 - [Concurrency](./concurrency.html.md) describes the various options for tuning concurrency, including automatic ramping behavior and caps on resource utilization.
 
 - [Error Handling](./errors.html.md) covers standing policies for error retries and resolution, including dealing with errors that are never resolved.
+
+- [Scanners](./scanners.html.md) explains how transcripts are scanned for scoring integrity problems as the run proceeds, and what a finding asks of you.
 
 - [Agent Runbook](./runbook.html.md) provides the full operating instructions that coding agents use to supervise and make decisions during runs.
 

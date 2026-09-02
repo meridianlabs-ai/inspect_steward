@@ -2,132 +2,125 @@
 
 ## Overview
 
-Concurrency under Steward has three dimensions, and they are controlled by three different knobs with three different owners:
+The two most important concurrency dimensions to consider when running agentic evaluations are how many samples can be run in parallel (bounded by compute) and how much inference can be run in parallel (bounded by provider rate limits). It’s important to try to match these well during execution, so that you don’t pay for compute that sits idle while waiting on rate limits.
 
-| Dimension | Knob | Owner |
-|----|----|----|
-| How many tasks run at once | `max_tasks` | your definition |
-| How many processes those tasks are divided into | `max_workers` | `_steward.yaml` |
-| How many samples run at once within a task | `max_samples` | your definition |
+## Sandboxes
 
-By default all tasks run at once, each in its own process, with sample concurrency taken from your definition. This page explains what each knob actually does, why they are split the way they are, and how to override them.
+Sandboxes are either local (e.g. Docker) or remote (e.g. k8s, Daytona). In either case it’s important to optimize allocation of sandboxes. For the local case, available CPU cores and memory create an upper bound. For remote, while you may have infinite elastic capacity you won’t want to pay for an over-allocation of sandboxes idled by model rate limits.
 
-## One process per task
+By default, local sandboxes are limited to 2 \* available CPU cores for Docker, and unlimited for other providers. You can set an explicit `max_sandboxes` to override the default behavior.
 
-Steward runs each task in its own worker process rather than running the eval set in one process. This buys two things:
+## Samples and Tasks
 
-- **Fault isolation.** An OOM or a segfault costs one task rather than the run.
-- **Real CPU parallelism.** A task’s Python work — transcript construction, JSON serialization, `.eval` compression, non-model scorers — serializes behind the GIL in a single process. Across processes it runs in parallel.
+By default, Steward runs 40 samples in parallel for each task (`max_samples=40`), and runs all tasks in the eval set in parallel (each in their own process). The 40 is a starting point: Steward [ramps sample concurrency](#automatic-ramp) toward 200 while the provider keeps up. Set `max_samples` yourself and Steward honors that number exactly and never ramps.
 
-The cost is per-process startup: every worker imports your definition and its dependencies before it can run. For plain [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) definitions this is seconds; execution frameworks can charge more (see [Inspect Flow](./flow.html.md) and [Inspect Hawk](./hawk.html.md) for what each costs).
+You can change these defaults in your call to [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set):
 
-## `max_tasks` — how much runs at once
+    evalset.py
 
-`max_tasks` caps how many tasks are in flight across the whole fleet. Unset, every task runs at once. Set, tasks queue in the order your definition declares them, and each completed task frees a slot for the next.
+``` python
+eval_set(
+  ...,
+  max_tasks=10,    # run only 10 tasks at a time
+  max_samples=100  # run 100 samples per task with NO auto-ramp
+)
+```
 
-It belongs in your definition — `eval_set(max_tasks=...)` — and `_steward.yaml` refuses it by name, on the rule that also refuses `max_samples`: **inspect’s words go in the definition; `_steward.yaml` holds only words [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) does not know.** For one run you can still say it inspect’s way (see below). Steward reads whichever value is in force and applies it to the fleet, so the number means what it says even though each worker is handed only its own share of it.
+For the above configuration, 1,000 samples will be run in parallel, and stay there, because setting `max_samples` turns the ramp off. Left unset, the same 10 tasks would start at 400 samples and climb toward 2,000. If your sandbox infrastructure can handle that then the next thing to consider is whether your model API can keep up.
 
-One difference from a plain [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) run worth knowing: leaving it unset means *every task at once* here, where [eval()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval)’s own rule for an unset `max_tasks` is one at a time. A fleet exists to run wide, and saying nothing is no preference rather than a preference for sequential.
+## Model Connections
 
-## `max_workers` — how many processes
+By default, Steward uses Inspect’s adaptive connections concurrency controller to automatically find the highest sustainable `max_connections` for the model provider endpoint. You can customize this behavior by either setting a fixed `max_connections` or a custom configuration for adaptive connections in your call to [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set):
 
-`max_workers` divides the in-flight tasks into fewer processes than one each, packing several tasks into each worker. It changes *nothing* about how much runs at once — that is `max_tasks` — only how many processes carry it.
+    evalset.py
 
-Packing trades away fault isolation to buy back startup cost. It is worth reaching for when per-process startup is expensive (an execution framework that builds a venv per process, a definition with heavy imports) and not otherwise. Unset, every task gets its own process.
+``` python
+eval_set(
+  ...,
+  max_connections=100  # fixed connections, no adaptive concurrency
+)
+```
 
-## `max_samples` — load within a task
+Sample concurrency and connection concurrency are tuned together: while a ramp is active, Steward raises the adaptive controller’s ceiling to match the ramp’s, so the two do not work against each other.
 
-Sample concurrency is a property of the eval — its author knows the workload — so `max_samples` belongs in your definition and `_steward.yaml` refuses it by name. An explicit value **pins** the setpoint: Steward honors it as written and never moves it.
+## Automatic Ramp
 
-When nobody pins one, sample concurrency is not a fixed default — it is discovered. When a worker is spawned, the number resolves most specific first:
+While Steward starts with `max_samples=40`, it will also attempt to automatically ramp sample concurrency according to how well the model provider is handling the load.
 
-| Source | Meaning |
-|----|----|
-| `STEWARD_MAX_SAMPLES` in this shell | an operator typed a number for this turn: pinned, nothing outranks it, and it holds for the rest of the run rather than the turn |
-| `steward launch --max-samples` | a number typed for this run, recorded in the manifest: pinned |
-| the definition’s `max_samples` | the eval’s own preference: pinned, honored as written |
-| the ramp | nobody expressed a preference, so tasks start at `40` and Steward tunes from there |
+During each `steward tend` operation, Steward checks to see if the following is true:
 
-The definition’s row is whatever it passes to [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set), which includes anything the framework running it sets on your behalf. [Hawk](./hawk.html.md#hawk-sets-the-concurrency-so-the-ramp-does-not-run) always supplies a `max_samples` (default `1000`), so **Hawk eval sets are always pinned and never ramp** — set the value you want in the Hawk config. Flow specs and plain [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) definitions leave it unset unless you write one, so they ramp.
+- The sample limiter is saturated (demand for more samples);
+- The model provider showed no rate-limit pushback;
+- No sample errored, and HTTP retries did not surge;
 
-## The ramp
+If all checks pass, then tend adds an additional 20 samples to the limit. This ramp continues up to 200 as long as the checks continue to pass.
 
-The right sample concurrency is roughly *what the provider will actually serve*, which is not a number anyone can look up — it varies by account tier, by model, and by time of day. So by default Steward discovers it: every task starts at the ramp’s floor (`40`), and each tend buys one `+20` step toward the ceiling (`200`) when the task’s window since the last tend was **clean**:
+On sustained pushback (rate-limit episodes in two consecutive windows) the ramp reverses. The connection ceiling is clamped down to where Inspect’s own controllers already fell, and sample concurrency steps back down so new samples stop being admitted against capacity that is not there. Samples already running are never interrupted. The way back up is stepwise, through the same gates.
 
-- the sample limiter was saturated — demand exists, so raising it means something;
-- the provider showed no rate-limit pushback (inspect’s adaptive connection controllers record every cut they take, so an episode is visible rather than inferred);
-- no sample errored, and HTTP retries did not surge (a quarter of a retry per sample slot is the line — not zero, because transient 5xxs and dropped connections are ordinary and a zero-tolerance gate would park the ramp against any imperfect endpoint);
-- the worker’s CPU had headroom over the window;
-- at least twenty minutes passed since the task’s last step, so a new batch has time to reach steady state before it is measured.
+Set the range with `samples_ramp` in the Steward config file or the `STEWARD_SAMPLES_RAMP` environment variable:
 
-On **sustained** pushback — episodes in two consecutive windows, the retry storm that independent per-process controllers cannot escape on their own — the ramp reverses at once: the adaptive connection ceiling is clamped down to where the controllers already fell (backoffs stop in seconds), and sample concurrency steps back down so new samples stop being admitted against connection capacity that is not there. Samples already running are never interrupted; they drain as they finish. The way back up is stepwise, through the same clean-window gates.
-
-Two more bounds cap the climb:
-
-- **`max_sandboxes` is a machine-wide budget.** The fleet-wide sum of sample setpoints never exceeds it — a task’s containers never exceed its running samples, so bounding the sum bounds the containers. The budget is your definition’s `max_sandboxes` if it sets one, otherwise the sandbox provider’s own default; elastic providers (k8s) cap nothing.
-- **The envelope.** The range itself, settable in `_steward.yaml`:
+    _steward.yaml
 
 ``` yaml
 samples_ramp: [40, 300]   # explore this range
 samples_ramp: false       # never ramp; tasks stay at 40
 ```
 
-Every move is recorded three ways: in the eval log (who, when, old → new, and why — inspect’s own retune provenance), in the journal as an action, and in the run history every summary carries (`ramped <task> 60→80 — no rate-limit pushback with the limiter saturated…`). The tuning block under the status table shows each task’s level and whatever is currently gating its next step.
+Narrowing the range works on a live run: a task the ramp had taken to 200 comes back to a new ceiling of 100 at the next tend.
 
-**Holding the ramp.** An agent (or you) can freeze the climb without touching configuration: `steward ramp hold --reason "..."` holds the fleet (add a task identifier to hold one arm), and `steward ramp resume` re-arms it. A hold stops growth only — the defensive cut stays active, because it exists precisely for when nobody is watching.
+To freeze the climb without changing configuration:
 
-**When capacity outruns authority.** If a *pinned* setpoint holds a clean, saturated window for two tends running, or a ramp tops out at its ceiling with pushback still absent, Steward raises a `tuning_proposal` — the binding constraint is a number a person chose, so only a person may move it. Acknowledge it to say “seen, happy where it is”; the acknowledgment is narrow, because a different level is a different item.
-
-## Provider load
-
-A fleet’s demand on a model provider is the product of the knobs above: `max_tasks` tasks, each running `max_samples` samples, is `max_tasks × max_samples` concurrent generate calls against whatever providers the tasks use.
-
-The total is still worth computing before a large run — the ramp’s ceiling bounds where discovery can take it, and `max_tasks × 200` is the number the default envelope authorizes. Within one process, inspect’s adaptive connection controllers manage the connection pool on their own (AIMD, exactly as TCP shares a link); when a ramp is active Steward raises their scaling ceiling to the ramp’s ceiling so the two do not fight, and the ramp moves only the *bounds* while the controllers move within them.
-
-## One setting, three spellings
-
-Every setting Steward owns can be said three ways, and they resolve most specific first — **flag, then variable, then file, then default**:
-
-|                                     |                                       |
-|-------------------------------------|---------------------------------------|
-| `max_workers: 8` in `_steward.yaml` | what this project wants               |
-| `STEWARD_MAX_WORKERS=8`             | what this machine or this shell wants |
-| `steward tend --max-workers 8`      | what this invocation wants            |
-
-That holds for every setting Steward owns, with no exceptions to remember — `max_workers`, `stall_after`, `samples_ramp`, `tend_interval`, and `policies` among them. All three spellings go through one parser, so a value that is refused in the file is refused the same way and with the same message everywhere else — `STEWARD_MAX_WORKERS=yes` fails naming the `True` that YAML made of it, exactly as `max_workers: yes` does.
-
-Two details worth knowing. `--tend-interval` appears on `steward launch` and `steward timer arm` but not on `tend` or `status`, because those run a single turn and have no cadence to set. And a `STEWARD_*` name Steward does not recognise is **refused**, not ignored — a misspelled `STEWARD_SAMPLE_RAMP` that sat inert would be a setting you believed was in force.
-
-## Inspect’s knobs, said inspect’s way
-
-`max_tasks` and `max_samples` are not in that table, and that is the ownership rule rather than an omission: they are words [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) knows, so your definition owns them and Steward mints no synonym. They are still sayable for one run, because **a Steward run is an `inspect eval-set` invocation with a longer lifetime** — so it reads the environment that CLI documents, and accepts the same options at `launch`:
+    Terminal
 
 ``` bash
-steward launch --epochs 2 --limit 5      # this run
-INSPECT_EVAL_MAX_SAMPLES=20 steward tend # this shell, and every inspect eval in it
-STEWARD_MAX_SAMPLES=20 steward tend      # this shell, but only for Steward
+steward ramp hold --reason "provider looks unhappy"
+steward ramp resume
 ```
 
-The last two are the same knob at different scopes, and the narrower wins. Inspect’s variable is broad by construction — exported in a shell it reaches every `inspect eval` there — so `STEWARD_MAX_SAMPLES` is how you say it quietly.
+Note that `max_sandboxes` is a machine-wide budget that bounds the fleet-wide sum of sample setpoints, where workers start at a share of the budget instead of at 40. The budget is your definition’s `max_sandboxes` if it sets one, otherwise what the sandbox provider reports (e.g. Docker’s 2 \* available CPUs). Elastic providers such as k8s have no limit.
 
-Every identity-neutral [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) argument works this way, not just these two: `--epochs`, `--limit`, `--sample-id`, `--max-connections`, `--sandbox`, `--tags`, and the rest. See `steward launch --help`, where they sit under their own heading. What you cannot override is anything that changes **task identity** — the model, the solver, the task args, the execution limits — because a worker computing a different identifier than the manifest recorded would write a log nothing ever looks for.
+## Worker Processes
 
-**Each spelling keeps its own syntax, because each is read by its owner.** Inspect’s variables are read by inspect — the same code path `inspect eval` uses, so `INSPECT_EVAL_LIMIT=10-20` and `INSPECT_EVAL_SAMPLE_ID=a,b` mean here exactly what they mean there, including the several whose names read backwards (`INSPECT_EVAL_SCORE_DISPLAY` is bound to `--no-score-display`, so setting it turns the display *off*). Steward’s flag and its `STEWARD_*` alias go through Steward’s parser, the one `_steward.yaml` uses, so a range is `--limit '[10, 20]'` and `STEWARD_LIMIT='[10, 20]'`. Same knob, same value, and each surface consistent with the rest of itself.
+Steward runs each task in its own worker process. This provides two things:
 
-One of inspect’s words is Steward’s here: `notification`. See [Getting told](./workflow.html.md#getting-told) — the channel Steward posts to and the channel your workers post from have to be one channel, so Steward owns the setting in all three spellings and both halves are wired from it.
+- Fault isolation. An OOM or a segfault costs one task, not the run.
 
-**These are set once, at launch, and recorded in the manifest.** That is what makes them survive to the 02:00 tend, which inherits no shell: the enumeration and the fleet read the same values because the fleet reads the ones the enumeration was made under. `tend` and `status` recompute Steward’s own settings every turn and never re-decide the run’s shape.
+- CPU parallelism. A task’s Python work (transcript construction, JSON serialization, `.eval` compression, non-model scorers) serializes behind the GIL in a single process, and runs in parallel across several.
 
-**These persist across a re-launch, and one flag replaces all of them.** A second `steward launch` — the amend path, for picking up an edited definition — reuses whatever the committed manifest recorded, the same way it reuses `-A` arguments, because forgetting a flag should not silently reshape the run. Say any one of them again and the whole set is replaced rather than merged, so *this run has no limit* stays sayable; `--no-overrides` goes back to the definition’s own shape and ignores the environment while it does.
+The cost is startup, since every worker imports your definition and its dependencies before it can run. For plain [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) definitions that is seconds; [Flow](./flow.html.md) and [Hawk](./hawk.html.md) can have longer startup times.
 
-**Changing which samples run re-runs the tasks.** `limit`, `sample_id` and `sample_shuffle` sit outside task identity so that raising a limit *resumes* rather than orphaning what has already run — but that also means a different slice of the same size keeps every identifier and every count. Steward compares a log against the slice the run is now asking for, so a re-launch that reshuffles or moves the range marks those tasks `reshaped` and runs them again; `steward launch` reports the change and how many tasks it would redo, and stops the fleet, since a worker’s slice is fixed when it spawns and it would otherwise spend hours producing a log the next tend discards. Overriding `--sandbox` or `--model-base-url` also re-runs the tasks, and more sharply: those are marked `redirected` and started **fresh** rather than resumed. Inspect resumes by looking each sample of the new slice up in the prior log by id, which is exactly what makes a reshape resumable — the samples it keeps are still good answers. A redirect keeps the whole sample set and invalidates every answer in it, so resuming would find all of them, reuse all of them, and finish having run nothing. Only a launch that overrode them counts, since nothing records what a definition asked for. The earlier logs are kept as superseded attempts, as with any re-run — and kept usefully: a shape you return to is answered by the attempt that answered it the first time, so slice A, then B, then A again re-runs nothing on the way back.
+Where startup is expensive, pack the fleet into fewer processes:
 
-**The other is `log_dir`.** Steward decides where a run’s logs go — the fleet is watched from that directory — so there is no `--log-dir`, no `STEWARD_LOG_DIR`, and `INSPECT_LOG_DIR` is refused at launch rather than quietly ignored. What Steward will not do is *override* a `log_dir` your definition names; where your definition names none, see [Where your logs go](./workflow.html.md#where-your-logs-go), which is the case worth preferring.
-
-**Fleet width lapses; a sample pin does not.** `max_tasks` is recomputed from scratch every turn, so a value that is not repeated simply stops applying. Sample concurrency is different, because a value there does not just set a number — it pins the setpoint and switches the ramp off. So the pin is remembered for the rest of the run, and the way to release it is a `samples_ramp` **range**, in whichever spelling suits:
+    _steward.yaml
 
 ``` yaml
-samples_ramp: [40, 200]   # ramp again, whatever an earlier pin set
+max_workers: 8
 ```
 
-Narrowing the range works on a live run too: a task the ramp had taken to 200 is brought back to a new ceiling of 100 at the next tend, and any worker respawned after the edit starts inside the new range.
+This changes nothing about how much runs at once (that is `max_tasks` and `max_samples`), only how many processes carry it.
+
+## Docker Configuration
+
+Docker has a ceiling on concurrent sandboxes that has nothing to do with the size of your machine. Every sandboxed sample gets its own compose project, and every compose project gets its own bridge network, allocated from Docker’s `default-address-pools`. The built-in value carves two ranges into sixteen networks each, so a host runs about thirty sandboxes however many cores it has. Samples past that fail with:
+
+    could not find an available, non-overlapping IPv4 address pool
+    among the defaults to assign to the network
+
+`steward launch` reads the daemon and tells you when your run wants more sandboxes than it can give, offering to write the fix into your `daemon.json`:
+
+    daemon.json
+
+``` json
+{
+  "default-address-pools": [
+    { "base": "172.17.0.0/12", "size": 20 },
+    { "base": "192.168.0.0/16", "size": 24 }
+  ]
+}
+```
+
+That is the same two ranges Docker already claims, carved finer: 512 networks instead of 32. Declining is the default, and prints the JSON along with the file to put it in.
+
+Steward never restarts the daemon, and nothing takes effect until you do. A restart stops every running container on the machine, so the timing is yours. The launch prints the command for your platform.
+
+See [Docker’s default address pools](https://straz.to/2021-09-08-docker-address-pools/) for background.
