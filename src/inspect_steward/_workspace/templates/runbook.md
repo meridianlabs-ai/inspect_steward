@@ -441,6 +441,20 @@ gate refuses over is something you can prepare in advance:
   is the one refusal with no act that answers it — go and find out why the
   capture is empty.
 
+And one thing to ask about that is not a blocker at all:
+
+- **Whether to publish.** If the readiness item names a log store, there is a
+  second decision waiting beside the first. Publishing puts these logs into an
+  index other projects read, so a task somebody else has already run is copied
+  in rather than run again — and a row in it is a claim that a result is good
+  enough to reuse sight-unseen, which is the same claim the signature makes.
+  **Ask; never assume.** There is no setting that turns this on, deliberately:
+  the store may be shared with people who are not in this conversation, and
+  results are not exported by default. Add `--publish` if they say yes. A task
+  signed with an accepted exception publishes like any other — the caveat is in
+  this project's `anomalies.md` and does not travel with the log, and whoever
+  answers should know that is the trade.
+
 One more refuses and is not something to prepare: an action the turn **could
 not carry out** — an acceptance whose log amendment hit a read-only mount, say.
 Run it again; the next turn retries what failed, and one that keeps failing is
@@ -455,7 +469,7 @@ so give it the reason you would give a ruling — it ends up quoted in
 Then run it when they answer:
 
 ```
-steward signoff --by NAME [--note TEXT]
+steward signoff --by NAME [--note TEXT] [--publish]
 ```
 
 `--by` is the name of whoever decided, never yours and never a role — the same

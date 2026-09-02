@@ -16,6 +16,7 @@ Everything else in Steward converges toward a manifest somebody else committed. 
 """
 
 import os
+from collections.abc import Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from tempfile import TemporaryDirectory
@@ -25,17 +26,24 @@ from inspect_ai._eval.eval_set_overrides import (
     INSPECT_EVAL_SET_OVERRIDES,
     EvalSetOverrides,
 )
+from inspect_ai._util.file import basename, filesystem
 
 from .._evalset.archive import archive_dir, restore_log
 from .._evalset.detect import DefinitionType
 from .._evalset.manifest import (
     Manifest,
     ManifestError,
+    ManifestTask,
     manifest_digest,
     read_manifest,
     write_manifest,
 )
-from .._evalset.observe import ObservedLogs, observe_logs
+from .._evalset.observe import (
+    ObservedLogs,
+    incomplete_reason,
+    observe_logs,
+    read_attempt,
+)
 from .._evalset.read import ReadEvalSetError, read_eval_set
 from .._scan import (
     ScanError,
@@ -47,6 +55,7 @@ from .._scan import (
 )
 from .._scan.model import establish_scan_model
 from .._schedule import RunningWorker
+from .._store import StoreError, copy_log, open_store, store_location
 from .._tend import TendResult, tend
 from .._timer import (
     Armament,
@@ -97,6 +106,21 @@ class LaunchError(Exception):
 
 
 @dataclass(frozen=True)
+class Reuse:
+    """One task this launch does not have to run, and where its result came from."""
+
+    identifier: str
+    key: str
+    """Display key, so the delta names a task the way every other row does."""
+
+    source: str
+    """Where the store had it. **Recorded rather than counted**, because an identifier match is a strong claim and not an unlimited one: it guarantees the task, args, model, solver, resolved plan, generate config and execution limits are identical, and guarantees nothing about package versions or a dataset loaded from a mutable source. Whether that is good enough is the reader's judgement, and they cannot make it without knowing whose log this is."""
+
+    location: str
+    """Where it now is, inside this run's log directory."""
+
+
+@dataclass(frozen=True)
 class Launch:
     """What a launch did, or what it stopped short of doing."""
 
@@ -120,6 +144,9 @@ class Launch:
 
     restored: list[str] = field(default_factory=list[str])
     """Logs moved back out of the archive, by their new location."""
+
+    reused: list[Reuse] = field(default_factory=list[Reuse])
+    """Tasks satisfied from the log store rather than run — rung 2 of the convergence ladder, between the archive and a worker (execution.md §5.6)."""
 
     stopped: list[Stop] = field(default_factory=list[Stop])
     """Workers stopped because the manifest no longer names what they were running."""
@@ -177,7 +204,7 @@ def launch(
         timer: Arm a timer. `False` launches unsupervised and records that it did.
         env_check: Refuse to arm when a scheduled tend would not inherit this shell's credentials. Checked **before** the capture, so a Hawk config does not spend five minutes resolving packages on the way to a refusal.
         log_root: The root this machine keeps eval logs under, overriding `_steward.yaml`. Used only where the definition names no `log_dir` of its own, in which case the run writes to `<root>/<workspace name>`. `False` keeps this run's logs in the workspace whatever the machine says; `None` defers to the file and the environment.
-        log_store: Log store for this run — a path or `auto` — overriding `_steward.yaml`. `False` declines the one the file or the environment configured; `None` defers to them. **Recorded and otherwise inert**: nothing reads a store until publication exists (step 33), so a path is recorded rather than resolved.
+        log_store: Log store for this run — a path or `auto` — overriding `_steward.yaml`. `False` declines the one the file or the environment configured; `None` defers to them. **Configuring one is the whole opt-in for reading it**: there is nothing to protect against, since a match means the identifier is equal and what it points at was published by a signoff. Reads are still *reported*, which is visibility rather than consent.
         overrides: Inspect's own eval-set arguments for this run, already parsed, keyed as `EvalSetOverrides` spells them. Merged over what `STEWARD_*` and `INSPECT_EVAL_*` say and honoured by the capture, so the manifest describes the run that will happen (`_workspace.overrides`). `None` — nothing typed and nothing exported — reuses the committed manifest's, for the reason `args` does. **An empty mapping is not the same thing**: it asks for the definition's own shape, which is the only way back once a launch has passed one.
         max_workers: Worker processes for the first turn, overriding `_steward.yaml`. `None` expresses no preference and defers to the file, which itself defaults to a process per task — it does not request that width.
         stall_after: Fruitless respawns before a task is given up on, overriding `_steward.yaml`.
@@ -203,7 +230,14 @@ def launch(
     # another would be a run nobody could explain
     directives = read_directives(workspace.directives)
     interval = resolve_interval(directives, tend_interval=tend_interval)
-    store = resolve_log_store(directives, log_store=log_store)
+    # resolved to a location here rather than carried as the setting, so the
+    # journal, the printed delta and the store itself all name one place. A
+    # relative `log_store` is relative to the *workspace*, which does not move,
+    # and not to wherever the command happened to be typed
+    configured = resolve_log_store(directives, log_store=log_store)
+    store = (
+        store_location(configured, workspace.root) if configured is not None else None
+    )
     root = resolve_log_root(directives, log_root=log_root)
     inspect_overrides = run_overrides(overrides)
 
@@ -367,6 +401,12 @@ def _launch(
 
     failures: list[str] = []
     restored = _restore(workspace, delta, log_dir, failures)
+    # rung 2 of the ladder, immediately after rung 1 and for the same reason
+    # the restore is here: what a store read is *for* is the identifiers the
+    # committed manifest asks for, and all `log_dir` mutation stays contiguous
+    reused = _reuse(
+        workspace, manifest, delta, logs, inflight.running, log_dir, log_store, failures
+    )
     stopped = _stop(workspace, delta, inflight.running, logs, failures)
 
     # after the restore, keeping all `log_dir` mutation contiguous, and
@@ -393,6 +433,10 @@ def _launch(
         tasks=len(manifest.tasks),
         timer=armed.scheduler if armed is not None else None,
         log_store=log_store,
+        # the source and not only the count: an identifier match says the
+        # configuration was identical and says nothing about the environment
+        # it ran in, so whose log this is has to be answerable later
+        reused=[{"identifier": one.identifier, "source": one.source} for one in reused],
         scanners=sorted(merged_scanners(scan)),
     )
     if refused is not None:
@@ -419,6 +463,7 @@ def _launch(
         disarmed=disarmed,
         scan_dir=scan_dir,
         restored=restored,
+        reused=reused,
         stopped=stopped,
         # `tend` cannot refuse a claim it was handed, so the union is only
         # formally present here
@@ -734,6 +779,169 @@ def _restore(
             except OSError as ex:
                 _failed(workspace, failures, f"could not restore {location}", ex)
     return restored
+
+
+def _reuse(
+    workspace: Workspace,
+    manifest: Manifest,
+    delta: Delta,
+    logs: ObservedLogs,
+    running: Sequence[RunningWorker],
+    log_dir: str,
+    location: str | None,
+    failures: list[str],
+) -> list[Reuse]:
+    """Satisfy what is left from the store, rather than running it.
+
+    **Rung 2 of the convergence ladder** (execution.md §5.6): the archive is free and local, the store is cheap and global, and a worker is neither. What reaches here is what rung 1 could not answer.
+
+    **And what makes it work is that the copied log stops a spawn.** `reconcile._spawn_order` queues only `MISSING` and `INCOMPLETE` tasks, so a log that lands here leaves its task `COMPLETE` and nothing is ever started for it. That is precisely the property flow's own read half lacks — its workers run their selected task regardless, so a copied log bought nothing and cost a race (execution.md §5.3) — and it is why the read belongs to the single writer rather than to each worker.
+
+    **Nothing here fails a launch.** A store whose absence costs time and never correctness cannot be allowed to cost a launch either, so an unopenable store, a query that raised and a copy that would not land are each one recorded line and one task that runs the ordinary way. `_restore`'s rule, and its reason.
+
+    **And a task somebody is already running is not one this can satisfy.** A worker's log exists from the moment it starts, so the observation above accounts for the whole fleet — except across the pre-boundary window, where a process has been spawned, has no log and has no control socket yet (`RunningWorker.socket is None`). An identifier in that window looked exactly like an identifier nothing had ever run: the store answered it, the delta reported the work as satisfied and not running here, and the worker went on spending money on the task for as long as it took. `reconcile` already refuses to queue a running task on the strength of the same in-flight record; consulting it here is that rule applied one rung up the ladder, rather than a second one.
+
+    **A worker being stopped outright is the exception**, and it is the case where reuse is worth most. Relocation and reshaping take the whole process down, so its tasks are about to start again from nothing — reusing a store result is then the difference between a re-run and no run at all. A *partial* stop needs no exception: the identifiers it sheds are leaving the manifest, so they were never in the wanted set.
+
+    Args:
+        workspace: The workspace being launched, for the log.
+        manifest: What was just committed.
+        delta: Its changes, for the restore rows this must not duplicate and the workers it is about to stop.
+        logs: The log directory as it stood **before** the restore.
+        running: The fleet as the in-flight record resolved it, for the tasks already under way.
+        log_dir: Where a matched log is copied to.
+        location: The store, or `None` where none is configured — in which case this is a no-op and not an error.
+        failures: Accumulated warnings, appended to in place.
+
+    Returns:
+        One entry per task satisfied from the store.
+    """
+    if location is None:
+        return []
+    # already here, already coming back out of the archive, or already being
+    # worked on. A restore that failed is deliberately *not* retried from the
+    # store: rung 1 declining is a task that runs, which is the answer
+    # `_restore` already chose for it
+    wanted = (
+        {task.identifier for task in manifest.tasks}
+        - set(logs.attempts)
+        - {row.identifier for row in delta.of(Change.RESTORE)}
+        - _held(delta, running)
+    )
+    if not wanted:
+        return []
+    rows = {task.identifier: task for task in manifest.tasks}
+    try:
+        store = open_store(location, root=workspace.root)
+        found = store.search(wanted)
+    except StoreError as ex:
+        _failed(workspace, failures, f"nothing could be reused from {location}", ex)
+        return []
+    reused: list[Reuse] = []
+    for identifier, candidates in sorted(found.items()):
+        task = rows[identifier]
+        if (chosen := _chosen(workspace, manifest, task, candidates)) is None:
+            continue
+        try:
+            landed = _copy_in(chosen, log_dir)
+        # **broadly, and only `open_store` used to be.** `StoreError` covers
+        # the search because `_store` normalizes its own failures; it covers
+        # nothing after it, and what happens after it is reading and copying
+        # files that live *in the store* -- so an S3 store on a machine whose
+        # credentials expired between the query and the copy raised
+        # `botocore.exceptions.NoCredentialsError` out of a launch that had
+        # already committed its manifest. Rung 2 is an optimisation whose
+        # every failure is one task that runs the ordinary way, and that has
+        # to include the failures nothing here anticipated
+        except Exception as ex:
+            _failed(workspace, failures, f"could not copy {chosen} in", ex)
+            continue
+        reused.append(
+            Reuse(
+                identifier=identifier,
+                key=task.key,
+                source=chosen,
+                location=landed,
+            )
+        )
+    return reused
+
+
+def _held(delta: Delta, running: Sequence[RunningWorker]) -> set[str]:
+    """Identifiers a live worker is already working on, and this launch must not claim.
+
+    Everything a running process holds, minus the processes this launch is about to take down outright — those are `relocated` and `reshaped`, which stop whatever they are running, so their tasks begin again from nothing and a store result is the difference between a re-run and no run. A worker losing only *some* of its tasks needs no exception here: what it sheds is leaving the manifest, and so was never wanted.
+    """
+    wholesale = delta.wholesale
+    return {
+        identifier
+        for worker in running
+        if worker.worker not in wholesale
+        for identifier in worker.identifiers
+    }
+
+
+def _chosen(
+    workspace: Workspace,
+    manifest: Manifest,
+    task: ManifestTask,
+    candidates: Sequence[str],
+) -> str | None:
+    """The first of a store's candidates that answers what this run asks, or `None`.
+
+    **A task identifier is not a promise about the results, and the store searches on nothing else.** `task_identifier` hashes the solver plan, generate config, model args, roles, version and execution limits — and pointedly *not* the sample count, the epochs or the selection, so that raising any of them leaves existing logs resumable rather than orphaning them. A store is therefore free to hand back a log for the same identifier that ran a different slice or fewer samples, and copying one in would leave the task `INCOMPLETE`, the next tend queuing it, and the launch having already said in the delta and the journal that the work does not run here.
+
+    **Every candidate, because the store's own ranking cannot see the question.** It orders by size and recency, which is all a manifest-blind index can do — so the log it puts first may be the one that answers a different slice while the one behind it matches exactly. Checking only the front of the list turned this filter into a veto: it rejected the best-ranked log and never found out the store had what it was asked for.
+
+    **The predicate is `observe`'s own**, not a second one assembled from the same ingredients. `incomplete_reason` is what `observe_tasks` classifies a task with, so a log this accepts is a log the next tend calls complete — which is the whole claim being made. A near copy of it drifted the way near copies do: it compared `completed_samples` where observation compares `total_samples`, so a signed log carrying samples a person accepted as errored was publishable by one rule and unreusable by the other.
+
+    A log that fails is not refused so much as not *claimed*. It stays in the store, where a run asking a different question will match it.
+    """
+    for source in candidates:
+        try:
+            candidate = read_attempt(source)
+        # the store's own rule, applied at the store's own boundary: this reads
+        # a file the store named and the store may be a remote one, so the
+        # failures available here are the backend's hierarchy rather than
+        # Python's. A candidate that will not read is one candidate skipped
+        except Exception as ex:
+            steward_log(workspace.log, f"{source} would not read from the store: {ex}")
+            continue
+        if (reason := incomplete_reason(manifest, task, candidate)) is None:
+            return source
+        # quietly, and to the log rather than to the launch: a store holding a
+        # near-miss is worth being able to find out about and is not something
+        # the operator did wrong
+        steward_log(
+            workspace.log,
+            f"{source} matches {task.key} by identifier and does not answer what "
+            f"this run asks of it ({reason.value}) — not reused",
+        )
+    return None
+
+
+def _copy_in(source: str, log_dir: str) -> str:
+    """Copy one log out of the store and into the run's directory.
+
+    A copy rather than a move, which is the whole difference between this and the archive: the store keeps its own copy, and every other project reusing the same identifier gets it too.
+
+    Args:
+        source: The log the store matched, wherever it lives.
+        log_dir: The run's log directory.
+
+    **A name already taken is checked rather than believed.** Skipping on the name alone was right about the ordinary case — a name is a timestamp, a task and a hash, so it identifies the log — and wrong about the only case that reaches here at all. The wanted set was built from `observe_logs`, which *skips a log it cannot read*, so an identifier arrives here wanted precisely when the file under that name is one nothing could parse: the wreckage of an interrupted copy, sitting at the final path under the final name. That was then recorded as a task satisfied from the store, by a file no reader can open. `copy_log` compares it against the source and replaces it when it does not match, and stages every write so this can never be the file it leaves behind.
+
+    Returns:
+        Where the log now is.
+
+    Raises:
+        Exception: If the directory could not be created or the copy did not land. Not narrowed, and the caller does not narrow either: `source` is inside the store, which may be a remote one whose failures are its backend's rather than `OSError`.
+    """
+    fs = filesystem(log_dir)
+    fs.mkdir(log_dir, exist_ok=True)
+    target = log_dir.rstrip(fs.sep) + fs.sep + basename(source)
+    copy_log(source, target, fs)
+    return target
 
 
 def _stop(

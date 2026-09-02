@@ -434,7 +434,11 @@ class Directives(BaseModel):
     log_store: str | bool | None = Field(default=None)
     """Where to look for logs this run does not have to produce, `false` for nowhere, or `None` for no preference.
 
-    An index of completed logs keyed on inspect_ai's `task_identifier`, holding paths rather than data — Steward reads it at launch and publishes to it at signoff (execution.md §5.3–5.6). A path, or `auto` for the default location.
+    An index of completed logs keyed on inspect_ai's `task_identifier` — a flow Delta table where the location already carries one, and a plain directory of `.eval` logs otherwise, which needs nothing installed (execution.md §5.3–5.6). A path, or `auto` for the machine's own store — the per-platform data directory a `flow store import` writes its table into, so `auto` on a machine that already has one finds it rather than quietly indexing a second store beside it.
+
+    **A relative path is relative to the workspace**, not to wherever the command was typed. A Steward command runs from anywhere at or below the root, so a location resolved against the process's directory would be a different store to a launch typed at the root than to a signoff typed inside `logs/` — one setting, two stores, and reuse that quietly stopped finding what publication had put there.
+
+    **Setting this enables reading and nothing else.** Steward consults it at launch and copies in what it matched; publishing to it happens only at `steward signoff --publish`, and there is deliberately no key here that could turn that on — a store is frequently shared, so a setting that said *always publish* would export a team's results on the strength of a file somebody wrote months ago. The readiness item asks instead.
 
     **A key here as well as a variable, and the two do not conflict.** execution.md §5.6 routes the location to the environment on the grounds that a store is a property of the machine rather than of the project, which is true of *where this machine's store lives* and not of *which store this project wants to reuse from*. Both are real questions and the precedence answers them in the right order: the file is the project's preference, a variable is the machine's, and the flag is the invocation's.
 

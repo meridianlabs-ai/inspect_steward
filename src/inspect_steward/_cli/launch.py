@@ -157,8 +157,9 @@ _LABELS = {
     default=None,
     metavar="PATH|auto",
     help=(
-        "Where to look for logs this run does not have to produce. Recorded "
-        f"now; read when signoff can publish to it. {overrides('log_store')}"
+        "Where to look for logs this run does not have to produce — a flow "
+        "store, or a plain directory of logs. Matches are copied in and "
+        f"reported. {overrides('log_store')}"
     ),
 )
 @click.option(
@@ -780,6 +781,18 @@ def _echo_launch(result: Launch, root: Path) -> None:
             f"restored {_plural(len(result.restored), 'log')} from the archive "
             f"— that work does not run again"
         )
+
+    if result.reused:
+        # named one by one rather than counted, and the source is the reason:
+        # an identifier match says the configuration was identical and nothing
+        # about the environment it ran in, so a reader deciding whether to
+        # accept somebody else's result needs to know it is somebody else's
+        click.echo(
+            f"satisfied {_plural(len(result.reused), 'task')} from the log store "
+            f"— that work does not run here"
+        )
+        for one in result.reused:
+            click.echo(f"  {one.key} — {one.source}")
 
     # the startup-memory bound is not printed here: `echo_turn` below prints it
     # for every verb, and a launch always has a turn to echo, so a line of its

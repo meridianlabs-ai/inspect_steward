@@ -37,6 +37,12 @@ from .turn import TURN_ERRORS, find_workspace
     help="Record a second signature over a run whose first one still stands.",
 )
 @click.option(
+    "--publish",
+    is_flag=True,
+    default=False,
+    help="Put the signed logs into the configured log store, so another project can reuse them instead of running the task. Never happens without this flag — there is no setting that turns it on.",
+)
+@click.option(
     "--no-break-claim",
     is_flag=True,
     default=False,
@@ -53,6 +59,7 @@ def signoff_command(
     by: str,
     note: str | None,
     again: bool,
+    publish: bool,
     no_break_claim: bool,
     output_json: bool,
 ) -> None:
@@ -60,7 +67,7 @@ def signoff_command(
 
     Runs a final turn, refuses with every blocker at once if anything is still unnamed, moves superseded attempts into `logs-archive/`, records who signed and what they signed over, and takes the timer down. It does not commit the journal — that stays yours.
 
-    A person decides this. An agent may prompt for it and may run it once they answer, recording their name, which is why the signer is recorded rather than the process.
+    A person decides this. An agent may prompt for it and may run it once they answer, recording their name, which is why the signer is recorded rather than the process. `--publish` is the same shape one step further out: exporting results into a shared store is the person's call too, so it is asked rather than configured.
     """
     workspace = find_workspace()
     try:
@@ -70,6 +77,7 @@ def signoff_command(
             by=by,
             note=note,
             again=again,
+            publish=publish,
             break_stale=not no_break_claim,
         )
     except (SignoffError, ManifestError, *TURN_ERRORS) as ex:
@@ -145,6 +153,15 @@ def _echo_signoff(result: Signoff, root: Path) -> None:
             f"  archived {moved} superseded attempt{'s' if moved != 1 else ''} — "
             f"logs/ now holds what was signed"
         )
+    if result.published is not None:
+        published = result.published
+        act = "indexed" if published.kind == "indexed" else "copied"
+        click.echo(
+            f"  {act} {published.count} log{'s' if published.count != 1 else ''} "
+            f"into the log store — other projects can reuse this work"
+        )
+    if result.unpublished is not None:
+        click.echo(f"  {result.unpublished}")
     if result.disarmed is not None:
         click.echo(f"  disarmed {result.disarmed} — nothing tends this run now")
     if result.unverified is not None:
@@ -203,6 +220,17 @@ def _signoff_json(result: Signoff) -> str:
             "curated": []
             if result.curated is None
             else [destination for _, destination in result.curated.moved],
+            "published": None
+            if result.published is None
+            else {
+                "kind": result.published.kind,
+                "logs": result.published.count,
+                # a partial publication is a real outcome, and the count alone
+                # cannot say whether it was one: a caller reading this has to
+                # be able to tell nine of nine from nine of ten
+                "failed": list(result.published.failed),
+            },
+            "unpublished": result.unpublished,
             "disarmed": result.disarmed,
             "unverified": result.unverified,
             "warnings": result.warnings,

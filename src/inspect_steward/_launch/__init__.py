@@ -7,7 +7,7 @@ from .delta import (
     TaskChange,
     compute_delta,
 )
-from .launch import Launch, LaunchError, launch
+from .launch import Launch, LaunchError, Reuse, launch
 
 __all__ = [
     "ARCHIVING",
@@ -17,6 +17,7 @@ __all__ = [
     "Relocation",
     "Reshaped",
     "LaunchError",
+    "Reuse",
     "TaskChange",
     "compute_delta",
     "launch",

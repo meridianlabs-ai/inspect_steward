@@ -30,6 +30,7 @@ from inspect_ai.log import (
     EvalLogInfo,
     headline_metric,
     list_eval_logs_async,
+    read_eval_log,
     read_eval_log_async,
 )
 from inspect_ai.util._sandbox.environment import resolve_sandbox_environment
@@ -354,7 +355,7 @@ async def observe_logs_async(
                 return UnreadableLog(
                     location=info.name, reason=f"{type(ex).__name__}: {ex}"
                 )
-        attempt = _attempt(info, header)
+        attempt = _attempt(info.name, info.mtime, header)
         if cache is not None:
             cache.put(info, attempt)
         return attempt
@@ -443,14 +444,7 @@ def _observe_task(
             required_samples=required,
         )
 
-    # a redirect first: it invalidates every sample in the log, where every
-    # other reason leaves them worth resuming, so it has to answer before one
-    # of those masks it
-    reason = (
-        _redirected(manifest, current)
-        or _incomplete_reason(current, required)
-        or _reshaped(manifest, task, current)
-    )
+    reason = incomplete_reason(manifest, task, current)
     return TaskObservation(
         identifier=task.identifier,
         state=TaskState.COMPLETE if reason is None else TaskState.INCOMPLETE,
@@ -482,6 +476,30 @@ def _current(
             if attempt.status == "success" and answers_shape(manifest, task, attempt)
         ),
         logs.current(task.identifier),
+    )
+
+
+def incomplete_reason(
+    manifest: Manifest, task: ManifestTask, attempt: LogAttempt
+) -> IncompleteReason | None:
+    """Why an attempt does not answer for a task, or `None` when it does.
+
+    **The one definition of *complete*, so that nothing can hold a second one.** `observe_tasks` calls this to classify a task, and the log store's read calls it to decide whether a candidate is worth copying in — and those two answering differently is not a discrepancy, it is a launch reporting *this work does not run here* about a task the very next tend queues. A store filter written from the same ingredients but not the same code drifted exactly that way: it compared `completed_samples` where this compares `total_samples`, so a signed log carrying samples somebody accepted as errored was published by one and refused by the other.
+
+    **A redirect answers first**, because it invalidates every sample in the log where every other reason leaves them worth resuming, so one of those must not mask it.
+
+    Args:
+        manifest: Desired state, whose overrides and options say what is being asked for.
+        task: The manifest row this attempt is paired with.
+        attempt: The log to judge.
+
+    Returns:
+        The reason more work is needed, or `None` where this attempt is the answer.
+    """
+    return (
+        _redirected(manifest, attempt)
+        or _incomplete_reason(attempt, task.samples * task.epochs)
+        or _reshaped(manifest, task, attempt)
     )
 
 
@@ -597,11 +615,29 @@ def _incomplete_reason(
     return None
 
 
-def _attempt(info: EvalLogInfo, header: EvalLog) -> LogAttempt:
+def read_attempt(location: str) -> LogAttempt:
+    """Read one log's header as an attempt, for a log no observation covers.
+
+    **The store is the caller, and it is the third directory to need this.** `observe_logs` answers for a *directory*, which is what `logs/` and `logs-archive/` are; a reuse store hands back individual logs from wherever it indexed them, and a launch has to ask `answers_shape` of one before copying it in. Reading a whole directory to judge one file would be the wrong shape and, for a table pointing at many prefixes, not even possible.
+
+    Args:
+        location: The log to read.
+
+    Returns:
+        The attempt, with no `mtime` — the field exists for the turn cache's staleness check, and nothing caches a log it is about to copy.
+
+    Raises:
+        OSError: The log could not be read.
+        ValueError: It read and was not a log.
+    """
+    return _attempt(location, None, read_eval_log(location, header_only=True))
+
+
+def _attempt(location: str, mtime: float | None, header: EvalLog) -> LogAttempt:
     results = header.results
     headline, headline_name = _headline(header)
     return LogAttempt(
-        location=info.name,
+        location=location,
         identifier=task_identifier(header, None),
         created=header.eval.created,
         status=header.status,
@@ -614,7 +650,7 @@ def _attempt(info: EvalLogInfo, header: EvalLog) -> LogAttempt:
         task=header.eval.task,
         task_id=header.eval.task_id,
         eval_id=header.eval.eval_id,
-        mtime=info.mtime,
+        mtime=mtime,
         headline=headline,
         headline_name=headline_name,
         selection={

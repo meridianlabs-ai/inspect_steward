@@ -49,6 +49,13 @@ dependencies = [
     # might, so a workspace must not be able to configure a channel Steward
     # then cannot reach.
     "apprise>=1.9",
+    # `log_store: auto` names the machine's own store, which is a per-platform
+    # data directory rather than a path Steward could hardcode. inspect-flow
+    # depends on platformdirs too — and resolving `auto` through *flow* would
+    # make the common case pay the `[flow]` extra to find out where it is
+    # pointing, which is the whole thing the directory implementation exists to
+    # avoid. A direct import, and a transitive dependency is not a promise.
+    "platformdirs>=4.0",
 ]
 
 [project.optional-dependencies]

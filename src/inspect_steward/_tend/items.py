@@ -1344,7 +1344,10 @@ def _signoff(result: "TendResult") -> list[Item]:
             level=Level.INFO,
             subject=result.manifest_digest or "",
             summary=_signoff_summary(
-                summary, len(decided), _dismissed_findings(result.anomalies)
+                summary,
+                len(decided),
+                _dismissed_findings(result.anomalies),
+                result.log_store,
             ),
             # bare, like every other item action: a placeholder here would be
             # one more thing for a reader to substitute, and this command's
@@ -1354,7 +1357,9 @@ def _signoff(result: "TendResult") -> list[Item]:
     ]
 
 
-def _signoff_summary(summary: Summary, accepted: int, dismissed: int) -> str:
+def _signoff_summary(
+    summary: Summary, accepted: int, dismissed: int, store: str | None
+) -> str:
     """What is true about the run, naming an accepted hole rather than papering over it.
 
     A run whose every task finished and one whose last task was accepted as it stands are both ready for the same decision, and they are not the same claim — so the invitation says which it is rather than reporting "every task is complete" over a log somebody knows is short.
@@ -1363,10 +1368,13 @@ def _signoff_summary(summary: Summary, accepted: int, dismissed: int) -> str:
 
     **And a third clause where scan findings were dismissed**, which is the one thing on this line that is not about task counts. A dismissed finding leaves no caveat and reaches `anomalies.md` nowhere — correctly, since the whole content of the dismissal is *this does not change the numbers*. But *the model tried to read the grader and failed* is something the person signing wants to have been told, and this is the sentence that reaches them at the moment they are asked (workflow.md §12.6.1). It says how many and points at the account; the reasons are in the journal and in `analysis.md`.
 
+    **And a fourth where a store is configured, which is a second decision rather than a fact about the run.** Publication is the one act at the end of a run that nothing does by default and no setting can turn on: exporting results into a cache other projects read is a person's call, taken once and out loud. So this line is the whole mechanism by which they are asked — an agent that is not told there is a store is an agent that signs off without mentioning it, and the run never tends again to say so afterwards.
+
     Args:
         summary: The run's shape.
         accepted: Tasks settled by a decision rather than by finishing (`settled_by_decision`), which is a count the summary cannot supply on its own: an acknowledged stall settles a task and is recorded in the journal rather than in the reconciliation.
         dismissed: Scan findings looked at and dismissed (`_dismissed_findings`).
+        store: The configured reuse store, or `None` where there is none and there is nothing to ask about.
     """
     complete = summary.states.get(TaskState.COMPLETE.value, 0)
     if not accepted:
@@ -1378,13 +1386,18 @@ def _signoff_summary(summary: Summary, accepted: int, dismissed: int) -> str:
             f"stand{'s' if accepted == 1 else ''}; "
             f"the results are waiting to be accepted"
         )
-    if not dismissed:
+    if dismissed:
+        one = dismissed == 1
+        line = (
+            f"{line} ({dismissed} scan finding{'' if one else 's'} "
+            f"{'was' if one else 'were'} looked at and dismissed — read the "
+            f"reason{'' if one else 's'} before you sign)"
+        )
+    if store is None:
         return line
-    one = dismissed == 1
     return (
-        f"{line} ({dismissed} scan finding{'' if one else 's'} "
-        f"{'was' if one else 'were'} looked at and dismissed — read the "
-        f"reason{'' if one else 's'} before you sign)"
+        f"{line}. A log store is configured at {store}: ask whether these "
+        f"results should be published to it, and pass --publish if they should"
     )
 
 

@@ -9,8 +9,11 @@ Steward can compute that no anomaly is open. Only a person can say **I accept th
 **Signing does not commit the journal**, and that stays the human's job (workflow.md §18 q4). What this verb owes instead is that at the moment it returns, the record is complete and quiescent — nothing further will be appended without somebody asking for it — so a commit taken any time afterwards captures the same thing. It says so on the way out.
 """
 
+from collections.abc import Set
 from dataclasses import dataclass, field
+from typing import cast
 
+from inspect_ai._util.file import basename
 from inspect_scout import Summary as ScanSummary
 
 from .._evalset.manifest import ManifestError, read_manifest
@@ -22,6 +25,7 @@ from .._notify import (
     send_post,
 )
 from .._scan import finalize_scan, scan_dir_location
+from .._store import Published, StoreError, open_store, store_location
 from .._tend import TendError, TendResult, tend
 from .._tend.turn import SCAN_FOLD_RESTORED
 from .._timer import TimerError, disarm
@@ -32,6 +36,7 @@ from .._workspace import (
     Directives,
     DirectivesError,
     Held,
+    JournalEvent,
     Signature,
     Workspace,
     acquire,
@@ -39,9 +44,22 @@ from .._workspace import (
     read_directives,
     read_journal,
     read_signoff,
+    resolve_log_store,
 )
 from .curate import Curated, curate, plan
 from .gate import STANDING, UNFINALIZED, UNSIGNED, Blocker, check
+
+PUBLISHED = "published"
+"""The `ACTION` a publication is recorded under, and the workspace's provenance record.
+
+Its `written` list is what makes withdrawal answerable: *this project put these logs in this store*. Accumulating, since a publication does not expire. Folded by `_publications`.
+"""
+
+WITHDRAWALS = "withdrawals"
+"""The `ACTION` this workspace records an unpaid withdrawal under.
+
+A snapshot rather than a delta: the newest event for a store is what is still owed to it, and an empty list is the debt cleared. Folded by `_pending`.
+"""
 
 
 class SignoffError(Exception):
@@ -73,6 +91,15 @@ class Signoff:
     warnings: list[str] = field(default_factory=list[str])
     """Things worth telling the signer that are not refusals — a paused run, journal damage, a log that would not read, a move that failed."""
 
+    published: Published | None = None
+    """What `--publish` put into the log store, or `None` where nothing was asked for or nothing was signed."""
+
+    unpublished: str | None = None
+    """Why a store this workspace configures holds nothing from this signature, or `None`.
+
+    **Not a warning, because nothing went wrong** — publication is a decision, and declining to make one is a legitimate outcome rather than a failure. What it is is the last moment anybody is looking: the timer is coming down and the run will never tend again, so a store sitting configured and unpublished has to say so here or say so nowhere.
+    """
+
     unverified: str | None = None
     """Why a recorded signature could not be checked against what the terminal fold revealed, or `None` where it was.
 
@@ -86,6 +113,7 @@ def signoff(
     by: str,
     note: str | None = None,
     again: bool = False,
+    publish: bool = False,
     break_stale: bool = True,
 ) -> Signoff | Held:
     """Attest that these results are accepted, and end the run.
@@ -95,6 +123,7 @@ def signoff(
         by: Who is signing. Free text — a name on a document, never a role.
         note: What they want said about it, or `None`. Optional by design: the account of every decision is already in the journal, and a required field here collects *results look good* at scale.
         again: Record a second signature over a run whose first one still stands. The only blocker with an override, because it is the only one that is not about the run.
+        publish: Put the signed logs into the configured log store, so another project can reuse them without running the task. **Defaults to off and has no configured default that could turn it on**: exporting somebody's results into a shared cache is a decision a person makes, once, out loud — so what a `_steward.yaml` key would buy here is publication nobody was asked about, which is the one thing this must not do.
         break_stale: Kill a wedged claim holder and take the claim from it.
 
     Returns:
@@ -119,7 +148,9 @@ def signoff(
         return outcome
 
     with outcome as claim:
-        return _signoff(workspace, claim, by=by, note=note, again=again)
+        return _signoff(
+            workspace, claim, by=by, note=note, again=again, publish=publish
+        )
 
 
 def _signoff(
@@ -129,6 +160,7 @@ def _signoff(
     by: str,
     note: str | None,
     again: bool,
+    publish: bool,
 ) -> Signoff:
     """The signoff itself, with the claim in hand for the whole of it."""
     try:
@@ -212,6 +244,8 @@ def _signoff(
         exceptions=tuple(exceptions),
     )
 
+    store = _store_location(workspace)
+
     # **a second turn, and it is what makes the artifacts true.** The turn
     # above ran before the signature existed, so everything it wrote and
     # propagated -- `status.md`, `anomalies.md`, the observation -- says the run
@@ -250,6 +284,7 @@ def _signoff(
                 *revealed,
             ],
             curated=curated,
+            unpublished=_withheld(store, publish),
             warnings=warnings,
         )
 
@@ -266,6 +301,7 @@ def _signoff(
             turn=signed,
             signature=signature,
             curated=curated,
+            unpublished=_withheld(store, publish),
             warnings=warnings,
             unverified=(
                 "the scan results were folded and then nothing could re-read "
@@ -274,6 +310,19 @@ def _signoff(
                 "armed, so the next turn asks the question this one could not"
             ),
         )
+
+    # **publication is last of the acts that leave this project, and it is
+    # *behind* the two returns above rather than beside the signature.** What a
+    # store row claims is that a result may be reused sight-unseen, which is
+    # exactly the claim the terminal fold can still overturn: it folds rows for
+    # the first time if every earlier fold failed, and what comes out is a
+    # window nobody has ruled on. Publishing before that check exported results
+    # into a shared cache and *then* told the operator nothing had been signed
+    # -- the failure §5.5 exists to prevent, arriving through the one door left
+    # open. So nothing reaches the store until the run is signed and verified
+    published = _publish(workspace, result, curated, store, publish, warnings)
+    _withdraw(workspace, curated, store, warnings)
+    unpublished = _unpublished(store, publish, published, warnings)
 
     # **after the signature, and it raises where a failed move does not.** A
     # move that did not happen leaves a tidy-up undone; a timer that stayed
@@ -292,6 +341,8 @@ def _signoff(
         turn=signed,
         signature=signature,
         curated=curated,
+        published=published,
+        unpublished=unpublished,
         disarmed=disarmed,
         warnings=warnings,
     )
@@ -401,6 +452,291 @@ def _journal_curated(workspace: Workspace, curated: Curated) -> None:
             {"from": log.location, "to": destination, "task": log.identifier}
             for log, destination in curated.moved
         ],
+    )
+
+
+def _store_location(workspace: Workspace) -> str | None:
+    """The log store this workspace configures, or `None`.
+
+    **Re-resolved here rather than read back off the committed manifest**, and the two questions are genuinely different. What a launch recorded is *which store this run read from*, months ago on whatever machine ran it; what publication needs is *where this machine's store is now*, and a person is standing here to have gotten that wrong in front of. The resolution is the ordinary one — the file, then the variable — minus the flag, because there is no `--log-store` on this verb.
+
+    **Resolved to a location rather than left as the setting**, which matters here more than anywhere: this is the identity a warning names, the journal records, and `_pending` matches a debt against. A relative `log_store` that stayed relative would be a different store to a signoff typed in a subdirectory than to the launch that read it — and a ledger keyed on the setting rather than the place would then hand one store's debt to another.
+    """
+    directives = _directives(workspace)
+    location = resolve_log_store(directives) if directives is not None else None
+    return store_location(location, workspace.root) if location is not None else None
+
+
+def _publish(
+    workspace: Workspace,
+    result: TendResult,
+    curated: Curated,
+    location: str | None,
+    publish: bool,
+    warnings: list[str],
+) -> Published | None:
+    """Put the signed logs into the store.
+
+    **What is published is what `logs/` holds *after* curation, which takes two filters rather than none.** The observation in hand was read before the moves, so reading `current` off it publishes a set the directory no longer has. **Orphans** are the sharp half: an identifier the definition no longer names has a current log, `plan` archives every one of its attempts including that one, and a signature does not cover any of them. Publishing straight off the observation therefore exported results the attestation excludes — and, where the move had already landed, failed partway through the batch on a path that was no longer there, after copying some of the valid logs. So the set is narrowed by both things this function knows exactly: **a manifest row** (`task.task is not None`, which is what an orphan lacks) and **not among what curation just moved**.
+
+    **Including the tasks carrying accepted exceptions.** A signature is a signature: two samples accepted as errored is a legitimate result with a caveat, and the caveat lives in this project's `anomalies.md` and travels nowhere. That is a hole, it is accepted knowingly, and the alternative — withholding results a person explicitly accepted — makes the store lie in the other direction about what a project produced.
+
+    **What actually reached the store is journalled by name, and that record is what `_withdraw` reads.** A count is enough to report a publication and is not enough to undo one: withdrawal has to know *which store holds which log because this project put it there*, and nothing else in the workspace can answer that afterwards. So the event carries `written` — the logs this call itself wrote, which for a directory store excludes any that were already present under their own name and therefore belong to whoever produced them.
+
+    Args:
+        workspace: The workspace, for the journal.
+        result: The turn that was signed, for the logs it observed.
+        curated: What curation just archived, so those are not published.
+        location: The store, or `None` where none is configured.
+        publish: Whether publication was asked for. **Publication only** — withdrawal is not this flag's to authorise and does not pass through here.
+        warnings: Accumulated warnings, appended to in place.
+
+    Returns:
+        What was published, or `None` where publication was not asked for or failed.
+    """
+    if location is None or not publish:
+        return None
+    moved = {log.location for log, _ in curated.moved}
+    try:
+        store = open_store(location, root=workspace.root)
+        published = store.publish(_publishable(result, moved))
+    except StoreError as ex:
+        warnings.append(f"nothing was published to {location}: {ex}")
+        return None
+    append_event(
+        workspace.journal,
+        ACTION,
+        action=PUBLISHED,
+        store=location,
+        kind=published.kind,
+        logs=published.count,
+        failed=len(published.failed),
+        written=sorted(published.written),
+    )
+    _partial(location, published, warnings)
+    return published
+
+
+def _withdraw(
+    workspace: Workspace,
+    curated: Curated,
+    location: str | None,
+    warnings: list[str],
+) -> None:
+    """Take this project's own rows back out for the attempts curation just archived.
+
+    **Not `--publish`'s to authorise, which is where this started.** The two acts were gated together — the store reached publication as `store if publish else None` — so removing a superseded result was conditional on somebody asking to add new ones. They are not the same permission: publication *exports* this project's results, which is why it is prompted and never automatic; withdrawal removes a row this project itself wrote, for a log it has just archived, and exports nothing. A project that published last month and this month curates that attempt away without the flag was leaving the store to serve the log it had just replaced.
+
+    **And it is withdrawn from the store that holds it, which is not the same as the store configured today.** Withdrawing `curated.moved` from whatever `log_store` currently says had two failures pulling in opposite directions. Repointing a workspace from A to B left the row in A untouched forever, because nothing would ever ask A about it again. And in the other direction — the sharper one — a directory store matches on the log's own filename, so a project that **reused** a log from a shared store and later archived that attempt would move the *producer's* copy into `withdrawn/`, ending reuse of it for everybody, over a log it had never published. So the ledger is the authority: `_publications` folds what this workspace wrote and where, and each store is asked only about its own.
+
+    **The journal is the provenance record and it needs no publisher field**, because it is this workspace's journal: anything in it was written here. What it could not answer before was *which* logs, which is why `_publish` now records them by name.
+
+    **Withdrawal is skipped where nothing is owed**, which is the common case and not only an optimisation: upstream's removal narrates itself to flow's own console whatever it is told about verbosity, so calling it over an empty list would print another tool's voice through the middle of a signoff that cleared no rows. It also means a store this project has finished with is never reopened, and a signoff owing nothing touches no store at all.
+
+    Args:
+        workspace: The workspace, for the ledger and the journal.
+        curated: What curation just archived.
+        location: The store configured now, or `None` — carried only because a debt may be outstanding against it from a signoff that never got to publish.
+        warnings: Accumulated warnings, appended to in place.
+    """
+    moved = {log.location for log, _ in curated.moved}
+    # read once: the two folds below are over the same file, and a second read
+    # could see a journal something appended in between
+    events = read_journal(workspace.journal).events
+    mine = _publications(events)
+    for store in sorted(set(mine) | ({location} if location is not None else set())):
+        pending = set(_pending(events, store))
+        owed = (moved & mine.get(store, set[str]())) | pending
+        if not owed:
+            continue
+        try:
+            open_store(store, root=workspace.root).withdraw(sorted(owed))
+        except StoreError as ex:
+            _deferred(workspace, store, owed, warnings, ex)
+        else:
+            _cleared(workspace, store, pending)
+
+
+def _publications(events: list[JournalEvent]) -> dict[str, set[str]]:
+    """Which logs this workspace has put in which store, folded over every signoff.
+
+    **Accumulating rather than newest-wins**, and the two folds beside each other are worth telling apart. A pending debt is a *state* — the newest word about a store is the whole answer, and an empty list ends it. A publication is an *event*: a log published two signoffs ago is still in the store two signoffs later, so the record only ever grows, exactly as `read_launched` accumulates for the same reason. Reading only the newest event would forget every log but the last batch, and forgetting a publication means declining to withdraw it.
+
+    Args:
+        events: Events in file order, as `read_journal` returns them.
+
+    Returns:
+        Store location to the logs this workspace wrote there, by the location they had in `logs/` — which is what `curated.moved` reports and what withdrawal matches on. A store this workspace never published to is absent.
+    """
+    publications: dict[str, set[str]] = {}
+    for event in events:
+        if event.type != ACTION or event.payload.get("action") != PUBLISHED:
+            continue
+        store = event.payload.get("store")
+        written = event.payload.get("written")
+        if not isinstance(store, str) or not isinstance(written, list):
+            # a payload this version does not understand is data, not damage
+            continue
+        publications.setdefault(store, set()).update(
+            one for one in cast(list[object], written) if isinstance(one, str)
+        )
+    return publications
+
+
+def _publishable(result: TendResult, moved: Set[str]) -> list[str]:
+    """The current logs a signature covers: a manifest row each, and none just archived."""
+    if result.observed is None:
+        return []
+    return [
+        task.current.location
+        for task in result.observed.tasks
+        if task.task is not None
+        and task.current is not None
+        and task.current.location not in moved
+    ]
+
+
+def _partial(location: str, published: Published, warnings: list[str]) -> None:
+    """Say so where a publication landed some of its logs and not the rest.
+
+    **The store copies one log at a time and nothing wraps them**, so a batch that stops partway has already put logs somewhere a reader will find them. That used to raise, which meant the caller reported *nothing was published* about a store holding all but the last few — a failure announced as its exact opposite, with no record of what had landed. The count is now what the signature covers and this is the other half of it.
+    """
+    if not published.failed:
+        return
+    total = published.count + len(published.failed)
+    names = ", ".join(basename(one) for one in published.failed[:3])
+    more = f" and {len(published.failed) - 3} more" if len(published.failed) > 3 else ""
+    warnings.append(
+        f"{published.count} of {total} logs reached {location} — {names}{more} "
+        f"did not, and are in this workspace only. Sign again with --publish "
+        f"--again once the store will take them"
+    )
+
+
+def _pending(events: list[JournalEvent], location: str) -> list[str]:
+    """Logs an earlier signoff owed this store and could not withdraw.
+
+    **The newest word for *this* store wins, and the qualifier is the whole fold.** A workspace can be repointed between signoffs, so the most recent withdrawal event may be about somewhere else entirely; stopping at it would drop a debt still owed to a store this one is still square with. Scanning back for this location instead means a store's ledger survives a detour to another one, and a signoff that cleared its debt writes the empty list that ends the scan.
+
+    Args:
+        events: Events in file order, as `read_journal` returns them.
+        location: The store being asked about, resolved.
+
+    Returns:
+        Logs still to withdraw, or empty where the store is square with this project.
+    """
+    for event in reversed(events):
+        if event.type != ACTION or event.payload.get("action") != WITHDRAWALS:
+            continue
+        if event.payload.get("store") != location:
+            continue
+        logs = event.payload.get("logs")
+        if not isinstance(logs, list):
+            # a payload this version does not understand is data, not damage
+            return []
+        return [one for one in cast(list[object], logs) if isinstance(one, str)]
+    return []
+
+
+def _deferred(
+    workspace: Workspace,
+    location: str,
+    owed: Set[str],
+    warnings: list[str],
+    ex: StoreError,
+) -> None:
+    """Record a withdrawal that did not happen, so a later signoff finishes it.
+
+    **Journalled rather than left to be noticed.** The logs are in `logs-archive/` by now and nothing rediscovers them: `plan` works from what `logs/` holds, so an archived attempt is out of every later signoff's reach, and the store would go on serving a superseded result with the only trace of it a warning that scrolled past once. Writing the debt down is what makes the retry in `_publish` possible at all.
+
+    **The whole set each time, not the difference.** This is a snapshot fold — the newest event for a store is the complete answer — which is `read_smoked`'s shape and is what lets a reader stop at the first match instead of replaying the file.
+    """
+    append_event(
+        workspace.journal,
+        ACTION,
+        action=WITHDRAWALS,
+        store=location,
+        logs=sorted(owed),
+    )
+    warnings.append(
+        f"{len(owed)} superseded log(s) could not be withdrawn from {location}: "
+        f"{ex} — until they are, that store can hand out a result this project "
+        f"has replaced. It is recorded, and the next signoff tries again"
+    )
+
+
+def _cleared(workspace: Workspace, location: str, pending: Set[str]) -> None:
+    """Close out a debt a previous signoff recorded, once it is actually paid.
+
+    Written only where there was one, so the ordinary signoff — which owes nothing and withdraws what it just archived — adds no event to a journal a person reads.
+    """
+    if pending:
+        append_event(
+            workspace.journal, ACTION, action=WITHDRAWALS, store=location, logs=[]
+        )
+
+
+def _unpublished(
+    location: str | None,
+    publish: bool,
+    published: Published | None,
+    warnings: list[str],
+) -> str | None:
+    """Why a store holds nothing from this signature, when something might have.
+
+    Two different silences, and only one of them is fine.
+
+    **Nobody asked**, which is the ordinary outcome and not a failure: publication is a decision, and declining to make one is an answer. It still gets a line, because this is the last moment anybody is looking — the timer comes down immediately below and a signed run never tends again, so a configured store sitting unwritten says so here or is never mentioned again.
+
+    **Somebody asked and there was nowhere to put it**, which is a failure and used to be silent: `--publish` with no store resolved returned no publication *and* suppressed the line above, on the grounds that the operator had already decided. So a signoff typed with `--publish` succeeded, disarmed, and published nothing, with nothing said. It warns now — and names the likeliest cause, which is a run launched under a one-off `--log-store` that `_steward.yaml` never recorded, since this verb re-resolves the location and has no flag of its own to be told again with.
+
+    Args:
+        location: The resolved store, or `None`.
+        publish: Whether publication was asked for.
+        published: What publication did, or `None` where it did not happen.
+        warnings: Accumulated warnings, appended to in place.
+
+    Returns:
+        The line for a signoff nobody asked to publish, or `None`.
+    """
+    if not publish:
+        if location is None:
+            return None
+        return (
+            f"a log store is configured at {location} and nothing was published "
+            f"to it — publication is a decision, and this signoff was not asked "
+            f"to make one. `steward signoff --by NAME --publish --again` records it"
+        )
+    if location is None:
+        warnings.append(
+            "--publish was given and no log store is configured, so nothing was "
+            "published — set `log_store` in _steward.yaml or STEWARD_LOG_STORE "
+            "and sign again with --publish --again. A `--log-store` passed to "
+            "one launch is not recorded for this verb to find"
+        )
+    elif published is None:
+        # the store failed and `_publish` has already said so; a second line
+        # here would report one failure twice in two different voices
+        return None
+    return None
+
+
+def _withheld(location: str | None, publish: bool) -> str | None:
+    """Why an unfinished signoff published nothing, whatever it was asked for.
+
+    Both early returns above leave a run that is *not* finished — one with a window the finalize revealed, one with a scan nothing could re-read — and neither is a state to export results from. Saying so is worth a line, because `--publish` was typed and did nothing, and the remedy is the same command that answers the blocker.
+    """
+    if location is None:
+        return None
+    if not publish:
+        return (
+            f"a log store is configured at {location} and nothing was published "
+            f"to it — this run is not finished"
+        )
+    return (
+        f"nothing was published to {location}: this run is not finished, and a "
+        f"store row claims a result may be reused sight-unseen. Sign again with "
+        f"--publish once what is named above is answered"
     )
 
 

@@ -124,6 +124,7 @@ from .._workspace import (
     read_signoff,
     read_undelivered,
     resolve_log_dir,
+    resolve_log_store,
     resolve_pool,
     steward_log,
     sync_target,
@@ -303,6 +304,9 @@ class TendResult:
 
     policies: list[str] = field(default_factory=list[str])
     """Standing rules in force, from `_steward.yaml` or `STEWARD_POLICIES`. Reported so that an agent reading the file alone is not missing half of them."""
+
+    log_store: str | None = None
+    """The reuse store this workspace configures, or `None`. Reported for one reason: `signoff --publish` is the only act at the end of a run that nothing does by default, so the readiness item has to say a decision is waiting."""
 
     tuning: TuningPlan = field(default_factory=TuningPlan)
     """What this turn's window supports retuning, and the account of why.
@@ -1003,6 +1007,12 @@ class _Settings:
     preauthorized: dict[str, str] | None = None
     """The rulings granted in advance, as patterns to dispositions. `None` on a degraded turn for the same reason as `stuck_cancel` — degrading must narrow authority, never preserve it."""
 
+    log_store: str | None = None
+    """The reuse store this workspace configures, or `None` for none.
+
+    **Resolved rather than expressed**, unlike `interval` and `sync`, because the only thing that reads it here is a sentence naming a location to a person — and *which store* is exactly what the precedence exists to answer. Carried for the readiness item alone: publication is the one act at signoff that nothing turns on by default, so the invitation has to say there is a decision waiting or nobody is ever asked to make one.
+    """
+
 
 def _turn(
     workspace: Workspace,
@@ -1203,6 +1213,7 @@ def _turn(
         manifest_digest=manifest_digest(manifest),
         degraded_at=settings.degraded_at,
         policies=settings.policies,
+        log_store=settings.log_store,
         supervision=Supervision(
             armed=history.armed,
             ever_armed=history.ever_armed,
@@ -1858,6 +1869,11 @@ def _settings(
             # an agent reading `status` needs the ones it can have
             policies=_policies(directives) if directives is not None else [],
             interval=directives.tend_interval if directives is not None else None,
+            # and the store on the same rule the policies keep: a file that
+            # parsed still says where it is. A file that did not says nothing,
+            # and the readiness item then invites no decision -- which is the
+            # safe direction, since the decision it invites is publication
+            log_store=resolve_log_store(directives) if directives is not None else None,
             # the reporting threshold degrades to the last known good like the
             # pool; the two authorities degrade to *nothing* -- a standing
             # authorization whose text cannot be read must not be exercised
@@ -1934,6 +1950,7 @@ def _settings(
         degraded=None,
         interval=directives.tend_interval,
         policies=_policies(directives),
+        log_store=resolve_log_store(directives),
         stuck_after=stuck_after if stuck_after is not None else directives.stuck_after,
         stuck_cancel=directives.stuck_cancel,
         preauthorized=(
