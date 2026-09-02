@@ -1,30 +1,5 @@
 ---
 title: Reference
+description: Command line reference for the steward CLI.
+reference: steward
 ---
-
-### Python API
-
-| | |
-|---|---|
-| [Enumeration](enumeration.qmd) | Reading an eval set definition into a manifest of resolved tasks. |
-: {.borderless tbl-colwidths=[35,65]}
-
-### CLI
-
-| | |
-|---|---|
-| [steward ack](steward_ack.qmd) | Accept an open item, so that nothing reports it again. |
-| [steward collect](steward_collect.qmd) | Read what has accumulated, and mark how far you have read. |
-| [steward init](steward_init.qmd) | Create a Steward workspace. |
-| [steward launch](steward_launch.qmd) | Start a run: capture the definition, commit it, arm a timer, tend once. |
-| [steward notify](steward_notify.qmd) | Post a message to this run's notification channel. |
-| [steward pause](steward_pause.qmd) | Stop scheduling new work, leaving what is running to finish. |
-| [steward raise](steward_raise.qmd) | Record that an item is now with the person who can decide it. |
-| [steward ramp](steward_ramp.qmd) | Hold or resume the tuning loop's climb. |
-| [steward resume](steward_resume.qmd) | Start scheduling again. |
-| [steward runbook](steward_runbook.qmd) | Print the agent runbook that ships with the package. |
-| [steward status](steward_status.qmd) | Report where the run stands, and what the next turn would do. |
-| [steward tasks](steward_tasks.qmd) | Enumerate the tasks an eval set definition resolves to. |
-| [steward tend](steward_tend.qmd) | Run one turn of the supervision loop. |
-| [steward timer](steward_timer.qmd) | Arm, disarm, and inspect the timer that tends this run. |
-: {.borderless tbl-colwidths=[35,65]}

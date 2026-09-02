@@ -1,4 +1,0 @@
----
-reference: steward ack
-description: Accept an open item, so that nothing reports it again.
----

@@ -1,4 +1,0 @@
----
-reference: steward timer
-description: Arm, disarm, and inspect the timer that tends this run.
----

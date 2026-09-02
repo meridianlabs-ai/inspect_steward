@@ -1,4 +1,0 @@
----
-reference: steward collect
-description: Read what has accumulated, and mark how far you have read.
----

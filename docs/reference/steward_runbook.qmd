@@ -1,4 +1,0 @@
----
-reference: steward runbook
-description: Print the agent runbook that ships with the package.
----
