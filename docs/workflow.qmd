@@ -118,68 +118,33 @@ Signoff verifies that the run is eligible for signoff, ensures a clean final log
 
 ## Eval Logs
 
-### Where logs go
+### Log Directory
 
-By default a run's logs land in `logs/` inside the workspace, and everything explaining them sits beside them. Two settings move that, in order of precedence:
+Logs are written to `logs/` inside the workspace. Two things can change this:
 
-- **Your definition's own `log_dir`.** If `eval_set()` names one, Steward uses it and nothing overrides it — where results go is the eval author's call.
-- **`log_root`**, for a machine that keeps logs somewhere other than beside the workspace — a large volume, or an S3 prefix. Steward puts one directory per workspace underneath it.
+- If your eval set passes a `log_dir` to `eval_set()`, Steward uses that.
 
-Whichever it resolves to is recorded in the committed manifest, so a tend running at 02:00 under a bare scheduler environment reads the same directory the fleet writes to.
+- The `log_root` option or `STEWARD_LOG_ROOT` environment variable, for a machine that keeps logs somewhere else (a bigger disk, or an S3 bucket). Steward makes one directory per workspace underneath it.
 
-**`logs/` holds the current definition's results and nothing else**, which is what makes `samples_df(log_dir)` trustworthy without remembering a filter. A log leaving it is always a *move*, never a delete:
+If you want your logs to be durable then we recommend setting `STEWARD_LOG_ROOT` to an S3 bucket or other permanent storage and letting Steward create subdirectories within it for each workspace.
 
-```{.text filename="Workspace"}
-swe-evals/
-  logs/               # the results this definition is about
-  logs-archive/       # superseded, failed, and orphaned attempts
-```
+### Log Store
 
-Logs reach the archive two ways. A tend archives a task the definition no longer names, as soon as the manifest says so. And signoff curates: superseded, failed, and cancelled attempts move out, so `logs/` ends up holding exactly what the signature covers. Nothing is ever destroyed — the archive is also a cache, so reverting a definition edit brings the original logs back as a move rather than a re-run.
-
-### Log store
-
-A log store is an index of completed logs keyed on the task identifier, holding pointers rather than data. It answers one question: *has this exact task already been run?* Point one or more workspaces at it and a task a colleague finished last night is copied in rather than run again.
+A log store lets several workspaces share results, so a task somebody has already run doesn't run again. Point at one with the `log_store` option or the `STEWARD_LOG_STORE` environment variable:
 
 ```{.yaml filename="_steward.yaml"}
-log_store: s3://our-bucket/eval-logs   # or `auto` for this machine's own
+log_store: s3://our-bucket/eval-logs
 ```
 
-A relative path is relative to the workspace rather than to wherever you typed the command, so `log_store: ./store` means one place no matter which directory you run `steward` from.
+The store can be a directory of `.eval` files, or a [Flow](flow.qmd) store (which requires the `flow` extra).
 
-The identifier covers the task, its arguments, the model, the solver, the resolved plan, the generate config and the execution limits — so a match means those were all identical. It does **not** cover the environment: package versions, or a dataset loaded from a mutable source. So reuse is reported rather than silent, naming the log it came from:
+A result is only reused when everything about the task matches: the task and its arguments, the model, the solver, the plan, the generate config, and the limits.
 
-```{.text filename="Terminal"}
-satisfied 2 tasks from the log store — that work does not run here
-  swebench[default]@openai/gpt-5.6-sol — s3://our-bucket/eval-logs/2026-08-…
-```
-
-Two kinds of location work, and Steward picks by what is there rather than by what your definition is:
-
-| location | what it is |
-|----|----|
-| a directory of `.eval` files | read directly — a shared prefix everyone publishes into. Needs nothing installed |
-| a [Flow](flow.qmd) store | a Delta table, built with `flow store import`. Needs the `flow` extra |
-
-**Configuring a store enables reading from it.** There is nothing to protect against: a match means the identifier is equal, and what it points at was put there by somebody's signoff.
-
-**Writing to it is a separate decision, and it is yours.** Nothing is published as logs land — with `continue_on_fail` on, a task finishes `success` while carrying errored samples, so a freshly landed log is exactly the provisional thing signoff exists to examine. Publishing happens at signoff, only when asked:
+Reading from a store happens automatically once you configure one. Publishing your own results into it does not, that only happens if you ask for it at signoff:
 
 ```{.bash filename="Terminal"}
 steward signoff --by "norah" --publish
 ```
-
-There is no setting that turns this on. A store may be shared with people who are not in the room, so your agent asks rather than assuming — and a run that is stopped, abandoned, or never signed publishes nothing. What ends up in the store is therefore stronger than a cache usually holds: **results a person accepted**, rather than logs that happen to exist.
-
-::: {.callout-note}
-A task signed with an accepted exception is published like any other — two samples accepted as errored is a legitimate result. The caveat lives in your project's `anomalies.md` and does not travel with the log, so whoever reuses it gets the result without the footnote.
-:::
-
-**Taking a result back out is not the same decision, and does not wait to be asked.** When signoff archives an attempt a previous signoff published — a superseded run, a failed one — it withdraws that log from the store as part of the same act, with or without `--publish`. Publishing exports your results, so you decide it; withdrawing removes a pointer your own project put there and that no longer names the result, so leaving it would mean the store handing out a run you have replaced. A withdrawal the store refuses is recorded and retried at your next signoff.
-
-**Only ever your own rows.** Steward withdraws from a store exactly what its own signoffs published there, which is what keeps a shared store safe to use: a log you *reused* from it stays where it is when you later archive your copy, and a store you have stopped pointing at still gets the rows you left in it taken back out.
-
-Losing a store costs time and never correctness: a missing row means a task runs, and `flow store import` rebuilds a table from the logs at any point. Set `log_store: false` in a project that should not use the one this machine configures.
 
 ## Options
 
