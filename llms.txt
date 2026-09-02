@@ -19,3 +19,7 @@
 
 - [Inspect Flow](https://meridianlabs-ai.github.io/inspect_steward/flow.html.md): Running an Inspect Flow spec under Steward: installation, what Steward overrides in a worker, and the two declarations that do not survive.
 - [Inspect Hawk](https://meridianlabs-ai.github.io/inspect_steward/hawk.html.md): Running a Hawk eval set config under Steward: installation, how concurrency is set, what a local Hawk run cannot do, and what fan-out costs at startup.
+
+## Reference
+
+- [Reference](https://meridianlabs-ai.github.io/inspect_steward/reference/index.html.md): Command line reference for the steward CLI.

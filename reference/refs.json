@@ -1,7 +1,1 @@
-{
-  "read_eval_set": "enumeration.qmd#read_eval_set",
-  "ReadEvalSetError": "enumeration.qmd#readevalseterror",
-  "Manifest": "enumeration.qmd#manifest",
-  "ManifestSource": "enumeration.qmd#manifestsource",
-  "ManifestTask": "enumeration.qmd#manifesttask"
-}
+{}
