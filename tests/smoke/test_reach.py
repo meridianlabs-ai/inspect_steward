@@ -58,7 +58,8 @@ class TestWhatTheScannersReached:
             (4, 4, True, Verdict.PASSED),
             (5, 4, True, Verdict.PASSED),
             (0, 4, True, Verdict.FAILED),
-            (3, 4, True, Verdict.FAILED),
+            (1, 4, True, Verdict.PASSED),
+            (3, 4, True, Verdict.PASSED),
             (0, 0, True, Verdict.UNEXERCISED),
             (0, 4, False, Verdict.UNEXERCISED),
         ],
@@ -70,16 +71,28 @@ class TestWhatTheScannersReached:
 
         assert check.verdict is verdict
 
+    def test_a_partial_count_is_reported_rather_than_blocked(self) -> None:
+        # a `ScannerConfig.filter` is a SQL clause applied per sample and an
+        # excluded transcript is never scanned at all -- no row, no snapshot
+        # entry -- and it reaches Steward only as a config hash, so a shortfall
+        # cannot be told from a correct one. Blocking would fail every filtered
+        # definition on every rehearsal
+        check = scan_coverage(reviewed=3, landed=4, scanning=True)
+
+        assert not check.blocks
+        assert "3 of 4" in check.detail
+
     def test_a_run_that_scans_nothing_is_not_a_failure(self) -> None:
         # `unexercised` rather than failed, on the rule the other checks keep:
         # there is no scan path to rehearse, which is not the same as one that
         # does not work
         assert not scan_coverage(reviewed=0, landed=4, scanning=False).blocks
 
-    def test_a_gap_can_be_accepted_by_name(self, tmp_path: Path) -> None:
-        # a definition whose `ScanSpec` filters what its scanners see leaves
-        # transcripts unanswered by design -- a configuration a person can vouch
-        # for and Steward cannot, which is exactly what `--accept` is for
+    def test_a_silent_scan_can_be_accepted_by_name(self, tmp_path: Path) -> None:
+        # what narrowing the block to zero still costs: a filter selective
+        # enough to match none of a two-sample slice records nothing and reads
+        # exactly like a broken scan path. A configuration a person can vouch
+        # for and Steward cannot, which is what `--accept` is for
         plan = planned(tmp_path, SMALL)
         write_log(Path(plan.log_dir), SMALL, samples=[SynthSample("1")])
 

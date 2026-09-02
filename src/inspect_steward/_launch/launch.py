@@ -70,6 +70,7 @@ from .._workspace import (
     Claim,
     DirectivesError,
     Held,
+    JournalRead,
     Workspace,
     acquire,
     append_event,
@@ -442,7 +443,9 @@ def _unrehearsed(
 
     A record written before any of these were carried reports `None` for them, and is compared on identifiers alone rather than being called stale — a fold that manufactured staleness out of its own absence of evidence would warn on every workspace rehearsed by an earlier version.
 
-    **Never raises and never refuses, and *unknown* is a warning rather than a silence.** The journal not reading used to cost the warning outright, which reads the trade backwards: this check's whole output is advice, so warning when the answer cannot be established costs one line and staying quiet asserts *rehearsed* on no evidence at all. Damage counts for the same reason and a sharper one — a torn line is what a crash mid-append leaves at the *end* of the file, which is exactly where the newest smoke is, so the fold silently reads the pass before it and reports coverage that has since been superseded.
+    **Never raises and never refuses, and *unknown* is a warning rather than a silence.** The journal not reading used to cost the warning outright, which reads the trade backwards: this check's whole output is advice, so warning when the answer cannot be established costs one line and staying quiet asserts *rehearsed* on no evidence at all.
+
+    **Damage counts only past the last readable event**, which is the shape that actually hides a rehearsal rather than every torn line ever written. A crash mid-append leaves its fragment at the *end* of the file, exactly where the newest smoke would be, so the fold silently reads the pass before it and reports coverage that has since been superseded. Damage anywhere earlier cannot do that: whatever it destroyed is older than something that did read, and losing it can only make this fold report *less* coverage than the truth, which is the direction that warns rather than the direction that reassures. Treating both alike warned on every launch for the rest of the workspace's life over a line one crash tore months ago — and said the same words as `JOURNAL_DAMAGE`, which is the tend's item for it and the one place that can actually be cleared.
 
     Args:
         workspace: The workspace being launched.
@@ -456,10 +459,10 @@ def _unrehearsed(
         read = read_journal(workspace.journal)
     except OSError as ex:
         return f"the journal could not be read, so nothing here knows whether this was rehearsed ({ex})"
-    if not read.intact:
+    if _torn_tail(read):
         return (
-            "the journal has damaged lines, so nothing here knows whether this "
-            "was rehearsed — the newest smoke is where a torn line lands"
+            "the journal's last line is damaged, so nothing here knows whether "
+            "this was rehearsed — the newest smoke is where a torn line lands"
         )
     rehearsed = read_smoked(read.events)
     if not rehearsed.identifiers:
@@ -489,6 +492,20 @@ def _unrehearsed(
         if rehearsed.scan_model != (scan_model or ""):
             return "the last passing smoke scanned with a different model"
     return None
+
+
+def _torn_tail(read: JournalRead) -> bool:
+    """Whether the journal's damage sits past everything that did read.
+
+    Both numbers are line positions in the same file — `Event.line` is assigned by the reader and counted over *lines* rather than over parsed events, so a torn line keeps its number and does not renumber what follows it. Damage below the newest readable event destroyed something older than a record that survived; damage above it may be the record itself.
+
+    A journal that is damage and nothing else has no readable event to be past, and reports `True` on the same argument: there is no surviving record for the fragment to be older than.
+    """
+    if read.intact:
+        return False
+    return max(line.line for line in read.damage) > max(
+        (event.line for event in read.events), default=0
+    )
 
 
 def _pool_advice(workspace: Workspace, manifest: Manifest) -> PoolAdvice | None:

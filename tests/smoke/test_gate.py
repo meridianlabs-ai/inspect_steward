@@ -348,3 +348,23 @@ class TestAJournalThatCannotBeRead:
 
         assert result.unrehearsed is not None
         assert "damaged" in result.unrehearsed
+
+    def test_damage_a_later_record_outlived_says_nothing(self, tmp_path: Path) -> None:
+        # the noise the tail rule exists to remove: one line torn by one crash
+        # months ago warned on every launch for the rest of the workspace's
+        # life, in the same words as `JOURNAL_DAMAGE` -- which is the tend's
+        # item for it and the one place it can be cleared. Whatever this
+        # fragment destroyed is older than a record that read, so losing it can
+        # only under-report coverage, never leave a stale pass standing
+        create_workspace(tmp_path, git=False)
+        workspace = Workspace.at(tmp_path)
+        with workspace.journal.open("a", encoding="utf-8") as f:
+            f.write('{"ts": "2026-06-01T00:00:00+00:00", "type": "smo\n')
+        # the manifest arrives with its scanners already merged, as the launch
+        # hands it over
+        merged = synth_manifest([ADDITION]).model_copy(
+            update={"scan": scan_material(None, None)}
+        )
+        rehearsed(workspace, ADDITION, manifest=merged)
+
+        assert _unrehearsed(workspace, merged, None) is None

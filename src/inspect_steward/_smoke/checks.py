@@ -133,7 +133,9 @@ def scan_coverage(*, reviewed: int, landed: int, scanning: bool) -> Check:
 
     **A scan that recorded nothing looks exactly like a scan that found nothing.** Both produce an empty findings list, no errors and no throws — so a rehearsal whose scanners never wrote a row reported *rehearsed and ready*, having established nothing at all about the path that will review five thousand transcripts tonight. That the scanners **work** is among the three things workflow.md §7.1 says a smoke is for, and a census of what they flagged cannot answer it. Reproduced: a full two-sample log with no scan rows passed.
 
-    **A check rather than an error, because a gap has a legitimate cause.** A transcript counts as reviewed once *every* scanner has answered for it, and a definition whose `ScanSpec` filters what its scanners see will leave some transcripts unanswered by design. That is the same shape as a pre-deployment model with no registry entry: a configuration a person can vouch for and Steward cannot, which is what `--accept` is for. A gap nobody accepts still stops the launch.
+    **A row per transcript whatever the verdict, which is what makes the count mean anything.** Scout appends a result for every transcript-scanner pair on success and on error alike (`_scan._scan_one`: *always append a result*), recording even the scanner that returned nothing — so a spotless review of four transcripts reads as four, and a shortfall really is transcripts nobody answered for rather than transcripts nobody flagged. The two are worth keeping apart because only one of them is a defect, and a check written over findings would have reported the clean run as the broken one.
+
+    **Nothing at all blocks; anything short of everything is only reported.** A definition's `ScannerConfig.filter` is a SQL clause applied per sample, and a transcript it excludes *is not scanned at all* — no parquet row, no snapshot entry (`inspect_ai._eval.task.scan.scan_eval_sample`). It reaches Steward only as a hash inside the scan spec's metadata, so a partial count cannot be told apart from a correct one, and failing on it would fail every filtered definition on every rehearsal — the gate that fires each time being the gate nobody reads. Zero can be told apart, near enough: a filter narrows *which* transcripts a scanner sees without stopping it running on the ones that match, so a rehearsal where no scanner answered for any transcript is the broken path this check exists for. What it costs is a filter selective enough to match none of a two-sample slice, which is what `--accept` is for.
 
     Args:
         reviewed: Transcripts every scanner answered for.
@@ -141,13 +143,19 @@ def scan_coverage(*, reviewed: int, landed: int, scanning: bool) -> Check:
         scanning: Whether this run scans at all.
 
     Returns:
-        The check, `unexercised` where there was nothing to review or nothing reviewing.
+        The check, `unexercised` where there was nothing to review or nothing reviewing, and `failed` only where nothing was reviewed at all.
     """
     if not scanning:
         return Check(SCAN_COVERAGE, Verdict.UNEXERCISED, "this run scans nothing")
     if not landed:
         return Check(
             SCAN_COVERAGE, Verdict.UNEXERCISED, "no samples landed to be reviewed"
+        )
+    if not reviewed:
+        return Check(
+            SCAN_COVERAGE,
+            Verdict.FAILED,
+            f"nothing was recorded for any of the {landed} transcripts",
         )
     if reviewed >= landed:
         return Check(
@@ -157,10 +165,8 @@ def scan_coverage(*, reviewed: int, landed: int, scanning: bool) -> Check:
         )
     return Check(
         SCAN_COVERAGE,
-        Verdict.FAILED,
-        f"nothing was recorded for any of the {landed} transcripts"
-        if not reviewed
-        else f"only {reviewed} of {landed} transcripts were reviewed",
+        Verdict.PASSED,
+        f"{reviewed} of {landed} transcripts were reviewed",
     )
 
 
