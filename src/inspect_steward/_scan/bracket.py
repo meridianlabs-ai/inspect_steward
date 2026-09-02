@@ -7,6 +7,7 @@ Three steps, in launch order. `scan_material` settles the merge: the definition'
 Identity deliberately excludes `package_version`: it is provenance (which Steward or which package authored the rows), and under setuptools-scm it moves on every commit — reading it as identity would refuse every re-launch of a development install.
 """
 
+import hashlib
 import json
 from typing import Any
 
@@ -245,6 +246,36 @@ def existing_eval_set_id(log_dir: str) -> str | None:
         return None
     with file(id_file, "r") as f:
         return f.read().strip() or None
+
+
+def scan_digest(material: ManifestScan | None) -> str:
+    """Hash everything that decides what a run's scanning *means*.
+
+    **Names are not the configuration.** A smoke recording only which scanners ran reports a launch as rehearsed after somebody changed a scanner's parameters, its scan-side model, the generation settings around it, or the filter deciding which transcripts it sees — every one of which changes what the rows say while leaving the names identical. That is the same silent drift `manifest_digest` refuses for tasks, one directory over.
+
+    Built out of the pieces `verify_scan` already compares, rather than a dump of the whole model, so that the two agree about what *changed* means: each scanner through `_identity`, which normalizes defaulted and spelled-out forms together and drops `package_version` — provenance, not identity, and hashing it would report a change on every dependency upgrade — plus capture's config hash for the wrapper that lives in no scanner's own spec, plus the redirect.
+
+    Args:
+        material: The merge as a launch settled it, or `None` where nothing scans.
+
+    Returns:
+        `sha256:<hex>` over the merged scanners' identities, the config hash, and the `scans` redirect.
+    """
+    rows = (
+        sorted(
+            f"{name}\t{json.dumps(_identity(entry), sort_keys=True)}"
+            for name, entry in merged_scanners(material).items()
+        )
+        if material is not None
+        else []
+    )
+    metadata: dict[str, Any] = (
+        (material.spec or {}).get("metadata") or {} if material is not None else {}
+    )
+    rows.append(f"config\t{metadata.get(_INSPECT_CONFIG_HASH_KEY)!r}")
+    rows.append(f"scans\t{material.scans if material is not None else None!r}")
+    joined = "\n".join(rows)
+    return f"sha256:{hashlib.sha256(joined.encode('utf-8')).hexdigest()}"
 
 
 def _identity(entry: dict[str, Any]) -> dict[str, Any]:

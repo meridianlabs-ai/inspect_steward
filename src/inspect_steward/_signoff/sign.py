@@ -11,6 +11,8 @@ Steward can compute that no anomaly is open. Only a person can say **I accept th
 
 from dataclasses import dataclass, field
 
+from inspect_scout import Summary as ScanSummary
+
 from .._evalset.manifest import ManifestError, read_manifest
 from .._notify import (
     Kind,
@@ -121,7 +123,12 @@ def signoff(
 
 
 def _signoff(
-    workspace: Workspace, claim: Claim, *, by: str, note: str | None, again: bool
+    workspace: Workspace,
+    claim: Claim,
+    *,
+    by: str,
+    note: str | None,
+    again: bool,
 ) -> Signoff:
     """The signoff itself, with the claim in hand for the whole of it."""
     try:
@@ -165,7 +172,8 @@ def _signoff(
     # reported, what the gate judged, and what the signature is about to say
     # was flagged are all over a scan this run has not finished reading. It is
     # ahead of the `SIGNOFF` event, so nothing is unmade by stopping here
-    if unfinalized := _finalize_scan(workspace, result):
+    unfinalized, folded = _finalize_scan(workspace, result)
+    if unfinalized:
         return Signoff(
             turn=result, blockers=[unfinalized], curated=curated, warnings=warnings
         )
@@ -177,6 +185,14 @@ def _signoff(
     # names a stalled task somebody disposed of. One definition of a caveat,
     # and the signature counts what it counts
     exceptions = sorted({caveat.subject for caveat in result.caveats})
+    # **and the coverage shortfall, which is a caveat nobody declared.** Every
+    # other exception here was decided by a person and carries their reasoning;
+    # this one is decided by the flag that got past the gate, and it has to
+    # reach the record for the same reason the others do -- a signature reading
+    # "no accepted exceptions" over a run whose scanners saw none of it is the
+    # sentence this whole verb exists to make impossible
+    if uncovered := _uncovered_exception(result, folded):
+        exceptions = sorted({*exceptions, uncovered})
     append_event(
         workspace.journal,
         SIGNOFF,
@@ -442,7 +458,9 @@ def _post(workspace: Workspace, result: TendResult, signature: Signature) -> Non
         return
 
 
-def _finalize_scan(workspace: Workspace, result: TendResult) -> Blocker | None:
+def _finalize_scan(
+    workspace: Workspace, result: TendResult
+) -> tuple[Blocker | None, ScanSummary | None]:
     """Compact the last of the scan rows and mark the scan complete, or refuse.
 
     **A finalize that succeeded closes the fold episode, and it has to.** The episode keeps a mid-run `sync(complete=False)` running every turn until one works (`_tend.turn._findings`), which is exactly right until this call lands — after it, the buffer has been cleaned and the summary rebuilt from the rows, and one more mid-run fold would overwrite that summary with `complete=false` and the counts of a buffer that is no longer there. `_rerender`'s turn is the one that would do it, so the edge is journalled here rather than after it. A finalize that *failed* deliberately leaves the episode open: nothing was cleaned, the rows are still owed, and the next turn should go on trying.
@@ -455,15 +473,17 @@ def _finalize_scan(workspace: Workspace, result: TendResult) -> Blocker | None:
         workspace: The workspace, whose journal carries the episode's edges.
         result: The turn the signature is being taken over.
 
+    **What the finalize *returns* is kept, where it used to be dropped on the floor.** It is the only account of the scan that is taken after the prune, and the prune is what makes the difference: curation has just moved the superseded attempts out, so rows naming them are dropped here — which can lower coverage rather than raise it. The turn's own `coverage` was computed before all of that, so a signature drawn from it can record a census wider than the one that survived. Measured: 3 of 4 before, 0 of 4 after.
+
     Returns:
-        The blocker where the finalize failed, or `None`.
+        The blocker where the finalize failed, and the summary where it worked. Neither where this run does not scan.
     """
     material = result.scan
     if not scanned(result) or material is None:
-        return None
+        return None, None
     assert result.log_dir is not None and result.scan_id is not None
     try:
-        finalize_scan(
+        summary = finalize_scan(
             log_dir=result.log_dir, scan_id=result.scan_id, scans=material.scans
         )
     except Exception as ex:
@@ -478,7 +498,7 @@ def _finalize_scan(workspace: Workspace, result: TendResult) -> Blocker | None:
                 "run it again — the finalize is idempotent, and one that keeps "
                 "failing is a defect to look at rather than a state to sign over"
             ),
-        )
+        ), None
     if result.fold_failing is not None:
         _journal(
             workspace,
@@ -487,7 +507,37 @@ def _finalize_scan(workspace: Workspace, result: TendResult) -> Blocker | None:
                 log_dir=result.log_dir, scan_id=result.scan_id, scans=material.scans
             ),
         )
-    return None
+    return None, summary
+
+
+def _uncovered_exception(result: TendResult, folded: ScanSummary | None) -> str | None:
+    """How much of this run the scanners actually reviewed, as one line in the signature.
+
+    **A caveat nobody declared, and it was reaching the record as silence.** Every other exception here was decided by a person and carries their reasoning; this one is a fact about the evidence, and leaving it out let a signature read *no accepted exceptions* over a completed four-sample run whose census covered none of it. Reproduced. That is the same failure as an unread log, arriving where nobody had put a predicate.
+
+    **Not a refusal, deliberately, and `gate` is where that argument lives** — briefly: nothing in Steward closes a coverage gap, several perfectly correct configurations produce one, and a flag every signoff has to carry is the same as no gate. So the person signing is told the number and the number is recorded. That is the *explicit, durable* half; the decision is the signature itself.
+
+    **Read off the finalize rather than off the turn**, because the two disagree and only one of them is taken after the prune. Coverage on the turn was computed before curation moved the superseded attempts and before the finalize dropped the rows naming them, so it can be wider than the census that survived — 3 of 4 against an actual 0 of 4, measured on a fixture that does exactly this. Per scanner rather than intersected: it is what the finalize counts, it needs no second read of the directory, and it is the more useful sentence anyway — *which* scanner fell short is what somebody would go and look at.
+
+    Args:
+        result: The turn signed over, for the sample population the counts are against.
+        folded: What the terminal finalize reported, or `None` where this run does not scan.
+
+    Returns:
+        One line naming every scanner that reviewed less than the run landed, or `None` where they all reached everything.
+    """
+    landed = result.coverage.landed
+    if folded is None or not landed:
+        return None
+    short = sorted(
+        (name, entry.scans)
+        for name, entry in folded.scanners.items()
+        if entry.scans < landed
+    )
+    if not short:
+        return None
+    said = ", ".join(f"{name} reviewed {scans}" for name, scans in short)
+    return f"scan coverage: of {landed} transcripts, {said}"
 
 
 def scanned(result: TendResult) -> bool:

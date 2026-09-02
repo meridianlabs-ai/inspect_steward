@@ -1262,29 +1262,38 @@ def _anomaly_name(class_key: str) -> str:
     return readable or "unclassed"
 
 
-def anomaly_summary(anomaly: Anomaly) -> str:
-    """One sentence saying what happened to a class — shared with `anomalies.md`, so the caveat list and the decision queue cannot word the same finding differently."""
-    count = anomaly.evidence.count
+def class_summary(kind: str, class_key: str, count: int) -> str:
+    """One sentence for a class of findings, from what a bare census already knows.
+
+    **Separated from `anomaly_summary` because a third reader arrived without a window.** The wording exists so that the decision queue and `anomalies.md` cannot describe one finding two ways; a smoke reports findings from a scan it just folded, before any window has been opened over them, and would otherwise have had to write a fourth phrasing of the same sentence. What a window adds — generation, prior rulings, the substrate warning — stays with `anomaly_summary`, since none of it is a fact a census holds.
+    """
     plural = "s" if count != 1 else ""
-    if anomaly.kind == "limit":
-        line = f"{count} sample{plural} were terminated by an operator"
-    elif anomaly.kind == "task":
-        line = f"{count} task attempt{plural} failed — {anomaly.class_key}"
-    elif anomaly.kind == "score":
-        line = f"every score converts to zero — {anomaly.class_key}"
-    elif anomaly.kind == "scan":
-        line = (
-            f"{count} sample{plural} flagged for scoring integrity — "
-            f"{anomaly.class_key}"
+    if kind == "limit":
+        return (
+            f"{count} sample{plural} {'were' if count != 1 else 'was'} "
+            f"terminated by an operator"
         )
-    elif anomaly.kind == "scanerror":
-        line = (
+    if kind == "task":
+        return f"{count} task attempt{plural} failed — {class_key}"
+    if kind == "score":
+        return f"every score converts to zero — {class_key}"
+    if kind == "scan":
+        return f"{count} sample{plural} flagged for scoring integrity — {class_key}"
+    if kind == "scanerror":
+        return (
             f"{count} transcript{plural} could not be scanned, so "
             f"{'they carry' if count != 1 else 'it carries'} no verdict either "
-            f"way — {anomaly.class_key}"
+            f"way — {class_key}"
         )
-    else:
-        line = f"{count} sample{plural} errored the same way — {anomaly.class_key}"
+    return f"{count} sample{plural} errored the same way — {class_key}"
+
+
+def anomaly_summary(anomaly: Anomaly) -> str:
+    """One sentence saying what happened to a class, plus what its window adds.
+
+    Shared with `anomalies.md`, so the caveat list and the decision queue cannot word the same finding differently — and sharing its first half with the smoke digest, for the same reason one layer down.
+    """
+    line = class_summary(anomaly.kind, anomaly.class_key, anomaly.evidence.count)
     if anomaly.generation > 1:
         rulings = len(anomaly.precedent)
         line += (

@@ -15,10 +15,12 @@ from typing import Any
 import pytest
 from inspect_ai._eval.eval_set_overrides import EvalSetOverrides
 from inspect_steward._evalset.manifest import (
+    DEFAULT_RETRY_ON_ERROR,
     ManifestError,
     definition_hash,
     manifest_digest,
     read_manifest,
+    worker_overrides,
     write_manifest,
 )
 
@@ -169,3 +171,45 @@ def test_an_override_and_a_definition_saying_the_same_thing_agree() -> None:
     )
 
     assert manifest_digest(from_definition) == manifest_digest(from_override)
+
+
+def test_a_worker_retries_samples_where_nobody_asked() -> None:
+    """Steward's sample-retry default.
+
+    Inspect leaves `retry_on_error` unset, which under an unattended fleet turns
+    a provider blip into a decision somebody answers in the morning.
+    """
+    manifest = synth_manifest([SynthTask("probe", samples=5)])
+
+    resolved = worker_overrides(manifest)
+
+    assert resolved is not None
+    assert resolved.retry_on_error == DEFAULT_RETRY_ON_ERROR
+
+
+@pytest.mark.parametrize("asked", [0, 7], ids=["none", "seven"])
+def test_a_definition_that_named_its_own_retries_is_left_alone(asked: int) -> None:
+    """The default never displaces the definition, `0` included.
+
+    How many attempts a sample deserves is a property of the eval, so a worker
+    is sent nothing and honours what the definition passed. A definition asking
+    for none is asking to see the failure.
+    """
+    manifest = synth_manifest([SynthTask("probe", samples=5)], retry_on_error=asked)
+
+    resolved = worker_overrides(manifest)
+
+    assert resolved is None or resolved.retry_on_error is None
+
+
+def test_a_run_that_named_its_own_retries_keeps_them() -> None:
+    """An override is somebody typing a number for this run, and outranks the default."""
+    manifest = synth_manifest([SynthTask("probe", samples=5)]).model_copy(
+        update={"overrides": EvalSetOverrides(retry_on_error=1, epochs=2)}
+    )
+
+    resolved = worker_overrides(manifest)
+
+    assert resolved is not None
+    assert resolved.retry_on_error == 1
+    assert resolved.epochs == 2

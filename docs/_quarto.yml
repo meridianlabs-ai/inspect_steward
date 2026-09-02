@@ -17,6 +17,7 @@ inspect-docs:
         - href: workflow.qmd
         - href: concurrency.qmd
         - href: errors.qmd
+        - href: scanners.qmd
         - href: runbook.qmd
     - text: Integrations
       contents:

@@ -6,7 +6,10 @@ from typing import Any
 
 # the capture models are a versioned wire format, deliberately not public API
 from inspect_ai._eval.eval_set_manifest import EvalSetCaptureTask
-from inspect_ai._eval.eval_set_overrides import EvalSetOverrides
+from inspect_ai._eval.eval_set_overrides import (
+    EvalSetOverrides,
+    merge_eval_set_overrides,
+)
 from pydantic import BaseModel
 
 from .detect import DefinitionType
@@ -131,7 +134,7 @@ def manifest_digest(manifest: Manifest) -> str:
     rows = sorted(
         f"{task.identifier}\t{task.samples}\t{task.epochs}" for task in manifest.tasks
     )
-    shape = [f"{name}\t{_shaping(manifest, name)!r}" for name in SHAPING]
+    shape = [f"{name}\t{shaping(manifest, name)!r}" for name in SHAPING]
     joined = "\n".join([*rows, *shape])
     return f"sha256:{hashlib.sha256(joined.encode('utf-8')).hexdigest()}"
 
@@ -157,10 +160,41 @@ The union of the two comparisons `observe` makes per task. Named here as one tup
 """
 
 
-def _shaping(manifest: Manifest, name: str) -> Any:
-    """One shaping field's effective value: the override, or what the definition passed."""
+def shaping(manifest: Manifest, name: str) -> Any:
+    """One shaping field's effective value: the override, or what the definition passed.
+
+    Public because a smoke needs the same answer for a different reason. It truncates a task's dataset per worker, and the three `SELECTION` fields move as one — so a rehearsal adding a bare `limit` displaces whatever the run had named, whether the run named it in an override or the definition named it in the call. *What is actually in force* is the question both callers are asking, and there is one right answer to it.
+    """
     override = getattr(manifest.overrides, name, None)
     return override if override is not None else manifest.options.get(name)
+
+
+DEFAULT_RETRY_ON_ERROR = 3
+"""Sample attempts a worker gets where nobody asked for a number.
+
+Inspect's own default is none at all, which is the right default for a run somebody is watching: a sample that failed is a fact its author wants to see. Under Steward the watcher arrives hours later, and a transient failure that nothing retried is indistinguishable by then from one that could never have succeeded — so the fleet spends a night's capacity earning decisions that a second attempt would have removed. Three is enough to absorb a provider blip and small enough that a genuine failure still reaches somebody the same night.
+
+**A default and never a constraint.** How many attempts a sample deserves is a property of the eval (execution.md, *Sample-level retry*): a flaky sandboxed task and a pure-inference task want different numbers, and the definition's author knows which they wrote. So this applies only where neither the definition nor the run said anything, and `retry_on_error: 0` in a definition still means zero.
+"""
+
+
+def worker_overrides(manifest: Manifest) -> EvalSetOverrides | None:
+    """The run's overrides as a worker should receive them.
+
+    What was asked for, plus `DEFAULT_RETRY_ON_ERROR` where nobody asked for a sample-retry budget. Resolved per spawn rather than written into the manifest at launch, for two reasons: a default recorded there would read afterwards as something the operator typed, and it would freeze at the version that captured it.
+
+    Args:
+        manifest: The committed manifest.
+
+    Returns:
+        The overrides to carry into every worker's selection, or `None` where there are none to carry.
+    """
+    if shaping(manifest, "retry_on_error") is not None:
+        return manifest.overrides
+    return merge_eval_set_overrides(
+        manifest.overrides,
+        EvalSetOverrides(retry_on_error=DEFAULT_RETRY_ON_ERROR),
+    )
 
 
 def definition_hash(path: Path) -> str:

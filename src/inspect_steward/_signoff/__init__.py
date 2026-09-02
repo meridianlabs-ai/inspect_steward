@@ -1,5 +1,6 @@
 from .curate import Curated, Superseded, curate, plan
 from .gate import (
+    EMPTY,
     FAILED,
     OPEN_WINDOW,
     ORPHANS,
@@ -15,6 +16,7 @@ from .gate import (
 from .sign import Signoff, SignoffError, committed_manifest, signoff
 
 __all__ = [
+    "EMPTY",
     "FAILED",
     "OPEN_WINDOW",
     "ORPHANS",

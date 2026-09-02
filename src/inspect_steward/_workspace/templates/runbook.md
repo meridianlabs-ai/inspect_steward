@@ -44,6 +44,82 @@ No situation makes any of these correct.
   the human the delta and let them answer. **The refusal is the mechanism, not
   an obstacle to it**: a flag reached for reflexively is the same as no gate.
 
+## Rehearse before you commit a night to it
+
+`steward launch --smoke` runs a couple of samples per task under a wall-clock
+cap, into `.steward/smoke/`, and tells you whether the run is ready. It is the
+default first step, and the artifact it leaves is `.steward/smoke/digest.md`.
+
+It launches nothing. Two invocations: `--smoke` answers *is this ready*, and a
+plain `steward launch` acts on the answer. A launch with no passing smoke for
+its tasks says so and proceeds anyway — that is a warning, not a gate, because
+re-launching after a fix and resuming are both legitimate.
+
+Give it the flags the launch will get. It rehearses what the launch will run,
+so `--scan-model`, `--notification` and `--max-workers` belong here too;
+arguments and overrides you do not repeat are taken from the committed
+manifest, exactly as a re-launch takes them. Flags that shape the *launch*
+rather than the run — `--no-timer`, `--sync`, `--log-root`, `--tend-interval`,
+`--samples-ramp` and the like — are refused here rather than ignored, because
+`--smoke` launches nothing. Pass them to `steward launch` when you run it. The launch also warns when the last
+smoke covered the same tasks at a different *shape* — a grown dataset or a
+raised `epochs` keeps every task identifier while changing what the night costs
+— and when it ran different scanners or scanned with a different model.
+
+The slice is taken inside whatever your run already selects, so a run limited
+to `(100, 200)` rehearses the front of that window rather than samples nobody
+will run.
+
+**What it catches that a run does not.** Most of the list is things that stop a
+run: a definition that will not import, a wrong model name or key, a sandbox
+image that will not start, a scorer that throws.
+
+None of those actually stop a *task*, which is why the digest reports what the
+**samples** did rather than whether the tasks finished. Workers run with
+`continue_on_fail` on, so every one of them lands as errored samples inside a
+log that finished `success`. Any errored sample fails the rehearsal, and unlike
+the checks below it cannot be waived — read the class it names, because that is
+the failure you were rehearsing to find. So does a task that finished holding
+fewer samples than the slice asked it for: nothing errored, nothing is marked,
+and a sample went missing anyway.
+
+Four more are worse still, because they do not stop anything — they produce an
+eval that completes, scores, and is quietly wrong:
+
+- **the scanners ran**, and what they flagged in the rehearsal. Two flagged
+  samples before the sweep are worth more than two hundred after.
+- **the scanners reached every transcript.** A scan that recorded nothing looks
+  exactly like a scan that found nothing, so a clean findings list is only good
+  news beside a full coverage. A definition that filters what its scanners see
+  will leave a real gap here — that one is yours to waive by name.
+- **every model resolved to a context window.** A model that resolves to none
+  runs at an assumed 128000 whatever its real window is, and stops shrinking
+  oversized tool output entirely. A model with no database entry whose provider
+  aliased it onto the current frontier is *fine* — the digest names which entry
+  it landed on, so read that line rather than assuming.
+- **reasoning is replayed to the model.** Checked in the conversation and again
+  in the raw request body, because a provider can drop on the wire what Inspect
+  kept.
+
+**A failed check stops the launch.** Say what failed when you tell the human,
+and fix it rather than routing around it. Three answers are not failures:
+`unexercised` means there was nothing to check — a non-reasoning model has no
+reasoning to replay — and `undetermined` means the check could not run here,
+usually a provider package this machine does not have. `--accept CHECK` waives
+one by name and records the waiver in the journal, so use it when you know why
+and never to make a red line go away.
+
+**Do not project the run's spend from it, and do not ask the digest to.** A
+rehearsal is a couple of samples off the front of each dataset, which is not a
+sample of the run in any sense that supports multiplying. The digest says how
+many samples the run will produce; that count is a fact and everything past it
+would be a guess wearing a number.
+
+**Stop and ask if a smoke fails twice.** A rehearsal that keeps failing is a
+problem to understand, not to retry. And notify: before the first worker of the
+real run starts there is no tend, no `status.md` and nothing posting, so a
+launch blocked here is silent unless somebody says so.
+
 ## Trust the artifact, not the exit code
 
 Every gate has an artifact that says what happened — the manifest delta, the
@@ -355,8 +431,15 @@ gate refuses over is something you can prepare in advance:
   nothing Steward can run closes that gap, so a refusal would wedge the run
   rather than route it. Say the number in the message when you tell them the
   run is ready. `48 of 50 scanned` is a different thing to sign than `50 of
-  50`.
+  50`. The signature carries the shortfall by name among its exceptions, so it
+  is durable whether or not anybody said it out loud — but the point of saying
+  it is that they hear it *before* they answer, not after.
 - **No worker still running a task the definition no longer names.**
+- **Something to sign for at all.** A capture that enumerated no tasks, or
+  tasks that finished and produced no samples, is refused: a signature over no
+  results is not a caveated attestation, it is a statement about nothing. This
+  is the one refusal with no act that answers it — go and find out why the
+  capture is empty.
 
 One more refuses and is not something to prepare: an action the turn **could
 not carry out** — an acceptance whose log amendment hit a read-only mount, say.

@@ -16,6 +16,9 @@ from .._workspace import Signature
 if TYPE_CHECKING:
     from .._tend import TendResult
 
+EMPTY = "empty"
+"""There are no results for a signature to be about — no tasks, or no samples under them."""
+
 UNSETTLED = "unsettled"
 ORPHANS = "orphans"
 OPEN_WINDOW = "open_window"
@@ -60,7 +63,13 @@ def check(result: "TendResult", signature: Signature | None) -> list[Blocker]:
         Every blocker, in the order a person should read them. Empty means the run can be signed.
     """
     blockers: list[Blocker] = []
-    if remaining := unfinished(result.summary, result.acknowledged):
+    remaining = unfinished(result.summary, result.acknowledged)
+    if empty := _nothing_to_attest_to(result, remaining):
+        # **before every other refusal, because it is about whether there is a
+        # subject at all.** Each one below asks whether some part of the results
+        # is unsettled; this asks whether there are results
+        blockers.append(empty)
+    if remaining:
         # **naming the verbs that end a run without signing it**, because an
         # abandoned project publishes nothing and that is the correct outcome
         # (workflow.md §13.2) rather than a gap to work around. A hole is
@@ -191,6 +200,49 @@ def check(result: "TendResult", signature: Signature | None) -> list[Blocker]:
             )
         )
     return blockers
+
+
+def _nothing_to_attest_to(result: "TendResult", remaining: int) -> Blocker | None:
+    """Whether this run has any results for a signature to be about.
+
+    **The gate asked only whether anything was *unfinished*, and nothing is unfinished about nothing.** An empty manifest reports zero missing and zero incomplete, so a capture that enumerated no tasks — a definition edited to nothing, an argument that filtered every task away, a `-T` typo — passed every refusal here and received a signature attesting to an empty set. A task with an empty dataset does the same thing one level down, once its `0/0` log lands `success`: every count is zero and every count agrees.
+
+    The readiness *item* already had this guard (`_tend.items._signoff` returns nothing where `summary.tasks` is zero), which is the tell: the invitation knew there was nothing to invite anybody to, and the verb did not require the invitation.
+
+    **Refused rather than warned, and it is the one refusal with no remedy naming a decision.** Everywhere else the gate routes a person to the act that names a hole, because a named hole is signable. There is no naming act for this one: a signature over no results is not a caveated attestation, it is a statement about nothing, and the record's whole value is that it cannot be that.
+
+    Args:
+        result: The turn being judged.
+        remaining: Tasks neither finished nor settled by a decision. The zero-samples half is asked only of a run with none, because a run that has not started yet has no samples either and `UNSETTLED` is already its answer — two refusals for one condition is the loop this gate collapses.
+    """
+    if result.summary.tasks == 0:
+        return Blocker(
+            kind=EMPTY,
+            summary="this capture enumerated no tasks, so there are no results to accept",
+            remedy=(
+                "check the definition and its arguments, launch the work, and "
+                "sign when there is something to sign for"
+            ),
+        )
+    observed = result.observed
+    if (
+        not remaining
+        and observed is not None
+        and not any(task.observed_samples for task in observed.tasks)
+    ):
+        return Blocker(
+            kind=EMPTY,
+            summary=(
+                f"{result.summary.tasks} task"
+                f"{'s' if result.summary.tasks != 1 else ''} finished and not "
+                f"one sample was produced, so there are no results to accept"
+            ),
+            remedy=(
+                "check the dataset the tasks are over — a signature says a "
+                "person accepted these results, and there are none"
+            ),
+        )
+    return None
 
 
 def _undecided(result: "TendResult") -> int:

@@ -75,7 +75,7 @@ def test_opens_the_journal_with_a_real_event(tmp_path: Path) -> None:
         # only the evalset placeholder has anything to say: hawk has no
         # log-directory option at all, and a flow spec's is a different key
         ("evalset", "evalset.py", False),
-        ("flow", "flow.yaml", True),
+        ("flow", "config.py", True),
         ("hawk", "hawk.yaml", True),
     ],
 )

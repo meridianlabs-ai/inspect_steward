@@ -14,6 +14,7 @@ from inspect_steward._evalset.archive import archive_dir
 from inspect_steward._evalset.manifest import write_manifest
 from inspect_steward._scan import initialize_scan, scan_dir_location
 from inspect_steward._signoff import (
+    EMPTY,
     FAILED,
     OPEN_WINDOW,
     STANDING,
@@ -47,6 +48,7 @@ from ..anomaly.test_items import CLASS, erroring
 from ..schedule.test_tend import prepared, turn
 
 TASK = SynthTask("probe", samples=4)
+EMPTY_TASK = SynthTask("hollow", samples=0)
 
 
 def done(root: Path, *tasks: SynthTask) -> Workspace:
@@ -940,3 +942,98 @@ def test_a_run_that_scans_nothing_finalizes_nothing(tmp_path: Path) -> None:
 
     assert result.blockers == []
     assert not any("finalized" in warning for warning in result.warnings)
+
+
+# --- there has to be something to attest to ------------------------------
+
+
+class TestNothingToSign:
+    """The gate asked whether anything was *unfinished*, and nothing is unfinished about nothing.
+
+    A capture that enumerated no tasks reports zero missing and zero incomplete, so an empty manifest passed every refusal and received a signature attesting to an empty set — a definition edited to nothing, an argument that filtered every task away, a `-T` typo. The readiness *item* already had the guard, which is the tell: the invitation knew there was nothing to invite anybody to, and the verb did not require the invitation.
+    """
+
+    def test_a_capture_with_no_tasks_cannot_be_signed(self, tmp_path: Path) -> None:
+        create_workspace(tmp_path, git=False)
+        workspace, _ = prepared(tmp_path, [])
+
+        result = sign(workspace)
+
+        assert kinds(result) == [EMPTY]
+        assert result.signature is None
+        assert "no tasks" in result.blockers[0].summary
+
+    def test_tasks_that_finished_and_produced_no_samples_cannot_be_signed(
+        self, tmp_path: Path
+    ) -> None:
+        # the same hole one level down: every count is zero and every count
+        # agrees, so a `0/0` log that landed `success` satisfied the gate
+        create_workspace(tmp_path, git=False)
+        workspace, _ = prepared(tmp_path, [EMPTY_TASK])
+        write_log(workspace.logs, EMPTY_TASK, samples=[])
+
+        result = sign(workspace)
+
+        assert kinds(result) == [EMPTY]
+        assert "not one sample" in result.blockers[0].summary
+
+    def test_a_run_that_has_not_started_is_unsettled_rather_than_empty(
+        self, tmp_path: Path
+    ) -> None:
+        # it has no samples either, and `UNSETTLED` is already its answer --
+        # two refusals for one condition is the loop this gate collapses
+        create_workspace(tmp_path, git=False)
+        workspace, _ = prepared(tmp_path, [TASK])
+
+        assert kinds(sign(workspace)) == [UNSETTLED]
+
+    def test_a_run_with_results_is_unaffected(self, tmp_path: Path) -> None:
+        assert kinds(sign(done(tmp_path))) == []
+
+
+# --- what the scanners actually reached, in the signature ----------------
+
+
+class TestTheCoverageTheSignatureWasTakenOver:
+    """A signature reading *no accepted exceptions* over a census that covers none of the run.
+
+    Nothing recorded a coverage shortfall: `finalize_scan`'s return was dropped on the floor and the gate never read `result.coverage`, so a completed four-sample run with zero transcripts scanned produced an `exceptions=()` in the journal and a terminal line saying so. Not a refusal — nothing in Steward closes a coverage gap and several correct configurations produce one — but the number belongs in the record the signature is.
+    """
+
+    def test_a_short_census_is_named_in_the_signature(self, tmp_path: Path) -> None:
+        workspace = scanned(tmp_path)
+
+        result = sign(workspace)
+
+        assert result.signature is not None
+        assert any(
+            one.startswith("scan coverage:") for one in result.signature.exceptions
+        )
+        assert "of 4 transcripts" in " ".join(result.signature.exceptions)
+
+    def test_it_reaches_the_journal_too(self, tmp_path: Path) -> None:
+        # the signature is rebuilt from the journal on every later read, so a
+        # caveat that lives only in the returned object is a caveat that is gone
+        # by morning
+        workspace = scanned(tmp_path)
+
+        sign(workspace)
+
+        recorded = read_signoff(read_journal(workspace.journal).events)
+        assert recorded is not None
+        assert any(one.startswith("scan coverage:") for one in recorded.exceptions)
+
+    def test_it_does_not_refuse(self, tmp_path: Path) -> None:
+        # `--accept-coverage` was tried and taken back out: `coverage` counts a
+        # transcript only once *every* scanner has answered, so a filtered
+        # scanner reads as zero coverage on a run that scans perfectly well.
+        # A flag every signoff has to carry is the same as no gate
+        assert kinds(sign(scanned(tmp_path))) == []
+
+    def test_a_run_that_scans_nothing_records_no_such_exception(
+        self, tmp_path: Path
+    ) -> None:
+        result = sign(done(tmp_path))
+
+        assert result.signature is not None
+        assert result.signature.exceptions == ()

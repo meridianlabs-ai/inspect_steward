@@ -90,3 +90,77 @@ def test_a_root_gives_each_workspace_its_own_directory(tmp_path: Path) -> None:
     second = resolve_log_dir(Workspace.at(tmp_path / "math"), empty, root)
 
     assert first != second
+
+
+def _flow_spec(path: Path) -> Path:
+    """A Python file that reads as a flow spec."""
+    path.write_text("from inspect_flow import FlowSpec\n\nspec = FlowSpec(tasks=[])\n")
+    return path
+
+
+def test_a_flow_spec_is_found_under_whatever_name_its_author_gave_it(
+    tmp_path: Path,
+) -> None:
+    """A flow spec is a file its author names, so discovery reads rather than guesses."""
+    spec = _flow_spec(tmp_path / "swebench.py")
+
+    assert Workspace.at(tmp_path).find_definition() == spec
+
+
+def test_flows_auto_include_file_is_never_the_definition(tmp_path: Path) -> None:
+    """`_flow.py` imports inspect_flow and is merged into whatever spec runs.
+
+    Classifying it as a definition would make every workspace that keeps shared
+    defaults beside its spec ambiguous.
+    """
+    _flow_spec(tmp_path / "_flow.py")
+    spec = _flow_spec(tmp_path / "config.py")
+
+    assert Workspace.at(tmp_path).find_definition() == spec
+
+
+def test_python_that_is_not_a_definition_is_passed_over(tmp_path: Path) -> None:
+    (tmp_path / "helpers.py").write_text("def score(x: int) -> int:\n    return x\n")
+    spec = _flow_spec(tmp_path / "swebench.py")
+
+    assert Workspace.at(tmp_path).find_definition() == spec
+
+
+def test_two_files_that_each_read_as_a_definition_choose_neither(
+    tmp_path: Path,
+) -> None:
+    """Nothing here can tell which one the operator meant, so the caller says so."""
+    _flow_spec(tmp_path / "swebench.py")
+    _flow_spec(tmp_path / "gpqa.py")
+
+    workspace = Workspace.at(tmp_path)
+
+    assert workspace.find_definition() is None
+    assert [path.name for path in workspace.definition_candidates()] == [
+        "gpqa.py",
+        "swebench.py",
+    ]
+
+
+def test_a_conventional_name_settles_it_without_reading_anything(
+    tmp_path: Path,
+) -> None:
+    """The placeholder `init` writes is empty, and an empty file classifies as nothing."""
+    (tmp_path / "config.py").write_text("")
+    _flow_spec(tmp_path / "swebench.py")
+
+    found = Workspace.at(tmp_path).find_definition()
+
+    assert found is not None
+    assert found.name == "config.py"
+
+
+def test_a_workspace_scaffolded_before_python_specs_still_resolves(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "flow.yaml").write_text("tasks: []\n")
+
+    found = Workspace.at(tmp_path).find_definition()
+
+    assert found is not None
+    assert found.name == "flow.yaml"

@@ -90,7 +90,7 @@ eval_set(
 )
 ```
 
-Steward can manage any evalution defined with a script that ends in a call to `eval_set()` or alternatively a `flow.py` from [Flow](https://meridianlabs-ai.github.io/inspect_flow/) or a `hawk.yaml` from [Hawk](https://hawk.metr.org).
+Steward can manage any evalution defined with a script that ends in a call to `eval_set()` or alternatively a `config.py` from [Flow](https://meridianlabs-ai.github.io/inspect_flow/) or a `hawk.yaml` from [Hawk](https://hawk.metr.org).
 
 
 ### Run the Eval
@@ -114,7 +114,7 @@ To be notified when things require your attention, we strongly recommend you als
 STEWARD_NOTIFICATION=slack://{OAuthToken}/{ChannelID}
 ```
 
-Anything [Apprise](https://github.com/caronc/apprise) understands works: Slack, email, SMS, a webhook, or a config file naming several. It configures your workers too, so a sample waiting on your approval reaches the same place. See [Getting told](workflow.qmd#getting-told).
+Anything [Apprise](https://github.com/caronc/apprise) understands works: Slack, email, SMS, a webhook, or a config file naming several. It configures your workers too, so a sample waiting on your approval reaches the same place. See [Notifications](workflow.qmd#notifications).
 :::
 
 The run depends on neither you nor the agent staying connected. When you come back, ask how it's going:
@@ -168,6 +168,8 @@ Steward provides a system that is fully unattended by default but which escalate
 - [Concurrency](concurrency.qmd) describes the various options for tuning concurrency, including automatic ramping behavior and caps on resource utilization.
 
 - [Error Handling](errors.qmd) covers standing policies for error retries and resolution, including dealing with errors that are never resolved.
+
+- [Scanners](scanners.qmd) explains how transcripts are scanned for scoring integrity problems as the run proceeds, and what a finding asks of you.
 
 - [Agent Runbook](runbook.qmd) provides the full operating instructions that coding agents use to supervise and make decisions during runs.
 

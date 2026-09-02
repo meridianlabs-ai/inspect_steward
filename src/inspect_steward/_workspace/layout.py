@@ -1,7 +1,7 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from .._evalset.detect import DefinitionType
+from .._evalset.detect import DefinitionType, detect_definition_type
 from .._evalset.manifest import Manifest
 
 JOURNAL = "journal.jsonl"
@@ -9,10 +9,22 @@ JOURNAL = "journal.jsonl"
 
 DEFINITION_NAMES: dict[DefinitionType, str] = {
     "evalset": "evalset.py",
-    "flow": "flow.yaml",
+    "flow": "config.py",
     "hawk": "hawk.yaml",
 }
-"""Conventional definition filename per type. The definition pointer is discovered by name rather than configured, so these are the names looked for."""
+"""Conventional definition filename per type, and the name `init` scaffolds.
+
+Flow's own name, because a flow spec is a file the author names themselves and `config.py` is what flow's documentation calls it in every example. Discovery does not stop here — see `find_definition`, which reads any other Python file in the root."""
+
+DEFINITION_ALIASES: tuple[str, ...] = ("flow.yaml", "flow.yml", "flow.py")
+"""Other conventional names discovery answers to, after `DEFINITION_NAMES`.
+
+`flow.yaml` is what Steward scaffolded before flow specs were written in Python, so a workspace created then keeps working without being renamed."""
+
+AUTO_INCLUDE_NAME = "_flow.py"
+"""Flow's own auto-include file, which is never the definition.
+
+Flow discovers `_flow.py` in the spec's directory and every parent and merges it into whatever spec is being run — it holds shared defaults, `@step` functions and log filters. It imports `inspect_flow`, so content detection classifies it as a flow definition, and a workspace holding one alongside a spec would otherwise be ambiguous."""
 
 GITIGNORE_ENTRIES = (
     ".steward/",
@@ -134,6 +146,36 @@ class Workspace:
         return self.state / "workers"
 
     @property
+    def smoke(self) -> Path:
+        """`.steward/smoke/` — where a rehearsal's logs land, and never `logs/`.
+
+        **Its own directory because two-sample logs are indistinguishable from results.** A truncated log written into `logs/` reads as a real one to `samples_df`, to the viewer, and to whoever analyses the eval six months from now (workflow.md §7.1). Under `.steward/` rather than beside `log_dir` because `log_dir` is frequently S3, and a rehearsal has no business writing throwaway objects to a bucket — slower, billable, and leaving junk that needs a lifecycle rule to clear.
+
+        The cleanup question then answers itself: each smoke clears the previous one, a failed smoke's logs stay for as long as anyone wants to read them, and everything goes when `.steward/` goes. `inspect view --log-dir .steward/smoke` works on it like any other directory.
+
+        **Nothing else in Steward can see it, which is the point.** `observe_logs` lists non-recursively and is only ever pointed at `manifest.log_dir` or its archive sibling; the sync carries top-level files and skips dotted names. So a rehearsal cannot contribute a log to the run, and cannot be mirrored into a bucket, by construction rather than by discipline.
+
+        Its machine state goes inside it too (`smoke_workers`, `smoke_inflight`), so that one `rmtree` is the whole of clearing a rehearsal.
+        """
+        return self.state / "smoke"
+
+    @property
+    def smoke_workers(self) -> Path:
+        """`.steward/smoke/workers/` — a rehearsal's selection documents and worker output.
+
+        **Separate from `workers/`, and this is a correctness boundary rather than tidiness.** `resolve_inflight` bounds its process-table scan by the workers directory it is given, so a rehearsal's workers sharing the run's directory would be workers the run's own tend believes are its.
+        """
+        return self.smoke / "workers"
+
+    @property
+    def smoke_inflight(self) -> Path:
+        """`.steward/smoke/inflight.jsonl` — what the rehearsal spawned.
+
+        **Separate from `inflight.jsonl` for a reason measured rather than anticipated.** The record accounts for *spent attempts per identifier*, and `reconcile` stops respawning a task after two of them. A rehearsal writing into the run's record therefore spends the run's attempt budget: two smokes of a two-task definition left both tasks stalled before the real launch had run a single sample. A rehearsal's workers are not attempts at the run, and the record that says so is this one.
+        """
+        return self.smoke / "inflight.jsonl"
+
+    @property
     def inflight(self) -> Path:
         """`.steward/inflight.jsonl` — what was spawned, appended before each launch.
 
@@ -192,21 +234,46 @@ class Workspace:
         return self.root / DEFINITION_NAMES[type]
 
     def find_definition(self) -> Path | None:
-        """Locate this workspace's definition by name.
+        """Locate this workspace's definition.
 
-        Deliberately by filename rather than by `detect_definition_type`, which reads the file: an empty definition placeholder validates as both a flow spec and a hawk config, and would be reported ambiguous. Content-based detection happens later, when there is content.
+        By name first, because a name is unambiguous and costs no reads: a conventional filename in `DEFINITION_NAMES`, then `DEFINITION_ALIASES`. A placeholder `init` has scaffolded but nobody has written yet is found here, which is why the name pass comes first — an empty file validates as both a flow spec and a hawk config and would be reported ambiguous by content.
+
+        Failing that, any other Python file in the root is read: a flow spec is a file its author names, so `swebench.py` is as ordinary a name as `config.py` and a workspace holding one has a definition. `AUTO_INCLUDE_NAME` is skipped, and a file that classifies as neither kind is passed over rather than raising, since a workspace may hold Python that is not a definition at all.
 
         Returns:
-            The definition, or `None` when the workspace has none yet. When several exist, the first in `DEFINITION_NAMES` order wins.
+            The definition, or `None` when the workspace has none, and also when several Python files each look like one — a caller with no way to choose between them should say so rather than pick.
         """
-        return next(
+        named = next(
             (
                 path
-                for name in DEFINITION_NAMES.values()
+                for name in (*DEFINITION_NAMES.values(), *DEFINITION_ALIASES)
                 if (path := self.root / name).exists()
             ),
             None,
         )
+        if named is not None:
+            return named
+        found = self.definition_candidates()
+        return found[0] if len(found) == 1 else None
+
+    def definition_candidates(self) -> list[Path]:
+        """Python files in the root that read as an eval set definition.
+
+        Sorted by name, so two callers looking at one directory report the same list. Excludes `AUTO_INCLUDE_NAME` and anything that does not classify.
+
+        Returns:
+            The candidates, which may be empty.
+        """
+        candidates: list[Path] = []
+        for path in sorted(self.root.glob("*.py")):
+            if path.name == AUTO_INCLUDE_NAME:
+                continue
+            try:
+                detect_definition_type(path)
+            except (ValueError, OSError):
+                continue
+            candidates.append(path)
+        return candidates
 
     @classmethod
     def at(cls, root: Path | str) -> "Workspace":

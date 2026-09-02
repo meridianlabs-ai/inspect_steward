@@ -19,6 +19,7 @@ logs, so the tend that ends a launch finds nothing to spawn.
 
 import json
 from pathlib import Path
+from typing import Any
 
 import pytest
 from click.testing import CliRunner, Result
@@ -27,6 +28,7 @@ from inspect_steward._cli.main import steward
 from inspect_steward._cli.options import PASSTHROUGH
 from inspect_steward._evalset.manifest import Manifest, read_manifest, write_manifest
 from inspect_steward._launch import Delta, Reshaped
+from inspect_steward._launch.launch import _pool_advice
 from inspect_steward._workspace import (
     ALIASED,
     LAUNCHED,
@@ -940,3 +942,56 @@ def test_a_roomy_daemon_says_nothing(
 
     assert result.exit_code == 0, result.output
     assert "address-pools" not in result.output
+
+
+def test_a_journal_that_will_not_read_costs_the_advice_and_not_the_launch(
+    workspace: Workspace, capture: FakeCapture, cramped_docker: None
+) -> None:
+    """The opposite of what the smoke gate does with the same failure, deliberately.
+
+    That one is a warning about the run, where saying nothing asserts something
+    false. This is a tip about somebody's Docker daemon, where saying nothing
+    asserts nothing — and what an unreadable journal actually costs here is the
+    *once*, so repeating a tip they already declined is the failure to avoid.
+    What must not happen either way is a traceback: this runs after the run is
+    committed, and a launch that succeeded and then died rendering an aside is
+    a launch nobody can tell succeeded.
+
+    Called directly rather than driven through the CLI, because a journal this
+    unreadable takes the launch down two steps earlier at the `launched` append
+    — which is correct there and stated as such: an event that did not land is
+    a hole in the only copy. What is reachable is the narrower case this covers,
+    a journal that would not read when this asked.
+    """
+    workspace.journal.write_text("", encoding="utf-8")
+    workspace.journal.chmod(0o000)
+    try:
+        advice = _pool_advice(workspace, capture.manifest)
+    finally:
+        workspace.journal.chmod(0o644)
+
+    assert advice is None
+
+
+def test_advice_that_could_not_be_journalled_is_still_given(
+    workspace: Workspace,
+    capture: FakeCapture,
+    cramped_docker: None,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    # the other half, and it fails the other way: the record is what makes this
+    # once-only, and the advice is useful without it. Said now, and said again
+    # next launch, which is noise rather than a wrong answer
+    import importlib
+
+    def refuse(*args: Any, **kwargs: Any) -> None:
+        raise OSError("read-only file system")
+
+    # by name, because `_launch` re-exports the `launch` *function* under the
+    # module's own path and the attribute lookup finds that instead
+    module = importlib.import_module("inspect_steward._launch.launch")
+    monkeypatch.setattr(module, "append_event", refuse)
+
+    advice = _pool_advice(workspace, capture.manifest)
+
+    assert advice is not None and advice.networks == 32

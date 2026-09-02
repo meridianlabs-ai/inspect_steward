@@ -26,7 +26,7 @@ swe-evals/
   _steward.yaml       # steward specific options 
   AGENTS.md           # agent instructions for managing a run
   CLAUDE.md           # agent instructions for managing a run
-  evalset.py          # eval-set definition (or flow.py / hawk.yaml)
+  evalset.py          # eval-set definition (or config.py / hawk.yaml)
   journal.jsonl       # append-only journal of workspace actions
   status.md           # human readable current status of run
 ```
@@ -53,7 +53,11 @@ Once you have defined your eval set, use a coding agent to launch the evaluation
 ─────────────────────────────────────────────────────────
 ```
 
-The agent is instructed to read the Steward [runbook](runbook.qmd) which provides instructions for conducting the evaluation. By default the agent will start with a smoke run (2 samples for each task, capped to 10 minutes of working time) to make sure config, infrstructure, and model connectivity is all workign as expected.
+The agent is instructed to read the Steward [runbook](runbook.qmd) which provides instructions for conducting the evaluation. By default the agent will start with a smoke run (2 samples for each task, under a 15 minute wall-clock cap) to make sure config, infrstructure, and model connectivity is all workign as expected.
+
+The smoke reports what the *samples* did rather than whether the tasks finished, which matters because workers run with `continue_on_fail` on: a wrong key or a sandbox that will not start lands as errored samples inside a log that finished cleanly. Any errored sample fails the rehearsal, and so does a task that finished holding fewer samples than the rehearsal asked it for.
+
+It also checks four things that would not stop the run but would quietly spoil it: that the scanners work and what they flagged, that they reached every transcript rather than silently recording nothing, that every model resolved to a real context window rather than an assumed default, and that reasoning is being replayed to the model on later turns. It leaves a digest at `.steward/smoke/digest.md`, and a failing check stops the launch until you fix it or waive it by name.
 
 After the smoke, the agent will launch all of the tasks, set up a background monitoring process, and respond to alerts that require its intervention. Note that while it is recommended that you keep the agent attached during the evaluation it is not _required_. If you choose not to you should be sure to configure [notifications](#notifications) so you know when to reconnect the agent to handle issues that arise.
 

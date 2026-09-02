@@ -1,137 +1,109 @@
 ---
 title: Error Handling
-llms-description: "Steward's two error tiers — sample errors that never halt a task, and task failures that are re-launched up to a stall limit — plus who decides what happens after each."
+llms-description: "How Steward tunes inspect's error handling for unattended runs: what it retries automatically, what it surfaces as decisions, how a decision becomes standing policy, and how errors are resolved before signoff."
 ---
 
 ## Overview
 
-Errors under Steward come in two tiers, and they are handled by different mechanisms with different owners:
+Inspect's default behavior is to fail fast so that you can see and fix a problem. Steward runs unattended for hours at a time, so it does the opposite: errors never halt a run, retries are automatic, and anything a retry cannot fix becomes a decision that waits in a queue.
 
-| Tier | What happens | Who decides what's next |
+Nothing is dropped silently. Every error is either retried or turned into a decision, and a run cannot be signed off while a decision is unanswered.
+
+| Stage | What happens | Who acts |
 |----|----|----|
-| **Sample errors** | The task keeps running; errored samples are collected in the log | You (or the agent, within your policy) |
-| **Task failures** | The task is re-launched, up to `stall_after` attempts | Steward, then you once the limit is hit |
+| [Retry](#retry) | Samples are retried in the worker, and failed tasks are respawned | Steward, unattended |
+| [Surface](#surface) | What survives retry is grouped into a class and raised as a decision | Steward and your agent |
+| [Decide](#decide) | A ruling: a disposition, a reason, and a name | you |
+| [Codify](#codify) | Standing rules so the same question stops being asked | your agent, in `_steward.yaml` |
+| [Resolve](#resolve) | Signoff refuses while anything is still undecided | you |
 
-There is a third thing this page covers that is not an error at all: a sample that ran and scored, whose *score* cannot be trusted. See [scan findings](#scan-findings).
+Transcript scanning follows the same stages, because a finding becomes a decision the same way an error does. See [Scanners](scanners.qmd).
 
-## Sample errors
+## Retry
 
-A sample that errors never halts its task: Steward runs every task to completion (`continue_on_fail` is forced on in worker mode, and a definition's own setting has no effect under Steward). This is an invariant rather than an option because supervision depends on it — Steward reconciles the run by comparing logs against the manifest, and a task that halted on its first error would be indistinguishable from a structural failure, re-launched, and halted again.
+Steward runs workers with `fail_on_error=False`, so a sample that errors never fails its task. Every task runs to completion and its errored samples are collected in the log. Steward decides what to do about them by reading the logs, so a task that stopped on its first error would look like a structural failure and be re-launched.
 
-The consequence is that **completion is not success**: a log can finish `success` while carrying errored samples, so a task whose provider was down for its entire duration completes "successfully" with a meaningless score. Read the reported status, not the exit code.
+This means that completion is not success. A log can finish `success` while carrying errored samples, so a task whose provider was down for its entire duration still completes.
 
-Two things govern what happens to errored samples:
+Retries then happen at two levels:
 
-- **Automatic retry** belongs to your definition: set `retry_on_error` in your `eval_set()` call and it is honored exactly as written; when a definition says nothing, Steward workers default to 3 attempts per sample. Retrying samples release their concurrency slot and re-enter at the back of the queue, so retries never block healthy samples — they just tend to finish late in the task.
-- **Everything past automatic retry is a decision**, and Steward turns it into one you can actually make: samples that failed the same way are grouped into a **class** (a provider outage is one question, not two hundred), the class appears in `steward status` under *anomalies*, and it stays open until somebody rules on it with `steward rule`.
+- Samples are retried inside the worker (by default up to 3 times; set `retry_on_error` in your `eval_set()` call to choose your own number, including 0).
 
-A ruling names one of the honest answers, each with a different consequence for your results:
+- Tasks are retried by Steward. Once `stall_after` attempts get nowhere (default `2`) the task is marked stalled and becomes a decision.
+
+## Surface
+
+Samples that failed the same way are grouped into a class, so a provider outage is one question instead of two hundred. A stalled task is classed the same way, on the exception in its log or on the worker's output if it died before writing one, so it arrives with its evidence attached.
+
+Classes appear under the anomalies heading in `steward status` and `status.md`, with instance counts, an example message, and any prior rulings. A class is raised once, and again only if it materially changes: the population crosses an order of magnitude, or a re-run fails.
+
+Your agent works the queue from here. `steward investigate` marks a class as being worked, and `steward propose` bundles related classes into one question with the evidence attached.
+
+## Decide
+
+Agents will prompt you for a ruling with one of six answers:
 
 | Disposition | What it means | What happens to the data |
 |----|----|----|
-| `rerun` | The failure was transient; the samples should run again | Steward carries the re-run out — requeued in place while the task still runs, or the landed log invalidated for resume — and records whether it passed or failed again |
-| `exclude` | Leave the samples out of scoring | The report says how many were excluded, as a sentence you approved |
-| `zero` | Count the samples as failures | Scored zero, with the same visible mark |
+| `rerun` | The failure was transient and the samples should run again | Steward re-runs them and records whether they passed |
+| `exclude` | Leave the samples out of scoring | The report says how many were excluded |
+| `zero` | Count the samples as failures | Scored zero, with a visible mark |
 | `score` | The recorded results stand as they are | Scored as-is, marked |
-| `accept` | The anomaly is real and the data stands with a caveat | Requires `--effect`: the sentence the report carries. Refused for errored samples, where "accept" would be exclusion in disguise |
+| `accept` | The data stands with a caveat | Requires a stated effect, which is the sentence the report carries. Not available for errored samples |
 | `dismiss` | Looked, nothing here | No mark; the record keeps who looked and why |
 
-Every ruling requires a `--reason` and a `--by` naming who decided, because the ruling is the part of the run's story that survives. If the same failure comes back after a ruling, it opens as a new question **carrying the old decision with it** — the 2am reader inherits the 11pm reasoning without hunting for it.
+The next tend carries out a `rerun`. Samples in a running task are requeued in place, and a landed log has the ruled samples invalidated so the task re-runs them and reuses everything else. Authorized re-runs are scheduled ahead of ordinary queued work.
 
-The agent's part is grouping and legwork: `steward investigate` marks a class as being worked, and `steward propose` bundles related classes into one question with the evidence attached, which you answer whole or in part with `steward rule --proposal`. A ruling itself is always a person's.
+If the same failure comes back after a ruling, it opens as a new question and carries the old decision with it.
 
-A ruling can also be made in advance. `preauthorized:` in `_steward.yaml` maps class patterns to dispositions — `"error:ReadTimeout@*": rerun` — and when a new class matches a pattern, the tend records an ordinary ruling with `by: policy` naming the pattern and applies it in the same turn. It is the same decision made earlier and it sits on the record like any other; **nothing is pre-authorized by default**, and after a pre-authorized re-run fails the pattern stops matching that class until a person has looked.
+## Codify
 
-To stop a run when error rates climb, write it as a policy rule — e.g. *"if more than 10% of the samples in a task error out, pause the run and notify me"* — which pauses the whole run reversibly rather than failing one task.
+"When you find yourself answering the same question twice, your agent will propose recording it in _steward.yaml so it stops being asked. For example:
 
-## Stuck samples
+```{.yaml filename="_steward.yaml"}
+preauthorized:
+  'error:ReadTimeout@*': rerun
+```
 
-Between the two tiers sits a condition that is neither: a sample that is alive but not moving. A `bash` that never returns, a connection a silent peer holds open — nothing errors, nothing scores, and the task's clock keeps running. Steward keeps three names apart so each gets its own remedy: a **stuck** sample has stopped moving inside a healthy worker; a **stalled** task keeps failing its re-launches (below); a **wedged** Steward holds the run claim without progressing (killed and replaced by the next tend).
+When a new class matches a pattern, the tend records a ruling with `by: policy` naming the pattern and applies it in the same turn. Nothing is pre-authorized by default, and if a pre-authorized re-run fails, the pattern stops matching that class until a person has looked.
 
-Detection reads the live channel's own activity feed: a running sample whose last activity is older than `stuck_after` (default: 5 hours) is reported, one item per task, naming the samples and the tool call they are inside where one names it. The exclusions are what make the report trustworthy — streaming counts as activity, so a slow but healthy `generate` is never stuck; a sample parked on an approval or a question is waiting on you, not stuck; a provider backoff with a live deadline is waiting on purpose.
+Anything more nuanced than a pattern goes in `policies:` as prose, which your agent applies when one is in session:
 
-`stuck_after` is a **reporting threshold, never a limit**: nothing is cancelled when it passes. The enforced budget for how long a sample may work belongs to the definition's own `working_limit` — which is why Steward refuses a `working_limit:` key in `_steward.yaml`.
+```{.yaml filename="_steward.yaml"}
+policies:
+  - If more than 10% of the samples in a task error out, pause the run and
+    notify me right away.
+  - Sandbox startup timeouts under 1% are expected here; invalidate and re-run.
+```
 
-What to do about a stuck sample is an escalation ladder, cheapest rung first, and the item carries the applicable rung as an `inspect ctl` command ready to run:
+Use a policy to stop a run on error rates. Pausing is reversible and stops the whole run, which is usually better than failing one task.
+
+## Resolve
+
+`steward signoff` refuses while any error is still undecided, and lists every reason at once so that fixing one and being refused for the next never happens.
+
+The refusal tells you what to answer. It is not a quality bar: `accept` and `dismiss` are answers, and "2 samples accepted as errored, the provider was down all night" is a signed statement about the results.
+
+The classes you accepted become the entries in `anomalies.md`, each with its reason, who decided, when, and the effect on the numbers.
+
+## Stuck Samples
+
+One condition never becomes an error: a sample that is alive but not moving, such as a `bash` command that never returns. Nothing errors, nothing scores, and the task's clock keeps running.
+
+A running sample with no activity for longer than `stuck_after` (default `5h`) is reported, one item per task, naming the samples and the tool call they are inside. Streaming counts as activity, so a slow but healthy `generate` is never stuck. A sample parked on an approval is waiting on you, and a provider backoff with a live deadline is waiting on purpose.
+
+`stuck_after` only reports, and never cancels. To bound how long a sample may work, set `working_limit` in your definition.
+
+What to do about a stuck sample is an escalation ladder. The item carries the applicable rung as a command ready to run:
 
 | Rung | Command | What it costs |
 |----|----|----|
-| Cancel the tool call | `inspect ctl sample cancel-tool-call TASK ID EPOCH` | The call fails inside the sample, which continues — the model sees the failure and works with it |
-| Cancel the sample | `inspect ctl sample cancel TASK ID EPOCH` | The sample stops; how it is recorded (`--action score|error|cancel`) is your call at the moment you run it |
-| Requeue the sample | `inspect ctl sample requeue TASK ID EPOCH` | Everything the sample did is discarded and it runs again from the start |
+| Cancel the tool call | `inspect ctl sample cancel-tool-call TASK ID EPOCH` | The call fails inside the sample, which continues |
+| Cancel the sample | `inspect ctl sample cancel TASK ID EPOCH` | The sample stops, recorded as you choose with `--action` |
+| Requeue the sample | `inspect ctl sample requeue TASK ID EPOCH` | The sample's work is discarded and it runs again from the start |
 
-A cancel is a request, and the feedback is explicit: when a cancellation was asked and the call still has not stopped, the item returns marked as such — *a cancel was asked and it did not stop* — which is the signal to climb a rung rather than ask again.
+A cancel is a request. If one was asked for and the call still has not stopped, the item says so, which is your signal to climb a rung.
 
-The first rung can be granted in advance: `stuck_cancel: true` in `_steward.yaml` lets the agent cancel any stuck pending tool call itself, and a list (`stuck_cancel: [bash]`) admits only those tools. The higher rungs stay a person's — cancelling a sample records an outcome, and discarding work is not a call to pre-authorize.
+You can grant the first rung in advance. `stuck_cancel: true` lets your agent cancel any stuck tool call itself, and `stuck_cancel: [bash]` admits only those tools. The higher rungs stay yours, since they discard work.
 
-A stuck sample is **not an anomaly**: nothing has failed and there is nothing to rule on. It is a live condition in the tend queue — reported while it holds, gone when the sample moves.
-
-## Task failures
-
-A task that fails outright — an import error, an OOM, a scorer that throws, a worker process that dies — is re-launched by the next turn of the monitor. Attempts are counted, and after `stall_after` of them finish nothing new (default: 2) the task is marked **stalled**: it will not be re-launched again, and it is reported as needing a person.
-
-Each failed attempt is also classed like a sample error is — on the exception in the log's header, on the worker's own output when it died before writing any log — so a stalled task arrives with its evidence attached rather than as a bare count. A transient failure that Steward's own re-launch absorbed resolves itself; one that looks like the storage or credentials *under* the run is flagged, and no re-run is proposed for it until a person has looked.
-
-The limit exists because a structural failure re-runs to the same place at full price — a definition that will not import fails identically on attempt ten. Steward never retries past the limit on its own; raising `stall_after` in `_steward.yaml` is how you buy more patience for a genuinely flaky environment (a sandbox fleet earns more of it than a deterministic scorer bug).
-
-When a person rules `rerun`, the tend carries the ruling out: samples in a still-running task are requeued in place, and a landed log has exactly the ruled samples invalidated so the next turn re-launches it and re-runs them (reusing everything else). The attempt history before the ruling is cleared — a decision to try again is made by the only party entitled to make one, and what happened before it no longer counts against the task — and authorized re-runs are scheduled ahead of ordinary queued work.
-
-## Scan findings {#scan-findings}
-
-Not every threat to your results is an error. A sample can run perfectly, score cleanly, and still be untrustworthy — the model found a way to read the grader, refused the task while keeping the shape of an answer, or got data out of a sandbox that was supposed to have no route to the internet. Steward runs a **scoring-integrity scanner** over every sample of every run, and it needs no configuration: with no scan model set it reviews with the model already under evaluation.
-
-**A flagged sample becomes an anomaly**, with the same lifecycle as an errored one. The class is the scanner and what it found — `scan:scoring_integrity:reward_hacking` — so five hundred samples gamed the same way are one decision, and every disposition in the table above is available, including `exclude` and `zero` for a score you establish is wrong.
-
-**The window opens when the flag lands, not when somebody decides it is real.** That is deliberate: it makes *nobody looked* and *somebody looked and found nothing* different states, and only the second one is a decision. So *looked, nothing here* is a real ruling —
-
-```bash
-steward rule 'scan:scoring_integrity:reward_hacking' \
-  --disposition dismiss --reason "tried to read the grader, never got it" --by NAME
-```
-
-— and the run cannot be signed while a flag has no ruling either way.
-
-**Expect to dismiss most of them, and expect that to be worth doing.** A model probing a grader it never reaches, or firing curl at a host the sandbox refuses, earned nothing and contaminated nothing — the score stands. What makes dismissing worthwhile rather than paperwork is that the reason survives: when you sign off, Steward tells you how many findings were looked at and dismissed, and your agent is asked to name them. *"The model tried to read the grader on four samples and failed every time"* changes no number and is still something you want to know before you accept the results.
-
-Two things worth knowing about how this behaves. **Rarity is not the signal** — a class covering 197 of 200 samples is the alarming case, not the noisy one, because an exploit that works gets used everywhere. And **only yes/no scanners open anomalies**: a scanner returning a number or a category is recorded and readable, and Steward will not invent a threshold for it.
-
-### When the scanner itself fails
-
-A scanner can throw — the grader model times out, a transcript will not parse — and the transcript is then left with no verdict either way. In the findings that is indistinguishable from a sample that came back clean, so a run whose scans all failed would otherwise be signed as *nothing was flagged*.
-
-Those transcripts get a class of their own, keyed on the scanner and the exception:
-
-```
-scanerror:scoring_integrity:TimeoutError@openai/_client.py:post
-```
-
-The population is the whole story, and you do not have to compute it. One grader timeout in five hundred is a class of one; a scanner throwing on every transcript is a class of five hundred, and both are visible at a glance in the anomalies block.
-
-A scanner that **never ran at all** is a different shape and does not appear here: it wrote no rows, so there is no class to open and nothing to rule. What shows that one is the column below.
-
-It is refused at signoff like any other open window, and the answers are **`accept`** and **`dismiss`**. `rerun`, `exclude` and `zero` are refused, because the samples are fine and only the reading of them failed — there is nothing to take out of the scores and nothing to run again.
-
-```bash
-steward rule 'scanerror:scoring_integrity:TimeoutError@openai/_client.py:post' \
-  --disposition accept --by NAME \
-  --reason "one grader timeout in five hundred; the rest scanned" \
-  --effect "1 transcript carries no verdict either way"
-```
-
-Alongside it, the status table grows a **scanned** column — transcripts *every* scanner has answered for, against samples landed — and a note under the table when there is a gap. That is what tells you the difference between *nothing was found* and *nothing looked*, and it catches the case a scan error cannot: a worker that died between logging its samples and scanning them, or a scanner you added at a re-launch, which will never revisit the transcripts that had already landed.
-
-**That column does not block signoff, and the omission is deliberate.** Nothing Steward can run closes a coverage gap — re-scanning already-landed transcripts is scout's own resume, which Steward has no verb for — so refusing over it would leave a run permanently unsignable rather than routing you to an act that fixes it. You are told the number and you decide. Ask your agent to say it when they tell you the run is ready.
-
-If an agent is attached when a flagged task finishes, its completion is held back briefly — up to about an hour — so you get one message saying what finished *and* what needs deciding, rather than a cheerful *finished* followed twenty minutes later by a correction. With no agent attached nothing is held.
-
-## Where errors surface
-
-Per-task error counts appear in the status table, and open anomaly classes — with their instance counts, an example message, and any prior rulings — under the *anomalies* heading in `steward status` and `status.md`. Each class is raised once rather than repeated every interval, and again only when it materially changes: a population crossing an order of magnitude, or a re-run that failed. Rulings, their reasons, and who made them are recorded in the journal as they happen, so how the run's errors were handled is part of the run's record — and a run does not read as finished while a class is still waiting for its answer.
-
-Two kinds deliberately stay quieter than that. A worker death Steward's own re-launch absorbs resolves itself without asking anyone, and samples *you* killed (`limit:operator`) never ask inline at all — they wait in the anomalies block and get their ruling as part of accepting the results, since the person who killed them already knows.
-
-## The last place they surface
-
-`steward signoff` refuses while any of it is unnamed, and that refusal is the point at which errors stop being a running concern and become a record. It names every reason at once — anything a ruling has not covered, any window still open, any task not settled — so that fixing one and being refused for the next never happens.
-
-Read it as routing rather than as a bar to clear. What it refuses is not a hole but an **unnamed** hole: `accept` and `dismiss` are answers, and *"2 samples accepted as errored — the provider was down all night"* is a signed statement where the same two passing quietly is what all of this exists to prevent. The classes you accepted then become the entries in `anomalies.md`, each with its reason verbatim, who decided, when, and the effect on the numbers — which is the file somebody quotes when they write the results up.
+A stuck sample is not an anomaly and there is nothing to rule on. It is reported while it holds and gone when the sample moves.

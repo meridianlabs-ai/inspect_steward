@@ -8,6 +8,7 @@ Almost every other surface in Steward is written for a reader who is not there: 
 import dataclasses
 import json
 import os
+import shlex
 import sys
 from pathlib import Path
 from typing import Any, NoReturn
@@ -24,6 +25,9 @@ from .._launch.pools import (
 )
 from .._notify import INSPECT_NOTIFICATION, usable_channel
 from .._scan import merged_scanners
+from .._smoke import CHECKS, echo_smoke
+from .._smoke.run import DEFAULT_CAP, DEFAULT_SAMPLES
+from .._smoke.run import smoke as run_smoke
 from .._util.duration import format_duration
 from .._workspace import (
     ACTION,
@@ -206,6 +210,33 @@ _LABELS = {
 @tend_interval_option
 @sync_options
 @click.option(
+    "--smoke",
+    is_flag=True,
+    default=False,
+    help="Rehearse first instead of launching: a few samples per task under a cap, into .steward/smoke/.",
+)
+@click.option(
+    "--samples",
+    "smoke_samples",
+    type=click.IntRange(min=1),
+    default=None,
+    help=f"Samples per task in a smoke (default {DEFAULT_SAMPLES}).",
+)
+@click.option(
+    "--cap",
+    "smoke_cap",
+    type=click.IntRange(min=0),
+    default=None,
+    help=f"Wall-clock minutes a smoke may take, 0 for none (default {DEFAULT_CAP}).",
+)
+@click.option(
+    "--accept",
+    "accepted",
+    multiple=True,
+    type=click.Choice(CHECKS),
+    help="Record a smoke check as waived rather than failing on it. Repeatable.",
+)
+@click.option(
     "--no-break-claim",
     is_flag=True,
     default=False,
@@ -244,6 +275,10 @@ def launch_command(
     tend_interval: int | None,
     sync: str | bool | None,
     no_sync: bool,
+    smoke: bool,
+    smoke_samples: int | None,
+    smoke_cap: int | None,
+    accepted: tuple[str, ...],
     no_break_claim: bool,
     output_json: bool,
     **passthrough: Any,
@@ -292,8 +327,78 @@ def launch_command(
             "one. Pass whichever you meant."
         )
 
+    if not smoke and (smoke_samples is not None or smoke_cap is not None or accepted):
+        raise click.UsageError(
+            "--samples, --cap and --accept shape a rehearsal and only apply "
+            "with --smoke."
+        )
+    if smoke and (
+        launch_only := _launch_only(
+            {
+                "--accept-archive": accept_archive or None,
+                "--no-timer": None if timer else True,
+                "--no-env-check": None if env_check else True,
+                "--log-root": log_root,
+                "--no-log-root": no_log_root or None,
+                "--log-store": log_store,
+                "--no-log-store": no_log_store or None,
+                "--stall-after": stall_after,
+                "--samples-ramp": samples_ramp,
+                "--stuck-after": stuck_after,
+                "--preauthorized": preauthorized,
+                "--tend-interval": tend_interval,
+                "--sync": sync,
+                "--no-sync": no_sync or None,
+            }
+        )
+    ):
+        # **the mirror of the refusal above, and it closes a silent loss rather
+        # than a usage confusion.** A rehearsal commits nothing, arms nothing
+        # and tends nothing, so every one of these was accepted and dropped --
+        # and the follow-up command printed after a passing smoke carried only
+        # the flags the rehearsal *used*, so `--smoke --no-timer` printed a bare
+        # `steward launch` that arms one. Naming them is better than preserving
+        # them: printing back a flag the rehearsal ignored would say it had been
+        # rehearsed under it
+        raise click.UsageError(
+            f"{', '.join(launch_only)} shape{'' if len(launch_only) == 1 else ''} "
+            f"the launch rather than the rehearsal, and --smoke launches "
+            f"nothing. Pass {'it' if len(launch_only) == 1 else 'them'} to "
+            f"`steward launch` when you run it."
+        )
+
     workspace = find_workspace()
     resolved = definition or _own_definition(workspace)
+
+    if smoke:
+        _run_smoke(
+            workspace,
+            resolved,
+            args={} if no_args else parse_args(definition_args),
+            type=definition_type,
+            samples=smoke_samples if smoke_samples is not None else DEFAULT_SAMPLES,
+            cap=smoke_cap if smoke_cap is not None else DEFAULT_CAP,
+            accept=accepted,
+            overrides={} if no_overrides else given_overrides,
+            max_workers=max_workers,
+            notification=False if no_notification else notification,
+            scan_model=False if no_scan_model else scan_model,
+            break_stale=not no_break_claim,
+            output_json=output_json,
+            given=_Given(
+                definition=definition,
+                args=definition_args,
+                no_args=no_args,
+                type=definition_type,
+                overrides=given_overrides,
+                no_overrides=no_overrides,
+                max_workers=max_workers,
+                scan_model=scan_model,
+                no_scan_model=no_scan_model,
+            ),
+        )
+        return
+
     # **before the launch, because the launch settles the channel into this
     # process's own environment.** Asking afterwards would find whatever
     # `--notification` exported and report a durable channel where there is one
@@ -349,6 +454,140 @@ def launch_command(
         # after the delta rather than instead of it, and an error rather than a
         # note: a refusal that exits zero is a refusal a script does not notice
         raise click.ClickException(_refusal(result.delta))
+
+
+def _run_smoke(
+    workspace: Workspace,
+    definition: Path,
+    *,
+    args: dict[str, Any] | None,
+    type: DefinitionType | None,
+    samples: int,
+    cap: int,
+    accept: tuple[str, ...],
+    overrides: dict[str, Any] | None,
+    max_workers: int | None,
+    notification: str | bool | None,
+    scan_model: str | bool | None,
+    break_stale: bool,
+    output_json: bool,
+    given: "_Given",
+) -> None:
+    """Rehearse, report, and stop — a smoke launches nothing.
+
+    **Two invocations rather than one**, which is what the workflow diagram has always shown: `launch --smoke` answers *is this ready*, and `launch` acts on the answer. Chaining them would spend a night's budget on the strength of a gate nobody read, which is the opposite of what a gate is for.
+
+    **Every setting the launch takes, because the rehearsal is of the launch.** A smoke run without `--scan-model` while the launch that follows has one rehearses a scan the run will not perform, and reports on a model the workers never used — a gate blessing a configuration it never exercised, which is the one failure mode a rehearsal must not have.
+
+    **A failure exits non-zero, and the digest is still printed first.** Same reasoning as the archive refusal above: a refusal that exits zero is one a script does not notice, and a refusal whose reason is invisible teaches people to reach past it.
+    """
+    try:
+        result = run_smoke(
+            workspace,
+            definition,
+            args=args,
+            type=type,
+            samples=samples,
+            cap=cap,
+            accept=accept,
+            overrides=overrides,
+            max_workers=max_workers,
+            notification=notification,
+            scan_model=scan_model,
+            break_stale=break_stale,
+        )
+    except (LaunchError, *TURN_ERRORS) as ex:
+        raise click.ClickException(str(ex)) from ex
+
+    if isinstance(result, Held):
+        _echo_held(result)
+
+    if output_json:
+        click.echo(json.dumps(dataclasses.asdict(result), indent=2, default=str))
+    else:
+        for line in echo_smoke(result):
+            click.echo(line)
+        click.echo("")
+        click.echo(f"  digest: {workspace.smoke / 'digest.md'}")
+        if result.passed:
+            click.echo(f"  next:   {_next_launch(workspace, definition, given)}")
+
+    if not result.passed:
+        raise click.ClickException(
+            "the smoke did not pass, so nothing was launched — read the digest, "
+            "fix what it names, and run it again"
+        )
+
+
+@dataclasses.dataclass(frozen=True)
+class _Given:
+    """What the operator actually typed, kept so the next step can be printed back."""
+
+    definition: Path | None
+    args: tuple[str, ...]
+    no_args: bool
+    type: DefinitionType | None
+    overrides: dict[str, Any] | None
+    no_overrides: bool
+    max_workers: int | None
+    scan_model: str | bool | None
+    no_scan_model: bool
+
+
+def _launch_only(given: dict[str, Any]) -> list[str]:
+    """The flags that were typed and shape only the launch, in the order they are declared.
+
+    A mapping rather than a list of conditions so the name and the value stay together: a refusal that named the wrong flag would be worse than the silence it replaces.
+    """
+    return [name for name, value in given.items() if value is not None]
+
+
+def _next_launch(workspace: Workspace, definition: Path, given: _Given) -> str:
+    """The launch this rehearsal was for, spelled out.
+
+    **A bare `steward launch` is the wrong instruction after a first smoke, and it is the one somebody copies.** A re-launch reuses arguments, type and overrides from the committed manifest — but the first launch has no committed manifest to reuse, so everything the rehearsal was shaped by has to be typed again or it is silently dropped: the run launches at the definition's own epochs and limit, with no `-A`, in a process per task, scanning with a different model. That is a launch nothing rehearsed, arriving with a passing smoke immediately above it.
+
+    **`--notification` is deliberately absent even when it was given.** It does not change what runs, and an Apprise URL carries an OAuth token — printing one into a terminal and its scrollback is the leak `check_eval_set_overrides` refuses upstream for the same value in the same shape.
+
+    **Tokens joined by `shlex`, never a string built with spaces in it.** Half of what this prints came off somebody's command line and can hold whitespace, quotes or a `$`: `-A prompt=hello world` pasted back is two arguments and a definition that never sees the second half. The other half was *parsed* on the way in and has to be spelled back the way the parser reads it — `parse_override` runs `yaml.safe_load`, so a `(100, 200)` window round-trips as the JSON `[100, 200]` that YAML also accepts, where Python's own repr of the tuple is not valid input at all. Both bugs produce a command that looks right in a terminal and is not the run that was rehearsed.
+
+    Args:
+        workspace: The workspace, for shortening the definition path.
+        definition: The definition that was rehearsed, resolved.
+        given: What was typed.
+
+    Returns:
+        The command, ready to run.
+    """
+    parts = ["steward", "launch"]
+    if given.definition is not None:
+        parts.append(_short(str(definition), workspace.root))
+    for one in given.args:
+        parts.extend(["-A", one])
+    if given.no_args:
+        parts.append("--no-args")
+    if given.type is not None:
+        parts.extend(["--type", given.type])
+    if given.no_overrides:
+        parts.append("--no-overrides")
+    else:
+        for field, value in sorted((given.overrides or {}).items()):
+            parts.extend([f"--{field.replace('_', '-')}", _typed(value)])
+    if given.max_workers is not None:
+        parts.extend(["--max-workers", str(given.max_workers)])
+    if given.no_scan_model:
+        parts.append("--no-scan-model")
+    elif isinstance(given.scan_model, str):
+        parts.extend(["--scan-model", given.scan_model])
+    return shlex.join(parts)
+
+
+def _typed(value: Any) -> str:
+    """One override value, spelled the way `parse_override` reads it back.
+
+    JSON, because that parser is `yaml.safe_load` and every JSON document is a YAML one — so a range comes back as `[100, 200]` and a boolean as `true`, both of which survive the round trip. A plain string is passed through as itself rather than quoted into `"gpt-5"`, since YAML reads the bare word the same way and the quoted form is what a person would not have typed.
+    """
+    return value if isinstance(value, str) else json.dumps(value)
 
 
 def _durable_channel(workspace: Workspace) -> str | bool | None:
@@ -489,9 +728,16 @@ def _own_definition(workspace: Workspace) -> Path:
     Optional argument rather than required, because the ordinary case is a workspace with exactly one definition sitting in it and `steward launch` should be the whole command. An explicit path still wins, which is what a shared definition outside the workspace needs.
     """
     if (found := workspace.find_definition()) is None:
+        candidates = workspace.definition_candidates()
+        if len(candidates) > 1:
+            names = ", ".join(path.name for path in candidates)
+            raise click.ClickException(
+                f"this workspace has several files that read as a definition "
+                f"({names}) — name the one to launch on the command line"
+            )
         raise click.ClickException(
             "this workspace has no definition — create one (evalset.py, "
-            "flow.yaml, or hawk.yaml) or name one on the command line"
+            "config.py, or hawk.yaml) or name one on the command line"
         )
     return found
 
@@ -500,6 +746,13 @@ def _echo_launch(result: Launch, root: Path) -> None:
     """Print a launch: what it would change, then what it did."""
     for line in delta_lines(result.delta, root=root):
         click.echo(line)
+
+    if result.unrehearsed is not None:
+        # **printed even where the launch then refuses at the archive gate**,
+        # because both are things to fix before running this again and a person
+        # who fixes one and rediscovers the other has been made to look twice
+        click.echo("")
+        click.echo(f"⚠️  {result.unrehearsed} — `steward launch --smoke` rehearses it")
 
     if not result.committed:
         return

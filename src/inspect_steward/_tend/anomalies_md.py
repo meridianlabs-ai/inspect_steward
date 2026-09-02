@@ -198,7 +198,10 @@ def _what(group: _Group, affected: int) -> str:
     anomaly = group.anomaly
     plural = "s" if affected != 1 else ""
     if anomaly.kind == "limit":
-        line = f"{affected} sample{plural} were terminated by an operator"
+        line = (
+            f"{affected} sample{plural} "
+            f"{'were' if affected != 1 else 'was'} terminated by an operator"
+        )
     elif anomaly.kind == "task":
         line = f"{affected} task attempt{plural} failed"
     elif anomaly.kind == "score":

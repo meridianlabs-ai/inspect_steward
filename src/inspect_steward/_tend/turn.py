@@ -43,6 +43,7 @@ from .._evalset.manifest import (
     definition_hash,
     manifest_digest,
     read_manifest,
+    worker_overrides,
 )
 from .._evalset.observe import (
     ObservedLogs,
@@ -1135,7 +1136,7 @@ def _turn(
     # one read, two readers: the uuid set a resumed task's current log actually
     # holds is both coverage's denominator and the narrowing every scan-shaped
     # report needs -- and computing it twice is how the two come to disagree
-    reused, unverified = _reused_samples(observed, found)
+    reused, unverified = reused_samples(observed, found)
     scanned = coverage(
         observed,
         found.recorded,
@@ -1761,7 +1762,7 @@ def _fleet(workspace: Workspace, manifest: Manifest, log_dir: str) -> Fleet:
         # a definition's relative paths resolve the same way every turn
         cwd=workspace.root,
         args=manifest.source.args or None,
-        overrides=manifest.overrides,
+        overrides=worker_overrides(manifest),
         # from the manifest, never this turn's directives: the merge was
         # settled and verified at launch (`_scan.bracket`)
         scanners=manifest.scan.injected if manifest.scan is not None else None,
@@ -2307,10 +2308,26 @@ def _findings(
     **The second is an open episode, and without it the cheap gate has a hole that ends at the signature.** A fold that failed on the departure turn is a fold that never happens: the reap lands, the gate stops firing, and rows sit in the buffer through every later tend — until signoff's terminal finalize folds them, *after* the gate has passed, revealing a finding the signature does not cover. So a failure opens an episode (`scan_fold_failed`) that keeps the fold running every turn until one succeeds, on `status.md`'s and the propagation's mechanics exactly.
 
     Never raises. A directory that will not fold costs this turn's freshness and is retried; one that will not *read* is a different thing entirely and is reported (`ScanFindings.unreadable`), because unread and unflagged are not the same answer.
+
+    **A configured scan with no id is that same distinction one step earlier, and it read as *no scanning at all*.** The two conditions were one predicate: no `material` means this run scans nothing, and an empty census is simply true for it. A missing `scan_id` — `.eval-set-id` gone from the log directory and no id in the manifest — means the scan is configured and its directory cannot be located, so nothing can be folded, nothing read, and the census, the coverage column and the terminal finalize all quietly become *there was never anything here*. A signature then says nothing was flagged about transcripts nobody could look for. It is reported as unreadable, which is the vocabulary this file already has for evidence that exists and cannot be sized, and which the signoff gate already refuses on.
     """
     material = manifest.scan
-    if material is None or scan_id is None:
+    if material is None:
         return ScanFindings()
+    if scan_id is None:
+        return ScanFindings(
+            unreadable=[
+                UnreadableLog(
+                    location=log_dir,
+                    reason=(
+                        "this run scans, and neither the log directory's "
+                        "`.eval-set-id` nor the committed manifest says which "
+                        "scan the rows belong to"
+                    ),
+                    what="this run's scan results",
+                )
+            ]
+        )
     scanners = tuple(sorted(merged_scanners(material)))
     if not scanners:
         return ScanFindings()
@@ -2372,7 +2389,7 @@ def _current_locations(observed: ObservedTasks) -> dict[str, str]:
     }
 
 
-def _reused_samples(
+def reused_samples(
     observed: ObservedTasks, found: ScanFindings
 ) -> tuple[dict[str, frozenset[str]], frozenset[str]]:
     """Per resumed task with scan rows, the sample uuids its current log actually holds — and the ones that would not read.

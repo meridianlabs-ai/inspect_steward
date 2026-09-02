@@ -945,3 +945,48 @@ def _age(workspace: Workspace, *, seconds: float, **match: Any) -> None:
             line = json.dumps(event)
         rewritten.append(line)
     workspace.journal.write_text("\n".join(rewritten) + "\n", encoding="utf-8")
+
+
+class TestAConfiguredScanWithNoIdentity:
+    """*Configured scanning whose directory cannot be found* read as *no scanning at all*.
+
+    The two conditions were one predicate. No `material` means this run scans nothing and an empty census is simply true for it; a missing `scan_id` — `.eval-set-id` gone from the log directory, and no id in the committed manifest — means the scan is configured and nothing can be located. Everything downstream then quietly becomes *there was never anything here*: no census, no coverage, no terminal finalize, and a signature saying nothing was flagged about transcripts nobody could look for.
+    """
+
+    def unidentified(self, tmp_path: Path) -> Workspace:
+        """A scanning run whose eval-set id has gone missing from both places."""
+        workspace, manifest = prepared(tmp_path, [TASK])
+        write_manifest(
+            manifest.model_copy(update={"scan": MATERIAL}), workspace.manifest
+        )
+        write_log(workspace.logs, TASK)
+        return workspace
+
+    def test_it_is_reported_as_unreadable_rather_than_as_silence(
+        self, tmp_path: Path
+    ) -> None:
+        result = turn(self.unidentified(tmp_path))
+
+        assert result.observed is not None
+        assert [entry.what for entry in result.observed.unreadable] == [
+            "this run's scan results"
+        ]
+
+    def test_and_the_signature_is_refused_over_it(self, tmp_path: Path) -> None:
+        # through the vocabulary the gate already refuses on: a hole nobody can
+        # size is signed over by naming it, never by not noticing it
+        from inspect_steward._signoff import Signoff, signoff
+
+        result = signoff(self.unidentified(tmp_path), by="kaia")
+
+        assert isinstance(result, Signoff)
+        assert [blocker.kind for blocker in result.blockers] == [UNREAD]
+        assert result.signature is None
+
+    def test_a_run_that_scans_nothing_still_says_nothing(self, tmp_path: Path) -> None:
+        # the other half of the predicate, which was and remains correct
+        workspace, _ = prepared(tmp_path, [TASK])
+        write_log(workspace.logs, TASK)
+
+        observed = turn(workspace).observed
+        assert observed is not None and observed.unreadable == []

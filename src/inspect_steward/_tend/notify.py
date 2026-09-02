@@ -144,12 +144,16 @@ def _owed(workspace: Workspace, result: "TendResult") -> None:
         return
 
 
-def notify_failure(workspace: Workspace, reason: str) -> None:
+def notify_failure(
+    workspace: Workspace, reason: str, *, notification: str | bool | None = None
+) -> None:
     """Post that a turn could not run at all, once per distinct reason.
 
     **The case that is otherwise silent forever.** A malformed `_steward.yaml`, an unreadable log directory, an expired credential — each fails identically every interval, writes nothing anybody reads, and leaves `status.md` frozen at whatever the last good turn said.
 
     **The file is read here rather than taken from the caller**, because a turn can fail long before it settles a channel — a missing manifest raises in the first few lines — and a caller handing over what it happened to have would leave a workspace whose channel is *only* in `_steward.yaml` unable to report the one condition it most needs to. Where the file is itself what failed, `establish_channel` falls back to the variable on its own.
+
+    **`notification` is the exception a caller with a flag needs.** Reading the file alone posts a `launch --smoke --notification …` failure to the workspace's channel rather than the one the operator just named, and `--no-notification` to a channel they just declined. A caller that reached its own answer before failing passes it; one that failed before reaching one passes nothing and the file answers, which is every tend.
 
     Latched on `NOTIFIED` and released by the next turn that reaches its observation, so a run that breaks, is fixed, and breaks again the same way is heard both times.
 
@@ -162,9 +166,15 @@ def notify_failure(workspace: Workspace, reason: str) -> None:
     Args:
         workspace: The workspace whose turn failed.
         reason: What went wrong, as the exception said it.
+        notification: A channel the caller already settled — a command-line target, or `False` for nowhere. `None` reads the workspace's own.
     """
     try:
-        if establish_channel(workspace, _directives(workspace)) is None:
+        if (
+            establish_channel(
+                workspace, _directives(workspace), notification=notification
+            )
+            is None
+        ):
             return
         if reason in _already_said(workspace):
             return

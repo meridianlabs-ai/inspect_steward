@@ -41,6 +41,7 @@ __all__ = [
     "RESUMED",
     "RULING",
     "SIGNOFF",
+    "SMOKED",
     "Ack",
     "Armed",
     "Collected",
@@ -54,6 +55,7 @@ __all__ = [
     "Raised",
     "RampHold",
     "Signature",
+    "Smoked",
     "append_event",
     "read_acks",
     "read_armed",
@@ -64,6 +66,7 @@ __all__ = [
     "read_raised",
     "read_ramp_holds",
     "read_signoff",
+    "read_smoked",
     "summarize",
     "utc_now",
 ]
@@ -161,6 +164,16 @@ LAUNCHED = "launched"
 What it buys is one item's correctness. `unsupervised` is gated on a timer having been armed, deliberately, so a workspace nobody armed stays quiet rather than nagging somebody sitting at the terminal typing `steward tend` (`_tend.items`). `launch --no-timer` falls in the gap that leaves: the operator asked to run unsupervised, execution.md §8.3 requires that to *look* unsupervised, and with nothing recorded the run looks exactly like a hand-driven experiment nobody promised to schedule. So a launch writes itself down, and the item asks *did anyone launch this* as well as *did anyone arm it*.
 
 Carries `tasks`, `definition`, and `timer` — the scheduler armed, or `None` where the launch was told not to arm one.
+"""
+
+SMOKED = "smoked"
+"""Journal event: a rehearsal ran, and what it concluded.
+
+**Durable because it is the only record that a smoke happened.** The rehearsal's logs are disposable by construction and the next smoke clears them, so a record kept beside them would answer *was this definition rehearsed* only until somebody ran a second one. The launch that consults it may be days later.
+
+**Task identifiers and the manifest digest, because they answer different halves.** Identifiers say *which tasks* were rehearsed and are the half that can be reported per task — three of twelve is a sentence, and a digest can only say yes or no. The digest says whether the run's *shape* is still the one that was rehearsed: `task_identifier` hashes a task's execution limits and pointedly not its sample count, epochs or selection (execution.md §12 item 8), so a dataset that grew or an `epochs` that doubled keeps every identifier and is a materially different run. Both are recordable here for one reason — **the slice rides the workers and never the capture**, so the manifest a smoke captures is shape-identical to the one the launch will capture, and the digests are comparable rather than always different.
+
+Carries `identifiers`, `digest`, `verdict`, `waived` (checks accepted rather than passed), `samples`, `cap`, and `log_dir`. Written whether the smoke passed or failed — a failure is the more useful of the two to find in a journal.
 """
 
 NOTIFIED = "notified"
@@ -368,6 +381,29 @@ class Signature:
 
     exceptions: tuple[str, ...] = ()
     """The class keys whose caveats were signed over — `anomalies.md`'s contents at the moment of signing, by name."""
+
+
+@dataclass(frozen=True)
+class Smoked:
+    """The rehearsal in force, as the fold reports it."""
+
+    identifiers: frozenset[str] = frozenset()
+    """Task identifiers the rehearsal covered, or empty where nothing currently rehearses this workspace."""
+
+    digest: str | None = None
+    """The manifest digest it rehearsed, or `None` for a record written before digests were carried. `None` means *cannot say*, so a caller compares only when there is something to compare."""
+
+    scanners: str | None = None
+    """`scan_digest` of the material it ran under, or `None` for a record that predates the field.
+
+    A digest rather than the names, because names are not the configuration: a parameter changed, a different scan-side model, a filter narrowing which transcripts a scanner sees — each leaves the names identical and changes what the rows mean. Not covered by `digest`, which hashes the tasks and the run's shaping and not `Manifest.scan`.
+    """
+
+    scan_model: str | None = None
+    """The model those scanners reviewed with, `""` where none was configured, or `None` for a record that predates the field.
+
+    Three states in two spellings, which is worth the awkwardness: *no scan model* and *nobody wrote this down* have to stay apart, or a workspace rehearsed by an earlier version reports a change it did not make. `scanners` is the presence flag — the same version began recording both — so a caller that has one has the other.
+    """
 
 
 @dataclass(frozen=True)
@@ -643,6 +679,44 @@ def read_launched(events: list[JournalEvent]) -> str | None:
         if event.type == LAUNCHED:
             launched = event.ts
     return launched
+
+
+def read_smoked(events: list[JournalEvent]) -> Smoked:
+    """Fold a journal down to the rehearsal currently in force.
+
+    **The newest smoke is the answer, whatever it concluded**, which is what makes this a statement about the definition as it stands rather than about the best day it ever had. Reading back to the most recent *pass* would let a rehearsal that just failed sit behind a passing one from an hour ago, and report the launch as rehearsed on the strength of a run whose successor said otherwise — the one reading a person would never make from the same journal. So the last `smoked` event wins, and a last word that is not `passed` covers nothing.
+
+    Args:
+        events: Events in file order, as `read_journal` returns them.
+
+    Returns:
+        What the most recent rehearsal covered, or an empty `Smoked` where none ran or the most recent did not pass. A caller asks whether its captured identifiers are a subset — everything the launch is about to run was rehearsed — and whether the digest still matches.
+    """
+    for event in reversed(events):
+        if event.type != SMOKED:
+            continue
+        if event.payload.get("verdict") != "passed":
+            return Smoked()
+        digest = event.payload.get("digest")
+        scanners = event.payload.get("scanners")
+        scan_model = event.payload.get("scan_model")
+        identifiers = event.payload.get("identifiers")
+        return Smoked(
+            identifiers=frozenset(
+                one for one in cast(list[object], identifiers) if isinstance(one, str)
+            )
+            if isinstance(identifiers, list)
+            else frozenset(),
+            digest=digest if isinstance(digest, str) and digest else None,
+            scanners=scanners if isinstance(scanners, str) and scanners else None,
+            # gated on `scanners` rather than on itself, because `""` is a real
+            # answer here — *no scan model was configured* — and only the
+            # sibling field can say whether anybody wrote either of them down
+            scan_model=scan_model
+            if isinstance(scanners, str) and scanners and isinstance(scan_model, str)
+            else None,
+        )
+    return Smoked()
 
 
 def read_notified(events: list[JournalEvent]) -> set[str]:

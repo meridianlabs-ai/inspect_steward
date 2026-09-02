@@ -31,6 +31,7 @@ from .._evalset.detect import DefinitionType
 from .._evalset.manifest import (
     Manifest,
     ManifestError,
+    manifest_digest,
     read_manifest,
     write_manifest,
 )
@@ -40,9 +41,11 @@ from .._scan import (
     ScanError,
     initialize_scan,
     merged_scanners,
+    scan_digest,
     scan_material,
     verify_scan,
 )
+from .._scan.model import establish_scan_model
 from .._schedule import RunningWorker
 from .._tend import TendResult, tend
 from .._timer import (
@@ -74,6 +77,7 @@ from .._workspace import (
     read_directives,
     read_journal,
     read_overrides,
+    read_smoked,
     resolve_interval,
     resolve_log_dir,
     resolve_log_root,
@@ -124,6 +128,12 @@ class Launch:
 
     failures: list[str] = field(default_factory=list[str])
     """Things that did not work but did not stop the launch — a log that would not move, a worker that would not stop. Reported here and in `steward.log`, and left for the next turn, which decides again from what it finds."""
+
+    unrehearsed: str | None = None
+    """Why no passing smoke covers this capture, or `None` where one does.
+
+    **A warning, deliberately, and never a refusal.** Whether a smoke still applies is answered by the task identifiers — a definition that changed produced different ones — which gives the check a precise question to ask instead of guessing at which edits matter. What it must not do is refuse: re-launching after a fix and resuming an interrupted run are both legitimate reasons to have no current rehearsal, and a hard gate here would only teach people to route around it (workflow.md §7.1).
+    """
 
     pools: PoolAdvice | None = None
     """A host whose Docker will run out of bridge networks before it runs out of room, or `None` where it will not — no Docker, pools already carved finely enough, or a run small enough that thirty networks is ample (`_launch.pools`).
@@ -194,7 +204,7 @@ def launch(
     interval = resolve_interval(directives, tend_interval=tend_interval)
     store = resolve_log_store(directives, log_store=log_store)
     root = resolve_log_root(directives, log_root=log_root)
-    inspect_overrides = _overrides(overrides)
+    inspect_overrides = run_overrides(overrides)
 
     # before the capture and before the claim, because both of the things below
     # are cheap and one of them is a refusal. A five-minute Hawk capture that
@@ -232,7 +242,7 @@ def launch(
             log_root=root,
             log_store=store,
             overrides=inspect_overrides,
-            reuse_overrides=overrides is None,
+            reuse_overrides=reuse_committed(overrides, inspect_overrides),
             max_workers=max_workers,
             stall_after=stall_after,
             samples_ramp=samples_ramp,
@@ -240,7 +250,11 @@ def launch(
             preauthorized=preauthorized,
             sync=sync,
             notification=notification,
-            scan_model=scan_model,
+            # resolved over the file here rather than left to the tend, because
+            # the smoke gate below has to ask which model the fleet will scan
+            # with. The tend re-resolves and lands on the same answer, since a
+            # value that is no longer `None` wins its own precedence check
+            scan_model=scan_model if scan_model is not None else directives.scan_model,
             scanners=directives.scanners,
         )
 
@@ -270,15 +284,15 @@ def _launch(
     scanners: dict[str, Any] | None,
 ) -> Launch:
     """The launch itself, with the claim in hand for the whole of it."""
-    committed = _committed(workspace)
-    manifest = _capture(
+    committed = committed_manifest(workspace)
+    manifest = capture_run(
         workspace,
         definition,
-        args=args if args is not None else _prior_args(committed),
-        type=type
-        if type is not None
-        else (committed.source.type if committed else None),
-        overrides=overrides if not reuse_overrides else _prior_overrides(committed),
+        committed,
+        args=args,
+        type=type,
+        overrides=overrides,
+        reuse_overrides=reuse_overrides,
     )
     # the merge is settled here, at the one moment capture's word and the
     # operator's are both in hand, and committed with the manifest: every
@@ -288,6 +302,12 @@ def _launch(
     except ScanError as ex:
         raise LaunchError(str(ex)) from ex
     manifest = manifest.model_copy(update={"scan": scan})
+    # hoisted from the tend below, which makes exactly this call with exactly
+    # this input a few lines later. The gate needs the model the fleet will
+    # actually use rather than the flag alone, because the smoke recorded what
+    # it exercised -- and reading it any other way would miss the environment
+    # rung and report a change nobody made
+    unrehearsed = _unrehearsed(workspace, manifest, establish_scan_model(scan_model))
 
     # resolved here and nowhere else, then carried by the manifest: a tend
     # re-deriving it would be re-reading an environment a scheduler does not
@@ -335,7 +355,7 @@ def _launch(
     if not (delta.additive or accept_archive):
         # the refusal is the whole product of this call: the caller prints the
         # delta and the operator decides. Nothing has been written
-        return Launch(manifest=manifest, delta=delta)
+        return Launch(manifest=manifest, delta=delta, unrehearsed=unrehearsed)
 
     try:
         write_manifest(manifest, workspace.manifest)
@@ -393,6 +413,7 @@ def _launch(
         manifest=manifest,
         delta=delta,
         committed=True,
+        unrehearsed=unrehearsed,
         armed=armed,
         disarmed=disarmed,
         scan_dir=scan_dir,
@@ -406,27 +427,103 @@ def _launch(
     )
 
 
+def _unrehearsed(
+    workspace: Workspace, manifest: Manifest, scan_model: str | None
+) -> str | None:
+    """Whether a passing smoke covers what this launch is about to run.
+
+    **Two questions, because one answer cannot carry both.** Task identifiers say *which tasks* were rehearsed, and are the half that can name a number — *3 of 12 tasks* sends somebody somewhere, where a bare mismatch does not. They are also deliberately blind to how much of each task runs: `task_identifier` hashes execution limits and not the sample count, epochs or selection, so a dataset that doubled keeps every identifier while being a materially different night. The manifest digest is what closes that, and it is comparable at all only because **the rehearsal's slice rides its workers and never its capture** — a smoke that captured under its own `limit` would differ in the digest every time, for the one reason that does not matter.
+
+    **Subset rather than equality on the identifiers**, because adding a task to a rehearsed definition is the case worth naming and removing one is not: what matters is that nothing about to run is unrehearsed.
+
+    **So the digest is asked only where the two sets are equal**, which is the join between a subset rule and a whole-manifest hash. A capture that dropped a task hashes differently for that reason alone, and warning about a *shape* change there would report the removal twice under a name that does not describe it — while the removal itself is the case the identifier rule has already decided is fine. The cost is stated rather than hidden: a launch that both drops a task and grows another's dataset is not warned about the growth. That is an advisory line, and a rule a reader can hold is worth more than the corner it misses.
+
+    **And the scan configuration, which no manifest digest covers.** `manifest_digest` hashes the tasks and the run's shaping fields, not `Manifest.scan` — so a scanner added after a passing smoke reviews every transcript of the run having been exercised on none, and a `scan_model` changed since is a model whose context window the rehearsal established nothing about. Compared through `scan_digest` rather than through the scanner *names*, because names are not the configuration: a parameter changed, a different scan-side model, a filter deciding which transcripts a scanner sees, all leave the names identical while changing what the rows say — the same silent drift the manifest digest refuses for tasks.
+
+    A record written before any of these were carried reports `None` for them, and is compared on identifiers alone rather than being called stale — a fold that manufactured staleness out of its own absence of evidence would warn on every workspace rehearsed by an earlier version.
+
+    **Never raises and never refuses, and *unknown* is a warning rather than a silence.** The journal not reading used to cost the warning outright, which reads the trade backwards: this check's whole output is advice, so warning when the answer cannot be established costs one line and staying quiet asserts *rehearsed* on no evidence at all. Damage counts for the same reason and a sharper one — a torn line is what a crash mid-append leaves at the *end* of the file, which is exactly where the newest smoke is, so the fold silently reads the pass before it and reports coverage that has since been superseded.
+
+    Args:
+        workspace: The workspace being launched.
+        manifest: What this launch captured, with its scanners already merged in.
+        scan_model: The model scanners will review with, as the fleet will have it.
+    """
+    identifiers = {task.identifier for task in manifest.tasks}
+    if not identifiers:
+        return None
+    try:
+        read = read_journal(workspace.journal)
+    except OSError as ex:
+        return f"the journal could not be read, so nothing here knows whether this was rehearsed ({ex})"
+    if not read.intact:
+        return (
+            "the journal has damaged lines, so nothing here knows whether this "
+            "was rehearsed — the newest smoke is where a torn line lands"
+        )
+    rehearsed = read_smoked(read.events)
+    if not rehearsed.identifiers:
+        return "no smoke has passed for this workspace"
+    if missing := identifiers - rehearsed.identifiers:
+        count = len(missing)
+        return (
+            f"the last passing smoke does not cover {count} "
+            f"{'task' if count == 1 else 'tasks'} in this capture"
+        )
+    if (
+        identifiers == set(rehearsed.identifiers)
+        and rehearsed.digest is not None
+        and rehearsed.digest != manifest_digest(manifest)
+    ):
+        return (
+            "the last passing smoke rehearsed the same tasks at a different "
+            "shape — the samples, epochs or selection have changed since"
+        )
+    if rehearsed.scanners is not None:
+        if rehearsed.scanners != scan_digest(manifest.scan):
+            return (
+                "the last passing smoke scanned under a different configuration "
+                "— the scanners, their parameters, or the filter and generation "
+                "settings around them have changed since"
+            )
+        if rehearsed.scan_model != (scan_model or ""):
+            return "the last passing smoke scanned with a different model"
+    return None
+
+
 def _pool_advice(workspace: Workspace, manifest: Manifest) -> PoolAdvice | None:
     """Whether to tell this person about their Docker address pools, and once only.
 
     Asked after the run is committed rather than before, because the number to compare against is the provider's — `default_concurrency()`, which is what will actually be in force — and asking the provider means the answer tracks whatever inspect_ai is installed rather than a copy of its arithmetic that drifts.
 
     **Once per workspace**, recorded in the journal. The condition is a property of the host rather than of the run, so a person who has heard it and decided against changing their daemon has answered for every later launch too, and repeating it on each one is how advice becomes something people learn to scroll past.
+
+    **A journal that will not read costs the advice, and that is the opposite of what `_unrehearsed` does with the same failure.** The asymmetry is the point rather than an oversight: that one is a warning *about the run*, where saying nothing asserts something false — this one is a tip about somebody's Docker daemon, where saying nothing asserts nothing at all. What an unreadable journal actually costs here is the *once*, and repeating a tip somebody already declined is the failure mode this function exists to avoid. Either way it must not raise: this runs after the run is committed, and a launch that succeeded and then died rendering an aside is a launch nobody can tell succeeded.
     """
-    if any(
-        event.type == ACTION and event.payload.get("action") == POOLS_ADVISED
-        for event in read_journal(workspace.journal).events
-    ):
+    try:
+        advised = any(
+            event.type == ACTION and event.payload.get("action") == POOLS_ADVISED
+            for event in read_journal(workspace.journal).events
+        )
+    except OSError as ex:
+        steward_log(workspace.log, f"could not read the journal for pool advice: {ex}")
+        return None
+    if advised:
         return None
     advice = advise(_wanted_sandboxes(manifest))
     if advice is not None:
-        append_event(
-            workspace.journal,
-            ACTION,
-            action=POOLS_ADVISED,
-            networks=advice.networks,
-            wanted=advice.wanted,
-        )
+        try:
+            append_event(
+                workspace.journal,
+                ACTION,
+                action=POOLS_ADVISED,
+                networks=advice.networks,
+                wanted=advice.wanted,
+            )
+        except OSError as ex:
+            # said anyway, and said again next launch: the record is what makes
+            # this once-only, and the advice is useful without it
+            steward_log(workspace.log, f"could not journal the pool advice: {ex}")
     return advice
 
 
@@ -447,7 +544,7 @@ def _wanted_sandboxes(manifest: Manifest) -> int:
     return default if default is not None else 2 * (os.cpu_count() or 1)
 
 
-def _capture(
+def capture(
     workspace: Workspace,
     definition: Path,
     *,
@@ -456,6 +553,8 @@ def _capture(
     overrides: EvalSetOverrides | None,
 ) -> Manifest:
     """Execute the definition and read the eval set out of it.
+
+    **Public because a smoke captures too, and must capture identically.** A rehearsal that read the definition by any other route would be rehearsing a different enumeration than the launch it gates, and the two would then disagree about task identifiers — which is the one thing the gate compares.
 
     **Three paths matter, and conflating any two of them breaks something different.**
 
@@ -495,7 +594,61 @@ def _capture(
     )
 
 
-def _committed(workspace: Workspace) -> Manifest | None:
+def capture_run(
+    workspace: Workspace,
+    definition: Path,
+    committed: Manifest | None,
+    *,
+    args: dict[str, Any] | None,
+    type: DefinitionType | None,
+    overrides: EvalSetOverrides | None,
+    reuse_overrides: bool,
+) -> Manifest:
+    """Capture what the run *is*, reusing the committed manifest for whatever went unsaid.
+
+    **One expression of the rule, because two would eventually differ.** A rehearsal resolving these three by any other route rehearses a different eval set than the launch it gates: a workspace launched with `-A` and `--epochs` would have its *defaults* rehearsed by a bare `launch --smoke` while the launch that follows reuses what was committed — the gate then comparing a run against a rehearsal of something else, and passing. That was measured rather than imagined, which is why the resolution lives here and both callers pass through it.
+
+    Args:
+        workspace: The workspace being captured for.
+        definition: The definition to read.
+        committed: Desired state as it stands, or `None` where nothing is committed.
+        args: Definition arguments. `None` reuses the committed manifest's; an empty mapping asks for the definition's own.
+        type: Explicit definition type, or `None` to reuse then detect.
+        overrides: Inspect's words for this run, already resolved from flag and environment.
+        reuse_overrides: Whether nothing named an override, in which case the committed manifest's stand. The caller decides this, because *nothing was typed and nothing was exported* is a fact about its own inputs.
+
+    Returns:
+        The captured manifest.
+    """
+    return capture(
+        workspace,
+        definition,
+        args=args if args is not None else _prior_args(committed),
+        type=type
+        if type is not None
+        else (committed.source.type if committed else None),
+        overrides=_prior_overrides(committed) if reuse_overrides else overrides,
+    )
+
+
+def reuse_committed(
+    given: dict[str, Any] | None, resolved: EvalSetOverrides | None
+) -> bool:
+    """Whether the committed manifest's overrides still stand.
+
+    **Both halves, because either one alone gets a case wrong.** `_prior_overrides` is reached only when nothing said otherwise, and *otherwise* is a flag **or** a variable — its own docstring says any `STEWARD_*` and any `INSPECT_EVAL_*` replaces the set. Asking the flags alone discards a `STEWARD_EPOCHS` nobody typed but somebody exported, which on a first launch means the environment is read, resolved, and then dropped on the floor. Asking the resolved value alone cannot see `--no-overrides`, which resolves to nothing on purpose and must displace the committed manifest rather than fall back to it.
+
+    Args:
+        given: What the command line named, `{}` for `--no-overrides`, or `None` where nothing was typed.
+        resolved: What the flag and the environment came to together.
+
+    Returns:
+        Whether to capture under the committed manifest's overrides.
+    """
+    return given is None and resolved is None
+
+
+def committed_manifest(workspace: Workspace) -> Manifest | None:
     """Desired state as it stands, or `None` where this workspace has never launched.
 
     **A manifest that will not read raises rather than reading as absent.** Absent means every task is an addition and the delta needs no acceptance; unreadable means the same thing arrived at by accident, and would propose archiving a directory full of results nobody agreed to give up.
@@ -669,8 +822,10 @@ def _supervise(
         )
 
 
-def _overrides(given: dict[str, Any] | None) -> EvalSetOverrides | None:
+def run_overrides(given: dict[str, Any] | None) -> EvalSetOverrides | None:
     """Inspect's words for this run, resolved once and carried by the manifest.
+
+    **Public for the same reason `capture_run` is**: a rehearsal that read the environment differently would rehearse a different shape. In particular `--no-overrides` arrives as an empty mapping and has to displace the environment as well as the committed manifest, which is a rule expressed here and nowhere else — a smoke doing its own `read_overrides(os.environ, given or {})` reads `STEWARD_*` and `INSPECT_EVAL_*` straight back in, and the flag silently does half of what it says.
 
     The flag, then `STEWARD_X`, then inspect's own variable, then the definition — the same shape as every Steward setting, one vocabulary over (`_workspace.overrides`). Resolved here rather than per turn because a run's shape is decided when it is launched: `tend` and `status` recompute Steward's own settings every turn and never re-decide what the eval set *is*.
 

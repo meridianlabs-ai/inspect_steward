@@ -1,0 +1,41 @@
+---
+title: Scanners
+llms-description: "How Steward scans transcripts for scoring integrity problems: the built-in scanner, choosing a scan model, adding your own, and what a finding asks of you."
+---
+
+## Overview
+
+A sample can run, score cleanly, and still be untrustworthy: the model read the grader, refused the task while producing something that looks like an answer, or retrieved remote data from inside a sandbox that should have had no route to the internet.
+
+Scanners review transcripts for these problems. Under Steward they run as the samples they review complete, so the transcripts are already scanned by the time the run finishes.
+
+Steward runs a scoring integrity scanner over every sample of every run. It requires no configuration.
+
+## Scan Model
+
+By default a scanner reviews with the model already under evaluation, so an unconfigured run still scans. To use a different model, set `scan_model` in `_steward.yaml` or `STEWARD_SCAN_MODEL` in your `.env`:
+
+```{.yaml filename="_steward.yaml"}
+scan_model: anthropic/claude-opus-5
+```
+
+A scanner that names its own model in the definition keeps it.
+
+## Adding Scanners
+
+Your definition is the normal place to say what scans your eval set:
+
+```{.python filename="evalset.py"}
+eval_set(
+    tasks=[cais_swebenchpro(), datacurve_deep_swe()],
+    model=["openai/gpt-5.6-sol", "anthropic/claude-opus-5"],
+    scanner=[my_scanner()],
+)
+```
+
+## Findings
+
+A flagged sample becomes an anomaly and is decided the same way an error is, as described in [Error Handling](errors.qmd). Samples flagged the same way are one class and one decision, and every disposition is available, including excluding or zeroing a score you establish is wrong.
+
+Dismissing is an answer too, and a run cannot be signed off while a finding has no ruling either way. You will dismiss most of them: a model that probed a grader it never reached earned nothing, and the score stands. At signoff Steward tells you how many findings were dismissed, and your agent is asked to name them.
+

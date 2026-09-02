@@ -66,7 +66,11 @@ def signoff_command(
     try:
         committed_manifest(workspace)
         result = signoff(
-            workspace, by=by, note=note, again=again, break_stale=not no_break_claim
+            workspace,
+            by=by,
+            note=note,
+            again=again,
+            break_stale=not no_break_claim,
         )
     except (SignoffError, ManifestError, *TURN_ERRORS) as ex:
         raise click.ClickException(str(ex)) from ex
