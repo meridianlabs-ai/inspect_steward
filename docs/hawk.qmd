@@ -1,6 +1,6 @@
 ---
 title: Inspect Hawk
-llms-description: "Running a Hawk eval set config under Steward: installation, how concurrency is set, what a local Hawk run cannot do, and what fan-out costs at startup."
+llms-description: "Running a Hawk eval set config under Steward: how concurrency is set, what a local Hawk run cannot do, and what fan-out costs at startup."
 ---
 
 ## Overview

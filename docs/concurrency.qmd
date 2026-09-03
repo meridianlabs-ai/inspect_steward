@@ -1,6 +1,6 @@
 ---
 title: Concurrency
-llms-description: "The two concurrency dimensions that matter when running agentic evaluations, how sandboxes, samples, tasks, and model connections are bounded, and how Steward's automatic ramp discovers sample concurrency."
+llms-description: "Matching sample concurrency to inference concurrency: how sandboxes, samples, tasks and model connections are bounded, how the automatic ramp finds the right level, worker processes, and Docker configuration."
 ---
 
 ## Overview

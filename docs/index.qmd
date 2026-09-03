@@ -1,7 +1,7 @@
 ---
 title: "Inspect Steward"
 description: "Automated execution and supervision of long-running evaluations."
-llms-description: "What Steward is, how supervision divides between a timer, a tend loop, an agent, and you, and how to start and walk away from a run."
+llms-description: "What Steward is, and a quick tour: setting up a workspace, running an eval set, and making the decisions the run brings you."
 tbl-colwidths: [30,70]
 ---
 

@@ -1,6 +1,6 @@
 ---
 title: Error Handling
-llms-description: "How Steward tunes inspect's error handling for unattended runs: what it retries automatically, what it surfaces as decisions, how a decision becomes standing policy, and how errors are resolved before signoff."
+llms-description: "How Steward handles errors in unattended runs: automatic retry, what becomes a decision, codifying decisions as standing policy, resolving errors before signoff, and stuck samples."
 ---
 
 ## Overview

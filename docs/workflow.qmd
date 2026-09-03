@@ -1,6 +1,6 @@
 ---
 title: Workflow
-llms-description: "Everything that happens in a Steward run: the workspace init creates, what launch captures and gates on, the tend loop, where the run stands, the decisions that reach a person, standing rules, pausing, cold pickup, and how a run ends."
+llms-description: "A Steward run end to end: the workspace, launch and the tend loop, agent and human decisions, notifications, signoff, log directories and the log store, options, and advanced topics such as pausing and inflight changes."
 ---
 
 ## Overview
