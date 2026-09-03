@@ -51,6 +51,46 @@ CHANNEL = frozenset({"INSPECT_EVAL_NOTIFICATION", "STEWARD_NOTIFICATION"})
 Identity is not the question either, here or anywhere else in this module: a `.env` naming a *different* `OPENAI_API_KEY` than the shell also passes, because what cannot be known is which one the run should use and what can be known is whether one will be there.
 """
 
+ORCHESTRATION = frozenset(
+    {
+        # GitHub Actions, injected into every job
+        "GITHUB_TOKEN",
+        "ACTIONS_RUNTIME_TOKEN",
+        "ACTIONS_ID_TOKEN_REQUEST_TOKEN",
+        # GitLab CI
+        "CI_JOB_TOKEN",
+        # Buildkite
+        "BUILDKITE_AGENT_ACCESS_TOKEN",
+    }
+)
+"""Credential-shaped variables belonging to whatever *invoked* Steward, rather than to the run.
+
+**The check is a diff, and these are the one thing a diff reads wrong.** Every name here ends in `_TOKEN`, so the suffix rule catches all of them; none is in anybody's `.env`, because none was ever chosen by a person — the runner injects them into the job it is executing. The refusal that produced named a variable the operator did not recognise and prescribed the one thing they must not do with it, which is copy a CI token into a committed-adjacent file. Running `steward launch` from a CI job was refused on arrival.
+
+**The cost of this list is stated rather than hidden, because it is real.** This module refuses to guess which credentials an eval *needs*, on the grounds that guessing "would refuse correct setups and miss unusual ones" — and an exemption is that guess wearing the other hat. A task that clones a private repository through `GITHUB_TOKEN` genuinely will fail at 02:00, and this list is why nothing warned. Accepted deliberately: the variables here are injected rather than configured, so a run depending on one is depending on an artifact of where it was started from, which is already a run that does not survive being scheduled.
+
+**So the bar for adding a name is that the environment sets it without being asked.** `VAULT_TOKEN` and `GH_TOKEN` fail that bar and are deliberately absent: a person exports those on purpose, which is exactly the signal that something wanted them.
+"""
+
+HARNESS = ("CLAUDE_CODE_",)
+"""Prefixes owned by an agent harness that runs Steward, whose variables are its own and never the run's.
+
+The same case as `ORCHESTRATION` arriving as a namespace rather than a list of names. It earns a prefix because the harness is free to add variables to it and every one of them will be as irrelevant to the eval as the last — and because an agent driving Steward is not an edge case here, it is who the runbook is addressed to.
+"""
+
+
+def orchestration(name: str) -> bool:
+    """Whether a variable belongs to whatever invoked Steward rather than to the run.
+
+    Args:
+        name: A variable name.
+
+    Returns:
+        Whether the diff should pass over it.
+    """
+    return name in ORCHESTRATION or name.startswith(HARNESS)
+
+
 AMBIENT = frozenset(
     {
         "INSPECT_EVAL_MODEL",
@@ -73,12 +113,14 @@ def credentials(environ: Mapping[str, str]) -> set[str]:
         environ: An environment.
 
     Returns:
-        The names, ignoring any set to an empty value — an exported-but-empty variable carries nothing and its absence loses nothing.
+        The names, ignoring any set to an empty value — an exported-but-empty variable carries nothing and its absence loses nothing — and ignoring the runner's own (`ORCHESTRATION`).
     """
     return {
         name
         for name, value in environ.items()
-        if value and (name in KNOWN or CREDENTIAL.search(name))
+        if value
+        and not orchestration(name)
+        and (name in KNOWN or CREDENTIAL.search(name))
     }
 
 
@@ -181,10 +223,13 @@ def explain(missing: list[str], env_file: Path) -> str:
 __all__ = [
     "AMBIENT",
     "CREDENTIAL",
+    "HARNESS",
     "KNOWN",
+    "ORCHESTRATION",
     "credentials",
     "dotenv_names",
     "explain",
+    "orchestration",
     "resolved",
     "unavailable",
 ]

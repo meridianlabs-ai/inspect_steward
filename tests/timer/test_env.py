@@ -12,7 +12,12 @@ from pathlib import Path
 
 import pytest
 from inspect_steward._timer import resolved_env, unavailable_credentials
-from inspect_steward._timer.env import credentials, dotenv_names, explain
+from inspect_steward._timer.env import (
+    credentials,
+    dotenv_names,
+    explain,
+    orchestration,
+)
 
 SHELL = {
     "ANTHROPIC_API_KEY": "sk-ant-secret",
@@ -317,3 +322,64 @@ def test_the_remedy_names_the_file_that_is_being_read(tmp_path: Path) -> None:
 
     assert missing == ["AWS_ACCESS_KEY_ID"]
     assert str(ancestor.resolve()) in explain(missing, env_file)
+
+
+# --- variables belonging to whatever invoked steward ----------------------
+#
+# The diff compares this shell against the `.env` a tend will read, and a
+# runner's own credentials sit in the first and never the second: nobody chose
+# them, the job they were injected into did. Every one ends in `_TOKEN`, so the
+# suffix rule caught all of them and a launch from CI was refused on arrival --
+# naming a variable the operator did not recognise, and prescribing the one
+# thing they must not do with it, which is copy a runner token into `.env`.
+
+
+RUNNERS: list[tuple[str, str, bool]] = [
+    ("a forge runner's job token", "GITHUB_TOKEN", True),
+    ("its oidc request token", "ACTIONS_ID_TOKEN_REQUEST_TOKEN", True),
+    ("its runtime token", "ACTIONS_RUNTIME_TOKEN", True),
+    ("another forge's job token", "CI_JOB_TOKEN", True),
+    ("a build agent's", "BUILDKITE_AGENT_ACCESS_TOKEN", True),
+    ("an agent harness, by prefix", "CLAUDE_CODE_MESSAGING_TOKEN", True),
+    ("anything else in that namespace", "CLAUDE_CODE_SOMETHING_ELSE_TOKEN", True),
+    # exported on purpose, which is exactly the signal that something wanted it
+    ("a secret store token a person exported", "VAULT_TOKEN", False),
+    ("a cli's own token", "GH_TOKEN", False),
+    ("a provider key", "ANTHROPIC_API_KEY", False),
+    ("the notification channel", "STEWARD_NOTIFICATION", False),
+]
+
+
+@pytest.mark.parametrize(
+    ("name", "expected"),
+    [(name, expected) for _, name, expected in RUNNERS],
+    ids=[case for case, _, _ in RUNNERS],
+)
+def test_which_variables_belong_to_the_runner(name: str, expected: bool) -> None:
+    assert orchestration(name) is expected
+
+
+@pytest.mark.parametrize(
+    "name", [name for _, name, passed_over in RUNNERS if passed_over]
+)
+def test_a_runners_own_token_is_not_a_credential_to_lose(name: str) -> None:
+    # it will indeed be gone at 02:00, and that is not a fact about the eval
+    assert credentials({name: "secret"}) == set()
+
+
+def test_a_run_started_from_a_runner_is_not_refused_over_it(tmp_path: Path) -> None:
+    """The refusal this list exists to stop, end to end."""
+    env_file = env(tmp_path, "ANTHROPIC_API_KEY=x\nAWS_ACCESS_KEY_ID=y\n")
+    injected = {**SHELL, "GITHUB_TOKEN": "redacted", "CI_JOB_TOKEN": "redacted"}
+
+    assert unavailable_credentials(env_file, injected) == []
+
+
+def test_and_a_real_credential_alongside_one_still_is(tmp_path: Path) -> None:
+    # the exemption is per-variable and never a mode: the reason to be wary of
+    # an ignore list is that it quietly widens, so the check has to keep
+    # answering for everything it did not name
+    env_file = env(tmp_path, "ANTHROPIC_API_KEY=x\n")
+    injected = {**SHELL, "GITHUB_TOKEN": "redacted"}
+
+    assert unavailable_credentials(env_file, injected) == ["AWS_ACCESS_KEY_ID"]
