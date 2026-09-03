@@ -24,6 +24,7 @@ from .._workspace import (
     ARMED,
     DISARMED,
     LAUNCHED,
+    NOTED,
     PAUSED,
     RAISED,
     RAMP_HELD,
@@ -46,6 +47,7 @@ _ADMITTED = frozenset(
         ARMED,
         DISARMED,
         LAUNCHED,
+        NOTED,
         RULING,
         SIGNOFF,
     }
@@ -130,6 +132,10 @@ def _describe(event: JournalEvent) -> str:
         return f"paused by {by}" + (f" — {reason}" if reason else "")
     if event.type == RESUMED:
         return "resumed"
+    if event.type == NOTED:
+        by = _text(payload, "by") or "somebody"
+        text = _text(payload, "text")
+        return f"noted by {by}: {text}" if text else ""
     if event.type == RAMP_HELD:
         by = _text(payload, "by") or "somebody"
         task = _text(payload, "task") or _text(payload, "identifier")

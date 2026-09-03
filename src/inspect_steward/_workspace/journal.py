@@ -30,6 +30,7 @@ __all__ = [
     "INSTANCE",
     "INVESTIGATING",
     "LAUNCHED",
+    "NOTED",
     "OBSERVATION",
     "OPENED",
     "PAUSED",
@@ -174,6 +175,14 @@ SMOKED = "smoked"
 **Task identifiers and the manifest digest, because they answer different halves.** Identifiers say *which tasks* were rehearsed and are the half that can be reported per task — three of twelve is a sentence, and a digest can only say yes or no. The digest says whether the run's *shape* is still the one that was rehearsed: `task_identifier` hashes a task's execution limits and pointedly not its sample count, epochs or selection (execution.md §12 item 8), so a dataset that grew or an `epochs` that doubled keeps every identifier and is a materially different run. Both are recordable here for one reason — **the slice rides the workers and never the capture**, so the manifest a smoke captures is shape-identical to the one the launch will capture, and the digests are comparable rather than always different.
 
 Carries `identifiers`, `digest`, `verdict`, `waived` (checks accepted rather than passed), `samples`, `cap`, and `log_dir`. Written whether the smoke passed or failed — a failure is the more useful of the two to find in a journal.
+"""
+
+NOTED = "noted"
+"""Journal event: something a session wrote down for the next reader.
+
+The two acts that otherwise leave no journal entry are the ones a reader most wants explained: stopping to ask, where `notify` posts to a channel and writes nothing here, and a direct `inspect ctl` mutation, recorded in the eval log where no collection looks. A note is the record for both, and for any observation worth more than the conversation it was made in.
+
+Carries `by` and `text`. It is not a decision — it opens, closes, and pauses nothing — which is why it has no `reason` of its own: the text is the reason.
 """
 
 NOTIFIED = "notified"

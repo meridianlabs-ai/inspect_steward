@@ -24,7 +24,7 @@ from .anomalies import (
     refuse_dishonest,
     settled_ruling,
 )
-from .turn import TURN_ERRORS, find_workspace
+from .turn import TURN_ERRORS, decided_by, find_workspace
 
 
 @click.command("rule")
@@ -48,8 +48,8 @@ from .turn import TURN_ERRORS, find_workspace
 )
 @click.option(
     "--by",
-    required=True,
-    help="Who decided — a name, never a role. An agent relaying a person's decision records the person.",
+    default=None,
+    help="Who decided — a name, never a role. Defaults to this workspace's git `user.name`, or the login name; pass it when relaying someone else's decision.",
 )
 @click.option(
     "--effect",
@@ -68,7 +68,7 @@ def rule_command(
     proposal_id: str | None,
     disposition: str | None,
     reason: str,
-    by: str,
+    by: str | None,
     effect: str | None,
     output_json: bool,
 ) -> None:
@@ -77,6 +77,7 @@ def rule_command(
     `CLASSES` are class keys as `steward status` prints them, or any unambiguous prefix. A ruling closes the class's window — every open generation of it — and recurrence afterwards opens a new one carrying this decision as precedent.
     """
     workspace = find_workspace()
+    decider = decided_by(workspace, by)
     try:
         result = status(workspace)
     except TURN_ERRORS as ex:
@@ -111,7 +112,7 @@ def rule_command(
             "class": key,
             "disposition": decided.value,
             "reason": reason,
-            "by": by,
+            "by": decider,
             "effect": effects.get(key, ""),
         }
         if proposal_id is not None:
@@ -127,7 +128,7 @@ def rule_command(
                             "class": key,
                             "disposition": decided.value,
                             "reason": reason,
-                            "by": by,
+                            "by": decider,
                             "effect": effects.get(key, ""),
                             "proposal": proposal_id,
                         }

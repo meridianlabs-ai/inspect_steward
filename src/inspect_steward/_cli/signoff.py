@@ -16,14 +16,14 @@ import click
 from .._evalset.manifest import ManifestError
 from .._signoff import Signoff, SignoffError, committed_manifest, signoff
 from .._workspace import Held
-from .turn import TURN_ERRORS, find_workspace
+from .turn import TURN_ERRORS, decided_by, find_workspace
 
 
 @click.command("signoff")
 @click.option(
     "--by",
-    required=True,
-    help="Who is accepting these results — a name, never a role. An agent relaying a person's decision records the person.",
+    default=None,
+    help="Who is accepting these results — a name, never a role. Defaults to this workspace's git `user.name`, or the login name; pass it when relaying someone else's decision.",
 )
 @click.option(
     "--note",
@@ -56,7 +56,7 @@ from .turn import TURN_ERRORS, find_workspace
     help="Output the signature, or the blockers, as JSON.",
 )
 def signoff_command(
-    by: str,
+    by: str | None,
     note: str | None,
     again: bool,
     publish: bool,
@@ -70,11 +70,12 @@ def signoff_command(
     A person decides this. An agent may prompt for it and may run it once they answer, recording their name, which is why the signer is recorded rather than the process. `--publish` is the same shape one step further out: exporting results into a shared store is the person's call too, so it is asked rather than configured.
     """
     workspace = find_workspace()
+    decider = decided_by(workspace, by)
     try:
         committed_manifest(workspace)
         result = signoff(
             workspace,
-            by=by,
+            by=decider,
             note=note,
             again=again,
             publish=publish,

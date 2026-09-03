@@ -223,6 +223,15 @@ def test_a_condition_that_changes_comes_back_as_new_work(tmp_path: Path) -> None
     assert "stuck" in returned
 
 
+def test_a_note_appears_under_what_happened(workspace: Workspace) -> None:
+    # a note is written for the next reader, and collect is the next reader
+    run("note", "sonnet arm failing since 01:40; suspect the provider")
+
+    _, latest = sections(run("collect"))
+
+    assert "noted by agent" in latest and "suspect the provider" in latest
+
+
 def test_acknowledging_moves_an_item_from_the_queue_into_what_happened(
     workspace: Workspace,
 ) -> None:

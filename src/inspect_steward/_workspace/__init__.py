@@ -33,6 +33,7 @@ from .journal import (
     INSTANCE,
     INVESTIGATING,
     LAUNCHED,
+    NOTED,
     NOTIFIED,
     OBSERVATION,
     OPENED,
@@ -91,6 +92,7 @@ from .overrides import (
     read_overrides,
     spellings,
 )
+from .person import person_name
 from .sync import (
     OMITTED,
     OMITTED_VALUE,
@@ -142,6 +144,7 @@ __all__ = [
     "JournalSummary",
     "ACTION",
     "LaunchedEvent",
+    "NOTED",
     "OBSERVATION",
     "OPENED",
     "PROPOSAL",
@@ -162,6 +165,7 @@ __all__ = [
     "acquire",
     "append_event",
     "create_workspace",
+    "person_name",
     "ensure_gitignore",
     "read_acks",
     "read_armed",

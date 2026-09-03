@@ -4,7 +4,7 @@ import pytest
 from click.testing import CliRunner
 from inspect_steward._cli.main import steward
 from inspect_steward._evalset.manifest import write_manifest
-from inspect_steward._workspace import create_workspace
+from inspect_steward._workspace import NOTED, create_workspace, read_journal
 
 from ._logs import SynthTask, synth_manifest
 
@@ -73,3 +73,31 @@ def test_a_hold_on_a_task_nobody_is_running_is_refused(
         ["ramp", "hold", manifest.tasks[0].identifier, "--reason", "watch this"],
     )
     assert named.exit_code == 0, named.output
+
+
+def test_a_note_is_one_journal_append_and_a_blank_one_is_refused(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # the verb exists for the two acts that leave no other entry -- a stop and
+    # a direct ctl mutation -- so what matters is that it lands, whose it is,
+    # and that an empty line nobody could read is refused rather than written
+    workspace = create_workspace(tmp_path, git=False).workspace
+    monkeypatch.chdir(tmp_path)
+    runner = CliRunner()
+
+    noted = runner.invoke(
+        steward, ["note", "grader timing out since 01:40; suspect the provider"]
+    )
+    assert noted.exit_code == 0, noted.output
+
+    blank = runner.invoke(steward, ["note", "   "])
+    assert blank.exit_code != 0
+
+    notes = [
+        event.payload
+        for event in read_journal(workspace.journal).events
+        if event.type == NOTED
+    ]
+    assert len(notes) == 1
+    assert notes[0]["by"] == "agent"
+    assert notes[0]["text"] == "grader timing out since 01:40; suspect the provider"

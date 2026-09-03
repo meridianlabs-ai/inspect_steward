@@ -55,15 +55,16 @@ def test_init_reports_a_complete_workspace_on_a_second_run(tmp_path: Path) -> No
 
 
 def test_runbook_carries_the_bounds() -> None:
-    # the runbook is skeletal, but the prohibitions in it are settled and are
-    # the reason an agent can be trusted with the rest
+    # the prohibitions are settled and are the reason an agent can be trusted
+    # with the rest, so they are the part of the text pinned here
     result = CliRunner().invoke(steward, ["runbook"])
 
     assert result.exit_code == 0, result.output
     for bound in (
-        "steward signoff",
+        "## What you may do",
+        "## When to stop and ask",
         "Edit the definition",
-        "Write `_steward.yaml`",
+        "Writing `_steward.yaml`",
         "Move or delete a log",
         "Trust the artifact, not the exit code",
     ):

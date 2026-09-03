@@ -6,6 +6,8 @@ Entered as a shell would enter them, over a real workspace with hand-journalled 
 """
 
 import json
+import shutil
+import subprocess
 from pathlib import Path
 from typing import Any
 
@@ -106,6 +108,30 @@ class TestRule:
         assert all(entry["reason"] == "provider outage overnight" for entry in landed)
         assert all(entry["by"] == "kaia" for entry in landed)
         assert f"ruled {CLASS_A}: rerun" in output
+
+    def test_by_defaults_to_the_person_the_repository_names(
+        self, workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # an agent relaying the person whose shell this is should not have to
+        # ask their name -- the repository already carries it
+        git = shutil.which("git")
+        if git is None:
+            pytest.skip("git is not installed")
+        monkeypatch.setenv(
+            "GIT_CONFIG_GLOBAL", str(workspace.root / "no-global-gitconfig")
+        )
+        subprocess.run([git, "init", "-q", str(workspace.root)], check=True)
+        subprocess.run(
+            [git, "-C", str(workspace.root), "config", "user.name", "Kaia Example"],
+            check=True,
+        )
+
+        code, output = run(
+            "rule", CLASS_A, "--disposition", "rerun", "--reason", "provider outage"
+        )
+
+        assert code == 0, output
+        assert rulings(workspace)[0]["by"] == "Kaia Example"
 
     def test_an_unknown_class_is_refused_listing_what_is_open(
         self, workspace: Workspace

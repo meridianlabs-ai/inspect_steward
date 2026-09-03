@@ -3,6 +3,8 @@
 The claims worth defending: the gate names *every* reason at once and each one names the act that answers it; a hole that was ruled on is signed over and one nobody named refuses; curation moves rather than deletes, and moves the superseded attempt rather than the one the run reports; a signature is keyed to the results it covered, so a relaunch un-signs and an unlaunched edit does not; a filesystem that will not cooperate cannot unmake a decision a person made; and the timer comes down, because a signed run that goes on tending is spending money against an explicit instruction.
 """
 
+import shutil
+import subprocess
 from dataclasses import replace
 from pathlib import Path
 from typing import Any
@@ -585,6 +587,24 @@ def test_the_command_signs_and_says_what_is_still_the_humans(here: Workspace) ->
     assert "no accepted exceptions" in result.output
     # the one thing signoff does not do, said on the way out
     assert "yours to commit" in result.output
+
+
+def test_the_command_signs_as_the_person_the_repository_names(
+    here: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    git = shutil.which("git")
+    if git is None:
+        pytest.skip("git is not installed")
+    monkeypatch.setenv("GIT_CONFIG_GLOBAL", str(here.root / "no-global-gitconfig"))
+    subprocess.run([git, "init", "-q", str(here.root)], check=True)
+    subprocess.run(
+        [git, "-C", str(here.root), "config", "user.name", "Kaia Example"], check=True
+    )
+
+    result = run("signoff")
+
+    assert result.exit_code == 0, result.output
+    assert "🔒 signed off by Kaia Example" in result.output
 
 
 def test_the_command_prints_every_blocker_and_exits_non_zero(

@@ -24,7 +24,7 @@ from .._tend import (
     progress_table,
     verdict_line,
 )
-from .._workspace import DirectivesError, Held, Workspace
+from .._workspace import DirectivesError, Held, Workspace, person_name
 
 TURN_ERRORS = (TendError, ManifestError, ManifestVersionError, DirectivesError)
 """Everything a turn raises that is a message for a person rather than a traceback."""
@@ -42,6 +42,24 @@ def find_workspace() -> Workspace:
             "`steward init` to create one"
         )
     return workspace
+
+
+def decided_by(workspace: Workspace, by: str | None) -> str:
+    """The person a decision is recorded against.
+
+    `--by` when given, passed through untouched so the verb's own refusal of a blank name still fires; otherwise the workspace's git `user.name`, or the login name. The default exists so that an agent relaying the person whose shell this is need not ask them their name — and it is refused rather than guessed when neither source answers, because a decision recorded against nobody is worse than one that asked.
+
+    Raises:
+        click.ClickException: If `--by` was omitted and no name can be resolved.
+    """
+    if by is not None:
+        return by
+    name = person_name(workspace.root)
+    if not name:
+        raise click.ClickException(
+            "could not work out who is deciding — pass --by NAME"
+        )
+    return name
 
 
 def echo_refused(refused: Refused) -> None:
