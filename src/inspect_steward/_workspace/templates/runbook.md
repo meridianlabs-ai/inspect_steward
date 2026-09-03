@@ -18,6 +18,8 @@ What a tend cannot decide becomes an item in the queue. Every item has a kind, a
 
 The smoke fails on any errored sample and on four named checks: `context_window`, `reasoning`, `reasoning_api`, `scan_coverage`. `unexercised` and `undetermined` are not failures. Fix what failed rather than routing around it. `--accept CHECK` waives one check by name; an errored sample cannot be waived. Do not project the run's spend from the smoke.
 
+**The cap is not one of the things that can fail.** A smoke runs a few samples under a wall-clock deadline and stops when it fires, mid-sample if that is where it is. That is the tool working: samples are meant to be cut off, nothing is reported about the ones that were, and a rehearsal that answered its checks is ready whether or not it finished what it started. Do not raise `--cap`, do not lower `--samples`, and do not run it again to let the samples complete — a slow task is a fact about the run, and the smoke has already told you what it went to find out. The one deadline worth acting on is one that fires before a single sample lands, which establishes nothing and says so.
+
 A smoke that fails twice is a stop. Notify it explicitly: nothing posts before the first worker starts.
 
 **Then launch.** `steward launch` shows what will change and starts the run.

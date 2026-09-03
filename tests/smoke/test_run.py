@@ -211,16 +211,37 @@ class TestTheVerdict:
     ) -> None:
         assert outcome(Probe(), waived=(), capped=False, errors=1) is Outcome.FAILED
 
-    def test_a_cap_is_its_own_outcome_rather_than_a_kind_of_failure(self) -> None:
-        # the two send a reader somewhere different: a failed check is a
-        # configuration to fix, a cap is a rehearsal that never got far enough
-        # to have an opinion
-        assert outcome(Probe(), waived=(), capped=True, errors=0) is Outcome.CAPPED
+    def test_a_truncated_rehearsal_is_ready(self) -> None:
+        """The cap firing mid-sample is the tool working, not a defect to fix.
 
-    def test_a_cap_outranks_a_waiver(self) -> None:
+        A smoke runs a couple of samples under a deadline precisely so it can
+        be stopped. Reading the stop as a verdict discarded every check that
+        had already answered and refused the launch it had just cleared.
+        """
         assert (
-            outcome(self.failing(), waived=("context_window",), capped=True, errors=0)
+            outcome(Probe(), waived=(), capped=True, errors=0, landed=3)
+            is Outcome.PASSED
+        )
+
+    def test_a_cap_that_established_nothing_is_its_own_outcome(self) -> None:
+        # the narrow case left: no sample landed, so no check could answer and
+        # there is nothing to have an opinion about. A different thing to look
+        # into than a check that came back wrong
+        assert (
+            outcome(Probe(), waived=(), capped=True, errors=0, landed=0)
             is Outcome.CAPPED
+        )
+
+    def test_a_cap_excuses_nothing_a_rehearsal_actually_found(self) -> None:
+        # the deadline explains a short slice and nothing else -- a check that
+        # came back wrong under a cap came back wrong
+        assert (
+            outcome(self.failing(), waived=(), capped=True, errors=0, landed=2)
+            is Outcome.FAILED
+        )
+        assert (
+            outcome(Probe(), waived=(), capped=True, errors=0, errored=1, landed=2)
+            is Outcome.FAILED
         )
 
 

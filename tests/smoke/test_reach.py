@@ -265,3 +265,124 @@ class TestWhichAttemptTheCountsAreOver:
         plan = self.two_attempts(tmp_path)
 
         assert concluded(plan).landed == 1
+
+
+class TestWhatTheCapExcuses:
+    """The deadline explains a short rehearsal, and nothing else.
+
+    A smoke runs a few samples under a wall-clock cap and stops when it fires,
+    mid-sample if that is where it is. Every layer that judged the rehearsal
+    read that stop as a defect: `unfinished` reported the cancelled task,
+    `short_slices` reported the samples it never reached, and `outcome`
+    short-circuited ahead of the checks — so a rehearsal that answered all four
+    and landed all but one of its samples was refused, and the remedy on offer
+    was to run the whole thing again with a longer clock.
+
+    What must not come back with that fix is the defect underneath: a task that
+    failed on its own terms lands a finalized log with an exception in its
+    header and nothing beneath it, and excusing that because the rehearsal
+    later ran out of time would report a broken definition as ready.
+
+    `scan_coverage` is waived wherever a verdict is the subject, because these
+    logs carry no scan rows and the question here is the cap alone.
+    """
+
+    def capped(self, plan: Plan, *, waived: tuple[str, ...] = ()) -> Smoke:
+        return conclude(
+            plan,
+            logs=observe_logs(plan.log_dir),
+            capped=True,
+            elapsed=1.0,
+            waived=waived,
+        )
+
+    def cancelled_by_the_cap(self, plan: Plan) -> None:
+        write_log(
+            Path(plan.log_dir),
+            SMALL,
+            status="error",
+            error="Task cancelled by user (abort)",
+            error_traceback=(
+                "Traceback (most recent call last):\n"
+                "inspect_ai._util.exception.TerminateTaskError: "
+                "Task cancelled by user (abort)\n"
+            ),
+            samples=[SynthSample("1")],
+        )
+
+    def test_a_task_the_cap_cancelled_is_not_a_failure(self, tmp_path: Path) -> None:
+        plan = planned(tmp_path, SMALL)
+        self.cancelled_by_the_cap(plan)
+
+        assert self.capped(plan).errors == ()
+
+    def test_and_is_a_failure_when_no_cap_fired(self, tmp_path: Path) -> None:
+        # the excusal is the deadline's alone; the same log in a rehearsal that
+        # ran its course is a task that died
+        plan = planned(tmp_path, SMALL)
+        self.cancelled_by_the_cap(plan)
+
+        assert concluded(plan).errors != ()
+
+    def test_a_task_that_died_on_its_own_still_is(self, tmp_path: Path) -> None:
+        # the defect `unfinished` exists for: an exception in the header and
+        # nothing underneath, which the sample census reads as a clean run of
+        # zero samples. A cap later in the rehearsal does not make it clean
+        plan = planned(tmp_path, SMALL)
+        write_log(
+            Path(plan.log_dir),
+            SMALL,
+            status="error",
+            error="No module named 'nowhere'",
+            error_traceback=(
+                "Traceback (most recent call last):\n"
+                "ModuleNotFoundError: No module named 'nowhere'\n"
+            ),
+        )
+
+        errors = self.capped(plan).errors
+
+        assert len(errors) == 1
+        assert "ModuleNotFoundError" in errors[0]
+
+    def test_a_slice_the_cap_cut_short_is_not_reported(self, tmp_path: Path) -> None:
+        # the same log the suite above requires a complaint about
+        plan = planned(tmp_path, SMALL)
+        write_log(Path(plan.log_dir), SMALL, samples=[SynthSample("1")])
+        logs = observe_logs(plan.log_dir)
+        read_logs, _ = read(logs)
+
+        assert slices(plan, logs, read_logs) != []
+        assert slices(plan, logs, read_logs, capped=True) == []
+
+    def test_a_truncated_rehearsal_is_ready_to_launch(self, tmp_path: Path) -> None:
+        plan = planned(tmp_path, SMALL)
+        write_log(Path(plan.log_dir), SMALL, samples=[SynthSample("1")])
+
+        result = self.capped(plan, waived=(SCAN_COVERAGE,))
+
+        assert result.landed == 1
+        assert result.outcome is Outcome.PASSED
+
+    def test_a_cap_that_reached_no_sample_establishes_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        # the one deadline still worth stopping for: no sample landed, so no
+        # check could answer and there is nothing to have an opinion about
+        plan = planned(tmp_path, SMALL)
+
+        assert self.capped(plan).outcome is Outcome.CAPPED
+
+    def test_nothing_in_the_digest_remarks_on_the_truncation(
+        self, tmp_path: Path
+    ) -> None:
+        # a sample the deadline cut short is the tool working, and there is
+        # nothing for a reader to do about it
+        plan = planned(tmp_path, SMALL)
+        write_log(Path(plan.log_dir), SMALL, samples=[SynthSample("1")])
+
+        rendered = digest_markdown(self.capped(plan, waived=(SCAN_COVERAGE,))).lower()
+
+        assert "rehearsed and ready" in rendered
+        assert "truncated" not in rendered
+        assert "capped" not in rendered

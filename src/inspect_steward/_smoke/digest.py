@@ -28,7 +28,9 @@ class Outcome(StrEnum):
     """A check failed, a task errored, or the run did not produce what it needed to. The launch this precedes is not ready."""
 
     CAPPED = "capped"
-    """The wall-clock deadline fired before the tasks settled. A failure, and a distinct one — nothing was proved either way, which is a different thing to look into than a check that came back wrong."""
+    """The wall-clock deadline fired and the rehearsal had nothing to show for it — no sample landed, so no check could answer. A failure, and a distinct one: a check that came back wrong is a configuration to fix, and this is a rehearsal that never got far enough to have an opinion.
+
+    **Not every rehearsal the cap interrupted.** Truncation is the expected way for a smoke to end — it runs a couple of samples off the front of each task precisely so it can be stopped — so a cap that fires with samples landed and every check answered is `PASSED`, and goes unremarked. This outcome is the narrow case where the deadline arrived before anything was established at all."""
 
 
 @dataclass(frozen=True)
@@ -90,6 +92,11 @@ class Smoke:
     cap: int = 0
     log_dir: str = ""
 
+    capped: bool = False
+    """Whether the deadline fired before the tasks settled.
+
+    **Carried, and deliberately never reported.** A smoke runs a couple of samples under a clock so that it can be stopped; a sample the deadline cut short is the tool working, not a fact about the definition, and there is nothing for a reader to do about it. So it reaches no verdict line, no digest section and no journal field — it exists because `_amended` re-derives the outcome after a failed write and has to know what the deadline already excused (`_smoke.run.unfinished`)."""
+
     @property
     def passed(self) -> bool:
         return self.outcome is Outcome.PASSED
@@ -124,10 +131,13 @@ def outcome(
     errors: int,
     errored: int = 0,
     threw: int = 0,
+    landed: int = 0,
 ) -> Outcome:
     """Decide a rehearsal's verdict from what it found.
 
-    **A cap is its own outcome rather than a kind of failure**, because the two send a reader somewhere different: a failed check is a configuration to fix, and a cap is a rehearsal that never got far enough to have an opinion. Both stop the launch.
+    **A cap is not a kind of failure, and treating it as one made a good rehearsal unlaunchable.** A smoke runs a couple of samples off the front of each task under a deadline; ending inside a sample is the expected way for it to stop, not a defect in the definition. The cap used to short-circuit this function ahead of everything else, so a rehearsal that answered every check and landed all but one of its samples was reported as having established nothing, and the launch it had just cleared was refused. What the deadline actually costs is coverage, and `landed` already says what was covered.
+
+    **So the cap decides nothing on its own, and only speaks where the rehearsal is otherwise clean.** A deadline that fires before a single sample lands *is* worth stopping for, because then no check could answer and there is nothing to have an opinion about — that is `CAPPED`, and it is the only shape of it left.
 
     **An errored sample fails the rehearsal, and is not waivable.** `--accept` waives a *check* — a question about configuration that a person can answer better than Steward can, like a pre-deployment model with no registry entry. A sample that errored is not a question: it is the thing a smoke was run to find out, arriving. Somebody who wants to launch anyway already can, because the gate on the real launch only ever warns.
 
@@ -137,15 +147,18 @@ def outcome(
         probe: What the transcripts were asked.
         waived: Check names accepted rather than passed.
         capped: Whether the deadline fired before the tasks settled.
-        errors: How many things went wrong running the rehearsal itself.
+        errors: How many things went wrong running the rehearsal itself. What the cap itself cut short is not among them (`_smoke.run.unfinished`).
         errored: How many samples errored.
         threw: How many transcripts a scanner threw on.
+        landed: How many samples the rehearsal produced. Only consulted under a cap, to tell a rehearsal that was cut short from one that never started.
     """
-    if capped:
-        return Outcome.CAPPED
     accepted = set(waived)
     failed = [one for one in probe.failed if one not in accepted]
-    return Outcome.FAILED if failed or errors or errored or threw else Outcome.PASSED
+    if failed or errors or errored or threw:
+        return Outcome.FAILED
+    if capped and not landed:
+        return Outcome.CAPPED
+    return Outcome.PASSED
 
 
 def findings(instances: Sequence[Instance]) -> tuple[str, ...]:
@@ -187,8 +200,8 @@ def _verdict(smoke: Smoke) -> str:
     """
     if smoke.outcome is Outcome.CAPPED:
         return (
-            f"🛑 capped at {smoke.cap}m before the rehearsal settled — "
-            f"nothing was established either way"
+            f"🛑 capped at {smoke.cap}m with nothing established — no sample "
+            f"landed, so no check could answer"
         )
     if smoke.outcome is Outcome.FAILED:
         reasons: list[str] = []

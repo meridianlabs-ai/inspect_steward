@@ -20,7 +20,7 @@ from inspect_ai._eval.eval_set_overrides import (
 )
 from inspect_ai.log import EvalLog, read_eval_log
 
-from .._evalset.classify import kind_of, task_error_class
+from .._evalset.classify import kind_of, parse_error, task_error_class
 from .._evalset.detect import DefinitionType
 from .._evalset.instances import ClassedCache, classed_instances
 from .._evalset.manifest import (
@@ -547,28 +547,63 @@ def expected(task: ManifestTask, samples: int) -> int:
     return min(samples, task.samples) * task.epochs
 
 
-def unfinished(manifest: Manifest, logs: ObservedLogs) -> list[str]:
+def unfinished(
+    manifest: Manifest, logs: ObservedLogs, *, capped: bool = False
+) -> list[str]:
     """Every task that did not come back with a good log, and what happened to it.
 
     **`settled` and *finished well* are different questions, and reading one for the other made a failed rehearsal pass.** `settled` asks whether the watch can stop, so a log finalized `error` or `cancelled` satisfies it — that is the whole point, since a task that died is not a task to keep waiting for. But a task-level failure lands no errored samples to class: a definition that will not import, an OOM, a scorer that throws in `Task` construction all produce a log with an exception in its header and nothing underneath, so the sample census sees a clean run of zero samples and the rehearsal reported ready. Reproduced.
 
     Classed with `task_error_class`, which is what the tend keys a failed attempt on, so a rehearsal and the run it precedes name the same failure the same way.
+
+    **Under a cap, what the cap itself did is not a failure of the definition.** `reap` cancels every worker still running when the deadline fires, and each one finalizes `error` carrying inspect's `TerminateTaskError` — the same shape a task that died on its own arrives in, which is why this used to report the deadline as a defect and refuse the launch over it. A task the cap stopped, one it never got to spawn, and one still mid-sample are all attributable to the clock, so under `capped` they are left out.
+
+    **What is still reported under a cap is a task that failed on its own terms**, which is the whole reason this function exists: a definition that will not import or a scorer that throws in construction lands a finalized log carrying *its* exception, well before the deadline, and excusing that because the rehearsal later ran out of time would put the defect back. The discriminator is the exception, not the status — see `_by_the_cap`.
+
+    Args:
+        manifest: The tasks the rehearsal captured.
+        logs: Its log directory, observed.
+        capped: Whether the deadline fired. Excuses only what the deadline produced.
     """
     lines: list[str] = []
     for task in observe_tasks(manifest, logs).tasks:
         current = task.current
         if current is None:
-            lines.append(f"{task.key} produced no log")
+            if not capped:
+                lines.append(f"{task.key} produced no log")
         elif current.status == "started":
-            lines.append(f"{task.key} did not finish")
+            if not capped:
+                lines.append(f"{task.key} did not finish")
         elif current.status != "success":
+            if capped and _by_the_cap(current.error, current.error_traceback):
+                continue
             classed = task_error_class(current.error, current.error_traceback)
             lines.append(f"{task.key} {current.status} — {classed}")
     return lines
 
 
+CAP_ABORT = "TerminateTaskError"
+"""The exception a task raises when something outside it asked it to stop.
+
+Matched on the name rather than imported, because the import would be of `inspect_ai._util.exception` — private, and a dependency this module does not otherwise take on a path where being wrong is cheap: a rename makes a capped rehearsal report the cap as a failure again, which is visible in the digest, rather than making anything silently pass.
+"""
+
+
+def _by_the_cap(message: str | None, traceback: str | None) -> bool:
+    """Whether a task's halting error is the deadline's own cancellation.
+
+    `reap` cancels through `inspect ctl`, so the task ends on inspect's abort rather than on anything the definition did. Read off the parsed exception type, which is the same reading `task_error_class` gives the tend, so the two cannot disagree about what a failure was.
+    """
+    parsed = parse_error(message, traceback)
+    return parsed is not None and parsed.type.endswith(CAP_ABORT)
+
+
 def short_slices(
-    plan: Plan, logs: ObservedLogs, read_logs: Sequence[EvalLog]
+    plan: Plan,
+    logs: ObservedLogs,
+    read_logs: Sequence[EvalLog],
+    *,
+    capped: bool = False,
 ) -> list[str]:
     """Every task that finished cleanly holding less than the slice asked for.
 
@@ -576,14 +611,19 @@ def short_slices(
 
     **Counted off the records rather than off the header**, which are two different claims. `total_samples` is what a log says about itself; the smoke has already read these logs whole for the checks, so the honest numerator is in hand and is also exactly the number the digest reports as landed. A document saying *3 samples* in one line and *expected 4* in another is only useful if both came from the same count.
 
+    **Silent under a cap, because then the shortfall has a known cause.** The deadline stops workers mid-slice by design, so every task still running comes up short and none of it says anything about the definition. The defect above needs a rehearsal that was allowed to finish to be visible at all; under a cap this check cannot tell a dataset that was too short from a clock that ran out, and guessing wrong refuses a launch over the expected behaviour of the tool.
+
     Args:
         plan: The rehearsal, for the slice it asked for.
         logs: Its log directory, observed — the map from task to the files it produced.
         read_logs: Those files, read.
+        capped: Whether the deadline fired, in which case a short slice is the cap's doing.
 
     Returns:
-        One line per task that came up short.
+        One line per task that came up short, and nothing under a cap.
     """
+    if capped:
+        return []
     records = current_records(plan.manifest, logs, read_logs)
     lines: list[str] = []
     for task in plan.manifest.tasks:
@@ -695,8 +735,8 @@ def conclude(
         )
     scan = fold(plan, logs)
     errors.extend(scan.errors)
-    errors.extend(unfinished(plan.manifest, logs))
-    errors.extend(short_slices(plan, logs, read_logs))
+    errors.extend(unfinished(plan.manifest, logs, capped=capped))
+    errors.extend(short_slices(plan, logs, read_logs, capped=capped))
     errors.extend(
         f"smoke worker {one} was still running after being cancelled"
         for one in lingering
@@ -727,7 +767,9 @@ def conclude(
             errors=len(errors),
             errored=errored,
             threw=scan.threw,
+            landed=landed,
         ),
+        capped=capped,
         identifiers=tuple(task.identifier for task in plan.manifest.tasks),
         # the `scan` and `log_dir` this manifest was copied with are not hashed,
         # so this is the digest the launch will compute for the same definition
@@ -930,7 +972,7 @@ def _write_digest(workspace: Workspace, result: Smoke) -> str | None:
 def _amended(result: Smoke, errors: Sequence[str]) -> Smoke:
     """The same rehearsal with what went wrong recording it, and the verdict redone.
 
-    A cap stays a cap: nothing was established either way, and a write that also failed does not change which question is open.
+    A cap stays a cap: what the deadline did or did not establish is not changed by a write that failed afterwards, so it is carried from `Smoke.capped` rather than re-derived from the outcome — which no longer names it once a truncated rehearsal passes.
     """
     if tuple(errors) == result.errors:
         return result
@@ -940,10 +982,11 @@ def _amended(result: Smoke, errors: Sequence[str]) -> Smoke:
         outcome=outcome(
             result.probe,
             waived=result.waived,
-            capped=result.outcome is Outcome.CAPPED,
+            capped=result.capped,
             errors=len(errors),
             errored=result.errored,
             threw=result.threw,
+            landed=result.landed,
         ),
     )
 
