@@ -43,7 +43,7 @@ SCAN_MODELS = ("STEWARD_SCAN_MODEL", "SCOUT_SCAN_MODEL")
 
 
 @pytest.fixture(autouse=True)
-def no_ambient_channel(monkeypatch: pytest.MonkeyPatch) -> None:
+def no_ambient_channel() -> Iterator[None]:
     """Keep the developer's own notification channel out of the suite.
 
     `pytest-dotenv` loads the repository's `.env` into the session, so a developer who has configured a channel has one set in every test. Two things go wrong, and the second is the serious one.
@@ -57,22 +57,26 @@ def no_ambient_channel(monkeypatch: pytest.MonkeyPatch) -> None:
     **Clearing them once is not enough, which is what the wrapper is for.** Every `steward` invocation calls `init_dotenv()` in its group callback — deliberately, because a scheduled tend runs under a stripped environment and needs to see what its workers see — and that reads `.env` again from the cwd upward and puts back exactly what this fixture removed. So any in-process CLI test running from inside the repository had a live channel restored underneath it, and the only thing standing between the suite and a real Slack workspace was which tests happened to resolve one.
 
     The load still happens, because everything else in `.env` is wanted. What the wrapper does is **restore these four to whatever they were when it was called** — which is absent for most tests, and the test's own value for one that set a channel deliberately. Clearing them outright instead would take those away too, and *no test may have a channel* is a different rule from *no test may inherit one*.
+
+    **It holds its own `MonkeyPatch` rather than the test's, and that is not tidiness.** They are the same object otherwise — the `monkeypatch` fixture is function-scoped and shared between a test and everything autouse around it — so a test calling `monkeypatch.undo()` to drop a patch of its own reverted this fixture too, put the developer's channel back from `.env`, and posted to a real Slack workspace from whatever it did next. Observed, from three tests that undid a stubbed store failure and then signed off again. A guard against an ambient channel cannot be revocable by the code it is guarding.
     """
-    for name in CHANNELS + SCAN_MODELS:
-        monkeypatch.delenv(name, raising=False)
+    with pytest.MonkeyPatch.context() as guard:
+        for name in CHANNELS + SCAN_MODELS:
+            guard.delenv(name, raising=False)
 
-    loaded = cli.init_dotenv
+        loaded = cli.init_dotenv
 
-    def guarded() -> None:
-        held = {name: os.environ.get(name) for name in CHANNELS + SCAN_MODELS}
-        loaded()
-        for name, value in held.items():
-            if value is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = value
+        def guarded() -> None:
+            held = {name: os.environ.get(name) for name in CHANNELS + SCAN_MODELS}
+            loaded()
+            for name, value in held.items():
+                if value is None:
+                    os.environ.pop(name, None)
+                else:
+                    os.environ[name] = value
 
-    monkeypatch.setattr(cli, "init_dotenv", guarded)
+        guard.setattr(cli, "init_dotenv", guarded)
+        yield
 
 
 @pytest.fixture(autouse=True)

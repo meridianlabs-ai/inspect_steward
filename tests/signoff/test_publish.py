@@ -6,7 +6,7 @@ A store row is a claim that a result may be reused sight-unseen, which is the sa
 """
 
 import shutil
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from pathlib import Path
 from typing import Any
 
@@ -93,11 +93,28 @@ def flaky_copy(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(directory, "copy_log", flaky)
 
 
-def refuse_withdrawal(monkeypatch: pytest.MonkeyPatch) -> None:
+def refuse_withdrawal(monkeypatch: pytest.MonkeyPatch) -> Callable[[], None]:
+    """Make withdrawal fail, and hand back the way to let it succeed again.
+
+    **A toggle rather than `monkeypatch.undo()`**, which was the first shape of this and reached much further than it looked. The `monkeypatch` fixture is function-scoped and shared with everything autouse around the test, so undoing "the patch this test made" also undid `no_ambient_channel` — putting the developer's own `STEWARD_NOTIFICATION` back from `.env`, and posting a real Slack message from the signoff that came next.
+
+    Returns:
+        A callable that stops the refusal, for a test asserting the retry.
+    """
+    refusing = [True]
+    real = DirectoryStore.withdraw
+
     def refuse(self: DirectoryStore, locations: Sequence[str]) -> None:
-        raise StoreError("the rows would not come out")
+        if refusing[0]:
+            raise StoreError("the rows would not come out")
+        real(self, locations)
 
     monkeypatch.setattr(DirectoryStore, "withdraw", refuse)
+
+    def relent() -> None:
+        refusing[0] = False
+
+    return relent
 
 
 class TestPublishingWhatWasSigned:
@@ -341,17 +358,19 @@ class TestAWithdrawalThatDidNotHappen:
     Curation has already moved the log to `logs-archive/` by the time withdrawal is attempted, and `plan` works from what `logs/` holds — so no later signoff could rediscover it and no later run would ever try again. The store would go on serving a superseded result with the only trace of it a warning that scrolled past once.
     """
 
-    def owed(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Workspace:
-        """A workspace whose withdrawal was refused, leaving a debt behind."""
+    def owed(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> tuple[Workspace, Callable[[], None]]:
+        """A workspace whose withdrawal was refused, and the way to let the retry succeed."""
         workspace, _, _ = published_then_superseded(tmp_path)
-        refuse_withdrawal(monkeypatch)
+        relent = refuse_withdrawal(monkeypatch)
         sign(workspace, again=True)
-        return workspace
+        return workspace, relent
 
     def test_the_debt_is_written_down(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        workspace = self.owed(tmp_path, monkeypatch)
+        workspace, _ = self.owed(tmp_path, monkeypatch)
 
         recorded = withdrawals(workspace)
         assert len(recorded) == 1
@@ -375,10 +394,10 @@ class TestAWithdrawalThatDidNotHappen:
         # the whole point of writing it down: the log is in `logs-archive/` and
         # out of every later signoff's reach, so the retry can only come from
         # the ledger
-        workspace = self.owed(tmp_path, monkeypatch)
+        workspace, relent = self.owed(tmp_path, monkeypatch)
         store = tmp_path / "store"
         name = sorted(one.name for one in store.iterdir() if one.is_file())[0]
-        monkeypatch.undo()
+        relent()
 
         result = sign(workspace, again=True)
 
@@ -391,8 +410,8 @@ class TestAWithdrawalThatDidNotHappen:
     ) -> None:
         # a paid debt is closed out with an empty snapshot, which is what ends
         # the fold -- otherwise every later signoff would withdraw it forever
-        workspace = self.owed(tmp_path, monkeypatch)
-        monkeypatch.undo()
+        workspace, relent = self.owed(tmp_path, monkeypatch)
+        relent()
 
         sign(workspace, again=True)
 
@@ -415,8 +434,8 @@ class TestAWithdrawalThatDidNotHappen:
         # hand one store's debt to another. The second store deliberately holds
         # a log of the *same name*, which is what a leaked ledger would reach
         # for — withdrawal matches on the filename publication wrote
-        workspace = self.owed(tmp_path, monkeypatch)
-        monkeypatch.undo()
+        workspace, relent = self.owed(tmp_path, monkeypatch)
+        relent()
         store = tmp_path / "store"
         name = sorted(one.name for one in store.iterdir() if one.is_file())[0]
         elsewhere = tmp_path / "elsewhere"

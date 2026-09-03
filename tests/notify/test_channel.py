@@ -12,6 +12,7 @@ import os
 from pathlib import Path
 
 import pytest
+from inspect_steward._cli import main as cli
 from inspect_steward._notify import INSPECT_NOTIFICATION, establish_channel
 from inspect_steward._workspace import (
     Directives,
@@ -20,6 +21,8 @@ from inspect_steward._workspace import (
     declared_notification,
     read_directives,
 )
+
+from ..conftest import CHANNELS
 
 SLACK = "slack://tok-a/tok-b/tok-c"
 DISCORD = "discord://1234/abcd"
@@ -235,3 +238,22 @@ def test_the_key_is_stewards_rather_than_an_override_alias() -> None:
     # `STEWARD_NOTIFICATION` used to mean `eval_set(notification=…)` for one
     # run. Excluded from the alias table so that it reaches the settings instead
     assert Directives.model_validate({"notification": SLACK}).notification == SLACK
+
+
+def test_a_tests_own_undo_cannot_revoke_the_ambient_channel_guard(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The guard that keeps a developer's real channel out of the suite must not be revocable by the tests it guards.
+
+    `no_ambient_channel` and the `monkeypatch` a test asks for used to be the same object — the fixture is function-scoped and shared with everything autouse around it — so a test that called `undo()` to drop a stub of its own also dropped the guard, and the next thing it did that resolved a channel posted to a real Slack workspace. It holds its own `MonkeyPatch` now, which is what this asserts: the test's `undo()` reverts the test's patch and reaches nothing else.
+    """
+    guarded = cli.init_dotenv
+    monkeypatch.setattr(cli, "init_dotenv", lambda: None)
+
+    monkeypatch.undo()
+
+    assert cli.init_dotenv is guarded
+    # and the variables it cleared at setup are still clear, so the reload every
+    # CLI invocation performs cannot put a channel back underneath the test
+    cli.init_dotenv()
+    assert all(os.environ.get(name) is None for name in CHANNELS)
