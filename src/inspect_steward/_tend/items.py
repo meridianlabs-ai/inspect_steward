@@ -797,10 +797,15 @@ def _unwritten(result: "TendResult") -> list[Item]:
 
     **Only in a workspace an agent has actually attached to**, which is `Supervision.ever_armed`'s reasoning applied to the other kind of expectation. A run somebody drives by hand is owed no write-up by anybody — there is nobody the item is addressed to — and raising one would put every such run permanently at ⚠️ over work nobody agreed to do. The first `steward collect` is what creates the obligation.
 
+    **Only once the task has stopped moving.** The section appears with the task's first log, which is right — the facts are worth keeping current from the moment there are any. The *item* used to appear then too, and that is a different claim: it asks somebody to explain numbers that are still changing. A four-task run put four of these up while every task was mid-flight and half the transcripts were unscanned, which is the same way an attention list stops being read that `analysis_md.analysis_sections` guards against one step earlier. Write-ups are owed on results, so the ask waits for results.
+
+    **Finished means the same thing here as everywhere else** (`unfinished`): complete, or settled by a person's decision. The second half matters more than it looks — a short-but-accepted task stays `INCOMPLETE` for good, deliberately, so gating on `COMPLETE` alone would mean the tasks with a known hole in them are the only ones never asked to explain it.
+
     One per task, keyed on the identifier — the same key its marker carries, so a task renamed in the definition keeps the item it already had rather than closing one and opening another.
     """
     if result.collected is None:
         return []
+    settled = _final(result)
     return [
         Item(
             id=f"{UNWRITTEN}:{identifier}",
@@ -815,7 +820,25 @@ def _unwritten(result: "TendResult") -> list[Item]:
             action="write the section; *looked, nothing here* is an entry",
         )
         for identifier, key in sorted(result.unwritten.items(), key=lambda one: one[1])
+        if identifier in settled
     ]
+
+
+def _final(result: "TendResult") -> set[str]:
+    """Task identifiers that will not run again, by observation or by decision.
+
+    Args:
+        result: This turn.
+
+    Returns:
+        The identifiers. Empty where the turn observed no directory, which is a result assembled by hand rather than a run with nothing in it.
+    """
+    observed = result.observed
+    if observed is None:
+        return set()
+    return {
+        task.identifier for task in observed.tasks if task.state == TaskState.COMPLETE
+    } | settled_by_decision(result.summary, result.acknowledged)
 
 
 STALE_INTERVALS = 2

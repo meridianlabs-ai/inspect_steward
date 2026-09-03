@@ -38,6 +38,7 @@ from inspect_steward._tend.items import (
     TIMER_DRIFT,
     UNREADABLE,
     UNSUPERVISED,
+    UNWRITTEN,
     Item,
 )
 from inspect_steward._tend.items import STUCK as STUCK_SAMPLE
@@ -52,6 +53,7 @@ from inspect_steward._worker import (
 from inspect_steward._workspace import (
     ACKNOWLEDGED,
     ARMED,
+    COLLECTED,
     DISARMED,
     LAUNCHED,
     SIGNOFF,
@@ -1302,3 +1304,52 @@ def test_a_one_off_interval_against_a_silent_file_is_not_drift(
     armed(workspace, interval=60)
 
     assert TIMER_DRIFT not in items(workspace)
+
+
+# --- the write-up, and when it is owed -----------------------------------
+
+
+class TestWhenAWriteUpIsAskedFor:
+    """`unwritten` waits for results, because it is a question about results.
+
+    The section itself appears with a task's first log, which is right: the
+    facts are worth keeping current from the moment there are any. The *item*
+    used to appear then too, and that is a different claim — it asks somebody
+    to explain numbers that are still moving. A four-task run raised four of
+    them while every task was mid-flight, which is the same way an attention
+    list stops being read that `analysis_sections` already guards against one
+    step earlier.
+    """
+
+    def collected(self, workspace: Workspace) -> None:
+        """The first collect is what creates the obligation at all."""
+        append_event(workspace.journal, COLLECTED, position=0)
+
+    def test_a_task_still_running_is_not_asked_to_explain_itself(
+        self, tmp_path: Path
+    ) -> None:
+        workspace, _ = prepared(tmp_path, [STUCK])
+        # four of the ten the manifest asks for: a log exists, so the section
+        # exists, and the task is plainly not done with it
+        write_log(workspace.logs, STUCK, total=4, completed=4)
+        self.collected(workspace)
+
+        assert UNWRITTEN not in items(workspace)
+
+    def test_and_is_once_it_has_finished(self, tmp_path: Path) -> None:
+        workspace, _ = prepared(tmp_path, [TASK])
+        write_log(workspace.logs, TASK)
+        self.collected(workspace)
+
+        found = items(workspace)
+
+        assert UNWRITTEN in found
+        assert found[UNWRITTEN].owner is Owner.AGENT
+
+    def test_a_run_nobody_attached_to_is_owed_nothing(self, tmp_path: Path) -> None:
+        # no collect, so no agent ever picked this up and there is nobody the
+        # item is addressed to
+        workspace, _ = prepared(tmp_path, [TASK])
+        write_log(workspace.logs, TASK)
+
+        assert UNWRITTEN not in items(workspace)
