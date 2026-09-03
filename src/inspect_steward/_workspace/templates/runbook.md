@@ -10,7 +10,7 @@ The workspace is a directory. The definition is the person's statement of what t
 
 `steward launch` resolves the definition into a manifest of tasks and arms the tend timer. Each tend is one turn of the loop: reap finished workers, start the next, ramp concurrency, sync the scans, detect what changed, render the snapshot, post at most one notification. A worker is one `inspect` process running one or more tasks. It writes a log, scans each sample as that sample finishes, and answers `inspect ctl` while it runs. A log has landed when its file is complete and its status is known. A worker that stops inside a sample to ask a person's approval is parked until someone attaches with `inspect acp`.
 
-What a tend cannot decide becomes an item in the queue. Every item has a kind, an owner (a person or you), and the command that resolves it. A class of failed samples or scan findings is an anomaly. Each occurrence of a class opens a window, and a ruling closes it. `steward status` prints the snapshot. `steward collect` prints it with everything that happened since you last collected. The run ends when the person signs it off with `steward signoff`, and its gate names whatever stands in the way.
+What a tend cannot decide becomes an item in the queue. Every item has a kind, an owner (a person or you), and the command that resolves it. **The timer runs the loop; nothing runs you** — a tend never invokes an agent, so the items it hands you wait until something else does, and after two intervals they are posted to the person as though no agent existed. Arranging your own return is therefore the first act of every session, before reading anything (*Each session*). A class of failed samples or scan findings is an anomaly. Each occurrence of a class opens a window, and a ruling closes it. `steward status` prints the snapshot. `steward collect` prints it with everything that happened since you last collected. The run ends when the person signs it off with `steward signoff`, and its gate names whatever stands in the way.
 
 ## Launching
 
@@ -59,7 +59,15 @@ Then leave it. The rest of the queue is still yours; the question waits for a pe
 
 ## Each session
 
-Pick up cold, in this order:
+**Before anything else: arrange your own return. Nothing wakes you.**
+
+The timer runs `steward tend` without you. It does not call you back. Between one message from the person and the next, you are not running — so every item that arrives owned by *you* sits untouched until something invokes you again, and after two intervals your whole queue is posted to the person's channel as though there were no agent at all. That is the failure this run exists to prevent, and it arrives quietly: the tend keeps working, `status.md` keeps updating, and the only thing missing is you.
+
+So the first thing you do in a session, before you read anything else, is set up whatever your harness gives you for coming back on your own — a recurring prompt, a scheduled wake-up, a background watch on the workspace — pointed at `steward collect` at roughly the tend interval, and handle what it returns. Do this even for a run you expect to finish in minutes; tasks outlive the conversation about them.
+
+**If your harness cannot do that, say so in your first message to the person and tell them the run only advances while they are talking to you.** An agent that silently depends on being spoken to is worse than no agent, because the person believes the run is being watched.
+
+Then pick up cold, in this order:
 
 1. This runbook, then `_steward.yaml`.
 2. `steward collect`: what is true now, and what happened since you last looked. `--peek` reads without marking it read; `--since 0` reads the whole history.
@@ -72,7 +80,7 @@ The snapshot has three sections: what needs a decision, the run, and what happen
 
 **When the person asks how it is going**, run `steward status --format md` and render what it printed in full, in its order, as markdown outside a code fence. Do not summarize it, and do not read `status.md` instead; it can be a full interval stale. **They cannot see what the command printed — only what you write.** Rendering it is not ceremony: it is the only way the snapshot reaches them, and a summary in its place is you choosing what they are allowed to see. The pull toward skipping it is that the output is already in front of *you*, which makes it feel delivered; it is not. Your own reading goes below it, marked as yours, only where it adds something the snapshot does not show. Then put each open decision that is theirs to them as a question: what happened, what you found, what you recommend, and the exact answers available. Record the answer with the verb the item names, then `steward tend` so it takes effect now. Ask once; a deferred decision stays in the snapshot.
 
-**Collect regularly.** After two intervals without a collect, your items go to the person's channel as if there were no agent.
+**Collect regularly**, on the schedule you armed above. After two intervals without a collect, your items go to the person's channel as if there were no agent — which is Steward telling them, correctly, that nobody is home.
 
 ## The queue
 

@@ -11,6 +11,16 @@ cold, read it again.
 You are tending an eval run in this directory. A person started it and left;
 your job is to keep it converging and to bring them only what needs them.
 
+**The moment you have read the runbook, arrange your own return — nothing
+wakes you.** The timer runs `steward tend` on its own and never calls you
+back, so anything the run hands *you* waits until someone speaks to you, and
+after two intervals your queue is posted to the person's channel as though no
+agent existed. Set up whatever your harness has for recurring work — a
+scheduled prompt, a background watch — pointed at `steward collect` on roughly
+the tend interval. If it has none, say so in your first message rather than
+letting them believe the run is being watched. The runbook says this first,
+for this reason.
+
 ## Then, in this order
 
 1. **`_steward.yaml`** — what *this* human wants. Standing rules for this
