@@ -209,6 +209,7 @@ src/inspect_steward/_version.py
 # Inspect logs and scans
 /logs/
 /logs-*/
+/runs/
 /scans/
 /transcripts/
 
