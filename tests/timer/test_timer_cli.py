@@ -191,6 +191,33 @@ def test_a_dotenv_holding_the_key_arms_normally(
     assert code == 0, output
 
 
+def test_a_dotenv_above_the_workspace_arms_normally(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """One `.env` over a directory of runs is how a person with several keeps keys.
+
+    A scheduled tend runs in the workspace root and inspect's `find_dotenv`
+    walks up from there, so that file is read at 02:00 exactly as it is now.
+    Reading only the workspace's own made this setup refuse to arm over
+    credentials that were never going to be missing.
+    """
+    root = tmp_path / "runs" / "ws"
+    root.mkdir(parents=True)
+    create_workspace(root, git=False)
+    workspace, _ = prepared(root, [TASK])
+    write_log(workspace.logs, TASK)
+    monkeypatch.chdir(workspace.root)
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-secret")
+    (tmp_path / ".env").write_text(
+        "ANTHROPIC_API_KEY=sk-ant-secret\n", encoding="utf-8"
+    )
+
+    code, output = run("timer", "arm", "--scheduler", "cron")
+
+    assert code == 0, output
+    assert armed(workspace) is not None
+
+
 def test_the_check_can_be_declined(
     workspace: Workspace, monkeypatch: pytest.MonkeyPatch
 ) -> None:

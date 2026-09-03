@@ -187,7 +187,9 @@ class Workspace:
     def env(self) -> Path:
         """`.env` — credentials a scheduled tend and its workers both read.
 
-        Not written by Steward and not required to exist. Named here because arming checks it (`_timer.env`) and because inspect loads it for free: `find_dotenv(usecwd=True)` searches up from a worker's cwd, which is this directory.
+        Not written by Steward and not required to exist. Named here because inspect loads it for free: `find_dotenv(usecwd=True)` searches up from a worker's cwd, which is this directory.
+
+        **The nearest candidate rather than the only one.** That search walks *up*, so a `.env` in a parent directory is loaded where this one is absent, and arming checks whichever the walk lands on (`_timer.env.resolved`) rather than this path alone. What this path remains is where a credential the walk did not find should go — nearest wins, so writing one here also shadows anything above it.
         """
         return self.root / ".env"
 

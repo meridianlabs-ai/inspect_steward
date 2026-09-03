@@ -63,6 +63,7 @@ from .._timer import (
     arm,
     disarm,
     explain_env,
+    resolved_env,
     unavailable_credentials,
 )
 from .._worker import (
@@ -256,9 +257,12 @@ def launch(
         steward_log(workspace.log, f"added to .gitignore: {', '.join(ignored)}")
 
     if timer and env_check:
-        missing = unavailable_credentials(workspace.env, os.environ)
+        # the file a tend will actually load, which is not always this
+        # workspace's own -- see `_timer.env.resolved`
+        env_file = resolved_env(workspace.root)
+        missing = unavailable_credentials(env_file, os.environ)
         if missing:
-            raise LaunchError(explain_env(missing, workspace.env))
+            raise LaunchError(explain_env(missing, env_file))
 
     outcome = acquire(workspace.claim, command="launch", break_stale=break_stale)
     if isinstance(outcome, Held):

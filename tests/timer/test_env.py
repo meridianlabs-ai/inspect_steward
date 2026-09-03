@@ -11,7 +11,7 @@ this shell has that a scheduled tend will not.
 from pathlib import Path
 
 import pytest
-from inspect_steward._timer import unavailable_credentials
+from inspect_steward._timer import resolved_env, unavailable_credentials
 from inspect_steward._timer.env import credentials, dotenv_names, explain
 
 SHELL = {
@@ -224,3 +224,96 @@ def test_either_spelling_in_the_env_file_covers_the_other(
     exported = {name: "slack://xoxb-different/C456"}
 
     assert unavailable_credentials(env_file, exported) == []
+
+
+# --- which .env a tend will actually load --------------------------------
+#
+# `init_dotenv()` walks up from the working directory and loads the first
+# `.env` it finds, and a scheduled tend runs in the workspace root. So the
+# workspace's own file is the nearest candidate rather than the only one, and a
+# check that read it alone refused to arm over credentials a parent directory
+# was always going to supply.
+
+
+def chain(tmp_path: Path, *at: str) -> Path:
+    """A workspace three levels down, with a `.env` at each named ancestor."""
+    root = tmp_path / "a" / "b" / "ws"
+    root.mkdir(parents=True)
+    for relative in at:
+        (tmp_path / relative / ".env").write_text("A=1\n", encoding="utf-8")
+    return root
+
+
+CHAINS: list[tuple[str, tuple[str, ...], str]] = [
+    ("in the workspace itself", ("a/b/ws",), "a/b/ws"),
+    ("one directory up", ("a/b",), "a/b"),
+    ("two directories up", ("a",), "a"),
+    ("at the top of the chain", (".",), "."),
+    # nearest wins, because `load_dotenv` is handed one path and reads one file
+    ("the workspace's, over an ancestor's", ("a/b/ws", "a"), "a/b/ws"),
+    ("the nearest ancestor's, over a further one", ("a/b", "."), "a/b"),
+]
+
+
+@pytest.mark.parametrize(
+    ("at", "expected"),
+    [(at, expected) for _, at, expected in CHAINS],
+    ids=[case for case, _, _ in CHAINS],
+)
+def test_the_dotenv_a_tend_loads_is_the_nearest_one_at_or_above_it(
+    at: tuple[str, ...], expected: str, tmp_path: Path
+) -> None:
+    root = chain(tmp_path, *at)
+
+    assert resolved_env(root) == (tmp_path / expected / ".env").resolve()
+
+
+def test_a_chain_with_no_dotenv_names_the_workspace_s_own(tmp_path: Path) -> None:
+    # where it should go, since nearest wins and writing one here is what puts
+    # a credential in front of the tend. Asserted as *nothing of ours matched*
+    # rather than as `is None`, because the walk really does continue past
+    # `tmp_path` to the filesystem root and a machine may have a `.env` up there
+    root = chain(tmp_path)
+
+    found = resolved_env(root)
+
+    assert found == root / ".env" or tmp_path not in found.parents
+
+
+def test_a_directory_named_dotenv_is_not_one(tmp_path: Path) -> None:
+    root = chain(tmp_path, "a")
+    (root / ".env").mkdir()
+
+    # the walk steps over it rather than resolving to something unreadable
+    assert resolved_env(root) == (tmp_path / "a" / ".env").resolve()
+
+
+def test_a_key_an_ancestor_defines_is_not_missing(tmp_path: Path) -> None:
+    """The refusal this whole resolution exists to stop.
+
+    One `.env` above a directory of workspaces is how a person with more than
+    one run keeps their keys, and a tend at 02:00 reads it exactly as the shell
+    reading it now does. Reporting it missing refuses to arm over a credential
+    that was never going to be gone.
+    """
+    root = chain(tmp_path)
+    (tmp_path / ".env").write_text(
+        "ANTHROPIC_API_KEY=x\nAWS_ACCESS_KEY_ID=y\n", encoding="utf-8"
+    )
+
+    assert unavailable_credentials(resolved_env(root), SHELL) == []
+
+
+def test_the_remedy_names_the_file_that_is_being_read(tmp_path: Path) -> None:
+    # and so must not name the workspace's own, which does not exist: writing
+    # the one missing key there would shadow the ancestor holding the rest,
+    # turning advice into the outage it was given to prevent
+    root = chain(tmp_path)
+    ancestor = tmp_path / ".env"
+    ancestor.write_text("ANTHROPIC_API_KEY=x\n", encoding="utf-8")
+
+    env_file = resolved_env(root)
+    missing = unavailable_credentials(env_file, SHELL)
+
+    assert missing == ["AWS_ACCESS_KEY_ID"]
+    assert str(ancestor.resolve()) in explain(missing, env_file)

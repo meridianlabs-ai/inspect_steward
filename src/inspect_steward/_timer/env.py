@@ -2,7 +2,9 @@
 
 A timer runs a tend under an environment nothing set up. launchd gives it a handful of variables, systemd `--user` gives it slightly different ones, and cron gives it almost nothing at all — none of them include the API key the shell that armed the timer is holding. The failure that produces is the worst kind available here: every interval all night, a worker starts, authenticates against nothing, and writes a log that says so, while `status.md` reports a fleet dutifully failing.
 
-**The check is a diff, not a requirement.** Steward cannot know which provider a definition uses and does not try — guessing at a required list would refuse correct setups and miss unusual ones. It compares two environments instead: what the arming shell holds against what the workspace's `.env` holds. A credential in the first and not the second is exactly a credential that will be gone at 02:00, and that is a fact about this machine rather than a judgement about the eval.
+**The check is a diff, not a requirement.** Steward cannot know which provider a definition uses and does not try — guessing at a required list would refuse correct setups and miss unusual ones. It compares two environments instead: what the arming shell holds against what the `.env` a tend will load holds. A credential in the first and not the second is exactly a credential that will be gone at 02:00, and that is a fact about this machine rather than a judgement about the eval.
+
+**The right-hand side is not the workspace's own `.env`, it is whichever one inspect will find.** `init_dotenv()` calls `find_dotenv(usecwd=True)`, which walks *up* from the working directory and loads the first `.env` at or above it; a scheduled tend runs in the workspace root (`_timer.entry`), so a `.env` in a parent directory — one holding the keys for every run on the machine, which is where a person with more than one workspace naturally puts them — is read at 02:00 exactly as it is read now. Reading only `<workspace>/.env` made every such setup fail the diff and refuse to arm, over credentials that were never going to be missing. `resolved` does the walk, so the check reads the file the tend will read (see `resolved` for why the *first* match rather than the merge of all of them).
 
 **No value ever leaves this module.** The question *will this key exist under cron* cannot be answered without looking at what a `.env` line resolves to, so values are read — by python-dotenv, which is the parser that will read them again at 02:00 — and only names come back out. Nothing here holds one, writes one, or puts one in a message.
 
@@ -100,11 +102,33 @@ def dotenv_names(path: Path) -> set[str]:
     return {name for name, value in values.items() if value}
 
 
+def resolved(root: Path) -> Path:
+    """The `.env` a tend rooted at `root` will load, or where one would go.
+
+    **The walk is inspect's, reproduced rather than invented.** `init_dotenv()` calls `find_dotenv(usecwd=True)`, which yields each directory from the working directory up to the filesystem root and takes the first that holds a `.env`; a scheduled tend runs in the workspace root, so that walk starts here. Reproducing it is the only way the diff can be about the same file at 02:00 as it is now.
+
+    **The first match, never the union of the chain.** `load_dotenv` is given one path and reads one file, so a `.env` further up is not merged in behind a nearer one — it is shadowed entirely. Merging would let a grandparent's `OPENAI_API_KEY` satisfy a check that the nearer file is about to shadow, which is a clean bill of health attached to the exact overnight failure this module exists to prevent. Erring the other way only ever over-reports.
+
+    **A directory named `.env` is not one**, and a FIFO is — the same reading python-dotenv's `_is_file_or_fifo` takes, because a `.env` piped in from a secret manager is a real arrangement and a stray directory is not.
+
+    Args:
+        root: The workspace root, which is the working directory a tend runs in.
+
+    Returns:
+        The nearest `.env` at or above `root`, or `root/".env"` where the chain holds none — the path the refusal then names, since the workspace's own file is where a missing credential should go.
+    """
+    for directory in (root, *root.parents):
+        candidate = directory / ".env"
+        if candidate.exists() and not candidate.is_dir():
+            return candidate
+    return root / ".env"
+
+
 def unavailable(env_file: Path, environ: Mapping[str, str]) -> list[str]:
     """Credentials this shell has that a scheduled tend will not.
 
     Args:
-        env_file: The workspace's `.env`.
+        env_file: The `.env` a tend will load, from `resolved`.
         environ: The environment arming is being done from.
 
     Returns:
@@ -161,5 +185,6 @@ __all__ = [
     "credentials",
     "dotenv_names",
     "explain",
+    "resolved",
     "unavailable",
 ]

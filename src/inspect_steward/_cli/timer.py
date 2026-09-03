@@ -19,6 +19,7 @@ from .._timer import (
     disarm,
     explain_env,
     installed,
+    resolved_env,
     unavailable_credentials,
 )
 from .._util.duration import format_duration
@@ -71,9 +72,12 @@ def arm_command(tend_interval: int | None, name: str | None, env_check: bool) ->
     ignored = ensure_gitignore(workspace)
 
     if env_check:
-        missing = unavailable_credentials(workspace.env, os.environ)
+        # the file a tend will actually load, which is not always this
+        # workspace's own -- see `_timer.env.resolved`
+        env_file = resolved_env(workspace.root)
+        missing = unavailable_credentials(env_file, os.environ)
         if missing:
-            raise click.ClickException(explain_env(missing, workspace.env))
+            raise click.ClickException(explain_env(missing, env_file))
 
     try:
         armament = arm(workspace, seconds, name=name)
