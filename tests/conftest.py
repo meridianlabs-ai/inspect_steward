@@ -101,6 +101,34 @@ def no_ambient_docker(monkeypatch: pytest.MonkeyPatch) -> None:
     monkeypatch.setattr(module, "advise", roomy)
 
 
+AWS_CREDENTIAL_SOURCES = (
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_SESSION_TOKEN",
+    "AWS_PROFILE",
+    "AWS_ROLE_ARN",
+    "AWS_WEB_IDENTITY_TOKEN_FILE",
+    "AWS_CONTAINER_CREDENTIALS_RELATIVE_URI",
+    "AWS_CONTAINER_CREDENTIALS_FULL_URI",
+)
+"""Every environment variable botocore takes credentials from; the files and the instance metadata service are closed separately."""
+
+
+@pytest.fixture(autouse=True)
+def no_ambient_aws(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Keep the machine's AWS credentials out of the suite.
+
+    A store at an `s3://` location is opened by asking the bucket a question, and what a bucket that does not exist answers depends on who is asking. With no credentials, botocore raises before the request leaves the process and `open_store` turns that into a `StoreError`. With credentials — an instance role on an EC2 box, keys in a developer's shell — S3 answers *not found*, `exists` returns `False`, and the store opens. `test_a_remote_location_that_will_not_open_is_a_store_error` was written on a laptop and encoded the first answer; on the box it observed the second.
+
+    The suite must not read the machine's credentials, for the two reasons the channel and the daemon are kept out: the answer is not deterministic across machines, and a test that reached a real bucket would be writing into it. Every source botocore consults is closed — the environment keys and profile, the shared credentials and config files, the container endpoints, and the instance metadata service, which it would otherwise reach from inside an instance. `s3fs` caches one filesystem per set of constructor arguments and resolves credentials on first use, so with this around every test the cached instance never holds any.
+    """
+    for name in AWS_CREDENTIAL_SOURCES:
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv("AWS_SHARED_CREDENTIALS_FILE", os.devnull)
+    monkeypatch.setenv("AWS_CONFIG_FILE", os.devnull)
+    monkeypatch.setenv("AWS_EC2_METADATA_DISABLED", "true")
+
+
 @pytest.fixture(scope="session")
 def fake_home() -> Iterator[Path]:
     """A home directory short enough to hold a unix socket.
