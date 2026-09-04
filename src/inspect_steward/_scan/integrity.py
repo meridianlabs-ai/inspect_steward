@@ -217,7 +217,12 @@ class IntegrityAnswer(BaseModel):
 
 
 def _outcome_line(transcript: Transcript) -> str:
-    """Describe the sample's recorded score so the reviewer can audit it."""
+    """Describe the sample's recorded score so the reviewer can audit it.
+
+    **The scorer's own account goes in, not only its verdict.** Asked whether a score can be trusted while shown nothing but the number, the reviewer can do no better than report that the number looks inconsistent with the trajectory and recommend a person go and read the grader logs — a finding nobody can act on, raised against evidence that was sitting on the same sample. Observed on a SWE-bench-style set: five samples flagged, every explanation ending in *a reviewer should inspect the grader logs*, four of them resolvable from the explanation alone. A test-suite scorer records its required/passed/missing counts here, and that is exactly what separates a task the agent failed from one the grading got wrong.
+
+    **Read through `getattr` because the field is newer than the floor this pins to.** `TranscriptInfo.score_explanation` is upstream in inspect_scout; against a release without it the scanner falls back to what it always had rather than failing to load. Becomes a plain attribute once the dependency floor moves.
+    """
     parts: list[str] = []
     if transcript.score is not None:
         parts.append(f"score={json.dumps(transcript.score)}")
@@ -228,7 +233,20 @@ def _outcome_line(transcript: Transcript) -> str:
             "The sample's recorded score is not available to you; judge validity "
             "from the trajectory alone."
         )
-    return f"RECORDED OUTCOME for this sample: {', '.join(parts)}."
+    line = f"RECORDED OUTCOME for this sample: {', '.join(parts)}."
+    explanation = getattr(transcript, "score_explanation", None)
+    if isinstance(explanation, str) and explanation.strip():
+        line += (
+            "\n\nWHAT THE SCORER SAID, verbatim — the grader's own output, and "
+            "the primary evidence about whether this score is sound. Read it "
+            "before judging the trajectory: where it names which tests were "
+            "required, which passed and which are missing, that settles "
+            "whether an apparently-complete solution genuinely failed. Do not "
+            "tell a reviewer to go and read the grader logs — they are quoted "
+            "here, so read them yourself and say what they show.\n"
+            f"{explanation.strip()}"
+        )
+    return line
 
 
 def integrity_question(transcript: Transcript) -> str:
