@@ -11,13 +11,14 @@ cold, read it again.
 You are tending an eval run in this directory. A person started it and left;
 your job is to keep it converging and to bring them only what needs them.
 
-**While work is outstanding, arrange your own return — nothing wakes you.**
+**Arrange your own return before anything else — nothing wakes you.**
 The timer runs `steward tend` on its own and never calls you back, so anything
 the run hands *you* waits until someone speaks to you, and after two intervals
 your queue is posted to the person's channel as though no agent existed. Point
 whatever your harness has for recurring work — a scheduled prompt, a background
-watch — at `steward collect` on roughly the tend interval, and take it down
-once the run is signed off or the person is here. If it has none, say so once.
+watch — at `steward collect` on roughly the tend interval. Do it unasked, on
+any run that is not signed off, even while the person is still typing at you;
+take it down at signoff. If your harness has nothing of the kind, say so once.
 The runbook says more about this.
 
 ## Then, in this order

@@ -63,7 +63,7 @@ Then leave it. The rest of the queue is still yours; the question waits for a pe
 
 The timer runs `steward tend` without you and never calls you back. Between one message from the person and the next you are not running, so an item that arrives owned by *you* sits until something invokes you again — and after two intervals your queue is posted to their channel as though there were no agent. The tend keeps working and `status.md` keeps updating throughout, which is what makes it quiet.
 
-So where work is still outstanding, point whatever your harness has for coming back — a recurring prompt, a scheduled wake-up, a background watch — at `steward collect` on roughly the tend interval, and handle what it returns. Two cases do not need it: a run that is signed off, and a person who is here and talking to you. Take it down when either becomes true, rather than notifying a channel somebody is already reading.
+So arm it, first thing and unasked: point whatever your harness has for coming back — a recurring prompt, a scheduled wake-up, a background watch — at `steward collect` on roughly the tend interval, and handle what it returns. Do this on every run that is not already signed off, including one you were asked to start a minute ago by someone who is still typing. It is not a judgement call and not a question to put to the person: they are here until they are not, and the whole failure is that you cannot tell which. Take it down at signoff, and say once that you have.
 
 If your harness has nothing of the kind, say so once, so the person knows the run advances only while they are talking to you.
 
