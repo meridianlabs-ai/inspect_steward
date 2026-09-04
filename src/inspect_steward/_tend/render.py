@@ -74,6 +74,7 @@ def status_markdown(
         # `echo_turn`: a terminal reader is standing in the workspace and the
         # compact output is for what changed
         lines.extend([f"**Logs** `{result.log_dir}`", ""])
+    lines.extend(_notification(result))
     lines.extend(_items(result, for_agent=for_agent))
     lines.extend(
         [
@@ -141,6 +142,20 @@ def _tuning(result: "TendResult") -> list[str]:
         out.extend(f"- {line}" for line in lines[1:])
         out.append("")
     return out
+
+
+def _notification(result: "TendResult") -> list[str]:
+    """Whether anything reaches a person, beside where the logs are.
+
+    In the header block for the reason `**Logs**` is: it is a fact about the deployment that a reader cannot get anywhere else, and the alternative to printing it is every reader guessing. The guess this replaces was always the same one — `notification` is commented out in `_steward.yaml`, therefore nobody can be reached — and it is wrong on any machine whose `.env` sets the variable, which is the arrangement the template itself recommends.
+
+    **No remedy here.** `launch` gives that once, where somebody is watching; a document rewritten every ten minutes that ends in advice is how a reader learns to stop reading the bottom of it.
+
+    Silent only on a result assembled by hand, which settled no channel and should claim nothing about one.
+    """
+    if (channel := result.notification) is None:
+        return []
+    return [f"**Notifications** {channel.description}", ""]
 
 
 def _policies(result: "TendResult") -> list[str]:

@@ -151,6 +151,11 @@ def echo_turn(result: TendResult, *, table: bool = True) -> None:
         # them on a machine that exports STEWARD_POLICIES
         click.echo(f"standing rules: {rule}" if index == 0 else f"  {rule}")
 
+    # one source with the markdown's own line (`render._notification`), so the
+    # two renderings cannot disagree about whether anything reaches a person
+    if result.notification is not None:
+        click.echo(f"notifications: {result.notification.description}")
+
     for line in _machinery(result):
         click.echo(line)
 

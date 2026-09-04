@@ -59,6 +59,10 @@
 # A URL here is committed. Prefer STEWARD_NOTIFICATION in your .env, or a config
 # file this file only names, and keep the token out of the repository. Steward
 # never prints the value and never syncs it out to the log store.
+#
+# Wherever you put it, `steward status` reports which spelling is in force and
+# how many places a post reaches, so leaving this key commented out does not
+# leave anybody guessing that the run is silent.
 
 # --- Standing rules an agent applies ----------------------------------------
 #

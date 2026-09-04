@@ -53,7 +53,7 @@ from .._evalset.observe import (
     observe_logs,
     observe_tasks,
 )
-from .._notify import establish_channel
+from .._notify import Channel, describe_channel, establish_channel
 from .._scan import (
     ScanFindings,
     establish_scan_model,
@@ -320,6 +320,14 @@ class TendResult:
     **Reported because it stopped being guessable.** For as long as `logs/` was the near-universal answer, a reader who needed the directory could assume it; a definition naming its own was the exception. A `log_root` makes the workspace's `logs/` the exception instead — there is no such directory at all — while the runbook goes on telling an agent to reach for `samples_df` and `read_eval_log_sample_summaries` without saying where. The alternative was pointing the agent at `.steward/manifest.json`, which would make a private file part of the contract with the one directory Steward documents as safe to delete.
 
     `None` only on a result assembled by hand, which makes no claim about a directory.
+    """
+
+    notification: Channel | None = None
+    """Where this run's notifications go, named without its value (`_notify.Channel`).
+
+    **Reported for the reason `log_dir` is**: it stopped being guessable, and the ways of guessing are all wrong. A channel arrives from four spellings, and the one that most often carries it is a `.env` at or above the workspace — loaded into Steward's own process by `init_dotenv()` and into no shell an agent can read. So an agent that opened `_steward.yaml`, found the key commented out, and told a person the run could reach nobody was right about everything it looked at and wrong about the run.
+
+    A fact rather than an item, on the argument `_cli.launch._echo_no_channel` makes: the remedy is said once, at launch, where somebody is watching. `None` only on a result assembled by hand, which settled no channel.
     """
 
     scan: ManifestScan | None = None
@@ -1033,6 +1041,15 @@ def _turn(
     channel = establish_channel(
         workspace, notification=settings.notification, fleet=settings.channel
     )
+    # described immediately after it is settled, and from the same two values
+    # that settled it: the snapshot has to be able to say whether anything will
+    # reach a person, and the spellings that answer that are unreadable from
+    # outside this process (`_notify.Channel`)
+    notification = describe_channel(
+        target=channel,
+        notification=settings.notification,
+        channel=settings.channel,
+    )
     # beside the channel and for its reason: this is the other value every
     # worker this turn spawns inherits from this process's environment, and
     # settling it late would leave part of a fleet scanning with the shell's
@@ -1226,6 +1243,7 @@ def _turn(
         progress=progress,
         tuning=plan,
         log_dir=log_dir,
+        notification=notification,
         scan=manifest.scan,
         scan_id=scan_id,
         coverage=scanned,

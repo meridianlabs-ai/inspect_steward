@@ -400,6 +400,27 @@ def test_the_live_block_replaces_the_startup_bound_and_both_renderings_agree(
     assert "refusals" not in status_markdown(result, header=False)
 
 
+def test_both_renderings_say_whether_anything_reaches_a_person(
+    workspace: Workspace, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The one fact a reader cannot get from anywhere else, so it has to be in both.
+
+    Which spelling configured a channel — usually a `.env` at or above the
+    workspace — is unreadable from outside Steward's own process, and a
+    rendering that carried the line while the other did not would leave
+    whichever reader got the silent one guessing exactly as before.
+    """
+    result = turn(workspace)
+    assert result.notification is not None
+    described = result.notification.description
+
+    markdown = status_markdown(result, header=False)
+    echo_turn(result)
+
+    assert f"notifications: {described}" in capsys.readouterr().out
+    assert f"**Notifications** {described}" in markdown
+
+
 def test_the_tasks_table_says_what_is_still_to_run_with_nothing_running(
     workspace: Workspace,
 ) -> None:

@@ -184,7 +184,9 @@ Tend ramps sample concurrency on its own, one step per clean window, and steps b
 
 Post rather than agonize, and do not batch. Steward limits its own posts to one per turn, so the channel is not tight. A skipped `stopped` is a run that waits all night for an answer nobody knew was wanted.
 
-Notify and raise are separate acts; do both when you hand something over. With no channel configured the command fails. Say so in the conversation and in `analysis.md`, since adding one is the person's.
+Notify and raise are separate acts; do both when you hand something over.
+
+**Whether there is a channel is in the snapshot, and not in `_steward.yaml`.** The *Notifications* line names the spelling that configured it and how many places a post reaches; a commented-out `notification:` proves nothing, because the channel most runs use comes from a `.env` at or above the workspace that only Steward's own process loads — which is neither in the file you read nor in the environment your shell hands you. So read the line. Tell the person this run cannot reach them only where it says `none configured` or `no usable targets`, and then say it in the conversation and in `analysis.md`, since adding one is theirs. Where it names a channel, the command works and there is nothing to raise.
 
 ## Standing rules
 

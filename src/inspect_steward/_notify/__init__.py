@@ -4,8 +4,13 @@
 """
 
 from .channel import (
+    COMMAND_LINE,
+    DIRECTIVES,
     INSPECT_NOTIFICATION,
+    STEWARD_NOTIFICATION,
+    Channel,
     channel_apprise,
+    describe_channel,
     establish_channel,
     usable_channel,
 )
@@ -16,12 +21,16 @@ from .send import SEND_TIMEOUT, Delivery, send_post
 
 __all__ = [
     "AGENT_KINDS",
+    "COMMAND_LINE",
+    "DIRECTIVES",
     "GLYPH",
     "INSPECT_NOTIFICATION",
     "NARROW",
     "SEND_TIMEOUT",
     "SLACK_FAMILY",
+    "STEWARD_NOTIFICATION",
     "WIDTH",
+    "Channel",
     "Delivery",
     "Dialect",
     "Kind",
@@ -29,6 +38,7 @@ __all__ = [
     "body_format",
     "by_dialect",
     "channel_apprise",
+    "describe_channel",
     "dialect_of",
     "establish_channel",
     "render",

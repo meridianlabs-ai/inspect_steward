@@ -13,7 +13,16 @@ from pathlib import Path
 
 import pytest
 from inspect_steward._cli import main as cli
-from inspect_steward._notify import INSPECT_NOTIFICATION, establish_channel
+from inspect_steward._cli.turn import turn_json
+from inspect_steward._notify import (
+    COMMAND_LINE,
+    DIRECTIVES,
+    INSPECT_NOTIFICATION,
+    STEWARD_NOTIFICATION,
+    describe_channel,
+    establish_channel,
+)
+from inspect_steward._tend import status, status_markdown
 from inspect_steward._workspace import (
     Directives,
     DirectivesError,
@@ -22,7 +31,9 @@ from inspect_steward._workspace import (
     read_directives,
 )
 
+from .._logs import SynthTask
 from ..conftest import CHANNELS
+from ..schedule.test_tend import prepared
 
 SLACK = "slack://tok-a/tok-b/tok-c"
 DISCORD = "discord://1234/abcd"
@@ -257,3 +268,152 @@ def test_a_tests_own_undo_cannot_revoke_the_ambient_channel_guard(
     # CLI invocation performs cannot put a channel back underneath the test
     cli.init_dotenv()
     assert all(os.environ.get(name) is None for name in CHANNELS)
+
+
+# --- what the snapshot may say about all of the above -------------------------
+#
+# The resolution above is correct and was, until this point, unreportable: every
+# spelling of it lives somewhere an outside reader cannot see. The one that
+# carries a channel most often is a `.env` at or above the workspace — loaded
+# into Steward's own process by `init_dotenv()` and into no shell an agent
+# holds — so an agent that opened `_steward.yaml`, found the key commented out,
+# and told its person the run could reach nobody was right about everything it
+# had looked at and wrong about the run. These are the snapshot being able to
+# say otherwise, and being unable to say the URL while it does.
+
+REACHABLE = "json://localhost/"
+"""A URL Apprise actually builds a target out of.
+
+Not `SLACK`, which every test above uses and none of them builds: its tokens
+are shaped like tokens and are not ones, so Apprise declines the plugin and the
+instance comes back holding nothing. That is the right answer — it is what
+`usable_channel` is for — and it makes the constant useless for the one thing
+these tests need, which is a channel that reaches somewhere.
+"""
+
+SPELLINGS: list[tuple[str, dict[str, str], str, str]] = [
+    ("the file", {}, f"notification: {REACHABLE}\n", DIRECTIVES),
+    ("steward's variable", {STEWARD_NOTIFICATION: REACHABLE}, "", STEWARD_NOTIFICATION),
+    ("inspect's variable", {INSPECT_NOTIFICATION: REACHABLE}, "", INSPECT_NOTIFICATION),
+]
+
+
+@pytest.mark.parametrize(
+    ("environ", "text", "source"),
+    [(environ, text, source) for _, environ, text, source in SPELLINGS],
+    ids=[case for case, _, _, _ in SPELLINGS],
+)
+def test_the_snapshot_names_the_spelling_that_configured_the_channel(
+    environ: dict[str, str],
+    text: str,
+    source: str,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A channel is reported however it was configured, under the name it was configured by.
+
+    The name is the point rather than a nicety: *configured* on its own leaves a
+    reader unable to tell a committed file from a variable this shell happens to
+    hold, and those two facts want different actions from them.
+    """
+    for name, value in environ.items():
+        monkeypatch.setenv(name, value)
+    workspace, _ = prepared(tmp_path, [SynthTask("waiting")])
+    workspace.directives.write_text(text, encoding="utf-8")
+
+    channel = status(workspace).notification
+
+    assert channel is not None
+    assert channel.source == source
+    assert channel.reaches
+    assert source in channel.description
+
+
+def test_a_channel_nobody_configured_is_reported_as_absent(tmp_path: Path) -> None:
+    workspace, _ = prepared(tmp_path, [SynthTask("waiting")])
+
+    channel = status(workspace).notification
+
+    assert channel is not None
+    assert channel.source is None
+    assert not channel.reaches
+    assert "none configured" in channel.description
+
+
+def test_a_channel_that_resolves_to_nothing_is_not_reported_as_reaching_anybody(
+    tmp_path: Path,
+) -> None:
+    """The worse of the two absences, since the operator has already done the thing they would be told to do.
+
+    An Apprise config file that has been moved reads as empty, which is a
+    non-empty setting that reaches nobody — and *configured* over one would be
+    the reassurance without the capability.
+    """
+    workspace, _ = prepared(tmp_path, [SynthTask("waiting")])
+    workspace.directives.write_text("notification: gone.yml\n", encoding="utf-8")
+
+    channel = status(workspace).notification
+
+    assert channel is not None
+    assert channel.source == DIRECTIVES
+    assert channel.targets == 0
+    assert not channel.reaches
+    assert "no usable targets" in channel.description
+
+
+def test_a_workspace_that_declined_is_reported_as_silent_throughout(
+    tmp_path: Path,
+) -> None:
+    workspace, _ = prepared(tmp_path, [SynthTask("waiting")])
+    workspace.directives.write_text("notification: false\n", encoding="utf-8")
+
+    channel = status(workspace).notification
+
+    assert channel is not None
+    assert channel.declined and not channel.fleet
+    assert channel.description == "declined — nothing posts anywhere"
+
+
+def test_a_flag_declining_over_a_configured_workspace_says_the_fleet_still_posts() -> (
+    None
+):
+    """The two silences are different runs to be reading about at 2am.
+
+    A worker's notification is a sample stopped on an approval and waiting, so a
+    fleet that can still reach somebody is materially unlike one that cannot —
+    and `--no-notification` beside a `notification:` produces exactly that pair.
+    """
+    channel = describe_channel(
+        target=None,
+        notification=False,
+        channel=REACHABLE,
+        environ={INSPECT_NOTIFICATION: REACHABLE},
+    )
+
+    assert channel.declined and channel.fleet
+    assert (
+        channel.description == "declined — Steward posts nowhere; the fleet still posts"
+    )
+
+
+def test_a_flag_is_named_as_the_flag_rather_than_as_the_workspace() -> None:
+    """It lasts as long as the invocation, and a reader who took it for the workspace's own answer would be reading a channel that is gone by the next turn."""
+    channel = describe_channel(
+        target=DISCORD, notification=DISCORD, channel=SLACK, environ={}
+    )
+
+    assert channel.source == COMMAND_LINE
+
+
+def test_no_spelling_of_the_channel_reaches_the_snapshot(tmp_path: Path) -> None:
+    """An Apprise URL is a bearer token with a scheme in front of it, and this document is written to a file, printed to a terminal, and synced to an object store."""
+    workspace, _ = prepared(tmp_path, [SynthTask("waiting")])
+    workspace.directives.write_text(f"notification: {REACHABLE}\n", encoding="utf-8")
+
+    result = status(workspace)
+
+    assert result.notification is not None
+    assert result.notification.reaches
+    assert REACHABLE not in result.notification.description
+    assert REACHABLE not in status_markdown(result, header=False)
+    assert REACHABLE not in turn_json(result)
