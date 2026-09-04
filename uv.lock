@@ -865,15 +865,6 @@ wheels = [
 ]
 
 [[package]]
-name = "dill"
-version = "0.4.1"
-source = { registry = "https://pypi.org/simple" }
-sdist = { url = "https://files.pythonhosted.org/packages/81/e1/56027a71e31b02ddc53c7d65b01e68edf64dea2932122fe7746a516f75d5/dill-0.4.1.tar.gz", hash = "sha256:423092df4182177d4d8ba8290c8a5b640c66ab35ec7da59ccfa00f6fa3eea5fa", size = 187315, upload-time = "2026-01-19T02:36:56.85Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/1e/77/dc8c558f7593132cf8fefec57c4f60c83b16941c574ac5f619abb3ae7933/dill-0.4.1-py3-none-any.whl", hash = "sha256:1e1ce33e978ae97fcfcff5638477032b801c46c7c65cf717f95fbc2248f79a9d", size = 120019, upload-time = "2026-01-19T02:36:55.663Z" },
-]
-
-[[package]]
 name = "docstring-parser"
 version = "0.18.0"
 source = { registry = "https://pypi.org/simple" }
@@ -1312,8 +1303,8 @@ wheels = [
 
 [[package]]
 name = "inspect-ai"
-version = "0.3.262.dev38+g3c5770755"
-source = { git = "https://github.com/UKGovernmentBEIS/inspect_ai?branch=main#3c5770755de3417bc78c75694a357c45b8c6b9f5" }
+version = "0.3.263"
+source = { git = "https://github.com/UKGovernmentBEIS/inspect_ai?branch=main#7aa7343e4a14fa7be07e5a09c7431df5e88c17ee" }
 dependencies = [
     { name = "agent-client-protocol" },
     { name = "aioboto3" },
@@ -1332,6 +1323,7 @@ dependencies = [
     { name = "jsonpath-ng" },
     { name = "jsonref" },
     { name = "jsonschema" },
+    { name = "markdown-it-py" },
     { name = "mmh3" },
     { name = "nest-asyncio2" },
     { name = "numpy" },
@@ -1395,13 +1387,12 @@ wheels = [
 
 [[package]]
 name = "inspect-scout"
-version = "0.4.47.dev22"
-source = { git = "https://github.com/meridianlabs-ai/inspect_scout?branch=main#354c37050be52adfc2668e6456f35b167dabaf95" }
+version = "0.5.0"
+source = { git = "https://github.com/meridianlabs-ai/inspect_scout?branch=main#90a0060dcce3a852d85960ead638f96ab4fd2cf0" }
 dependencies = [
     { name = "anyio" },
     { name = "click" },
     { name = "cloudpickle" },
-    { name = "dill" },
     { name = "duckdb" },
     { name = "fastapi" },
     { name = "ijson" },
