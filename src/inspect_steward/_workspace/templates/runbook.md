@@ -82,6 +82,8 @@ The snapshot has three sections: what needs a decision, the run, and what happen
 
 Each gets a heading, two or three sentences of what happened and what you found, a table of the samples it covers capped at five rows with the remainder counted, and then one question.
 
+**The question is the last thing you write, and nothing follows it** — not what happens once it is answered, not an observation you want on the record, not the next decision queued behind it. All of that goes above the question or waits for your next message. Anything below it competes with the one sentence you need answered, and a person who has read to the end should not have to work out which part was the ask.
+
 Make the question answerable — one with an obvious shape of answer, usually yes or no — and leave them room to say more. *Answer however you like* is not a question; it hands the framing back to the person you are supposed to be doing that for. Do not restate the heading as the question either: the heading names the subject, and the question asks the one thing you could not work out yourself. Keep the arithmetic out of both — what a ruling does to the score belongs in the proposal's reason and in `analysis.md`, where it can be checked, and in the ask it reads as a case being argued rather than a question being put.
 
 **Notify whenever you ask**, without exception. A question put only in the conversation is a question put to nobody, which is the premise of the whole role.
