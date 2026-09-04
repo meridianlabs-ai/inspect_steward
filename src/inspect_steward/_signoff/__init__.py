@@ -10,6 +10,7 @@ from .gate import (
     UNREAD,
     UNSETTLED,
     UNSIGNED,
+    UNWRITTEN,
     Blocker,
     check,
 )
@@ -26,6 +27,7 @@ __all__ = [
     "UNSETTLED",
     "UNFINALIZED",
     "UNSIGNED",
+    "UNWRITTEN",
     "Blocker",
     "Curated",
     "Signoff",

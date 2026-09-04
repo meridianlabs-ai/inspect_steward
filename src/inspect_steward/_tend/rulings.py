@@ -39,9 +39,11 @@ from .._anomaly.model import (
 from .._evalset.classify import OPERATOR_LIMIT, task_error_class
 from .._evalset.instances import Instance, InstanceBatch, in_results
 from .._evalset.observe import ObservedTasks, TaskObservation
+from .._marks import MARK_ATTEMPTS, Runs, Target, resolve_runs, spawn_runner
 from .._schedule import InFlight
 from .._worker import LiveFleet, Unavailable, requeue_sample
 from .._workspace import ACTION, RULING, Workspace, append_event, steward_log
+from .items import finding_label
 
 ACCEPTANCE_KEY = "steward_accepted"
 """The log-metadata key one acceptance writes. A fixed name rather than one composed from the class, because the reader who wants it months later is grepping for a word, and a key assembled per class would be unfindable."""
@@ -225,14 +227,18 @@ def apply_rulings(
     observed: ObservedTasks,
     spawned: set[str],
     acted: Acted,
+    reused: Mapping[str, frozenset[str]] = {},
+    paused: bool = False,
 ) -> None:
-    """Carry out every standing ruling's unapplied remainder — re-runs, and acceptances.
+    """Carry out every standing ruling's unapplied remainder — re-runs, acceptances, and marks.
 
     Per decision — windows grouped by `(class, ruling instant)`, since a class-scoped ruling can close two generations at once and they must not double-apply.
 
     A **rerun** takes RULED sample-kind windows: the ruled population is `unapplied` over the windows' merged refs — the one membership definition the routing and the pass check share — grouped per evidence task and partitioned by liveness. A running task's targets are warm-requeued; a landed one's are invalidated in its current attempt; a task with nothing left and no witness yet gets a `converged` record (an operator requeued by hand, or upstream retries absorbed the errors — without the witness the window would stick RULED forever). What could not be reached this turn — a 409 mid-finish, a busy worker, a task a worker was just spawned for — is deferred with **no record**, so exactly the remainder retries next turn.
 
     An **acceptance** takes ACCEPTED windows and reads from `anomalies.settled` rather than `.open`, because that is where the fold puts them: every accepting disposition settles its window on the spot (`_ruled_state`), so a carrier looking in `.open` would find nothing at all. **The two differ in the grain of their target, and everything else follows from that.** A rerun acts on samples, so its remainder is `unapplied` over the census; an acceptance acts on *logs*, so its remainder is the window's evidence tasks minus the ones this ruling already reached. Same doctrine one level up: nothing stores *fully applied*, a deferral leaves no record, and one failing class costs that class and never the turn — the `_act` posture.
+
+    An **exclusion or zero** is written into the log too, and by a process of its own (`_marks`): the tend computes the remainder — the ruled samples in the results minus the uuids already edited — and starts a detached runner for it, which journals what it wrote. The tend never touches the log for these: recomputing its metrics can import the task's module, and a zero needs a scratch run of the task's scorer. What the tend keeps is the bound — a ruling whose runs keep failing is reported rather than retried forever — and the same liveness rule as the rest: a task with a live or freshly spawned worker waits.
     """
     census = {batch.class_key: batch for batch in batches}
     lookup = {task.identifier: task for task in observed.tasks}
@@ -292,6 +298,147 @@ def apply_rulings(
             )
             acted.failures.append(failure)
             steward_log(workspace.log, failure)
+
+    marking = [
+        entry
+        for disposition in MARKING
+        for entry in _grouped(anomalies.settled, disposition).values()
+    ]
+    if not marking:
+        return
+    # the process table is read once, and only on a turn with a mark to carry
+    current = {
+        task.identifier: task.current.location
+        for task in observed.tasks
+        if task.current is not None
+    }
+    runs = resolve_runs(workspace.marks_runs)
+    for anomaly, ruling, refs, _tasks in marking:
+        if paused and ruling.disposition is Disposition.ZERO:
+            # a zero runs the task's scorer in a scratch fleet, and pausing
+            # means no new workers. An exclusion writes a file and proceeds,
+            # as a re-run's invalidation does
+            steward_log(
+                workspace.log,
+                f"holding the zero on {anomaly.class_key}: the run is paused, and "
+                f"its side run would start workers",
+            )
+            continue
+        try:
+            _mark(
+                workspace,
+                anomaly,
+                ruling,
+                frozenset(refs),
+                census.get(anomaly.class_key),
+                applied,
+                running,
+                spawned,
+                current,
+                reused,
+                lookup,
+                runs,
+                acted,
+            )
+        except Exception as ex:
+            failure = (
+                f"could not carry out the {ruling.disposition.value} on "
+                f"{anomaly.class_key}: {type(ex).__name__}: {ex}"
+            )
+            acted.failures.append(failure)
+            steward_log(workspace.log, failure)
+
+
+MARKING = (Disposition.EXCLUDE, Disposition.ZERO)
+"""The dispositions a runner writes into the log."""
+
+
+def _mark(
+    workspace: Workspace,
+    anomaly: Anomaly,
+    ruling: Ruling,
+    refs: frozenset[str],
+    batch: InstanceBatch | None,
+    applied: Applied,
+    running: set[str],
+    spawned: set[str],
+    current: Mapping[str, str],
+    reused: Mapping[str, frozenset[str]],
+    lookup: dict[str, TaskObservation],
+    runs: Runs,
+    acted: Acted,
+) -> None:
+    """Start a runner for one marking ruling's remainder, or say why not.
+
+    The remainder is the ruled population **in the results** — `in_results`, the narrowing every report-facing count shares — minus the uuids the journal says are written. Narrowed here rather than in the runner because a sample re-run since the ruling is not in the data the ruling is about, and a runner sent after it would fail to find it every turn until the budget ran out.
+
+    One run per ruling per turn, and none while one is running. A run that finished without journaling its application is a spent attempt, whatever it said on the way out; past `MARK_ATTEMPTS` of those the ruling is reported as a failure the turn could not carry out, which is the `action_failed` item and the gate's refusal, and stays so until somebody rules afresh.
+    """
+    key = anomaly.class_key
+    instances = [
+        instance
+        for instance in (batch.instances if batch is not None else ())
+        if instance.ref in refs and in_results(instance, current, reused)
+    ]
+    edited = applied.edited_uuids(key, ruling.ts)
+    remaining = [
+        instance
+        for instance in instances
+        if instance.uuid and instance.uuid not in edited
+    ]
+    if not remaining:
+        return
+    if (live := runs.running(key, ruling.ts)) is not None:
+        steward_log(
+            workspace.log,
+            f"run {live.run} is still writing the {ruling.disposition.value} on {key}",
+        )
+        return
+    landed = applied.runs(key, ruling.ts)
+    spent = [run for run in runs.finished(key, ruling.ts) if run.run not in landed]
+    if len(spent) >= MARK_ATTEMPTS:
+        output = workspace.marks_run(spent[-1].run) / "run.log"
+        acted.failures.append(
+            f"could not write the {ruling.disposition.value} on "
+            f"{finding_label(key)}: the run failed {len(spent)} times — read "
+            f"{output}"
+        )
+        return
+
+    targets: list[Target] = []
+    deferred: list[dict[str, Any]] = []
+    for instance in remaining:
+        task = instance.task
+        observation = lookup.get(task)
+        if task in running:
+            deferred.append(_deferral(instance, "a worker is running it"))
+        elif task in spawned:
+            deferred.append(_deferral(instance, "a worker was just spawned for it"))
+        elif observation is None or observation.current is None:
+            deferred.append(_deferral(instance, "no current attempt to write into"))
+        else:
+            targets.append(
+                Target.of(
+                    instance, observation.current.location, observation.current.eval_id
+                )
+            )
+    if targets:
+        attempt = len(runs.of(key, ruling.ts)) + 1
+        run = spawn_runner(workspace, key, ruling, targets, attempt=attempt)
+        steward_log(
+            workspace.log,
+            f"started run {run} to write the {ruling.disposition.value} on {key} "
+            f"into {len(targets)} sample{'s' if len(targets) != 1 else ''}",
+        )
+    if deferred:
+        reasons = "; ".join(
+            f"{entry['id']}:{entry['epoch']} in {entry['task']} ({entry['why']})"
+            for entry in deferred
+        )
+        steward_log(
+            workspace.log,
+            f"deferred writing the {ruling.disposition.value} on {key}: {reasons}",
+        )
 
 
 def _grouped(
@@ -770,6 +917,12 @@ class Dispositions:
     )
     """Task identifier to the samples that did not take the normal course, counted per `OUTCOMES` cell — what `anomalies.md` tabulates per task. Over every sample-marked kind, one cell per sample row."""
 
+    pending: dict[str, int] = field(default_factory=dict[str, int])
+    """Per class, the samples an `exclude` or `zero` ruling covers that are not yet written into their log.
+
+    Applied is a state (`_marks`): the journal's mark is the decision, the log's edit is its effect, and until the runner has landed the effect the numbers a reader sees are not the numbers the ruling describes. The gate refuses over this, the caveat says *pending*, and the by-task counts keep following the journal — a decision is a decision whether or not its effect has landed yet. Empty where the fold was given no applied record to subtract.
+    """
+
     affected: dict[str, frozenset[str]] = field(
         default_factory=dict[str, frozenset[str]]
     )
@@ -795,6 +948,7 @@ def dispositions(
     anomalies: Anomalies,
     current: Mapping[str, str],
     reused: Mapping[str, frozenset[str]] = {},
+    applied: Applied | None = None,
 ) -> Dispositions:
     """Fold the census against the rulings in force.
 
@@ -807,13 +961,15 @@ def dispositions(
         anomalies: The fold, post-policy — the rulings in force.
         current: Task identifier to its current attempt's log location.
         reused: Per resumed task, the sample uuids its current log holds.
+        applied: The applied-rulings fold, for which marks have reached their logs. `None` leaves `pending` empty.
 
     Returns:
-        Bucket counts per task over `error:` instances, the run-wide exclusion and zero totals over every sample-shaped kind, and the samples each class left in the data.
+        Bucket counts per task over `error:` instances, the run-wide exclusion and zero totals over every sample-shaped kind, the marks not yet written, and the samples each class left in the data.
     """
     by_task: dict[str, dict[str, int]] = {}
     marked: dict[str, str] = {}
     outcome_of: dict[str, tuple[str, str]] = {}
+    pending: dict[str, int] = {}
     for batch in batches:
         # the totals are about rows in the results, so every kind a mark can
         # honestly be recorded against counts toward them — an excluded reward
@@ -829,24 +985,35 @@ def dispositions(
         # ruling's bucket, while one still awaiting a fresh decision -- or an
         # instance no window has absorbed at all -- reads undecided: nothing
         # ruled has covered it
-        by_ref: dict[str, str] = {}
+        by_ref: dict[str, tuple[str, str | None]] = {}
         for window in anomalies.of_class(batch.class_key):
             covered = (
                 covered_refs(window, window.ruling.ts)
                 if window.ruling is not None
                 else window.refs
             )
+            ruled_at = window.ruling.ts if window.ruling is not None else None
             for ref in covered:
-                by_ref[ref] = _window_bucket(window)
+                by_ref[ref] = (_window_bucket(window), ruled_at)
         for instance in batch.instances:
             if not in_results(instance, current, reused):
                 continue
-            bucket = by_ref.get(instance.ref, "undecided")
+            bucket, ruled_at = by_ref.get(instance.ref, ("undecided", None))
             if batch.kind == "error":
                 counts = by_task.setdefault(instance.task, {})
                 counts[bucket] = counts.get(bucket, 0) + 1
             if bucket in MARKS:
                 marked[instance.ref] = _stronger(marked.get(instance.ref), bucket)
+                # a mark the log does not yet carry. Only a sample with a uuid
+                # can be written, and only under the ruling that marked it
+                if (
+                    applied is not None
+                    and ruled_at is not None
+                    and instance.uuid
+                    and instance.uuid
+                    not in applied.edited_uuids(batch.class_key, ruled_at)
+                ):
+                    pending[batch.class_key] = pending.get(batch.class_key, 0) + 1
             # one cell per sample row, the strongest outcome any of its
             # instances puts it in -- an errored sample a scan also flagged is
             # one row, and the ruling that moved it is what a reader is owed
@@ -865,6 +1032,7 @@ def dispositions(
         by_task=by_task,
         excluded=sum(1 for mark in marked.values() if mark == "excluded"),
         zeroed=sum(1 for mark in marked.values() if mark == "zeroed"),
+        pending=pending,
         affected=affected_refs(batches, current, reused),
         outcomes=outcomes,
     )

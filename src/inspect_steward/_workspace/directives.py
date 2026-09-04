@@ -42,10 +42,10 @@ PREFIX = "STEWARD_"
 One namespace, so *is this Steward's?* is answerable by looking. The cost is that Steward's own internals have to stay out of it or be named in `RESERVED`.
 """
 
-RESERVED = frozenset({"STEWARD_WORKER", "STEWARD_TASK"})
+RESERVED = frozenset({"STEWARD_WORKER", "STEWARD_TASK", "STEWARD_MARK"})
 """Variables under the prefix that are not settings.
 
-Both are markers Steward writes into a worker's environment and reads back off the process table (`_worker.inflight`), so they are always present in exactly the processes that would otherwise refuse them as typos.
+All three are markers Steward writes into a process's environment and reads back off the process table — a worker's two (`_worker.inflight`) and a marking runner's one (`_marks.state`) — so they are always present in exactly the processes that would otherwise refuse them as typos.
 """
 
 DEFAULT_TEND_INTERVAL = 600

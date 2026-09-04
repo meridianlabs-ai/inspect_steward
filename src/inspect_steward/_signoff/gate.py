@@ -26,6 +26,7 @@ UNREAD = "unread"
 UNFINALIZED = "unfinalized"
 """Not raised by `check` at all: the terminal fold happens past the gate, and this is `sign._finalize_scan` refusing in the shape the caller already renders."""
 UNDECIDED = "undecided"
+UNWRITTEN = "unwritten"
 FAILED = "failed"
 STANDING = "standing"
 UNSIGNED = "unsigned"
@@ -158,6 +159,26 @@ def check(result: "TendResult", signature: Signature | None) -> list[Blocker]:
                 remedy=(
                     "rule the classes they belong to; `accept` and `dismiss` "
                     "are answers, and a signed exception is the point"
+                ),
+            )
+        )
+    if unwritten := sum(result.dispositions.pending.values()):
+        # **a mark is a decision whose effect has not landed.** The journal
+        # says excluded; the log still scores the sample; the headline is
+        # over the wrong population until the runner writes it. Signing now
+        # would sign numbers the ruling itself says are not the numbers
+        blockers.append(
+            Blocker(
+                kind=UNWRITTEN,
+                summary=(
+                    f"{unwritten} ruled sample{'s' if unwritten != 1 else ''} "
+                    f"{'are' if unwritten != 1 else 'is'} not yet written into "
+                    f"the logs"
+                ),
+                remedy=(
+                    "tend again — an exclusion is written within a turn, a zero "
+                    "when its side run lands; one that keeps failing is an "
+                    "`action_failed` item"
                 ),
             )
         )

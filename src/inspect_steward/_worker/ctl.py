@@ -304,6 +304,74 @@ def requeue_sample(
     return RequeueView.model_validate(result)
 
 
+class CancelView(BaseModel):
+    """One sample cancel, as the CLI's uniform mutation envelope reports it.
+
+    The same envelope `RequeueView` reads — `{target, applied, dry_run, detail}` — over upstream's `cancel_sample` result: `changed: true` when the interrupt was delivered, `changed: false` with the sample's `status` when it had already finished. A sample still queued, or one that cannot take the action asked, is a 409 that arrives as `Unavailable("http_error", ...)`.
+    """
+
+    model_config = ConfigDict(extra="allow")
+
+    applied: bool = False
+    """Whether the cancel actually landed — false on a dry run and on the idempotent no-op."""
+
+    dry_run: bool = False
+
+    detail: dict[str, Any] = {}
+    """The server's result: `changed`, the `action` taken, and `status` on a no-op."""
+
+    @property
+    def changed(self) -> bool:
+        """Whether this call interrupted the sample (`True`) or found it already finished (`False`)."""
+        return self.detail.get("changed") is True
+
+    @property
+    def status(self) -> str:
+        """Where the sample already stood on a no-op, or empty."""
+        value = self.detail.get("status")
+        return value if isinstance(value, str) else ""
+
+
+def cancel_sample(
+    task_id: str,
+    sample_id: str,
+    epoch: int,
+    *,
+    action: str = "score",
+    dry_run: bool = False,
+) -> CancelView | Unavailable:
+    """End one running sample inside a live task, and say what becomes of it.
+
+    The primitive a `zero` ruling's side run is built on (`_marks.run`): `--action score` completes the sample and runs the task's scorer over the work done so far, which for a sample interrupted as it starts is the scorer's verdict on an empty attempt — the one value Steward cannot write itself. Idempotent upstream: a sample already finished answers `changed: false`, and a sample still queued is a 409 — which arrives as `Unavailable("http_error", ...)` and means *ask again on the next poll*, never *fail*.
+
+    Args:
+        task_id: The control channel's task selector, from the fleet read.
+        sample_id: The sample, as its log records it.
+        epoch: The epoch, always explicit — a defaulted epoch would silently cancel a different attempt.
+        action: What the sample becomes: `score`, `error`, or `cancel`.
+        dry_run: Report what would be cancelled without doing it.
+
+    Returns:
+        The mutation envelope, or why there is no answer.
+    """
+    args = [
+        "sample",
+        "cancel",
+        task_id,
+        sample_id,
+        str(epoch),
+        "--action",
+        action,
+        "--json",
+    ]
+    if dry_run:
+        args.append("--dry-run")
+    result = _ctl(*args)
+    if isinstance(result, Unavailable):
+        return result
+    return CancelView.model_validate(result)
+
+
 def _ctl(*args: str, timeout: float = TIMEOUT) -> dict[str, Any] | Unavailable:
     """Run one `inspect ctl` command and decode its JSON.
 

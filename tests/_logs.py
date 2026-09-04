@@ -44,6 +44,7 @@ from inspect_ai.log import (
     HeadlineMetric,
     write_eval_log,
 )
+from inspect_ai.log._log import EvalMetricDefinition, EvalScorer
 from inspect_ai.scorer import Score
 from inspect_ai.util._sandbox.environment import SandboxEnvironmentSpec
 from inspect_steward._evalset.display import compute_display_keys
@@ -183,6 +184,7 @@ def _eval_spec(
     selection: dict[str, Any] | None = None,
     sandbox: SandboxEnvironmentSpec | None = None,
     model_base_url: str | None = None,
+    scorers: Sequence[str] | None = None,
 ) -> EvalSpec:
     """The one place a synthetic task becomes an `EvalSpec`.
 
@@ -190,6 +192,11 @@ def _eval_spec(
     under a 3-epoch manifest task. `selection` does the same for `limit`,
     `sample_id` and `sample_shuffle` — which samples ran, as distinct from how
     many — and `sandbox`/`model_base_url` for what the run talked to.
+
+    `scorers` names the scorers the log declares, each with `accuracy` as its
+    metric — what `recompute_metrics` resolves the results from after an edit.
+    Not part of the identifier, so a log that declares them still pairs with
+    the manifest row that does not.
     """
     return EvalSpec(
         created=created,
@@ -202,6 +209,12 @@ def _eval_spec(
         model=task.model,
         sandbox=sandbox,
         model_base_url=model_base_url,
+        scorers=[
+            EvalScorer(name=name, metrics=[EvalMetricDefinition(name="accuracy")])
+            for name in scorers
+        ]
+        if scorers
+        else None,
         # limits go on via `model_copy` rather than as keywords: `EvalConfig`
         # takes a hundred fields of every type, so a `**dict[str, int]` spread
         # is checked against all of them
@@ -276,6 +289,7 @@ def write_log(
     model_base_url: str | None = None,
     samples: Sequence[SynthSample] | None = None,
     error_traceback: str | None = None,
+    scorers: Sequence[str] | None = None,
 ) -> Path:
     """Write one log for a task.
 
@@ -297,12 +311,15 @@ def write_log(
         model_base_url: The gateway the log's model calls went to.
         samples: Sample records to embed, for readers that go below the header — anomaly classification's summaries and single-sample reads.
         error_traceback: Traceback for `error`, when a test cares what it parses to.
+        scorers: Scorer names the log declares in its header, for a reader that recomputes its metrics. Defaults to the names in `scores`, or to `exact` — the one name `SynthSample` scores under — so a synthetic log declares a scorer the way a real one does; an empty sequence declares none.
 
     Returns:
         Path the log was written to.
     """
     if error is not None and status == "success":
         status = "error"
+    if scorers is None:
+        scorers = list(scores) if scores else ["exact"]
 
     results: EvalResults | None = None
     if status != "started":
@@ -333,6 +350,7 @@ def write_log(
             selection=selection,
             sandbox=sandbox,
             model_base_url=model_base_url,
+            scorers=scorers,
         ),
         plan=EvalPlan(),
         results=results,

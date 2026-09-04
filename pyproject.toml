@@ -242,6 +242,9 @@ markers = [
     # -- and cannot be read without replacing what is installed. Deselected by
     # default (see addopts above).
     "network: needs network access, an external tool on PATH, and sole use of the environment",
+    # A marking run's real, detached runner. Every other test has the launch
+    # stood in for and applies the run in-process (see tests/conftest.py).
+    "runner: starts a real marking runner process",
 ]
 
 [tool.pyright]

@@ -79,6 +79,28 @@ def ambient(name: str) -> bool:
 
 
 @pytest.fixture(autouse=True)
+def no_runner_outlives_its_test(request: pytest.FixtureRequest) -> Iterator[None]:
+    """Keep marking runs in-process.
+
+    A turn that finds an `exclude` or `zero` ruling unwritten starts a detached runner to write it (`_marks.spawn`), and that guarantee does not know it is in a test either: the runner would edit the fixture's log from the background while the test asserts on it, and outlive the test when its `tmp_path` goes. So the launch is stood in for — the run is recorded exactly as it would be, and no process starts — and a test that wants the effect applies it in-process with `tests/marks/_runner.py`, where the timing is its own.
+
+    Opt out with `@pytest.mark.runner` for the live tests, whose whole claim is that the real runner lands.
+    """
+    if "runner" in request.keywords:
+        yield
+        return
+
+    def stood_in(
+        argv: list[str], *, cwd: Path, env: dict[str, str], output: Path
+    ) -> int:
+        return 0
+
+    with pytest.MonkeyPatch.context() as guard:
+        guard.setattr("inspect_steward._marks.spawn._launch", stood_in)
+        yield
+
+
+@pytest.fixture(autouse=True)
 def no_ambient_settings() -> Iterator[None]:
     """Keep the developer's own machine out of the suite.
 

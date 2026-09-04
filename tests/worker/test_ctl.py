@@ -18,10 +18,12 @@ from inspect_ai._eval.evalset import task_identifier
 from inspect_ai.log import list_eval_logs, read_eval_log
 from inspect_steward import read_eval_set
 from inspect_steward._worker import (
+    CancelView,
     ConfigView,
     RequeueView,
     TaskRow,
     Unavailable,
+    cancel_sample,
     list_tasks,
     task_config,
 )
@@ -128,6 +130,57 @@ def test_a_requeue_envelope_decodes_to_its_two_answers(
     assert view.status == status
 
 
+CANCELS: list[tuple[str, dict[str, object], bool, str]] = [
+    (
+        "an accepted cancel is a change",
+        {
+            "target": {"sample_id": "1", "epoch": 1},
+            "applied": True,
+            "dry_run": False,
+            "detail": {"changed": True, "action": "score"},
+        },
+        True,
+        "",
+    ),
+    (
+        "a sample already finished is a no-op naming where it stands",
+        {
+            "target": {"sample_id": "1", "epoch": 1},
+            "applied": False,
+            "dry_run": False,
+            "detail": {"changed": False, "status": "completed", "action": "score"},
+        },
+        False,
+        "completed",
+    ),
+    (
+        "a dry run reports the change without applying it",
+        {
+            "target": {"sample_id": "1", "epoch": 1},
+            "applied": False,
+            "dry_run": True,
+            "detail": {"changed": True, "action": "score", "dry_run": True},
+        },
+        True,
+        "",
+    ),
+]
+
+
+@pytest.mark.parametrize(
+    ("envelope", "changed", "status"),
+    [pytest.param(*case[1:], id=case[0].replace(" ", "_")) for case in CANCELS],
+)
+def test_a_cancel_envelope_decodes_to_its_two_answers(
+    envelope: dict[str, object], changed: bool, status: str
+) -> None:
+    # a sample still queued is a 409 upstream, which `_decode` (covered above)
+    # turns into `http_error` -- never a view
+    view = CancelView.model_validate(envelope)
+    assert view.changed is changed
+    assert view.status == status
+
+
 def test_a_document_decodes_to_itself() -> None:
     result = _decode(0, '{"as_of": 1.0, "tasks": []}', "", command="task --json")
     assert result == {"as_of": 1.0, "tasks": []}
@@ -225,6 +278,13 @@ def test_the_live_surface(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> No
         assert not isinstance(view, Unavailable)
         assert view.max_samples is not None
         assert not view.applied
+
+        # the sample the fault holds open can be asked to end, and a dry run
+        # says it would be scored without ending it
+        asked = cancel_sample(row.task_id, "1", 1, dry_run=True)
+        assert not isinstance(asked, Unavailable), asked
+        assert asked.dry_run and not asked.applied and asked.changed
+        assert first_row(worker).status == "running"
 
         # a dry run reports without moving anything
         rehearsal = task_config(row.task_id, max_samples=3, reason="test", dry_run=True)

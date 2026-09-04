@@ -40,8 +40,14 @@ class Application:
     Task-grained where the two above are sample-grained, because that is the grain of the act: an acceptance decides about a *log*, and the four outcomes that need no write (already `success`, still being written, no log at all, a superseded attempt already answered) are recorded here exactly like the one that does. Without them a `limit:` acceptance over an already-successful log would be re-examined every turn for the life of the run.
     """
 
+    edited: frozenset[str] = frozenset()
+    """Sample uuids an `exclude` or `zero` ruling was written into, in a landed log (or found already written — the same crash-recovery record `invalidated` keeps)."""
+
+    run: str | None = None
+    """The marking run that wrote `edited`, where a runner did (`_marks`). What the executor subtracts from a ruling's spent attempts."""
+
     tasks: frozenset[str] = frozenset()
-    """Every task this event covered — requeued, invalidated, accepted, or converged with nothing left to do."""
+    """Every task this event covered — requeued, invalidated, accepted, edited, or converged with nothing left to do."""
 
 
 @dataclass(frozen=True)
@@ -70,6 +76,22 @@ class Applied:
             if application.ruling_ts == ruling_ts:
                 uuids |= application.invalidated
         return frozenset(uuids)
+
+    def edited_uuids(self, class_key: str, ruling_ts: str) -> frozenset[str]:
+        """The sample uuids this marking ruling has already been written into."""
+        uuids: set[str] = set()
+        for application in self.by_class.get(class_key, ()):
+            if application.ruling_ts == ruling_ts:
+                uuids |= application.edited
+        return frozenset(uuids)
+
+    def runs(self, class_key: str, ruling_ts: str) -> frozenset[str]:
+        """The marking runs that landed an application of this ruling — the ones that are not spent attempts."""
+        return frozenset(
+            application.run
+            for application in self.by_class.get(class_key, ())
+            if application.ruling_ts == ruling_ts and application.run is not None
+        )
 
     def accepted_tasks(self, class_key: str, ruling_ts: str) -> frozenset[str]:
         """The tasks this acceptance has already been carried out on.
@@ -121,6 +143,8 @@ def read_applied(events: list[JournalEvent]) -> Applied:
         invalidated, invalidated_tasks = _invalidated(event.payload.get("invalidated"))
         accepted = _accepted(event.payload.get("accepted"))
         converged = _strings(event.payload.get("converged"))
+        edited, edited_tasks = _invalidated(event.payload.get("edited"))
+        run = event.payload.get("run")
         by_class.setdefault(class_key, []).append(
             Application(
                 ruling_ts=ruling_ts,
@@ -128,10 +152,13 @@ def read_applied(events: list[JournalEvent]) -> Applied:
                 requeued=requeued,
                 invalidated=invalidated,
                 accepted=accepted,
+                edited=edited,
+                run=run if isinstance(run, str) and run else None,
                 tasks=frozenset(
                     {target[0] for target in requeued}
                     | invalidated_tasks
                     | accepted
+                    | edited_tasks
                     | set(converged)
                 ),
             )
@@ -162,6 +189,7 @@ def _requeued(value: object) -> frozenset[tuple[str, str, int]]:
 
 
 def _invalidated(value: object) -> tuple[frozenset[str], set[str]]:
+    """Per-log entries carrying `task` and `uuids` — the shape `invalidated` and `edited` share."""
     uuids: set[str] = set()
     tasks: set[str] = set()
     for entry in cast(list[object], value) if isinstance(value, list) else []:

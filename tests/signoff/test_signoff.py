@@ -25,6 +25,7 @@ from inspect_steward._signoff import (
     UNREAD,
     UNSETTLED,
     UNSIGNED,
+    UNWRITTEN,
     Signoff,
     check,
     signoff,
@@ -47,6 +48,7 @@ from inspect_steward._workspace import (
 
 from .._logs import SynthSample, SynthTask, write_log
 from ..anomaly.test_items import CLASS, erroring
+from ..marks._runner import apply_marks
 from ..schedule.test_tend import prepared, turn
 
 TASK = SynthTask("probe", samples=4)
@@ -192,12 +194,37 @@ def test_a_ruled_hole_is_signed_over_and_named_in_the_signature(
     workspace = erroring(tmp_path, errors=2, samples=4)
     turn(workspace)
     ruling(workspace, "exclude", effect="2 samples excluded from scoring")
+    turn(workspace)
+    apply_marks(workspace)
 
     result = sign(workspace)
 
     assert result.blockers == []
     assert result.signature is not None
     assert result.signature.exceptions == (CLASS,)
+
+
+def test_an_exclusion_not_yet_in_the_log_refuses_until_the_runner_lands_it(
+    tmp_path: Path,
+) -> None:
+    """The journal's mark is the decision; the log's edit is its effect, and the numbers are the effect's."""
+    workspace = erroring(tmp_path, errors=2, samples=4)
+    turn(workspace)
+    ruling(workspace, "exclude", effect="2 samples excluded from scoring")
+
+    refused = sign(workspace)
+
+    assert kinds(refused) == [UNWRITTEN]
+    (blocker,) = refused.blockers
+    assert blocker.summary == "2 ruled samples are not yet written into the logs"
+    assert "tend again" in blocker.remedy
+    assert refused.signature is None
+
+    apply_marks(workspace)
+    signed = sign(workspace)
+
+    assert signed.blockers == []
+    assert signed.signature is not None
 
 
 def test_a_log_that_will_not_read_is_refused_until_somebody_names_it(
@@ -1065,6 +1092,8 @@ def test_the_command_prints_the_by_task_table_it_is_signing_over(
     workspace = erroring(tmp_path, errors=2, samples=4)
     turn(workspace)
     ruling(workspace, "exclude", effect="2 samples excluded from scoring")
+    turn(workspace)
+    apply_marks(workspace)
     monkeypatch.chdir(workspace.root)
 
     result = run("signoff", "--by", "kaia")

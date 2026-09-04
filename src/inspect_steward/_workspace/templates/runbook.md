@@ -189,7 +189,7 @@ Your verbs, in order:
 
 **Two rulings are yours alone.** A class you have disproved: `steward rule CLASS --disposition dismiss --by agent --reason ...`. A scan finding that changes no score: `--disposition score`, which keeps every score as recorded and puts one line in the report. Make them as soon as the investigation gets there, rather than proposing them; the verb refuses `--by agent` for every other disposition.
 
-A `rerun` ruling is carried out by the next tend: samples in a running task are requeued in place, and a landed log has just those samples invalidated for relaunch. Run nothing. The window stays open until the re-run lands, and the same samples failing again come back as a question for the operator. A class flagged as substrate (credentials, disk, storage) gets no rerun proposal from you; re-running into broken machinery burns the work twice.
+`rerun`, `exclude` and `zero` are carried out by the tend. Run nothing. A `rerun` requeues samples in a running task in place, and has a landed log's samples invalidated for relaunch; the window stays open until the re-run lands, and the same samples failing again come back as a question for the operator. An `exclude` is written into the log within a turn: the samples become unscored, with the reason, and the metrics are recomputed over the rest. A `zero` takes minutes, since what a zero is depends on the task's scorer: Steward starts the task on just those samples in a scratch directory, stops each as it begins, and writes the scorer's verdict on that empty attempt into the log; the transcript stays. Until a mark is written the report says so, and signoff waits. A class flagged as substrate (credentials, disk, storage) gets no rerun proposal from you; re-running into broken machinery burns the work twice.
 
 Two classes are quiet on purpose. A `task:` window heals itself when the respawn brings the task home; if it does not, `stalled` is the real question. A `limit:operator` window raises no item, since the operator knows what they did; it waits for the signoff conversation.
 
@@ -240,8 +240,8 @@ A smoke that fails twice is a stop. Notify it explicitly: nothing posts before t
 | disposition | it says | honest for |
 |---|---|---|
 | `rerun` | run these samples again | anything but `scanerror:` |
-| `exclude` | drop these samples from scoring | `error:`, `limit:`, `scan:` |
-| `zero` | score these samples zero | `error:`, `limit:`, `scan:` |
+| `exclude` | drop these samples from scoring: written into the log as unscored, with the reason | `error:`, `limit:`, `scan:` |
+| `zero` | score these samples as the task's scorer scores an empty attempt: Steward runs the scorer for them | `error:`, `limit:`, `scan:` |
 | `score` | score these samples as recorded | `error:`, `limit:`, `scan:` |
 | `accept` | the data stands, with a caveat the report carries (`--effect`) | anything but `error:` |
 | `dismiss` | looked, nothing here | anything |

@@ -19,6 +19,7 @@ from inspect_steward._workspace import Workspace, create_workspace, read_journal
 
 from .._logs import SynthTask, write_log
 from ..anomaly.test_items import CLASS, erroring
+from ..marks._runner import apply_marks
 from ..schedule.test_tend import turn
 from .test_signoff import TASK, done, logs, ruling, sign
 
@@ -168,6 +169,8 @@ class TestPublishingWhatWasSigned:
         store = tmp_path / "store"
         configured(workspace, store)
         ruling(workspace, "exclude", effect="2 samples excluded from scoring")
+        turn(workspace)
+        apply_marks(workspace)
 
         result = sign(workspace, publish=True)
 

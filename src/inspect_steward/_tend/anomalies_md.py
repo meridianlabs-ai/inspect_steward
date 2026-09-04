@@ -12,7 +12,7 @@ The journal answers *was this run conducted properly*. A different reader asks a
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
 
-from .._anomaly.model import SAMPLE_SHAPED, Anomalies, Anomaly, Ruling
+from .._anomaly.model import SAMPLE_SHAPED, Anomalies, Anomaly, Disposition, Ruling
 from .._evalset.instances import InstanceBatch, in_results
 from .._workspace.journal import Ack
 from .items import STALLED, UNREADABLE, anomaly_name
@@ -91,6 +91,9 @@ class Caveat:
 
     kind: str = ""
 
+    written: bool | None = None
+    """For an exclusion or a zero, whether every sample it covers carries it in the log; `None` for a decision that writes nothing."""
+
 
 def caveats(
     anomalies: Anomalies,
@@ -100,6 +103,7 @@ def caveats(
     current: Mapping[str, str] = {},
     cleared: Collection[str] = (),
     reused: Mapping[str, frozenset[str]] = {},
+    pending: Mapping[str, int] = {},
 ) -> list[Caveat]:
     """Every caveat the record carries, from both ways in.
 
@@ -115,6 +119,7 @@ def caveats(
         current: Task identifier to its current attempt's log location — the narrowing. Empty for a caller that has none, which then reports the window's own population.
         cleared: The subjects whose condition demonstrably no longer holds — a log that now reads, a task that has since completed. An acknowledgment names a condition rather than an instant, so one whose condition has cleared is not a caveat: a replaced upload reads, and a stalled task that later finished is in the numbers. Stated as what *cleared* rather than what stands, because a subject nothing here recognises must keep its caveat — dropping a footnote nobody asked to drop is the worse of the two mistakes.
         reused: Per resumed task, the sample uuids its current log holds — what keeps a scan finding on a reused sample in the entry that covers it.
+        pending: Per class, the marked samples not yet written into their log (`Dispositions.pending`) — what makes an exclusion's entry say *pending* until the runner lands it.
 
     Returns:
         The caveats, oldest decision first.
@@ -132,7 +137,8 @@ def caveats(
     listed = [
         caveat
         for group in grouped.values()
-        if (caveat := _caveat(group, batches, keys, current, reused)) is not None
+        if (caveat := _caveat(group, batches, keys, current, reused, pending))
+        is not None
     ]
     listed.sort(key=lambda caveat: (caveat.when, caveat.subject))
     listed.extend(
@@ -182,6 +188,7 @@ def _caveat(
     keys: Mapping[str, str],
     current: Mapping[str, str],
     reused: Mapping[str, frozenset[str]] = {},
+    pending: Mapping[str, int] = {},
 ) -> Caveat | None:
     """One decision, as the entry an operator quotes — or nothing, where it left no mark after all.
 
@@ -203,6 +210,24 @@ def _caveat(
         members=members,
         unnamed=unnamed,
         kind=group.anomaly.kind,
+        written=(
+            pending.get(group.anomaly.class_key, 0) == 0
+            if group.ruling.disposition in WRITTEN
+            else None
+        ),
+    )
+
+
+WRITTEN = (Disposition.EXCLUDE, Disposition.ZERO)
+"""The decisions whose effect is written into the log, and whose entry therefore says whether it has been."""
+
+
+def written_phrase(caveat: Caveat) -> str:
+    """The clause that says whether a written decision has reached the log — empty for one that writes nothing."""
+    if caveat.written is None:
+        return ""
+    return (
+        ", written into the log" if caveat.written else ", not yet written into the log"
     )
 
 
@@ -368,7 +393,7 @@ def caveat_line(caveat: Caveat) -> str:
     The short rendering of the same facts the document below spells out, so a reader glancing at a run and a reader quoting it are told the same thing at two lengths. The finding first, in the eval's words, and the subject last as the address: the sentence is what an agent relays, the key is what it looks up.
     """
     return (
-        f"{caveat.what}{caveat.where} — {caveat.effect} "
+        f"{caveat.what}{caveat.where} — {caveat.effect}{written_phrase(caveat)} "
         f"({caveat.decision} by {caveat.who or 'somebody'}) · `{caveat.subject}`"
     )
 
@@ -484,7 +509,9 @@ def anomalies_markdown(
         lines.append(
             f"- **Accepted by** — {caveat.who or 'somebody'}, at {caveat.when}"
         )
-        lines.append(f"- **Effect on the data** — {caveat.effect}")
+        lines.append(
+            f"- **Effect on the data** — {caveat.effect}{written_phrase(caveat)}"
+        )
         if caveat.members:
             named = ", ".join(f"`{member}`" for member in caveat.members)
             more = f", and {caveat.unnamed} more" if caveat.unnamed else ""

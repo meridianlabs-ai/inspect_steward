@@ -302,12 +302,37 @@ def _applied(payload: dict[str, object]) -> str:
     if converged:
         n = len(converged)
         parts.append(f"found nothing left to re-run in {n} task{'s' if n != 1 else ''}")
+    disposition = _text(payload, "disposition")
+    edited = payload.get("edited")
+    if isinstance(edited, list) and edited:
+        entries = [
+            cast(dict[str, object], entry)
+            for entry in cast(list[object], edited)
+            if isinstance(entry, dict)
+        ]
+        logs = len(entries)
+        samples = sum(len(_strings(entry.get("uuids"))) for entry in entries)
+        where = f" across {logs} logs" if logs > 1 else ""
+        plural = "s" if samples != 1 else ""
+        if disposition == "zero":
+            parts.append(
+                f"wrote {samples} zeroed sample{plural} from a side run{where}"
+            )
+        else:
+            parts.append(f"wrote {samples} sample{plural} unscored{where}")
     deferred = payload.get("deferred")
     if isinstance(deferred, list) and deferred:
         n = len(cast(list[object], deferred))
         parts.append(f"{n} deferred to the next turn")
     what = f": {', '.join(parts)}" if parts else ""
-    which = "acceptance" if isinstance(accepted, list) and accepted else "rerun ruling"
+    if isinstance(accepted, list) and accepted:
+        which = "acceptance"
+    elif disposition == "exclude":
+        which = "exclusion"
+    elif disposition == "zero":
+        which = "zero ruling"
+    else:
+        which = "rerun ruling"
     if not class_key:
         return f"applied the {which} on an anomaly{what}"
     return f"applied the {which} on {finding_label(class_key)}{what} · `{class_key}`"

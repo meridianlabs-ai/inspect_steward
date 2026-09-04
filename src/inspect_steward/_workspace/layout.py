@@ -176,6 +176,36 @@ class Workspace:
         return self.smoke / "inflight.jsonl"
 
     @property
+    def marks(self) -> Path:
+        """`.steward/marks/` — where a marking ruling is carried out, and never `logs/`.
+
+        An `exclude` or `zero` ruling is written into a landed log by a detached runner (`_marks.run`), and a zero needs a scratch side run to obtain the scorer's own verdict on an empty attempt. Everything that side run produces is disposable and lands here, under the same argument `smoke` makes: a two-sample scratch log written into `logs/` reads as a result to every tool that opens the directory. One run directory per attempt (`marks_run`), so a failed run's output stays readable until `.steward/` goes.
+        """
+        return self.state / "marks"
+
+    @property
+    def marks_workers(self) -> Path:
+        """`.steward/marks/workers/` — a side run's selection documents and worker output.
+
+        Separate from `workers/` for the reason `smoke_workers` is: `resolve_inflight` bounds its process-table scan by the workers directory it is given, and a side worker under the run's directory would be a worker the run's own tend believes is its.
+        """
+        return self.marks / "workers"
+
+    @property
+    def marks_inflight(self) -> Path:
+        """`.steward/marks/inflight.jsonl` — what the side runs spawned, apart from the run's own attempt budget (`smoke_inflight`)."""
+        return self.marks / "inflight.jsonl"
+
+    @property
+    def marks_runs(self) -> Path:
+        """`.steward/marks/runs.jsonl` — every marking run, appended before and after each spawn (`_marks.state`)."""
+        return self.marks / "runs.jsonl"
+
+    def marks_run(self, run: str) -> Path:
+        """`.steward/marks/<run>/` — one marking run's scratch: its output log, its capture guard, and a zero's side logs."""
+        return self.marks / run
+
+    @property
     def inflight(self) -> Path:
         """`.steward/inflight.jsonl` — what was spawned, appended before each launch.
 

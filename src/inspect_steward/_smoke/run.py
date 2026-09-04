@@ -389,7 +389,13 @@ def watch(plan: Plan, *, now: float) -> bool:
         time.sleep(_POLL)
 
 
-def reap(workspace: Workspace, workers: Sequence[str]) -> list[str]:
+def reap(
+    workspace: Workspace,
+    workers: Sequence[str],
+    *,
+    inflight: Path | None = None,
+    workers_dir: Path | None = None,
+) -> list[str]:
     """Take down whatever of this rehearsal is still running, and wait for it to land.
 
     **The one exit, taken from a `finally`.** A rehearsal is untended by design, which is the property that makes it cheap and also the one that makes a leaked worker permanent: nothing will ever reconcile it, so a worker outliving the smoke keeps its sandboxes and keeps spending until somebody notices by hand. The cap is the expected way to get here; an exception, a claim that could not be released, and an interrupt are the ones that made this a `finally`.
@@ -400,13 +406,23 @@ def reap(workspace: Workspace, workers: Sequence[str]) -> list[str]:
 
     **And what it returns is a failure, which is the half that was missing after that.** A drain that timed out used to log a line and let the digest conclude whatever it liked: the tasks had settled, so the cap never fired, and a rehearsal reported *ready* with one of its own workers still generating. That worker outlives the smoke with nothing to reconcile it, and the next rehearsal's `rmtree` takes its logs and its in-flight record out from under it — which is why `prepare` now refuses that directory rather than clearing it.
 
+    **A zero ruling's side run leaves by the same door** (`_marks.run`), which is why the record and the workers directory are parameters: they default to the rehearsal's own, and a side run passes its own pair.
+
+    Args:
+        workspace: The workspace the fleet was spawned in.
+        workers: The worker stems to take down.
+        inflight: The in-flight record they were recorded in (defaults to the rehearsal's).
+        workers_dir: The workers directory that bounds the process scan (defaults to the rehearsal's).
+
     Returns:
         The workers still running when the drain gave up, empty where everything landed.
     """
     if not workers:
         return []
+    record = inflight if inflight is not None else workspace.smoke_inflight
+    directory = workers_dir if workers_dir is not None else workspace.smoke_workers
     wanted = set(workers)
-    if not (running := _running(workspace, wanted)):
+    if not (running := _running(record, directory, wanted)):
         return []
 
     requests = [
@@ -421,7 +437,7 @@ def reap(workspace: Workspace, workers: Sequence[str]) -> list[str]:
             )
 
     deadline = time.monotonic() + DRAIN
-    while left := _running(workspace, wanted):
+    while left := _running(record, directory, wanted):
         if time.monotonic() >= deadline:
             steward_log(
                 workspace.log,
@@ -433,9 +449,9 @@ def reap(workspace: Workspace, workers: Sequence[str]) -> list[str]:
     return []
 
 
-def _running(workspace: Workspace, wanted: set[str]) -> list[RunningWorker]:
-    """This rehearsal's workers that the process table still confirms."""
-    inflight = resolve_inflight(workspace.smoke_inflight, workspace.smoke_workers)
+def _running(record: Path, workers_dir: Path, wanted: set[str]) -> list[RunningWorker]:
+    """The wanted workers that the process table still confirms."""
+    inflight = resolve_inflight(record, workers_dir)
     return [worker for worker in inflight.running if worker.worker in wanted]
 
 

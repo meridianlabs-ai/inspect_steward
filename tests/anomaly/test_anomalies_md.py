@@ -25,11 +25,18 @@ from inspect_steward._tend.anomalies_md import (
     caveats,
     outcomes_table,
 )
+from inspect_steward._tend.history import happened
 from inspect_steward._tend.items import STALLED, SYNC_FAILED, UNREADABLE
 from inspect_steward._tend.progress import Progress, TaskProgress
-from inspect_steward._workspace import ACKNOWLEDGED, Workspace, append_event
+from inspect_steward._workspace import (
+    ACKNOWLEDGED,
+    Workspace,
+    append_event,
+    read_journal,
+)
 from inspect_steward._workspace.journal import Ack
 
+from ..marks._runner import apply_marks
 from ..schedule.test_tend import turn
 from .test_items import CLASS, erroring, ruling
 
@@ -653,3 +660,63 @@ def test_caveats_that_cannot_be_written_are_never_a_failed_turn(
     result = turn(workspace)
 
     assert result.summary.tasks == 1
+
+
+def test_an_exclusion_s_entry_says_whether_the_log_carries_it_yet(
+    tmp_path: Path,
+) -> None:
+    """Applied is a state, and the footnote a reader quotes says which state."""
+    workspace = erroring(tmp_path, errors=2, samples=4)
+    turn(workspace)
+    ruling(workspace, "exclude", effect="2 samples excluded from scoring")
+
+    pending = turn(workspace)
+
+    (caveat,) = pending.caveats
+    assert caveat.written is False
+    assert "2 samples excluded from scoring, not yet written into the log" in (
+        caveat_line(caveat)
+    )
+    assert "not yet written into the log" in collect_markdown(pending)
+    assert "not yet written into the log" in workspace.anomalies.read_text(
+        encoding="utf-8"
+    )
+
+    apply_marks(workspace)
+    written = turn(workspace)
+
+    (caveat,) = written.caveats
+    assert caveat.written is True
+    assert "2 samples excluded from scoring, written into the log" in caveat_line(
+        caveat
+    )
+    document = workspace.anomalies.read_text(encoding="utf-8")
+    assert (
+        "**Effect on the data** — 2 samples excluded from scoring, written into the log"
+        in document
+    )
+    # and *what happened* names the write, as it names an invalidation
+    lines = [
+        entry.text for entry in happened(read_journal(workspace.journal).events).entries
+    ]
+    assert any(
+        line.startswith(
+            "applied the exclusion on openai.APITimeoutError errors: wrote 2 samples "
+            "unscored"
+        )
+        for line in lines
+    ), lines
+
+
+def test_a_decision_that_writes_nothing_says_nothing_about_the_log(
+    tmp_path: Path,
+) -> None:
+    workspace = erroring(tmp_path, errors=2, samples=4)
+    turn(workspace)
+    ruling(workspace, "score", effect="2 samples scored as recorded")
+
+    result = turn(workspace)
+
+    (caveat,) = result.caveats
+    assert caveat.written is None
+    assert "written" not in caveat_line(caveat)

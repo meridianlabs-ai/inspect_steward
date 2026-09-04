@@ -40,14 +40,20 @@ def errored(id: str) -> SynthSample:
 
 
 def erroring(root: Path, *, errors: int = 2, samples: int = 4) -> Workspace:
-    """A one-task run whose log carries real errored samples."""
+    """A one-task run whose log carries real errored samples.
+
+    Every sample record is written, the clean ones scored, because a reader that recomputes the log's metrics counts what is there: a log holding only its errored records would read as a two-sample task with nothing completed the moment an exclusion was written into it.
+    """
     task = SynthTask("probe", samples=samples)
     workspace, _ = prepared(root, [task])
     write_log(
         workspace.logs,
         task,
         completed=samples - errors,
-        samples=[errored(f"s{n}") for n in range(errors)],
+        samples=[
+            *(errored(f"s{n}") for n in range(errors)),
+            *(SynthSample(f"c{n}", score=1.0) for n in range(samples - errors)),
+        ],
     )
     return workspace
 

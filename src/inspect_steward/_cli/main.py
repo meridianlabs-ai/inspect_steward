@@ -7,6 +7,7 @@ from .collect import collect_command
 from .init import init_command
 from .investigate import investigate_command
 from .launch import launch_command
+from .mark import mark_command
 from .note import note_command
 from .notify import notify_command
 from .pause import pause_command, resume_command
@@ -38,6 +39,7 @@ steward.add_command(collect_command)
 steward.add_command(init_command)
 steward.add_command(investigate_command)
 steward.add_command(launch_command)
+steward.add_command(mark_command)
 steward.add_command(note_command)
 steward.add_command(notify_command)
 steward.add_command(pause_command)

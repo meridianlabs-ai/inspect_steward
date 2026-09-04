@@ -1219,6 +1219,17 @@ def _turn(
         # baseline from before it
         plan = replace(plan, moves=[], proposals=[], lines=[])
 
+    # the dispositions fold once, for the table, the gate and the caveats: the
+    # marks not yet written are read off the applied fold, and the caveat that
+    # says *pending* must count the same samples the gate refuses over
+    folded = dispositions(
+        detection.batches,
+        anomalies,
+        _current_locations(observed),
+        reused,
+        applied=applied,
+    )
+
     result = TendResult(
         summary=decision.summary,
         queued=decision.queued,
@@ -1257,9 +1268,7 @@ def _turn(
         breaks_since=history.breaks_since,
         anomalies=anomalies,
         anomaly_pending=pending,
-        dispositions=dispositions(
-            detection.batches, anomalies, _current_locations(observed), reused
-        ),
+        dispositions=folded,
         stuck_cancel=_cancel_authority(settings.stuck_cancel),
         observed=observed,
         acknowledged=dict(history.acknowledged),
@@ -1272,6 +1281,7 @@ def _turn(
             _current_locations(observed),
             _cleared(observed),
             reused,
+            folded.pending,
         ),
         signature=history.signature,
         launched=history.launched,
@@ -1332,7 +1342,11 @@ def _turn(
             result,
             anomalies=anomalies,
             dispositions=dispositions(
-                detection.batches, anomalies, _current_locations(observed), reused
+                detection.batches,
+                anomalies,
+                _current_locations(observed),
+                reused,
+                applied=applied,
             ),
         )
 
@@ -1354,6 +1368,8 @@ def _turn(
             for task in action.tasks
         },
         acted=acted,
+        reused=reused,
+        paused=history.paused is not None,
     )
     retuned = _retune(workspace, plan, acted)
 
@@ -1369,6 +1385,18 @@ def _turn(
         # an action appends is an ack, a hand-off, or a collection, so every
         # other fold in this history is still the answer it was
         history = replace(history, events=_reread(workspace, history.events))
+        # and the marks with it: a runner's application lands between turns,
+        # but a signoff's own tend must see what this turn's re-read holds
+        result = replace(
+            result,
+            dispositions=dispositions(
+                detection.batches,
+                anomalies,
+                _current_locations(observed),
+                reused,
+                applied=read_applied(history.events),
+            ),
+        )
     result = _projected(
         replace(
             result,

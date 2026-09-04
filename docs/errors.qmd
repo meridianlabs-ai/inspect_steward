@@ -46,13 +46,15 @@ Agents will prompt you for a ruling with one of six answers:
 | Disposition | What it means | What happens to the data |
 |----|----|----|
 | `rerun` | The failure was transient and the samples should run again | Steward re-runs them and records whether they passed |
-| `exclude` | Leave the samples out of scoring | The report says how many were excluded |
-| `zero` | Count the samples as failures | Scored zero, with a visible mark |
+| `exclude` | Leave the samples out of scoring | Written into the log as unscored, with the reason; the headline is recomputed over the rest |
+| `zero` | Count the samples as failures | The task's scorer scores an empty attempt and that score is written in |
 | `score` | The recorded results stand as they are | Scored as-is, marked |
 | `accept` | The data stands with a caveat | Requires a stated effect, which is the sentence the report carries. Not available for errored samples |
 | `dismiss` | Looked, nothing here | No mark; the record keeps who looked and why |
 
 The next tend carries out a `rerun`. Samples in a running task are requeued in place, and a landed log has the ruled samples invalidated so the task re-runs them and reuses everything else. Authorized re-runs are scheduled ahead of ordinary queued work.
+
+The next tend carries out an `exclude` and a `zero` too, by writing them into the log: each edited score keeps its history and records who decided and why, and the log's metrics are recomputed over what remains. An exclusion lands within a turn. A zero needs the task's scorer, since what a zero is depends on it, so Steward runs the task on just those samples in a scratch directory under `.steward/`, stops each sample as it starts, and copies the scorer's verdict on that empty attempt into the log. Until a ruling is written the report's entry for it says *not yet written into the log*, and `steward signoff` refuses with the same words.
 
 If the same failure comes back after a ruling, it opens as a new question and carries the old decision with it.
 

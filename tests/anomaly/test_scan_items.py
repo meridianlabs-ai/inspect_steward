@@ -119,10 +119,11 @@ def record(
     error: str | None = None,
     stack: str = "",
     scanner: str = SCANNER,
+    sample_id: str | None = None,
 ) -> None:
     """One row, written exactly as a record-only worker writes it.
 
-    `error` is the shape a scanner that threw leaves behind: no result at all, and the exception in its place.
+    `error` is the shape a scanner that threw leaves behind: no result at all, and the exception in its place. `sample_id` is what the row names as the transcript's sample, where a test needs it to be a sample the log actually holds; by default it is the uuid, which is all a row-level test needs.
     """
     recorder = FileRecorder()
     scan_dir = scan_dir_location(
@@ -136,7 +137,7 @@ def record(
                 source_type="eval_log",
                 source_id="eval-1",
                 source_uri=log,
-                task_id=uuid,
+                task_id=sample_id if sample_id is not None else uuid,
                 task_repeat=1,
             ),
             scanner,
