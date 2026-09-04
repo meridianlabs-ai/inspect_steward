@@ -4,7 +4,7 @@ The verb the whole anomaly machinery exists to reach: five hundred errored sampl
 
 **It takes no claim**, for the same reason `ack` does not: a ruling is one append to an append-only file, and the moment that matters most is a person reading a status while a tend is in flight.
 
-**`--by` is free text naming a person, never a role.** A ruling is never the agent's own (agent.md §6); an agent relaying a decision records who decided.
+**`--by` is free text naming a person, with one role permitted.** An agent relaying a person's decision records who decided, never itself — except for `dismiss`, the one disposition that marks nothing, which an agent may record as its own after investigating (`_anomaly.model.Ruling.by`). Every other answer changes what the results say and stays a person's.
 """
 
 import json
@@ -13,7 +13,14 @@ from typing import Any
 
 import click
 
-from .._anomaly.model import Anomalies, Anomaly, Disposition, composed_effect
+from .._anomaly.model import (
+    AGENT,
+    Anomalies,
+    Anomaly,
+    Disposition,
+    agent_may,
+    composed_effect,
+)
 from .._tend import status
 from .._workspace import RULING, append_event
 from .anomalies import (
@@ -101,6 +108,7 @@ def rule_command(
         targets = list(dict.fromkeys(_matched(anomalies, token) for token in classes))
         decided = Disposition(disposition)
 
+    _refuse_agent(decider, decided)
     refuse_dishonest(targets, decided)
     effects = _effects(
         anomalies, targets, decided, effect, result.dispositions.affected
@@ -246,3 +254,24 @@ def _effects(
 
 def _open_windows(anomalies: Anomalies, key: str) -> list[Anomaly]:
     return [anomaly for anomaly in anomalies.open if anomaly.class_key == key]
+
+
+def _refuse_agent(decider: str, decided: Disposition) -> None:
+    """Refuse an agent recording a decision that is not its to make.
+
+    **The one role `--by` accepts, and only for `dismiss`.** An agent that has investigated a class and found no case to answer is reporting an absence, and requiring a signature for it cost one human decision per false positive while protecting nothing. Marking the data is the opposite: `accept` attaches a caveat the report carries, and `exclude`, `zero` and `score` change what the numbers are computed over. A run certified because a machine ran out of things to flag is the failure the whole verb exists to prevent, and this is the line that keeps `--by agent` on the harmless side of it.
+
+    Args:
+        decider: What `--by` resolved to.
+        decided: The disposition being recorded.
+
+    Raises:
+        click.ClickException: Where an agent named itself for anything but `dismiss`.
+    """
+    if decider.strip().lower() != AGENT or agent_may(decided):
+        return
+    raise click.ClickException(
+        f"{decided.value} marks the data, so it is a person's decision — "
+        f"an agent may record only dismiss as its own. Propose it instead "
+        f"(`steward propose`) and record the answer with their name."
+    )

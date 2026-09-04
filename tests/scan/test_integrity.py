@@ -12,19 +12,8 @@ under another model scored 1.0 on the same grader at 171/171, while the flagged
 run failed five named tests.
 """
 
-import pytest
 from inspect_scout import Transcript
 from inspect_steward._scan.integrity import integrity_question
-
-needs_upstream = pytest.mark.skipif(
-    "score_explanation" not in Transcript.model_fields,
-    reason="TranscriptInfo.score_explanation is newer than the pinned inspect_scout",
-)
-"""The field this reads is upstream and may be ahead of the floor.
-
-Skipped rather than dropped, so the coupling is visible in a test run instead
-of surfacing as an unexplained regression the day the pin moves.
-"""
 
 GRADER = (
     "Test exit code: 1 stdout: Running gold tests -- test/audio/VoiceRecording-test.ts "
@@ -37,7 +26,6 @@ def transcript(**fields: object) -> Transcript:
     return Transcript.model_validate({"transcript_id": "t1", **fields})
 
 
-@needs_upstream
 def test_the_graders_own_output_is_quoted_to_the_reviewer() -> None:
     question = integrity_question(
         transcript(score=0.0, success=False, score_explanation=GRADER)
@@ -47,7 +35,6 @@ def test_the_graders_own_output_is_quoted_to_the_reviewer() -> None:
     assert "Passed tests: 169" in question
 
 
-@needs_upstream
 def test_and_the_reviewer_is_told_not_to_defer_to_one() -> None:
     # the failure this exists to stop is a finding whose entire content is
     # *somebody should go and look at the thing you were just given*
@@ -77,21 +64,3 @@ def test_an_unscored_sample_still_says_so() -> None:
     question = integrity_question(transcript())
 
     assert "not available to you" in question
-
-
-def test_a_transcript_without_the_field_at_all_still_renders() -> None:
-    """`score_explanation` is newer than the inspect_scout floor this pins to.
-
-    Read through `getattr`, so a release without the field gives the reviewer
-    what it always had rather than failing the scan on an attribute error.
-    """
-
-    class Older:
-        transcript_id = "t1"
-        score = 0.0
-        success = False
-
-    question = integrity_question(Older())  # type: ignore[arg-type]
-
-    assert "RECORDED OUTCOME" in question
-    assert "WHAT THE SCORER SAID" not in question

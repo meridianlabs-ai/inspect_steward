@@ -688,3 +688,74 @@ def test_a_ruling_on_a_freshly_detected_class_survives_the_next_tend(
     (settled,) = result.anomalies.settled
     assert settled.ruling is not None
     assert settled.ruling.disposition.value == "dismiss"
+
+
+class TestWhatAnAgentMayDecideAlone:
+    """`dismiss` is the agent's; everything that marks the data is a person's.
+
+    Every scanner false positive used to cost a human decision, however
+    conclusively the agent disproved it — so a run could not reach *nothing
+    left to adjudicate* by construction, and the findings that mattered sat in
+    a queue beside the ones that did not. `dismiss` is the one disposition that
+    marks nothing, which is what makes it safe to hand over: it records that
+    somebody looked and there was no case to answer.
+    """
+
+    def test_an_agent_may_dismiss_what_it_disproved(self, workspace: Workspace) -> None:
+        code, output = run(
+            "rule",
+            CLASS_A,
+            "--disposition",
+            "dismiss",
+            "--by",
+            "agent",
+            "--reason",
+            "read the grader output; the failing tests are named and real",
+        )
+
+        assert code == 0, output
+        landed = rulings(workspace)
+        assert landed[0]["disposition"] == "dismiss"
+        assert landed[0]["by"] == "agent"
+
+    @pytest.mark.parametrize("disposition", ["accept", "exclude", "zero", "score"])
+    def test_but_never_one_that_marks_the_data(
+        self, disposition: str, workspace: Workspace
+    ) -> None:
+        # a run certified because a machine ran out of things to flag is the
+        # failure the verb exists to prevent
+        code, output = run(
+            "rule",
+            CLASS_A,
+            "--disposition",
+            disposition,
+            "--by",
+            "agent",
+            "--reason",
+            "because",
+            "--effect",
+            "1 sample",
+        )
+
+        assert code != 0
+        assert "a person's decision" in output
+        assert rulings(workspace) == []
+
+    def test_nor_a_rerun_it_decided_on_its_own(self, workspace: Workspace) -> None:
+        # `rerun` marks nothing either, and is still not the agent's: it spends
+        # the account's money and replaces recorded outcomes
+        code, output = run(
+            "rule", CLASS_A, "--disposition", "rerun", "--by", "agent", "--reason", "x"
+        )
+
+        assert code != 0
+        assert "a person's decision" in output
+        assert rulings(workspace) == []
+
+    def test_a_person_may_still_dismiss(self, workspace: Workspace) -> None:
+        code, output = run(
+            "rule", CLASS_A, "--disposition", "dismiss", "--by", "kaia", "--reason", "x"
+        )
+
+        assert code == 0, output
+        assert rulings(workspace)[0]["by"] == "kaia"

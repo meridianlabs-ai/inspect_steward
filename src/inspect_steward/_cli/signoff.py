@@ -13,10 +13,14 @@ from typing import NoReturn
 
 import click
 
+from .._anomaly.model import Disposition
 from .._evalset.manifest import ManifestError
 from .._signoff import Signoff, SignoffError, committed_manifest, signoff
 from .._workspace import Held
 from .turn import TURN_ERRORS, decided_by, find_workspace
+
+SCANNED = frozenset({"scan", "scanerror"})
+"""Anomaly kinds a scanner raises, as opposed to ones the run itself produced."""
 
 
 @click.command("signoff")
@@ -148,6 +152,8 @@ def _echo_signoff(result: Signoff, root: Path) -> None:
             click.echo(f"    {key}")
     else:
         click.echo("  no accepted exceptions")
+    if (findings := _findings_line(result)) is not None:
+        click.echo(f"  {findings}")
     if result.curated is not None and result.curated.moved:
         moved = len(result.curated.moved)
         click.echo(
@@ -238,3 +244,29 @@ def _signoff_json(result: Signoff) -> str:
         },
         indent=2,
     )
+
+
+def _findings_line(result: Signoff) -> str | None:
+    """What the scanners raised over the run, and how much of it survived a look.
+
+    **A tally rather than a list, on purpose.** A dismissed finding is one nobody has to do anything about — that is what dismissing it decided — so naming each one at the moment of signing asks a person to re-read an investigation whose conclusion was *there is nothing here*. What they need is the shape: how much was raised, and how much of it stood up. The reasons are in the journal and the reading is in `analysis.md` for anyone who wants to go back through it.
+
+    Returns:
+        The line, or `None` where the scanners raised nothing at all — which needs no sentence.
+    """
+    windows = [one for one in result.turn.anomalies.settled if one.kind in SCANNED]
+    if not windows:
+        return None
+    dismissed = sum(
+        1
+        for one in windows
+        if one.ruling is not None and one.ruling.disposition is Disposition.DISMISS
+    )
+    raised = len(windows)
+    stood = raised - dismissed
+    tail = (
+        f"{dismissed} dismissed after investigation" if dismissed else "none dismissed"
+    )
+    if stood:
+        tail += f", {stood} carried into the results"
+    return f"scanners raised {raised} finding{'s' if raised != 1 else ''} — {tail}"

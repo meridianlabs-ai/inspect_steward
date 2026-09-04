@@ -86,6 +86,22 @@ SAMPLE_MARKED = frozenset({"error", "limit", "scan"})
 """
 
 
+AGENT = "agent"
+"""The decider an agent records when it rules on its own judgement."""
+
+
+def agent_may(disposition: Disposition) -> bool:
+    """Whether an agent may record this disposition without a person's answer.
+
+    Args:
+        disposition: The answer being considered.
+
+    Returns:
+        Whether `--by agent` is honest for it — true only for `dismiss`, which marks nothing (`Ruling.by`).
+    """
+    return disposition is Disposition.DISMISS
+
+
 def honest(kind: str, disposition: Disposition) -> bool:
     """Whether a disposition can honestly be recorded against a class of this kind.
 
@@ -149,7 +165,10 @@ class Ruling:
     """Why — required, because this is the only account of the decision that survives."""
 
     by: str
-    """Who decided — free text naming a person, or `policy` when a standing pre-authorization applied (step 25). Never a role: a ruling is never the agent's own (agent.md §6)."""
+    """Who decided — free text naming a person, `policy` when a standing pre-authorization applied (step 25), or `agent` for the one disposition an agent may reach on its own.
+
+    **That exception is `dismiss` and only `dismiss`.** Every other disposition marks the data: `accept` attaches a caveat the report carries, and `exclude`, `zero` and `score` change what the numbers are computed over. Those are a person's, and conflating them with this is how a run ends up certified because a machine ran out of things to flag. `dismiss` marks nothing — it records that somebody looked and there was no case to answer — so requiring a signature for it bought no protection and cost one human decision per false positive, which is the tax that stops an attention list being read at all.
+    """
 
     ts: str
     """When. Load-bearing beyond display: it closes the window, and step 25 forgives stall history before it."""
