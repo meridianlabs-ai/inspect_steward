@@ -801,26 +801,37 @@ def _unwritten(result: "TendResult") -> list[Item]:
 
     **Finished means the same thing here as everywhere else** (`unfinished`): complete, or settled by a person's decision. The second half matters more than it looks — a short-but-accepted task stays `INCOMPLETE` for good, deliberately, so gating on `COMPLETE` alone would mean the tasks with a known hole in them are the only ones never asked to explain it.
 
-    One per task, keyed on the identifier — the same key its marker carries, so a task renamed in the definition keeps the item it already had rather than closing one and opening another.
+    **One item for the run, not one per task.** A write-up is owed per section and they clear one at a time, so this was N items — and on a four-task run that is four near-identical lines for what a reader experiences as a single piece of work, crowding out the anomaly sitting beside them. Nothing was bought with the granularity: `UNWRITTEN` is unacknowledgeable, so the per-task ids could not be disposed of individually and existed only to be printed. The tasks are named in the summary instead, and the item clears section by section exactly as before.
+
+    The id is deliberately fixed rather than keyed on the set. It means the same thing every turn — *the write-up is outstanding* — so a run that finishes three of four sections has not acquired a new condition to notify anybody about.
     """
     if result.collected is None:
         return []
     settled = _final(result)
+    owed = [
+        key
+        for identifier, key in sorted(result.unwritten.items(), key=lambda one: one[1])
+        if identifier in settled
+    ]
+    if not owed:
+        return []
+    named = ", ".join(f"`{key}`" for key in owed)
     return [
         Item(
-            id=f"{UNWRITTEN}:{identifier}",
+            id=UNWRITTEN,
             kind=UNWRITTEN,
             owner=OWNERS[UNWRITTEN],
             level=Level.ATTENTION,
-            subject=identifier,
+            subject=owed[0] if len(owed) == 1 else "",
             summary=(
-                f"`{key}` has no write-up in analysis.md — what the numbers "
+                f"{named} has no write-up in analysis.md — what the numbers "
                 f"mean is still only in the numbers"
+                if len(owed) == 1
+                else f"{len(owed)} tasks have no write-up in analysis.md — what "
+                f"the numbers mean is still only in the numbers: {named}"
             ),
-            action="write the section; *looked, nothing here* is an entry",
+            action="write the sections; *looked, nothing here* is an entry",
         )
-        for identifier, key in sorted(result.unwritten.items(), key=lambda one: one[1])
-        if identifier in settled
     ]
 
 

@@ -1353,3 +1353,25 @@ class TestWhenAWriteUpIsAskedFor:
         write_log(workspace.logs, TASK)
 
         assert UNWRITTEN not in items(workspace)
+
+    def test_several_owed_write_ups_are_one_item(self, tmp_path: Path) -> None:
+        """Four near-identical lines for what a reader sees as one job.
+
+        Nothing was bought by the granularity — `UNWRITTEN` cannot be
+        acknowledged, so the per-task ids could not be disposed of one at a
+        time and existed only to be printed, crowding out whatever else the
+        queue was trying to say.
+        """
+        other = SynthTask("second", samples=4)
+        workspace, _ = prepared(tmp_path, [TASK, other])
+        write_log(workspace.logs, TASK)
+        write_log(workspace.logs, other)
+        self.collected(workspace)
+
+        raised = [item for item in turn(workspace).items if item.kind == UNWRITTEN]
+
+        assert len(raised) == 1
+        assert "2 tasks have no write-up" in raised[0].summary
+        # and it still says which, because the count alone is not actionable
+        assert "probe" in raised[0].summary
+        assert "second" in raised[0].summary
