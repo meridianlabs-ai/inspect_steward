@@ -132,6 +132,10 @@ class TestRule:
 
         assert code == 0, output
         assert rulings(workspace)[0]["by"] == "Kaia Example"
+        # and the terminal says so too. It used to echo the raw `--by`, which
+        # is `None` on exactly this path, so the one confirmation a person
+        # reads disagreed with the record it was confirming
+        assert "(by Kaia Example)" in output
 
     def test_an_unknown_class_is_refused_listing_what_is_open(
         self, workspace: Workspace

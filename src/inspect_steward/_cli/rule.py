@@ -148,7 +148,12 @@ def rule_command(
         )
         return
     for key in targets:
-        click.echo(f"ruled {key}: {decided.value} — {reason} (by {by})")
+        # `decider`, never `by` -- the option is `None` whenever the name
+        # was resolved from the repository, and echoing it told a person
+        # their ruling was recorded `by None` while the journal beside it
+        # correctly held their name. The `--json` branch above was already
+        # right, which is the shape of every two-renderings bug here
+        click.echo(f"ruled {key}: {decided.value} — {reason} (by {decider})")
         if effects.get(key):
             click.echo(f"  effect: {effects[key]}")
         for window in _open_windows(anomalies, key):
