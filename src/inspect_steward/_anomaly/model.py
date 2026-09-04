@@ -90,16 +90,21 @@ AGENT = "agent"
 """The decider an agent records when it rules on its own judgement."""
 
 
-def agent_may(disposition: Disposition) -> bool:
+def agent_may(disposition: Disposition, kind: str = "") -> bool:
     """Whether an agent may record this disposition without an operator's answer.
+
+    `dismiss` on anything, which marks nothing (`Ruling.by`). And `score` on a `scan:` class: a finding the transcript bears out that changes no score — a refusal, an attempt that earned nothing, a grader that could not grade — keeps every score as recorded and puts one line in the report, and putting it to an operator as a decision told them there was something to do. On an errored sample `score` decides what the hole is worth, and that stays theirs.
 
     Args:
         disposition: The answer being considered.
+        kind: The class kind it would be recorded against.
 
     Returns:
-        Whether `--by agent` is honest for it — true only for `dismiss`, which marks nothing (`Ruling.by`).
+        Whether `--by agent` is honest for it.
     """
-    return disposition is Disposition.DISMISS
+    if disposition is Disposition.DISMISS:
+        return True
+    return disposition is Disposition.SCORE and kind == "scan"
 
 
 def honest(kind: str, disposition: Disposition) -> bool:

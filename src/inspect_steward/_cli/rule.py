@@ -4,7 +4,7 @@ The verb the whole anomaly machinery exists to reach: five hundred errored sampl
 
 **It takes no claim**, for the same reason `ack` does not: a ruling is one append to an append-only file, and the moment that matters most is an operator reading a status while a tend is in flight.
 
-**`--by` is free text naming an operator, with one role permitted.** An agent relaying an operator's decision records who decided, never itself — except for `dismiss`, the one disposition that marks nothing, which an agent may record as its own after investigating (`_anomaly.model.Ruling.by`). Every other answer changes what the results say and stays an operator's.
+**`--by` is free text naming an operator, with one role permitted.** An agent relaying an operator's decision records who decided, never itself — except for `dismiss`, which marks nothing, and `score` on a scan finding, which keeps every score as recorded and only notes it in the report; an agent may record either as its own after investigating (`_anomaly.model.agent_may`). Every other answer changes what the results say and stays an operator's.
 """
 
 import json
@@ -23,6 +23,7 @@ from .._anomaly.model import (
     agent_may,
     composed_effect,
 )
+from .._evalset.classify import kind_of
 from .._tend import status
 from .._tend.items import finding_label
 from .._tend.progress import display_keys
@@ -118,7 +119,7 @@ def rule_command(
         keys = [
             key for key, decision in decisions.items() if decision.decided is decided
         ]
-        _refuse_agent(decider, decided)
+        _refuse_agent(decider, decided, keys)
         refuse_dishonest(keys, decided)
         effects.update(
             _effects(anomalies, keys, decided, effect, result.dispositions.affected)
@@ -370,22 +371,26 @@ def _open_windows(anomalies: Anomalies, key: str) -> list[Anomaly]:
     return [anomaly for anomaly in anomalies.open if anomaly.class_key == key]
 
 
-def _refuse_agent(decider: str, decided: Disposition) -> None:
+def _refuse_agent(decider: str, decided: Disposition, keys: list[str]) -> None:
     """Refuse an agent recording a decision that is not its to make.
 
-    **The one role `--by` accepts, and only for `dismiss`.** An agent that has investigated a class and found no case to answer is reporting an absence, and requiring a signature for it cost one human decision per false positive while protecting nothing. Marking the data is the opposite: `accept` attaches a caveat the report carries, and `exclude`, `zero` and `score` change what the numbers are computed over. A run certified because a machine ran out of things to flag is the failure the whole verb exists to prevent, and this is the line that keeps `--by agent` on the harmless side of it.
+    **The one role `--by` accepts, and only for `dismiss` and a scan finding's `score`.** An agent that has investigated a class and found no case to answer is reporting an absence, and requiring a signature for it cost one human decision per false positive while protecting nothing. Marking the data is the opposite: `accept` attaches a caveat the report carries, and `exclude`, `zero` and `score` change what the numbers are computed over. A run certified because a machine ran out of things to flag is the failure the whole verb exists to prevent, and this is the line that keeps `--by agent` on the harmless side of it.
 
     Args:
         decider: What `--by` resolved to.
         decided: The disposition being recorded.
+        keys: The classes it would be recorded against.
 
     Raises:
-        click.ClickException: Where an agent named itself for anything but `dismiss`.
+        click.ClickException: Where an agent named itself for a decision that is an operator's.
     """
-    if decider.strip().lower() != AGENT or agent_may(decided):
+    if decider.strip().lower() != AGENT:
+        return
+    if all(agent_may(decided, kind_of(key)) for key in keys):
         return
     raise click.ClickException(
         f"{decided.value} marks the data, so it is an operator's decision — "
-        f"an agent may record only dismiss as its own. Propose it instead "
-        f"(`steward propose`) and record the answer with their name."
+        f"an agent may record only dismiss, and score on a scan finding, as "
+        f"its own. Propose it instead (`steward propose`) and record the answer "
+        f"with their name."
     )

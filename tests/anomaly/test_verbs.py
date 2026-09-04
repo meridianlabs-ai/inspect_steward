@@ -903,7 +903,7 @@ def test_a_ruling_on_a_freshly_detected_class_survives_the_next_tend(
 
 
 class TestWhatAnAgentMayDecideAlone:
-    """`dismiss` is the agent's; everything that marks the data is an operator's.
+    """`dismiss` is the agent's, and so is a scan finding's `score`; everything else that marks the data is an operator's.
 
     Every scanner false positive used to cost an operator decision, however
     conclusively the agent disproved it — so a run could not reach *nothing
@@ -930,8 +930,36 @@ class TestWhatAnAgentMayDecideAlone:
         assert landed[0]["disposition"] == "dismiss"
         assert landed[0]["by"] == "agent"
 
+    def test_an_agent_may_keep_a_scan_findings_score_as_recorded(
+        self, workspace: Workspace
+    ) -> None:
+        # a refusal, an attempt that earned nothing, a grader that could not
+        # grade: the score stands, the report says so, and the operator has
+        # nothing to decide -- asking them told them otherwise
+        scan = scan_class(
+            "scoring_integrity", "refusal", task="done", identifier="done@m"
+        )
+        opened(workspace, scan, count=4, kind="scan")
+
+        code, output = run(
+            "rule",
+            scan,
+            "--disposition",
+            "score",
+            "--by",
+            "agent",
+            "--reason",
+            "refused",
+        )
+
+        assert code == 0, output
+        (landed,) = rulings(workspace)
+        assert landed["disposition"] == "score"
+        assert landed["by"] == "agent"
+        assert landed["effect"] == "4 samples scored as recorded"
+
     @pytest.mark.parametrize("disposition", ["accept", "exclude", "zero", "score"])
-    def test_but_never_one_that_marks_the_data(
+    def test_but_never_one_that_marks_an_errored_samples_data(
         self, disposition: str, workspace: Workspace
     ) -> None:
         # a run certified because a machine ran out of things to flag is the
