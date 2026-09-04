@@ -19,7 +19,6 @@ whatever your harness has for recurring work — a scheduled prompt, a backgroun
 watch — at `steward collect` on roughly the tend interval. Do it unasked, on
 any run that is not signed off, even while the person is still typing at you;
 take it down at signoff. If your harness has nothing of the kind, say so once.
-The runbook says more about this.
 
 ## Then, in this order
 

@@ -18,8 +18,6 @@ What a tend cannot decide becomes an item in the queue. Every item has a kind, a
 
 The smoke fails on any errored sample and on four named checks: `context_window`, `reasoning`, `reasoning_api`, `scan_coverage`. `unexercised` and `undetermined` are not failures. Fix what failed rather than routing around it. `--accept CHECK` waives one check by name; an errored sample cannot be waived. Do not project the run's spend from the smoke.
 
-**The cap is not one of the things that can fail.** A smoke runs a few samples under a wall-clock deadline and stops when it fires, mid-sample if that is where it is. That is the tool working: samples are meant to be cut off, nothing is reported about the ones that were, and a rehearsal that answered its checks is ready whether or not it finished what it started. So a cap firing is not a reason to reach for `--cap` or `--samples`, and not a reason to rehearse again: a slow task is a fact about the run, and the smoke has already told you what it went to find out. Those flags are for choosing how much rehearsal you want up front, not for answering a deadline that did its job. The one deadline worth acting on is one that fires before a single sample lands, which establishes nothing and says so.
-
 A smoke that fails twice is a stop. Notify it explicitly: nothing posts before the first worker starts.
 
 **Then launch.** `steward launch` shows what will change and starts the run.
@@ -59,13 +57,7 @@ Then leave it. The rest of the queue is still yours; the question waits for a pe
 
 ## Each session
 
-**Arrange your own return, because nothing wakes you.**
-
-The timer runs `steward tend` without you and never calls you back. Between one message from the person and the next you are not running, so an item that arrives owned by *you* sits until something invokes you again — and after two intervals your queue is posted to their channel as though there were no agent. The tend keeps working and `status.md` keeps updating throughout, which is what makes it quiet.
-
-So arm it, first thing and unasked: point whatever your harness has for coming back — a recurring prompt, a scheduled wake-up, a background watch — at `steward collect` on roughly the tend interval, and handle what it returns. Do this on every run that is not already signed off, including one you were asked to start a minute ago by someone who is still typing. It is not a judgement call and not a question to put to the person: they are here until they are not, and the whole failure is that you cannot tell which. Take it down at signoff, and say once that you have.
-
-If your harness has nothing of the kind, say so once, so the person knows the run advances only while they are talking to you.
+**Arm your own return first.** Nothing wakes you: the timer runs `steward tend` on its own and never calls you back. Before anything else, and unasked, point whatever your harness has for recurring work, a scheduled prompt or a background watch, at `steward collect` on roughly the tend interval, and handle what it returns. Do it on any run that is not signed off, and take it down at signoff. If your harness has nothing of the kind, say so once.
 
 Pick up cold, in this order:
 
@@ -78,19 +70,13 @@ Everything you need is in the workspace. Nothing depends on a conversation you w
 
 The snapshot has three sections: what needs a decision, the run, and what happened. Its header carries two ages: tended is the last tend, collected is the last time you looked. The verdict line says the state in words.
 
-**When the person asks how it is going**, run `steward status --format md` and render what it printed in full, in its order, as markdown outside a code fence. Do not summarize it, and do not read `status.md` instead; it can be a full interval stale. **They cannot see what the command printed — only what you write**, so rendering it is the only way the snapshot reaches them. The pull toward skipping it is that the output is already in front of *you*, which makes it feel delivered; it is not. A narrower question deserves a narrower answer — *is it finished* wants a sentence, not the whole snapshot. Your own reading goes below it, marked as yours, only where it adds something the snapshot does not show. Then put the open decisions to them **one at a time**, most important first. A person answering one clear question is worth more than three they have to sort through.
+**When the person asks how it is going**, run `steward status --format md` and render what it printed in full, in its order, as markdown outside a code fence. Do not summarize it, and do not read `status.md` instead; it can be a full interval stale. They see only what you write, so the snapshot reaches them only if you render it. A narrower question wants a narrower answer: *is it finished* is a sentence, not the snapshot. Your own reading goes below it, marked as yours, only where it adds something the snapshot does not show.
 
-Each gets a heading, two or three sentences of what happened and what you found, a table of the samples it covers capped at five rows with the remainder counted, and then one question.
+**Put decisions to them one at a time**, most important first. Each is a heading, two or three sentences of what happened and what you found, a table of the samples it covers capped at five rows with the remainder counted, and then the question. The question is the last thing you write; nothing follows it. Make it answerable: recommend one answer and name the others on offer, so they can confirm, pick, or say more. Do not restate the heading as the question. Keep the arithmetic out of it.
 
-**The question is the last thing you write, and nothing follows it** — not what happens once it is answered, not an observation you want on the record, not the next decision queued behind it. All of that goes above the question or waits for your next message. Anything below it competes with the one sentence you need answered, and a person who has read to the end should not have to work out which part was the ask.
+Record the answer with the verb the item names, then `steward tend` so it takes effect now.
 
-Make the question answerable — one with an obvious shape of answer, usually yes or no — and leave them room to say more. *Answer however you like* is not a question; it hands the framing back to the person you are supposed to be doing that for. Do not restate the heading as the question either: the heading names the subject, and the question asks the one thing you could not work out yourself. Keep the arithmetic out of both — what a ruling does to the score belongs in the proposal's reason and in `analysis.md`, where it can be checked, and in the ask it reads as a case being argued rather than a question being put.
-
-**Notify whenever you ask**, without exception. A question put only in the conversation is a question put to nobody, which is the premise of the whole role.
-
-Record the answer with the verb the item names, then `steward tend` so it takes effect now. Ask once; a deferred decision stays in the snapshot.
-
-**Collect regularly**, on the schedule you armed above. After two intervals without a collect, your items go to the person's channel as if there were no agent — which is Steward telling them, correctly, that nobody is home.
+**Collect regularly**, on the schedule you armed above. After two intervals without a collect, your items go to the person's channel as if there were no agent.
 
 ## The queue
 
@@ -141,7 +127,7 @@ Your verbs, in order:
 2. `steward propose CLASS... --action DISPOSITION --reason ...` makes classes that want the same answer one question. Classes wanting different answers are different proposals.
 3. `steward rule --proposal ID --reason ...`, or `steward rule CLASS... --disposition D --reason ...`, records the person's answer.
 
-**A class you have disproved is yours to close.** `steward rule CLASS --disposition dismiss --by agent --reason ...` is the one ruling you may make on your own judgement, because `dismiss` marks nothing: it records that somebody looked and there was no case to answer. Do it as soon as the investigation reaches that conclusion, rather than proposing it — a proposal asks a person to confirm an absence, and a queue of those is how the findings that matter stop being read. The reason is required and is the whole of the account; the signoff reports how many were raised and how many were dismissed, so nobody has to take the count on trust. **Everything else stays a person's**, and the verb refuses `--by agent` for it: `accept` attaches a caveat the report carries, and `exclude`, `zero` and `score` change what the numbers are computed over.
+**A class you have disproved, dismiss yourself**: `steward rule CLASS --disposition dismiss --by agent --reason ...`, as soon as the investigation gets there, rather than proposing it. `dismiss` marks nothing, so it is the one ruling you may make alone; the verb refuses `--by agent` for every other disposition.
 
 | disposition | it says | honest for |
 |---|---|---|
@@ -152,8 +138,6 @@ Your verbs, in order:
 | `accept` | the data stands, with a caveat the report carries (`--effect`) | anything but `error:` |
 | `dismiss` | looked, nothing here | anything |
 
-**Check which way a disposition moves the number before you propose one.** `exclude` and `zero` come apart hardest on a class that mostly failed: dropping those samples *raises* the score. So excluding the samples where a model cheated hands it a better result than it earned — and that is the mistake in this table nobody catches, because the reasoning that reached it was about validity and the arithmetic was never looked at. Work out the effect, say it in the proposal, and treat *removing this class improves the number* as a reason to think again rather than a detail.
-
 A `rerun` ruling is carried out by the next tend: samples in a running task are requeued in place, and a landed log has just those samples invalidated for relaunch. Run nothing. The window stays open until the re-run lands, and the same samples failing again come back as a question for the person. A class flagged as substrate (credentials, disk, storage) gets no rerun proposal from you; re-running into broken machinery burns the work twice.
 
 Two classes are quiet on purpose. A `task:` window heals itself when the respawn brings the task home; if it does not, `stalled` is the real question. A `limit:operator` window raises no item, since the operator knows what they did; it waits for the signoff conversation.
@@ -163,12 +147,12 @@ Two classes are quiet on purpose. A `task:` window heals itself when the respawn
 Nothing starts a scan: the worker runs each scanner as a sample finishes, and a `scan:` window opens when its rows land. Every window needs a ruling before signoff. While one is open and you are attached, the task's finished notification is held for up to six tends so it can carry what you found; investigate promptly. The scanner read one transcript; you can read the population, the score and the rest of the run, and that judgement is the whole product.
 
 - **Behaviour that disqualifies a sample is disqualifying whether or not the environment allowed it.** An agent that fetched the reference solution did not solve the task, and whether the sandbox should have blocked it is a bug to report alongside your ruling, not the question to put in place of it. Do not turn a finding about the trajectory into a question about the machinery; the person then has to answer the wrong question before anything can move.
-- The bar is whether the score can still be trusted, not whether the behaviour was interesting. Escalate only where you can name the mechanism, cite the decisive messages, and say what the number would be if the concern is real. Otherwise the honest ruling is `dismiss`, and it is yours to record — *a reviewer should look into this* is a conclusion the scanner already reached, and repeating it up the chain adds nothing a person can act on.
-- **Read the scorer's own output before the transcript.** It is quoted in the finding where the scorer gave one, and for a test-suite grader it names which tests were required and which failed — which usually settles the question outright. An agent whose own chosen tests passed while the graded ones did not has failed the task; that is not an artifact.
+- The bar is whether the score can still be trusted, not whether the behaviour was interesting. Escalate only where you can name the mechanism and cite the decisive messages. Otherwise the honest ruling is `dismiss`.
+- **Read the scorer's own output first.** It is the explanation on the sample's score in `read_eval_log_sample_summaries`, and for a test-suite grader it names which tests failed. An agent whose own tests passed while the graded ones did not has failed the task.
 - A failed attempt is not a finding. The model tried to read the grader and could not; the sandbox refused the network. Nothing was earned, so the score stands. Dismiss it with the reason written out; the person signing reads that reason.
 - A successful escape or a returned egress response is a finding at n=1. Raise it now.
 - Rarity is not the signal. A class covering most of a task is the one to read first, because an exploit that works gets used everywhere.
-- A confirmed finding is sample-shaped: `exclude`, `zero` and `score` are available beside `accept`. A score you have shown to be wrong should not be averaged in.
+- Zero a confirmed finding rather than excluding it: dropping the samples where a model cheated raises its score.
 - Only boolean scanners open windows. Numbers and strings are recorded and never escalated; read them through the results, not the queue.
 
 ## Stuck samples
@@ -193,11 +177,11 @@ Tend ramps sample concurrency on its own, one step per clean window, and steps b
 
 ## Notifying
 
-`steward notify MESSAGE --kind attention|stopped --detail TEXT...` is the one thing that reaches the person when nobody is reading the conversation. `attention` means worth knowing, and work continues. `stopped` means nothing progresses until a person answers. A question you are blocked on is `stopped`, always.
+`steward notify MESSAGE --kind attention|stopped --detail TEXT...` is how you reach the person when nobody is reading the conversation. `attention` means worth knowing, and work continues. `stopped` means nothing progresses until a person answers. A question you are blocked on is `stopped`, always.
 
 Post rather than agonize, and do not batch. Steward limits its own posts to one per turn, so the channel is not tight. A skipped `stopped` is a run that waits all night for an answer nobody knew was wanted.
 
-Notify and raise are separate acts; do both when you hand something over.
+Steward's own posts already announce every new item a person owns. Notify for what you found that no item says.
 
 ## Standing rules
 
