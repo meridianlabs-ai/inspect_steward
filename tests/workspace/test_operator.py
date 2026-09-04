@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 
 import pytest
-from inspect_steward._workspace import person_name
+from inspect_steward._workspace import operator_name
 
 
 def _quiet_machine_identity(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
@@ -31,7 +31,7 @@ def test_the_workspace_repository_names_the_person(
         [git, "-C", str(root), "config", "user.name", "Kaia Example"], check=True
     )
 
-    assert person_name(root) == "Kaia Example"
+    assert operator_name(root) == "Kaia Example"
 
 
 def test_without_a_git_identity_the_login_name_is_used(
@@ -41,4 +41,4 @@ def test_without_a_git_identity_the_login_name_is_used(
     root = tmp_path / "ws"
     root.mkdir()
 
-    assert person_name(root) == getpass.getuser()
+    assert operator_name(root) == getpass.getuser()

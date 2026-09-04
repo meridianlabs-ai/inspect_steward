@@ -161,7 +161,7 @@ class TestPublishingWhatWasSigned:
         # signature is a signature: two samples accepted as errored is a
         # legitimate result with a caveat, and the caveat lives in this
         # project's `anomalies.md` and travels nowhere. That is a hole, and it
-        # is accepted knowingly -- withholding results a person explicitly
+        # is accepted knowingly -- withholding results an operator explicitly
         # accepted would make the store lie in the other direction
         workspace = erroring(tmp_path, errors=2, samples=4)
         turn(workspace)
@@ -420,7 +420,7 @@ class TestAWithdrawalThatDidNotHappen:
     def test_a_signoff_that_owes_nothing_writes_no_ledger_entry(
         self, tmp_path: Path
     ) -> None:
-        # the ordinary signoff, whose journal a person reads
+        # the ordinary signoff, whose journal an operator reads
         workspace, _, _ = published_then_superseded(tmp_path)
 
         sign(workspace, again=True)
@@ -667,7 +667,7 @@ class TestNotPublishing:
     def test_a_store_that_will_not_take_them_leaves_the_signature_standing(
         self, tmp_path: Path
     ) -> None:
-        # **curation's rule exactly.** The signature is the person's act, and a
+        # **curation's rule exactly.** The signature is the operator's act, and a
         # filesystem that would not cooperate must not unmake a decision they
         # already made -- so it warns where a failed move warns, and it happens
         # after the `SIGNOFF` event so there is nothing to unmake

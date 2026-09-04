@@ -112,7 +112,7 @@ class TestWhatTheJournalRemembers:
         # **the newest smoke is the answer, whatever it concluded.** Reading back
         # to the most recent *pass* would let a rehearsal that just failed sit
         # behind one from an hour ago and report the launch as rehearsed -- the
-        # one reading a person would never make from the same journal
+        # one reading an operator would never make from the same journal
         create_workspace(tmp_path, git=False)
         workspace = Workspace.at(tmp_path)
         rehearsed(workspace, ADDITION, ECHO)

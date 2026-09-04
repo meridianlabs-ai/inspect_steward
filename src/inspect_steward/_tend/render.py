@@ -1,16 +1,12 @@
-"""`status.md` — the snapshot a turn leaves behind for whoever arrives next.
+"""`status.md` and `steward collect` — one turn, two readers.
 
-The one artifact that reaches a human who is not in a session. On a machine with no git and sometimes no internet, an object store is the only observability channel there is, and this is the file somebody reads from another system to find out whether the night is going well (workflow.md, *Syncing the workspace out*).
+**Two projections of one fold, not two renderers.** `status_markdown` is what an operator reads: the file the timer regenerates, and what `steward status --format md` prints for an agent to relay. `collect_markdown` is what the agent reads for itself. They are cut from the same `TendResult` and share every sentence they both carry — the verdict, the task table's cells, the by-task anomalies table — so they can differ in what they show and never in what they say.
 
-**It states its own age, and that is load-bearing rather than a courtesy.** A remote reader detects a stopped timer, a crashed tend, or a broken sync in exactly one way: by noticing this file is old. A timestamp buried among the numbers gets skimmed past, so it goes at the top, on its own, before anything that could be mistaken for current.
+**The operator's page is short on purpose.** On a machine with no git and sometimes no internet, an object store is the only observability channel there is, and this is the file somebody reads from another system to find out whether the night is going well (workflow.md, *Syncing the workspace out*). It answers four questions in order: what state is the run in and how old is this, where does each task stand, what is waiting on me, and what did not take the normal course. Windows, proposals, precedent, standing rules and the history are the agent's to work, and an operator who wants them asks the agent. The item lines carry the summary alone — an id is the argument to a verb the operator is not running.
 
-**The verdict leads, and everything under it is elaboration.** A reader who takes one line from this file should have taken the true one.
+**Its age is load-bearing rather than a courtesy.** A remote reader detects a stopped timer, a crashed tend, or a broken sync in exactly one way: by noticing this file is old. So the two ages sit on the first line beside the verdict — *tended* is the timer, *collected* is the agent — and either going stale is its own signal (agent.md §2.2).
 
-**Then decisions, in full, before anything else** — because surfacing what a person has to decide is the summary's main job and everything else is context for it (agent.md §4.1). This section used to be last, under the task table, and running the M2 gate showed the cost: the verdict said one thing needed a person and finding out *what* meant scrolling past fifteen tasks that did not. Ordering matters more here than in most files, since agent.md §5 requires an agent to relay this document verbatim — so whatever is at the top is what a human is read first.
-
-Below that, where the run stands, and then what has been done to it.
-
-**Both this and the terminal render the same items.** They used to render two hand-written lists of the same conditions, and those lists had already drifted apart in what they reported — which is the argument for the item type rather than an anecdote about it.
+**The agent's page is complete rather than short.** Every open item with the id its verb takes, the run's states, the table with its errored and scanned columns, every open window with its exemplar and precedent, the rules in force, and the history since the cursor. What it sets aside — decisions already raised, history already collected — it counts, because an agent can read a label but cannot reason about what it was never shown.
 """
 
 from typing import TYPE_CHECKING
@@ -21,10 +17,11 @@ from .._evalset.observe import TaskState
 from .._schedule import Summary
 from .._util.duration import format_duration
 from .._util.jsonl import utc_now
-from .anomalies_md import caveat_line
+from .anomalies_md import caveat_line, outcomes_table
 from .coverage import TaskCoverage
-from .items import HEADINGS, by_owner, verdict_line
-from .progress import LIVE_ONLY, compact, short_keys
+from .items import HEADINGS, Owner, by_owner, verdict_line
+from .progress import LIVE_ONLY, TaskProgress, compact, short_keys
+from .table import resources_table
 
 if TYPE_CHECKING:
     # the turn imports this module to write its file, so the type it passes can
@@ -34,61 +31,61 @@ if TYPE_CHECKING:
 _HEADER = "<!-- Written by `steward tend`. Regenerated every turn; edits are lost. -->"
 
 
-def status_markdown(
-    result: "TendResult",
-    *,
-    header: bool = True,
-    for_agent: bool = False,
-    since: int = 0,
-) -> str:
-    """Render a turn as markdown.
-
-    **One renderer, two projections**, which is the same argument the item type itself rests on: two renderings of the same conditions are two chances to disagree, and the pair this replaced had already drifted. `for_agent` is a filter over what a person sees and never a different document.
+def status_markdown(result: "TendResult", *, header: bool = True) -> str:
+    """Render a turn for an operator: `status.md`, and `steward status --format md`.
 
     Args:
         result: The turn that just ran.
         header: Include the generated-file comment. `status.md` wants it; `steward status --format md` does not, since nothing there is a file anybody could edit by mistake.
-        for_agent: Set decisions the agent has already raised aside, and count them. The agent's queue is its own work — an item it surfaced at 1am is not work it can do anything more about, and showing it at every collection all night is what `raise` exists to stop (agent.md §2.2).
+
+    Returns:
+        The complete body.
+    """
+    lines: list[str] = []
+    if header:
+        lines += [_HEADER, ""]
+    lines += [status_headline(result), ""]
+    lines += _signature(result)
+    lines += _tasks(result)
+    lines += _operator(result)
+    lines += _outcomes(result)
+    lines += _resources(result)
+    if result.log_dir is not None:
+        # in full rather than shortened, because the audience for this line is
+        # somebody about to paste it into `samples_df` or `inspect view` -- and
+        # because it is frequently not under the workspace at all, which is the
+        # case that made it worth a line (`TendResult.log_dir`). Last, because
+        # it is the one line that never changes
+        lines += [f"**Logs** `{result.log_dir}`", ""]
+    return "\n".join(lines)
+
+
+def collect_markdown(result: "TendResult", *, since: int = 0) -> str:
+    """Render a turn for the agent: `steward collect`.
+
+    Args:
+        result: The turn that just ran.
         since: Show only history after this journal position, counting what that leaves out.
 
     Returns:
         The complete body.
     """
     summary = result.summary
-    lines = ["# status", ""]
-    if header:
-        lines.extend([_HEADER, ""])
-    lines.extend(
-        [
-            f"{verdict_line(result.verdict, result.items)}",
-            "",
-            f"**As of** `{utc_now()}`{_ages(result)}{_qualified(result)}",
-            "",
-        ]
-    )
+    lines = [
+        verdict_line(result.verdict, result.items),
+        "",
+        f"**As of** `{utc_now()}`{_ages(result)}{_qualified(result)}",
+        "",
+    ]
     if result.log_dir is not None:
-        # in full rather than shortened, because the audience for this line is
-        # somebody about to paste it into `samples_df` or `inspect view` -- and
-        # because it is frequently not under the workspace at all, which is the
-        # case that made it worth a line (`TendResult.log_dir`). Not in
-        # `echo_turn`: a terminal reader is standing in the workspace and the
-        # compact output is for what changed
-        lines.extend([f"**Logs** `{result.log_dir}`", ""])
-    lines.extend(_notification(result))
-    lines.extend(_items(result, for_agent=for_agent))
-    lines.extend(
-        [
-            "## the run",
-            "",
-            "| state | tasks |",
-            "| --- | ---: |",
-        ]
-    )
-    lines.extend(
+        lines += [f"**Logs** `{result.log_dir}`", ""]
+    lines += _notification(result)
+    lines += _items(result)
+    lines += ["## the run", "", "| state | tasks |", "| --- | ---: |"]
+    lines += [
         f"| {state.value} | {summary.states.get(state.value, 0)} |"
         for state in TaskState
-    )
-
+    ]
     counts = [
         f"{summary.tasks} tasks",
         f"{summary.running} running{_shape(summary)}",
@@ -98,14 +95,156 @@ def status_markdown(
         counts.insert(2, f"{len(result.spawned)} spawned this turn")
     else:
         counts.insert(2, f"{summary.spawning} would be spawned")
-    lines.extend(["", " · ".join(counts), ""])
-    lines.extend(_progress(result))
-    lines.extend(_anomalies(result))
-    lines.extend(_live(result))
-    lines.extend(_tuning(result))
-    lines.extend(_policies(result))
-    lines.extend(_happened(result, since=since))
+    lines += ["", " · ".join(counts), ""]
+    lines += _progress(result)
+    lines += _anomalies(result)
+    lines += _live(result)
+    lines += _tuning(result)
+    lines += _policies(result)
+    lines += _happened(result, since=since)
     return "\n".join(lines)
+
+
+def status_headline(result: "TendResult") -> str:
+    """The operator's first line: the verdict as it concerns them, then the two ages.
+
+    `⚠️ 1 needs an operator · tended 4m ago · agent: 4 open items, collected 12m ago`. The verdict counts the operator's own items, and the agent's queue is a count on the right — what an operator wants to know about the agent is that it is working and how long since it looked, not what it is working on. Shared by the terminal, so the two cannot open differently.
+    """
+    theirs = [item for item in result.items if item.owner is Owner.OPERATOR]
+    parts = [verdict_line(result.verdict, theirs), *_tended(result), _agent(result)]
+    return " · ".join(parts) + _qualified(result)
+
+
+def _tended(result: "TendResult") -> list[str]:
+    """`tended 4m ago`, or nothing on a workspace no tend has recorded an age for yet."""
+    supervision = result.supervision
+    if result.executed:
+        # **the turn writing this file is the tend**, so the recorded age is the
+        # *previous* one — this document would otherwise be stamped `as of now`
+        # and `tended 10m ago` on the same line, one of them wrong, and on a
+        # first turn would omit the age entirely for a run being tended as the
+        # reader looks. A `status` renders the recorded age, which is correct
+        # there for exactly the same reason
+        return ["tended just now"]
+    if supervision is not None and supervision.since_tend is not None:
+        return [f"tended {format_duration(int(supervision.since_tend))} ago"]
+    return []
+
+
+def _agent(result: "TendResult") -> str:
+    """`agent: 4 open items, collected 12m ago` — the agent's queue as a count, and how long since it read anything."""
+    open_ = sum(1 for item in result.items if item.owner is Owner.AGENT)
+    items = (
+        "no open items"
+        if not open_
+        else f"{open_} open item{'' if open_ == 1 else 's'}"
+    )
+    if result.collected is None:
+        # never, rather than long ago -- a workspace no agent has attached to is
+        # not one whose agent has gone quiet, and the two want different answers
+        looked = "never collected"
+    elif result.since_collected is not None:
+        looked = f"collected {format_duration(int(result.since_collected))} ago"
+    else:
+        looked = "collected"
+    return f"agent: {items}, {looked}"
+
+
+def _signature(result: "TendResult") -> list[str]:
+    """Who accepted the results and what they said, while a signature stands.
+
+    On the page rather than only in the journal, because the run never tends again after this turn: the snapshot a remote reader has is the last one written, and *signed off* without a name is a state, not a record.
+    """
+    signature = result.signature
+    if signature is None or not result.signed:
+        return []
+    note = f" — {signature.note}" if signature.note else ""
+    return [f"**Signed off** by {signature.by} at `{signature.ts}`{note}", ""]
+
+
+def _tasks(result: "TendResult") -> list[str]:
+    """The operator's task table: where each task stands, and nothing it would have to ask about.
+
+    Samples rather than task states, because *how is the run going* is a question about samples. No errored or scanned column: what errored is in the by-task table below, and coverage is the agent's to read aloud at signoff. Connections ride in the task cell, `(8/16)`, because they exist only while the task runs and a column for them is empty for most of a sweep. Every column is present or absent for the whole table rather than per row.
+    """
+    rows = result.progress.rows
+    if not rows:
+        return []
+    short = short_keys(rows)
+    live = any(row.live for row in rows)
+    queued = any(row.queued for row in rows)
+    budgeted = any(row.budget is not None for row in rows)
+    scored = any(row.headline is not None for row in rows)
+
+    header = ["task", "samples", "done"]
+    if live:
+        header += ["running"]
+    if queued:
+        header += ["queued"]
+    if budgeted:
+        header += ["limit"]
+    if scored:
+        header += ["score"]
+    lines = [
+        "| " + " | ".join(header) + " |",
+        "| --- | " + " | ".join("---:" for _ in header[1:]) + " |",
+    ]
+    for row, key in zip(rows, short.keys, strict=True):
+        cells = [
+            f"`{_named(row, key)}`",
+            f"{row.completed}/{row.total}",
+            f"{round(row.fraction * 100)}%",
+        ]
+        if live:
+            cells += [str(row.running) if row.running else ""]
+        if queued:
+            cells += [str(row.queued) if row.queued else ""]
+        if budgeted:
+            cells += [_budget_cell(row)]
+        if scored:
+            cells += [f"{row.headline:.3g}" if row.headline is not None else ""]
+        lines.append("| " + " | ".join(cells) + " |")
+    if short.model is not None:
+        lines += ["", f"Every task runs `{short.model}`."]
+    return lines + [""]
+
+
+def _named(row: TaskProgress, key: str) -> str:
+    """The task cell: the display key, and its connections in use while it runs — `swe_bench@gpt-5 (8/16)`."""
+    if row.connections is None:
+        return key
+    in_use, limit = row.connections
+    return f"{key} ({in_use}/{limit})" if limit is not None else f"{key} ({in_use})"
+
+
+def _budget_cell(row: TaskProgress) -> str:
+    budget = row.budget
+    if budget is None:
+        return ""
+    return f"{compact(budget.used)}/{compact(budget.limit)} {budget.name}"
+
+
+def _operator(result: "TendResult") -> list[str]:
+    """What is waiting on the operator, one summary per line, most costly first.
+
+    The summary alone: no id, no verb. The agent puts each of these to them as a question and runs the verb with their answer; a `steward ack` argument on an operator's page is a line they learn to skip. Absent rather than empty when nothing is waiting — the headline already says so.
+    """
+    for owner, group in by_owner(result.items):
+        if owner is Owner.OPERATOR:
+            return ["### operator", "", *(f"- {item.summary}" for item in group), ""]
+    return []
+
+
+def _outcomes(result: "TendResult") -> list[str]:
+    """By task, the samples that did not take the normal course — the table `anomalies.md` opens on, verbatim. Absent where every sample took it."""
+    table = outcomes_table(result.dispositions.outcomes, result.progress)
+    return ["### anomalies", "", *table, ""] if table else []
+
+
+def _resources(result: "TendResult") -> list[str]:
+    """Per running task, what it has met and what it is costing. Absent while no worker is answering."""
+    table = resources_table(result.progress)
+    return ["### resources", "", *table, ""] if table else []
 
 
 def _live(result: "TendResult") -> list[str]:
@@ -145,7 +284,7 @@ def _tuning(result: "TendResult") -> list[str]:
 
 
 def _notification(result: "TendResult") -> list[str]:
-    """Whether anything reaches a person, beside where the logs are.
+    """Whether anything reaches an operator, beside where the logs are.
 
     In the header block for the reason `**Logs**` is: it is a fact about the deployment that a reader cannot get anywhere else, and the alternative to printing it is every reader guessing. The guess this replaces was always the same one — `notification` is commented out in `_steward.yaml`, therefore nobody can be reached — and it is wrong on any machine whose `.env` sets the variable, which is the arrangement the template itself recommends.
 
@@ -198,12 +337,9 @@ def _qualified(result: "TendResult") -> str:
 
 
 def _progress(result: "TendResult") -> list[str]:
-    """The per-task table, as markdown.
+    """The agent's task table, as markdown.
 
-    Samples rather than task states, because *how is the run going* is a
-    question about samples and the table above it is not an answer to it. Every
-    column is present or absent for the whole table rather than per row, so a
-    settled campaign renders four columns instead of eight.
+    The operator's columns (`_tasks`) plus the two the agent works from: errored, split by ruling, and scanned. Every column is present or absent for the whole table rather than per row, so a settled campaign renders four columns instead of eight.
     """
     rows = result.progress.rows
     if not rows:
@@ -236,9 +372,6 @@ def _progress(result: "TendResult") -> list[str]:
     if errored:
         header += ["errored"]
         align += ["---:"]
-    if live:
-        header += ["connections"]
-        align += ["---:"]
     if scanned:
         header += ["scanned"]
         align += ["---:"]
@@ -250,8 +383,8 @@ def _progress(result: "TendResult") -> list[str]:
         align += ["---:"]
 
     # a sub-heading rather than a section of its own, because the document has
-    # exactly three sections and an agent is required to relay it whole
-    # (agent.md §4): a fourth `##` would read as a fourth thing to attend to
+    # exactly three sections: a fourth `##` would read as a fourth thing to
+    # attend to
     lines = [
         "### tasks",
         "",
@@ -260,7 +393,7 @@ def _progress(result: "TendResult") -> list[str]:
     ]
     for row, key in zip(rows, short.keys, strict=True):
         cells = [
-            f"`{key}`",
+            f"`{_named(row, key)}`",
             f"{row.completed}/{row.total}",
             f"{round(row.fraction * 100)}%",
         ]
@@ -274,21 +407,10 @@ def _progress(result: "TendResult") -> list[str]:
                     row.errored, result.dispositions.by_task.get(row.identifier)
                 )
             ]
-        if live:
-            connections = ""
-            if row.connections is not None:
-                in_use, limit = row.connections
-                connections = f"{in_use}/{limit}" if limit is not None else str(in_use)
-            cells += [connections]
         if scanned:
             cells += [_scanned_cell(row.scanned)]
         if budgeted:
-            budget = row.budget
-            cells += [
-                f"{compact(budget.used)}/{compact(budget.limit)} {budget.name}"
-                if budget
-                else "",
-            ]
+            cells += [_budget_cell(row)]
         if scored:
             cells += [f"{row.headline:.3g}" if row.headline is not None else ""]
         lines.append("| " + " | ".join(cells) + " |")
@@ -425,12 +547,10 @@ def _anomalies(result: "TendResult") -> list[str]:
     # an accepted window does, and one the other document drops cannot survive
     # as a line here
     marks = result.caveats
-    # the by-task table lives in `anomalies.md` alone, and this line is how a
-    # reader of the snapshot learns it is there
-    tabulated = any(
-        any(cells.values()) for cells in result.dispositions.outcomes.values()
-    )
-    if line is None and not marks and not tabulated:
+    # the same by-task table `anomalies.md` opens on and the operator's page
+    # carries, so the agent reads the numbers it will be asked about
+    table = outcomes_table(result.dispositions.outcomes, result.progress)
+    if line is None and not marks and not table:
         return []
     lines = ["### anomalies", ""]
     if line is not None:
@@ -458,11 +578,8 @@ def _anomalies(result: "TendResult") -> list[str]:
     # left a mark or what their effect sentence says
     for caveat in marks:
         lines.append(f"- {caveat_line(caveat)}")
-    if tabulated:
-        lines += [
-            "",
-            "By task, the samples that did not take the normal course: `anomalies.md`.",
-        ]
+    if table:
+        lines += ["", *table]
     return lines + [""]
 
 
@@ -495,20 +612,20 @@ def _window_line(anomaly: Anomaly) -> str:
 def _raised(count: int) -> str:
     """How an omission is named. One phrase, so the two renderings cannot word it differently."""
     return (
-        f"{count} raised, awaiting a person"
+        f"{count} raised, awaiting an operator"
         if count > 1
-        else "1 raised, awaiting a person"
+        else "1 raised, awaiting an operator"
     )
 
 
-def _items(result: "TendResult", *, for_agent: bool = False) -> list[str]:
-    """What somebody has to decide, which is what this document is mainly for.
+def _items(result: "TendResult") -> list[str]:
+    """What somebody has to decide, as the agent needs it: grouped by owner, each with the id its verb takes.
 
-    Grouped by who has to act, because the first question a reader has is whether any of this is theirs — and within a group by level, so that among a person's own decisions the ones costing something now come before the ones that can wait. Each line carries its id, which is how it is disposed of once somebody has decided it is fine: `steward ack` takes any unambiguous prefix of one.
+    Grouped by who has to act, because the first question a reader has is whether any of this is theirs — and within a group by level, so that among an operator's own decisions the ones costing something now come first (`by_owner`).
 
-    A raised item is marked rather than removed. It is still open and a person still owes an answer; what raising records is that the *agent's* part is done, and only the agent's own projection acts on that (agent.md §2.2).
+    A raised item is set aside and counted rather than shown. It is still open and an operator still owes an answer; what raising records is that the *agent's* part is done, and an agent reading ten entries with seven marked *raised* still spends attention on all ten — which is the cost `raise` exists to remove.
     """
-    shown = [item for item in result.items if not (for_agent and item.raised)]
+    shown = [item for item in result.items if not item.raised]
     set_aside = len(result.items) - len(shown)
 
     lines = ["## what needs a decision", ""]
@@ -527,8 +644,6 @@ def _items(result: "TendResult", *, for_agent: bool = False) -> list[str]:
             trailer = f"`{item.id}`" if item.addressable else "_transient_"
             if item.action is not None:
                 trailer = f"`{item.action}` · {trailer}"
-            if item.raised:
-                trailer = f"{trailer} · _raised_"
             lines.append(f"- {item.summary} — {trailer}")
         lines.append("")
     return lines
@@ -537,7 +652,7 @@ def _items(result: "TendResult", *, for_agent: bool = False) -> list[str]:
 def _happened(result: "TendResult", *, since: int = 0) -> list[str]:
     """What has been done to this run, oldest first.
 
-    **Complete rather than a delta**, which is what keeps this document stateless — see `history.py` for the admission test that makes completeness affordable. `since` is for the agent's projection only; a person's copy shows everything.
+    **Complete rather than a delta**, which is what keeps this document stateless — see `history.py` for the admission test that makes completeness affordable. `since` is for the agent's projection only; an operator's copy shows everything.
 
     **An omission is counted, never silent.** A reader who is shown a shortened list with nothing saying so concludes the list is the whole of it, which for a history is the difference between *the night was quiet* and *you were not shown the night*.
     """

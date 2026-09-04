@@ -1,6 +1,6 @@
 """Who is deciding, when nobody typed a name.
 
-`rule` and `signoff` record a person, and the person is almost always the one whose shell this is. Git already knows them: every workspace is a repository (`create.py`) and `user.name` is the identity its commits carry, so the journal naming the same person as the commit beside it is the right default. The login name is the fallback for a machine with no git identity, and an empty answer is left to the caller to refuse — `--by` exists for exactly the case where the resolver is wrong.
+`rule` and `signoff` record an operator, and the operator is almost always the one whose shell this is. Git already knows them: every workspace is a repository (`create.py`) and `user.name` is the identity its commits carry, so the journal naming the same operator as the commit beside it is the right default. The login name is the fallback for a machine with no git identity, and an empty answer is left to the caller to refuse — `--by` exists for exactly the case where the resolver is wrong.
 """
 
 import getpass
@@ -9,7 +9,7 @@ import subprocess
 from pathlib import Path
 
 
-def person_name(root: Path) -> str:
+def operator_name(root: Path) -> str:
     """The name to record for a decision nobody signed by name.
 
     Args:

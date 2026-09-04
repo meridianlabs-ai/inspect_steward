@@ -2,7 +2,7 @@
 
 Every setting Steward owns can be said three ways — in `_steward.yaml`, in a `STEWARD_*` variable, or on the command line — and the rule that makes that safe is that all three go through one parser. `Setting` is the command line's end of it: click hands the raw text to `parse_setting`, which is the same `yaml.safe_load` plus field validation the file and the environment get, so `--samples-ramp true` is refused with the same sentence about saying nothing about how far.
 
-**The variables are named in help text rather than bound with click's `envvar=`, and that is not an oversight.** Binding them would make click a second reader of the same variable, with its own coercion and its own error wording — `STEWARD_MAX_WORKERS=yes` would fail as a click usage error against `IntRange` where `max_workers: yes` fails with a sentence naming what YAML did to it. Two parsers that agree by coincidence is the arrangement this module exists to prevent, so the environment is read in exactly one place (`_workspace.directives._environment`) and these options carry only what a person types.
+**The variables are named in help text rather than bound with click's `envvar=`, and that is not an oversight.** Binding them would make click a second reader of the same variable, with its own coercion and its own error wording — `STEWARD_MAX_WORKERS=yes` would fail as a click usage error against `IntRange` where `max_workers: yes` fails with a sentence naming what YAML did to it. Two parsers that agree by coincidence is the arrangement this module exists to prevent, so the environment is read in exactly one place (`_workspace.directives._environment`) and these options carry only what an operator types.
 
 Refusing at the door rather than inside a turn is deliberate and matches `IntRange`: a value that cannot mean anything is a usage error, and a usage error should cost exit code 2 and a line of help rather than a half-run command.
 """
@@ -174,7 +174,7 @@ def passthrough_options[F: Callable[..., Any]](f: F) -> F:
 class PassthroughCommand(click.Command):
     """A command whose `--help` separates its own options from inspect's.
 
-    Thirty-seven generated flags in one undifferentiated list would bury the six a person actually types, and would also hide the distinction that matters: which of these Steward decides and which it only carries. So the passthrough flags get their own heading and the rest keep theirs.
+    Thirty-seven generated flags in one undifferentiated list would bury the six an operator actually types, and would also hide the distinction that matters: which of these Steward decides and which it only carries. So the passthrough flags get their own heading and the rest keep theirs.
     """
 
     def format_options(

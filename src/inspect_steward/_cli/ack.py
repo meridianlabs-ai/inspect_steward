@@ -2,7 +2,7 @@
 
 Most of what a turn reports goes away on its own: a park is answered, a stall starts progressing, drift is applied by a launch. What is left is the case neither projection nor lifecycle covers — a real condition nobody is going to clear mechanically, which somebody has looked at and accepted. A definition edited on purpose is the ordinary example, and without this it reports itself every ten minutes for the rest of the run, which is how an attention list stops being read.
 
-**It takes no claim.** An acknowledgment is one append to an append-only file, and the case that matters most is the one where a tend is already in flight — a person reading a status while the fleet converges is exactly when they decide something is fine.
+**It takes no claim.** An acknowledgment is one append to an append-only file, and the case that matters most is the one where a tend is already in flight — an operator reading a status while the fleet converges is exactly when they decide something is fine.
 
 **A reason is required.** The same discipline `inspect ctl` imposes on every applied change, for the same reason: this act stops something being reported at all, and *who decided, and why* has to survive it (workflow.md, *The audit trail*).
 
@@ -30,10 +30,10 @@ from .turn import TURN_ERRORS, find_workspace
 )
 @click.option(
     "--by",
-    type=click.Choice(["human", "agent"]),
-    default="human",
+    type=click.Choice(["operator", "agent"]),
+    default="operator",
     show_default=True,
-    help="Who decided. An agent relaying a person's answer records `human`; one disposing of something on its own judgement records `agent`.",
+    help="Who decided. An agent relaying an operator's answer records `operator`; one disposing of something on its own judgement records `agent`.",
 )
 @click.option(
     "--json",
@@ -140,7 +140,7 @@ def _nothing_matched(journal: Path, item: str, result: TendResult) -> str:
         )
     if any(entry.kind == PARKED for entry in named):
         return (
-            f"'{item}' is a worker waiting on a person, and only answering it "
+            f"'{item}' is a worker waiting on an operator, and only answering it "
             f"clears it — acknowledging one would silence a worker that is still "
             f"holding its slot. Attach with the command `steward status` prints "
             f"beside it; `steward raise` records that you have told somebody"

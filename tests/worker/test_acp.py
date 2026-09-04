@@ -1,4 +1,4 @@
-"""Whether a worker's pid has a human channel bound to it.
+"""Whether a worker's pid has an operator channel bound to it.
 
 Against the real discovery directory — inspect's own writer, inspect's own
 reader, and the pid of the process running the test, which is the one pid that
@@ -43,7 +43,7 @@ def test_a_dead_worker_s_socket_is_not_offered(
     tmp_path: Path, publish: Publish
 ) -> None:
     # the address would be unreachable, and printing one is worse than printing
-    # none: it sends a person to a socket nothing is listening on
+    # none: it sends an operator to a socket nothing is listening on
     dead = 2**22 - 1
     publish(dead, tmp_path / "gone.sock")
 

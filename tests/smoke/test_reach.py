@@ -91,7 +91,7 @@ class TestWhatTheScannersReached:
     def test_a_silent_scan_can_be_accepted_by_name(self, tmp_path: Path) -> None:
         # what narrowing the block to zero still costs: a filter selective
         # enough to match none of a two-sample slice records nothing and reads
-        # exactly like a broken scan path. A configuration a person can vouch
+        # exactly like a broken scan path. A configuration an operator can vouch
         # for and Steward cannot, which is what `--accept` is for
         plan = planned(tmp_path, SMALL)
         write_log(Path(plan.log_dir), SMALL, samples=[SynthSample("1")])

@@ -210,7 +210,7 @@ def test_acks_fold_to_the_last_word_per_item(tmp_path: Path) -> None:
     # a re-acknowledgment carries the newer reason, which is the one that
     # describes why the item is currently silent
     journal = tmp_path / "journal.jsonl"
-    append_event(journal, ACKNOWLEDGED, id="drift:abc", by="human", reason="first")
+    append_event(journal, ACKNOWLEDGED, id="drift:abc", by="operator", reason="first")
     append_event(journal, ACKNOWLEDGED, id="unreadable:x", by="agent", reason="other")
     append_event(journal, ACKNOWLEDGED, id="drift:abc", by="agent", reason="second")
 
@@ -223,7 +223,7 @@ def test_acks_fold_to_the_last_word_per_item(tmp_path: Path) -> None:
 
 
 ACK_PAYLOADS = [
-    ("no id at all", {"by": "human", "reason": "?"}),
+    ("no id at all", {"by": "operator", "reason": "?"}),
     ("an id that is not a string", {"id": 7, "reason": "?"}),
     ("an empty id", {"id": "", "reason": "?"}),
 ]
@@ -263,7 +263,7 @@ def test_a_position_is_the_line_it_was_read_from(tmp_path: Path) -> None:
     journal = tmp_path / "journal.jsonl"
     write_lines(
         journal,
-        event_line(PAUSED, by="human", reason="?"),
+        event_line(PAUSED, by="operator", reason="?"),
         "{not json at all",
         event_line(RESUMED),
     )
@@ -363,7 +363,9 @@ def test_an_acknowledgment_outlives_the_condition_it_disposed_of(
     # being true of a condition that has been and gone, where *this is accepted*
     # stays true of the thing that was accepted
     journal = tmp_path / "journal.jsonl"
-    append_event(journal, ACKNOWLEDGED, id="drift:abc", by="human", reason="on purpose")
+    append_event(
+        journal, ACKNOWLEDGED, id="drift:abc", by="operator", reason="on purpose"
+    )
     append_event(journal, OBSERVATION, items=[])
 
     assert set(read_acks(read_journal(journal).events)) == {"drift:abc"}
@@ -457,7 +459,7 @@ def test_the_last_word_decides_whether_a_run_is_paused(
     journal = tmp_path / "journal.jsonl"
     write_lines(
         journal,
-        *(event_line(type, by="human", reason="because") for type in types),
+        *(event_line(type, by="operator", reason="because") for type in types),
     )
 
     assert (read_pause(read_journal(journal).events) is not None) is expected
@@ -525,7 +527,7 @@ def test_holds_compose_by_scope(tmp_path: Path) -> None:
     journal = tmp_path / "journal.jsonl"
     append_event(journal, RAMP_HELD, by="agent", reason="errors rising")
     append_event(
-        journal, RAMP_HELD, by="human", reason="watch this arm", identifier="t1"
+        journal, RAMP_HELD, by="operator", reason="watch this arm", identifier="t1"
     )
     append_event(journal, RAMP_RESUMED, identifier="t1")
 

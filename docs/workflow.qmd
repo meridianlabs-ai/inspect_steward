@@ -5,7 +5,7 @@ llms-description: "A Steward run end to end: the workspace, launch and the tend 
 
 ## Overview
 
-Steward runs evaluations from a workspace directory that includes the eval-set definition, steward-specific options, a journal of the entire run, and human readable documents on run status. Evaluations are launched as background processes and monitored using a scheduled job, with coding agents and humans proactively notified when they are needed for a decision. 
+Steward runs evaluations from a workspace directory that includes the eval-set definition, steward-specific options, a journal of the entire run, and human readable documents on run status. Evaluations are launched as background processes and monitored using a scheduled job, with coding agents and operators proactively notified when they are needed for a decision. 
 
 We'll walk through the various phases of the workflow below, then cover [options](#steward-options) you can use to customize Steward's behavior and other [advanced](#advanced) topics like pausing runs and modifying runs in flight.
 
@@ -28,7 +28,7 @@ swe-evals/
   CLAUDE.md           # agent instructions for managing a run
   evalset.py          # eval-set definition (or config.py / hawk.yaml)
   journal.jsonl       # append-only journal of workspace actions
-  status.md           # human readable current status of run
+  status.md           # the operator's page: where the run stands, what waits on them
 ```
 
 Your eval set definition can be any script which ends with a call to `eval_set()` or a [Flow](flow.qmd) or [Hawk](hawk.qmd) configuration. For example:

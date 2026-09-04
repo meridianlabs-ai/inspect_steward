@@ -59,11 +59,11 @@ def paused(workspace: Workspace) -> None:
     moment the last task lands. A pause is the cheapest way to have work left
     and no worker started for it.
     """
-    append_event(workspace.journal, PAUSED, by="human", reason="under test")
+    append_event(workspace.journal, PAUSED, by="operator", reason="under test")
 
 
 HORIZON = UNATTENDED_INTERVALS * DEFAULT_TEND_INTERVAL
-"""How long a collection may be stale before the agent's items become a person's."""
+"""How long a collection may be stale before the agent's items become an operator's."""
 
 
 def collected(workspace: Workspace, *, ago: float = 0.0) -> None:
@@ -242,7 +242,7 @@ def test_the_queue_emptying_posts_once(tmp_path: Path) -> None:
         kind=item.kind,
         subject=item.subject,
         summary=item.summary,
-        by="human",
+        by="operator",
         reason="deliberate",
     )
     cleared = turn(workspace)
@@ -318,7 +318,7 @@ def unreadable(workspace: Workspace) -> None:
 
 
 def test_the_agents_own_items_do_not_wake_a_person(tmp_path: Path) -> None:
-    # `unreadable` is routed to the agent precisely because a person is not the
+    # `unreadable` is routed to the agent precisely because an operator is not the
     # one who should look at it, and a post naming it is the channel
     # advertising work its reader was told not to do
     workspace, _ = prepared(tmp_path, [DONE, PENDING])
@@ -333,7 +333,7 @@ def test_the_agents_own_items_do_not_wake_a_person(tmp_path: Path) -> None:
 def test_an_agents_item_reaches_a_person_where_no_agent_ever_attached(
     tmp_path: Path,
 ) -> None:
-    # the thing a person has to do about a workspace nobody has attached to is
+    # the thing an operator has to do about a workspace nobody has attached to is
     # attach to it, and never-collected needs no horizon to be sure of
     workspace, _ = prepared(tmp_path, [DONE, PENDING])
     paused(workspace)
@@ -378,7 +378,7 @@ def test_an_agent_that_stopped_collecting_hands_its_items_back(
 
 
 def test_the_title_counts_what_the_reader_has_to_act_on(tmp_path: Path) -> None:
-    # `verdict_line` splits *needs a person* from *for the agent* because its
+    # `verdict_line` splits *needs an operator* from *for the agent* because its
     # readers include the agent. Here there is one reader and everything in
     # front of them is theirs, so the split would be Steward's bookkeeping
     #
@@ -449,7 +449,7 @@ def test_an_item_carrying_somebody_elses_exception_is_trimmed(
 def test_a_summary_short_enough_to_read_is_left_alone(tmp_path: Path) -> None:
     # and Steward's own CLI does not travel with it: `steward launch` is right
     # on the item, where `status.md`'s reader is the agent, and printing it into
-    # a channel invites the person to drive Steward by hand
+    # a channel invites the operator to drive Steward by hand
     workspace, _ = prepared(tmp_path, [PENDING])
     paused(workspace)
     turn(workspace)
@@ -469,7 +469,7 @@ def test_the_one_command_a_person_runs_does_travel(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch, publish: Publish
 ) -> None:
     # a park is in `FIXED_OWNER` because the agent may never answer one, which
-    # is the same reason its command is the person's to run -- and it reaches
+    # is the same reason its command is the operator's to run -- and it reaches
     # the worker holding a sample hostage, which nothing else ends
     publish(os.getpid(), tmp_path / "w.sock")
     workspace = parked_run(tmp_path, monkeypatch, LiveParked(approvals=1))
@@ -483,7 +483,7 @@ def test_the_one_command_a_person_runs_does_travel(
 def test_a_post_says_which_workspace_it_is_about(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    # one channel serves however many runs a person has going, and every title
+    # one channel serves however many runs an operator has going, and every title
     # here is a sentence about *a* run -- two workspaces posting "2 decisions
     # need attention" an hour apart are otherwise indistinguishable
     monkeypatch.setenv(INSPECT_NOTIFICATION, CHANNEL)

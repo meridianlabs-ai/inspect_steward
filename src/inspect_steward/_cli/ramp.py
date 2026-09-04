@@ -36,7 +36,7 @@ def ramp_command() -> None:
 )
 @click.option(
     "--by",
-    type=click.Choice(["human", "agent"]),
+    type=click.Choice(["operator", "agent"]),
     default="agent",
     show_default=True,
     help="Who decided. Defaults to the agent, because holding on its own judgement is exactly what this verb exists for.",
@@ -87,7 +87,7 @@ def resume_command(identifier: str | None) -> None:
 def _known(workspace: Workspace, identifier: str) -> None:
     """Refuse an identifier the manifest does not name.
 
-    The hold matches on an exact identifier, so a typo holds nothing while printing that it did — and the arm the person was worried about keeps climbing on the strength of a message saying it would not. That is the one failure this verb must not have, because a hold is reached for precisely when somebody has stopped trusting the loop to be right.
+    The hold matches on an exact identifier, so a typo holds nothing while printing that it did — and the arm the operator was worried about keeps climbing on the strength of a message saying it would not. That is the one failure this verb must not have, because a hold is reached for precisely when somebody has stopped trusting the loop to be right.
 
     Raises:
         click.ClickException: If the identifier names no task in the manifest, or the manifest cannot be read.

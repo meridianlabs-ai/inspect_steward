@@ -1,4 +1,4 @@
-"""The loop, closed once, on a real eval — started the way a person starts one.
+"""The loop, closed once, on a real eval — started the way an operator starts one.
 
 Everything else about the turn is settled in `test_tend.py` against synthesized
 state. What no synthesized state can show is that the four layers agree with
@@ -9,7 +9,7 @@ about that shape rather than the shape itself.
 
 **Through `launch` rather than by hand.** This test used to perform launch's
 four steps itself — copy the definition, capture, commit, tend — which meant the
-composition a person actually runs was the one thing never exercised against a
+composition an operator actually runs was the one thing never exercised against a
 real eval. Going through the verb asserts the commit, the arming, and the
 journal entry for the same three launches, and it is the only place the *real*
 capture and the *real* delta meet each other.

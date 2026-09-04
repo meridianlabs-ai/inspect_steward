@@ -1,6 +1,6 @@
 """What stands between a run and its attestation.
 
-**Every blocker at once, coarsest first.** A person who fixes one refusal and is met by another has walked exactly the loop this gate exists to collapse, so the answer is the whole list — the same discipline `_launch._refusal` already keeps for the archive gate, one level up.
+**Every blocker at once, coarsest first.** An operator who fixes one refusal and is met by another has walked exactly the loop this gate exists to collapse, so the answer is the whole list — the same discipline `_launch._refusal` already keeps for the archive gate, one level up.
 
 **The refusal is a routing instruction, never a quality bar.** What is refused is not a hole but an *unnamed* one. "8 samples accepted as truncated by an operator" is a signed statement; the same eight passing silently is what this machine exists to prevent. So every message ends by naming the command that answers it, and none of them says *fix this first*.
 
@@ -60,7 +60,7 @@ def check(result: "TendResult", signature: Signature | None) -> list[Blocker]:
         signature: The attestation in force, or `None` where nobody has signed.
 
     Returns:
-        Every blocker, in the order a person should read them. Empty means the run can be signed.
+        Every blocker, in the order an operator should read them. Empty means the run can be signed.
     """
     blockers: list[Blocker] = []
     remaining = unfinished(result.summary, result.acknowledged)
@@ -107,7 +107,7 @@ def check(result: "TendResult", signature: Signature | None) -> list[Blocker]:
     if open_windows := list(result.anomalies.open):
         # **including `limit:`, where the readiness item deliberately excludes
         # it.** The item is an invitation to the adjudication conversation and
-        # would hide the line that leads a person to it; the signature is the
+        # would hide the line that leads an operator to it; the signature is the
         # end of that conversation, and an operator kill nobody ruled on is a
         # caveat missing from the record it is supposed to be complete
         keys = sorted({anomaly.class_key for anomaly in open_windows})
@@ -209,7 +209,7 @@ def _nothing_to_attest_to(result: "TendResult", remaining: int) -> Blocker | Non
 
     The readiness *item* already had this guard (`_tend.items._signoff` returns nothing where `summary.tasks` is zero), which is the tell: the invitation knew there was nothing to invite anybody to, and the verb did not require the invitation.
 
-    **Refused rather than warned, and it is the one refusal with no remedy naming a decision.** Everywhere else the gate routes a person to the act that names a hole, because a named hole is signable. There is no naming act for this one: a signature over no results is not a caveated attestation, it is a statement about nothing, and the record's whole value is that it cannot be that.
+    **Refused rather than warned, and it is the one refusal with no remedy naming a decision.** Everywhere else the gate routes an operator to the act that names a hole, because a named hole is signable. There is no naming act for this one: a signature over no results is not a caveated attestation, it is a statement about nothing, and the record's whole value is that it cannot be that.
 
     Args:
         result: The turn being judged.
@@ -239,7 +239,7 @@ def _nothing_to_attest_to(result: "TendResult", remaining: int) -> Blocker | Non
             ),
             remedy=(
                 "check the dataset the tasks are over — a signature says a "
-                "person accepted these results, and there are none"
+                "operator accepted these results, and there are none"
             ),
         )
     return None

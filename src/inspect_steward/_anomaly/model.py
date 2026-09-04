@@ -24,7 +24,7 @@ class AnomalyState(StrEnum):
     """The agent is working it — which stops a fresh session re-proposing, and lets `status` say so."""
 
     PROPOSED = "proposed"
-    """Covered by a live proposal; the question is in front of a person."""
+    """Covered by a live proposal; the question is in front of an operator."""
 
     RULED = "ruled"
     """A `rerun` was authorized and its outcome has not been observed. Closed to new instances, and still open in the sense the verdict cares about: the run is not resolved."""
@@ -91,7 +91,7 @@ AGENT = "agent"
 
 
 def agent_may(disposition: Disposition) -> bool:
-    """Whether an agent may record this disposition without a person's answer.
+    """Whether an agent may record this disposition without an operator's answer.
 
     Args:
         disposition: The answer being considered.
@@ -105,7 +105,7 @@ def agent_may(disposition: Disposition) -> bool:
 def honest(kind: str, disposition: Disposition) -> bool:
     """Whether a disposition can honestly be recorded against a class of this kind.
 
-    The matrix `steward rule` and `propose` refuse on, and the one a policy ruling re-checks at application time — one definition, so a pattern in `_steward.yaml` cannot grant what a person could not type.
+    The matrix `steward rule` and `propose` refuse on, and the one a policy ruling re-checks at application time — one definition, so a pattern in `_steward.yaml` cannot grant what an operator could not type.
 
     Three rows. `accept` on an `error:` class is silent exclusion wearing a decision's clothes. The three sample marks mean nothing where the residue is not a sample's data (`SAMPLE_MARKED`) — a `scanerror:` class has a sample behind every instance and still nothing to exclude, because what it left behind is a missing verdict rather than a wrong one. And `rerun` on a `scanerror:` class is a decision that cannot be carried out: the eval is fine and only the scan failed, so there are no samples to requeue, and the retry a re-scan would need is scout's resume rather than a respawn — a mechanism Steward has no verb for (execution.md §13 item 9).
 
@@ -165,9 +165,9 @@ class Ruling:
     """Why — required, because this is the only account of the decision that survives."""
 
     by: str
-    """Who decided — free text naming a person, `policy` when a standing pre-authorization applied (step 25), or `agent` for the one disposition an agent may reach on its own.
+    """Who decided — free text naming an operator, `policy` when a standing pre-authorization applied (step 25), or `agent` for the one disposition an agent may reach on its own.
 
-    **That exception is `dismiss` and only `dismiss`.** Every other disposition marks the data: `accept` attaches a caveat the report carries, and `exclude`, `zero` and `score` change what the numbers are computed over. Those are a person's, and conflating them with this is how a run ends up certified because a machine ran out of things to flag. `dismiss` marks nothing — it records that somebody looked and there was no case to answer — so requiring a signature for it bought no protection and cost one human decision per false positive, which is the tax that stops an attention list being read at all.
+    **That exception is `dismiss` and only `dismiss`.** Every other disposition marks the data: `accept` attaches a caveat the report carries, and `exclude`, `zero` and `score` change what the numbers are computed over. Those are an operator's, and conflating them with this is how a run ends up certified because a machine ran out of things to flag. `dismiss` marks nothing — it records that somebody looked and there was no case to answer — so requiring a signature for it bought no protection and cost one human decision per false positive, which is the tax that stops an attention list being read at all.
     """
 
     ts: str
@@ -193,7 +193,7 @@ class Resolution:
 class ProposalEvidence:
     """One class's weight, as the proposal snapshotted it from the fold.
 
-    Snapshotted by the verb rather than referenced, so the record shows what the human was shown — and so they can answer *some* of a proposal: per-class evidence is what makes partial acceptance an informed act rather than a blind one.
+    Snapshotted by the verb rather than referenced, so the record shows what the operator was shown — and so they can answer *some* of a proposal: per-class evidence is what makes partial acceptance an informed act rather than a blind one.
     """
 
     count: int = 0
@@ -237,7 +237,7 @@ class Anomaly:
     evidence: Evidence
 
     substrate: bool = False
-    """Whether the failure is the machinery under the run. A substrate class gets no re-run proposal until a person has looked (execution.md §9.1)."""
+    """Whether the failure is the machinery under the run. A substrate class gets no re-run proposal until an operator has looked (execution.md §9.1)."""
 
     generation: int = 1
     """Which window this is, 1-based. A ruling closes a window; recurrence opens the next generation."""
@@ -341,7 +341,7 @@ def composed_effect(
 ) -> str:
     """The report-facing sentence a marking disposition composes when nobody wrote one.
 
-    One composition shared by `steward rule` and a policy ruling, so the sentence the record carries cannot depend on which path recorded it. Empty for the dispositions that mark nothing — `rerun` and `dismiss` — and for `accept`, whose effect only a person can write.
+    One composition shared by `steward rule` and a policy ruling, so the sentence the record carries cannot depend on which path recorded it. Empty for the dispositions that mark nothing — `rerun` and `dismiss` — and for `accept`, whose effect only an operator can write.
 
     **It counts rows in the data, not instances in the window**, and the two come apart exactly where a re-run happened: three samples that failed, were re-run and failed again put six instances in one window and three rows in the results. Composing from the window said *6 samples excluded from scoring* over three excluded samples — a report-facing sentence overstating the mark, printed in `anomalies.md` three lines above a denominator line that said three. So the count comes from `Dispositions.affected`, which is the same narrowing the errored cell and that denominator already use.
 

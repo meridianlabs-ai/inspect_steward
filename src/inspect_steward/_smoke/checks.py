@@ -9,7 +9,7 @@
 
 **Four questions, and none of them is answerable any other way.** A run whose model resolved to no context window silently assumes 128000 and silently stops shrinking oversized tool output; a run whose reasoning is not replayed is an agent that forgets what it was thinking between turns; a run whose scanners recorded nothing looks identical to one whose scanners found nothing. All of them produce an eval that completes, scores, and is wrong — the class of failure a rehearsal exists for, and the class a green exit code cannot distinguish from success.
 
-The fourth is the one that does not come from a transcript. `scan_coverage` is handed its two numbers by the fold rather than reading them here, and lives among the others because what it answers is the same kind of question: a property of *this* configuration that a person may be able to vouch for and Steward cannot, which is what makes it waivable by name.
+The fourth is the one that does not come from a transcript. `scan_coverage` is handed its two numbers by the fold rather than reading them here, and lives among the others because what it answers is the same kind of question: a property of *this* configuration that an operator may be able to vouch for and Steward cannot, which is what makes it waivable by name.
 """
 
 from collections.abc import Iterable, Mapping, Sequence

@@ -205,7 +205,7 @@ def test_a_worker_with_no_cpu_baseline_waits() -> None:
 
 
 def test_a_level_that_moved_this_window_measured_nothing() -> None:
-    # somebody — the loop itself last turn, or a person over the control
+    # somebody — the loop itself last turn, or an operator over the control
     # channel — changed the setpoint mid-window, so the window says nothing
     # about the level it ends at
     assert steps(plan(sig(level=60, in_use=60))) == []
@@ -728,7 +728,7 @@ def test_a_proposal_is_the_humans_item_and_its_id_carries_the_level() -> None:
     items = tend_items(result, ObservedTasks(tasks=[]), InFlight())
 
     (item,) = [entry for entry in items if entry.kind == TUNING_PROPOSAL]
-    assert item.owner is Owner.HUMAN
+    assert item.owner is Owner.OPERATOR
     assert item.level is Level.INFO
     assert item.acknowledgeable
     assert item.id.endswith(":40")

@@ -3,11 +3,12 @@
 Thin on purpose: the turn itself is `test_tend.py`'s subject, and re-asserting
 its decisions through a `CliRunner` would only test them twice. What is only
 true at this layer is the shell contract — that a refusal is a normal outcome
-rather than a failure, that a message meant for a person is not a traceback,
+rather than a failure, that a message meant for an operator is not a traceback,
 and that `--json` is a document rather than prose with braces in it.
 """
 
 import json
+import re
 from dataclasses import replace
 from pathlib import Path
 
@@ -16,7 +17,8 @@ from click.testing import CliRunner
 from inspect_steward._cli.main import steward
 from inspect_steward._cli.turn import echo_turn
 from inspect_steward._evalset.manifest import write_manifest
-from inspect_steward._tend import Live, status_markdown
+from inspect_steward._tend import Live, collect_markdown, status_markdown
+from inspect_steward._tend.progress import TaskResources
 from inspect_steward._workspace import Claim, Workspace, acquire, create_workspace
 
 from .._logs import SynthTask, write_log
@@ -306,7 +308,7 @@ def test_ack_refuses_without_a_reason(workspace: Workspace) -> None:
 
 def test_ack_records_who_decided(workspace: Workspace) -> None:
     # an agent disposing of something it investigated is its own decision, not
-    # a person's relayed through it
+    # an operator's relayed through it
     identifier = broken(workspace)
 
     run("ack", identifier, "--by", "agent", "--reason", "transient")
@@ -344,11 +346,10 @@ def test_status_prints_markdown_on_request_and_not_otherwise(
     _, markdown = run("status", "--format", "md")
     _, text = run("status")
 
-    assert "| state | tasks |" in markdown
-    assert "### tasks" in markdown
+    assert "| task | samples | done |" in markdown
     # ...and no warning about editing a file, since this one is not a file
     assert "Regenerated every turn" not in markdown
-    assert "| state | tasks |" not in text
+    assert "| task |" not in text
 
 
 def test_every_rendering_leads_with_the_same_verdict(workspace: Workspace) -> None:
@@ -370,33 +371,56 @@ def test_every_rendering_leads_with_the_same_verdict(workspace: Workspace) -> No
     assert code == 0
 
 
-def test_the_live_block_replaces_the_startup_bound_and_both_renderings_agree(
+def test_the_resources_table_replaces_the_startup_bound_and_both_renderings_agree(
     workspace: Workspace, capsys: pytest.CaptureFixture[str]
 ) -> None:
-    """Under the table: what the fleet costs now, or what starting it would.
+    """Under the table: what each running task costs now, or what starting the fleet would.
 
     A real turn with a synthesized fleet, because the two branches are a
     rendering decision rather than a reading one — and no synthesized *state*
     can produce a running worker.
     """
     result = turn(workspace)
-    running = replace(
-        result,
-        progress=replace(
-            result.progress, live=Live(tasks=2, refusals=3, http_retries=41)
+    row = next(row for row in result.progress.rows if row.key.startswith("done"))
+    live = Live(
+        tasks=1,
+        refusals=3,
+        http_retries=41,
+        resources=(
+            TaskResources(
+                identifier=row.identifier,
+                refusals=3,
+                http_retries=41,
+                rss=2 * 1024**3,
+                cores=1.5,
+            ),
         ),
     )
+    running = replace(result, progress=replace(result.progress, live=live))
 
     markdown = status_markdown(running, header=False)
     echo_turn(running)
     text = capsys.readouterr().out
 
-    for rendering in (markdown, text):
-        assert "2 tasks · 3 refusals · 41 HTTP retries" in rendering
-        # the caveat travels with the figures, because a total that falls as
-        # tasks complete otherwise reads as a problem resolving itself
-        assert "fall as tasks finish" in rendering
-    # and with nothing running there is no block to caveat
+    assert "### resources" in markdown
+    (cells,) = [line for line in markdown.splitlines() if line.startswith("| done")]
+    assert [cell.strip() for cell in cells.split("|")][1:-1] == [
+        "done",
+        "3",
+        "41",
+        "2.0 GiB",
+        "1.5",
+    ]
+    assert "resources:" in text
+    (plain,) = [line for line in text.splitlines() if line.strip().startswith("done ")]
+    assert plain.split() == ["done", "3", "41", "2.0", "GiB", "1.5"]
+    # the agent's page keeps the fleet total, with the caveat that travels with
+    # it: a total that falls as tasks complete otherwise reads as a problem
+    # resolving itself
+    collected = collect_markdown(running)
+    assert "1 task · 3 refusals · 41 HTTP retries" in collected
+    assert "fall as tasks finish" in collected
+    # and with nothing running there is no table
     assert "refusals" not in status_markdown(result, header=False)
 
 
@@ -414,7 +438,7 @@ def test_both_renderings_say_whether_anything_reaches_a_person(
     assert result.notification is not None
     described = result.notification.description
 
-    markdown = status_markdown(result, header=False)
+    markdown = collect_markdown(result)
     echo_turn(result)
 
     assert f"notifications: {described}" in capsys.readouterr().out
@@ -461,16 +485,27 @@ def test_ack_leaves_status_md_to_the_next_tend(workspace: Workspace) -> None:
     stale by.
     """
     identifier = broken(workspace)
+    # paused, so no worker departs mid-test and moves the count for reasons of
+    # its own: the only thing that changes it here is the ack
+    run("pause", "--reason", "hold still")
     turn(workspace)
     stamped = workspace.status.read_text(encoding="utf-8")
-    assert identifier in stamped
+    before = agent_items(stamped)
+    assert before >= 1
 
     run("ack", identifier, "--reason", "known bad file")
 
-    # unchanged, byte for byte -- including the `As of` it was written with
+    # unchanged, byte for byte -- including the ages it was written with
     assert workspace.status.read_text(encoding="utf-8") == stamped
-    # but nothing that *computes* still reports it
-    assert identifier not in run("status")[1]
+    # but nothing that *computes* still counts it
+    assert agent_items(run("status")[1]) == before - 1
 
     turn(workspace)
-    assert identifier not in workspace.status.read_text(encoding="utf-8")
+    assert agent_items(workspace.status.read_text(encoding="utf-8")) == before - 1
+
+
+def agent_items(rendered: str) -> int:
+    """The agent's open-item count off the headline, which is all the operator's page says of them."""
+    found = re.search(r"agent: (\d+|no) open item", rendered)
+    assert found is not None, rendered
+    return 0 if found.group(1) == "no" else int(found.group(1))

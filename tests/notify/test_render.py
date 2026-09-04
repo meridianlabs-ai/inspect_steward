@@ -13,7 +13,7 @@ from inspect_steward._notify import Dialect, Kind, Post, body_format, render
 
 POST = Post(
     kind=Kind.ATTENTION,
-    title="⚠️ 2 need a person",
+    title="⚠️ 2 need an operator",
     lines=[
         "a sample is waiting on an approval — inspect acp",
         "the definition has changed since it was captured — steward launch",
@@ -37,7 +37,7 @@ def test_the_title_is_not_in_the_body(dialect: Dialect) -> None:
     # it is passed to Apprise separately and every plugin renders it itself --
     # Slack as an attachment heading, mail as the subject -- so a body opening
     # with it arrives as the same line twice
-    assert "2 need a person" not in render(POST, dialect)
+    assert "2 need an operator" not in render(POST, dialect)
 
 
 @pytest.mark.parametrize("dialect", [Dialect.TEXT, Dialect.MARKDOWN, Dialect.MRKDWN])

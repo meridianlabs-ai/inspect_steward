@@ -689,7 +689,7 @@ class TestResolutionDetection:
     def test_a_failed_rerun_does_not_pass_on_the_next_tend(self) -> None:
         # after `reran_failed` the failed instances are absorbed, so the class
         # goes quiet on an identical census -- but quiet is not recovered: the
-        # window stays RULED for a person while the census holds post-ruling
+        # window stays RULED for an operator while the census holds post-ruling
         # failures
         events = [
             opened(ts=T0),
@@ -713,7 +713,7 @@ class TestResolutionDetection:
         assert after.open[0].state is AnomalyState.RULED
 
     def test_a_fresh_ruling_re_arms_the_pass(self) -> None:
-        # the way out of a failed re-run is a person deciding again: the new
+        # the way out of a failed re-run is an operator deciding again: the new
         # ruling's instant moves the boundary past the failed instances
         failed = ev(
             RESOLUTION,
@@ -765,7 +765,7 @@ class TestResolutionDetection:
 
     def test_an_unruled_sample_window_never_heals_itself(self) -> None:
         # the residue of an errored sample is in the data; the four-answer
-        # question stands until a person rules
+        # question stands until an operator rules
         events = [opened(ts=T0), instance(ts=T0, tasks=["taskA"])]
         health = {"taskA": TaskHealth(complete=True, settled=T2)}
 

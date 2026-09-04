@@ -21,7 +21,7 @@ NO_CRONTAB = 1
 def markers(label: str) -> tuple[str, str]:
     """The comment pair Steward's block lives between.
 
-    Visible and self-explaining, because the reader who meets them is a person opening their own crontab and wondering what wrote in it.
+    Visible and self-explaining, because the reader who meets them is an operator opening their own crontab and wondering what wrote in it.
     """
     return (f"# >>> {label} >>>", f"# <<< {label} <<<")
 

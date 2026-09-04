@@ -120,7 +120,7 @@ class DirectoryStore:
 
         **Out of reach is what a flat read buys.** `observe_logs` does not recurse, so a subdirectory is invisible to `search` without anything having to filter it — the same property that makes a log directory's scan output safe to nest.
 
-        **An earlier version of this did nothing at all**, arguing that `search`'s quality rule would outrank a superseded copy. It does not: quality is completed samples before recency, so a revoked four-sample log beats the two-sample one that supersedes it — including the case that matters most, where the replacement is short *because* a person accepted a hole in it. Every project reading the store would go on getting the withdrawn result.
+        **An earlier version of this did nothing at all**, arguing that `search`'s quality rule would outrank a superseded copy. It does not: quality is completed samples before recency, so a revoked four-sample log beats the two-sample one that supersedes it — including the case that matters most, where the replacement is short *because* an operator accepted a hole in it. Every project reading the store would go on getting the withdrawn result.
 
         Args:
             locations: Logs that have left `logs/`, by the location they had there. Matched here on the filename, which is what `publish` wrote.

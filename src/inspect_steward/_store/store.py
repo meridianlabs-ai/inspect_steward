@@ -1,6 +1,6 @@
 """*Where have these logs already been run* — asked at launch, answered at signoff.
 
-A store is an index of completed logs keyed on inspect_ai's `task_identifier`, holding pointers rather than data. Steward reads it once at launch, so a task another project already ran is copied in rather than run again, and writes to it once at signoff, so what it holds is **results a person accepted** rather than logs that happen to exist (execution.md §5.3–5.6). Its absence costs time and never correctness, which is what makes every failure on these paths a warning.
+A store is an index of completed logs keyed on inspect_ai's `task_identifier`, holding pointers rather than data. Steward reads it once at launch, so a task another project already ran is copied in rather than run again, and writes to it once at signoff, so what it holds is **results an operator accepted** rather than logs that happen to exist (execution.md §5.3–5.6). Its absence costs time and never correctness, which is what makes every failure on these paths a warning.
 
 **Two targets, dispatched on what is there rather than on what the definition is.** A `flow_store/` marker means somebody built a Delta table with `flow store import`, and it is read and written through `inspect_flow`. Anything else — an existing directory of `.eval` logs, or a location nothing has created yet — is a plain directory, which is a store too: `task_identifier`'s `EvalLog` branch computes an identifier from a log's own header, so a directory of logs already holds everything a table holds and the table adds an index rather than information. `observe_logs` reads one directly.
 
@@ -36,7 +36,7 @@ Flow's own `store_exists` checks for exactly this (`inspect_flow._store.store`),
 class StoreError(Exception):
     """A store was configured and could not be opened.
 
-    A message for a person, never a traceback: everything reachable here is a condition of the machine — a location that will not read, or a Delta table with no `inspect_flow` to read it. Every caller turns one of these into a warning rather than a failure, because a store is an optimisation.
+    A message for an operator, never a traceback: everything reachable here is a condition of the machine — a location that will not read, or a Delta table with no `inspect_flow` to read it. Every caller turns one of these into a warning rather than a failure, because a store is an optimisation.
     """
 
 

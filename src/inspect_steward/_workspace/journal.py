@@ -87,15 +87,15 @@ ACKNOWLEDGED = "acknowledged"
 
 The one event kind an item list was not supposed to need. Items are a projection, so a condition that ends stops being reported and a decision keeps its subject open — but neither covers a real condition nothing will clear mechanically that somebody has already accepted. Without this, a definition edited on purpose reports drift every ten minutes for the rest of the run, which is how an attention list stops being read.
 
-Written by `steward ack`, never by a tend. It carries `id`, `by` (`agent` or `human`), and a required `reason` — the discipline `inspect ctl` already imposes on every applied change, and what makes *who decided, and why* (workflow.md, *The audit trail*) true of this act too.
+Written by `steward ack`, never by a tend. It carries `id`, `by` (`agent` or `operator`), and a required `reason` — the discipline `inspect ctl` already imposes on every applied change, and what makes *who decided, and why* (workflow.md, *The audit trail*) true of this act too.
 """
 
 RAISED = "raised"
-"""Journal event: the agent put an item in front of the person who can decide it.
+"""Journal event: the agent put an item in front of the operator who can decide it.
 
-**It closes nothing, and that is the whole point.** An item owned by a human stays open until a human rules on it — but the *agent's* work on it ended when it was surfaced, and without a record of that the item returns to the agent's queue at every collection all night. Reading is the wrong verb for something the reader cannot dispose of (agent.md §2.2), so raising is the verb.
+**It closes nothing, and that is the whole point.** An item owned by an operator stays open until an operator rules on it — but the *agent's* work on it ended when it was surfaced, and without a record of that the item returns to the agent's queue at every collection all night. Reading is the wrong verb for something the reader cannot dispose of (agent.md §2.2), so raising is the verb.
 
-The third of three item states, between *needs the agent* and *closed*. What it changes is one projection: `steward collect` sets a raised item aside and counts it; `status` still shows it, because a person still owes an answer.
+The third of three item states, between *needs the agent* and *closed*. What it changes is one projection: `steward collect` sets a raised item aside and counts it; `status` still shows it, because an operator still owes an answer.
 
 Carries `id` and an optional `note` — optional where `acknowledged`'s reason is required, because disposing of a decision owes an account and handing one off does not.
 """
@@ -117,7 +117,7 @@ PAUSED = "paused"
 
 **Here rather than in `.steward/`, and the difference is a safety property.** `.steward/` is disposable by construction — deleting it is documented as costing nothing — so a pause flag living there means clearing a cache silently *resumes* an expensive run overnight. Between the two directions this can fail in, a pause that outlives a wiped cache is recoverable and a resume nobody asked for is not.
 
-Carries `by` (`agent` or `human`) and a required `reason`. A tend never writes it.
+Carries `by` (`agent` or `operator`) and a required `reason`. A tend never writes it.
 """
 
 RESUMED = "resumed"
@@ -208,7 +208,7 @@ Carries `items` (the ids that appeared) and `complete` (the display keys that fi
 OPENED = "opened"
 """Journal event: a class of failures has a window absorbing instances.
 
-Written by a tend, mechanically, when detection finds instances of a class with no absorbing window — the first ever, or the first after a ruling closed the previous one. Carries `class`, `kind` (`error` | `limit` | `task` | `score`), and `substrate` (whether the failure is the machinery under the run, which forbids a re-run proposal until a person has looked — execution.md §9.1).
+Written by a tend, mechanically, when detection finds instances of a class with no absorbing window — the first ever, or the first after a ruling closed the previous one. Carries `class`, `kind` (`error` | `limit` | `task` | `score`), and `substrate` (whether the failure is the machinery under the run, which forbids a re-run proposal until an operator has looked — execution.md §9.1).
 """
 
 INSTANCE = "instance"
@@ -228,11 +228,11 @@ A sixth event rather than a flag on `proposal`, because investigation precedes p
 PROPOSAL = "proposal"
 """Journal event: the agent's grouping judgement — these classes are one decision.
 
-Carries `id` (`prop-<digest8>`), one `action`, the covered `classes` with per-class evidence snapshotted from the fold (count, exemplar, window, precedent) — snapshotted by the verb so the record shows what the human was shown, and so a partial answer is possible — plus `reason` and `by`. A later proposal covering a class supersedes the earlier one for that class.
+Carries `id` (`prop-<digest8>`), one `action`, the covered `classes` with per-class evidence snapshotted from the fold (count, exemplar, window, precedent) — snapshotted by the verb so the record shows what the operator was shown, and so a partial answer is possible — plus `reason` and `by`. A later proposal covering a class supersedes the earlier one for that class.
 """
 
 RULING = "ruling"
-"""Journal event: a human decided what a class of failures means.
+"""Journal event: an operator decided what a class of failures means.
 
 **One event per class**: ruling a twelve-class proposal appends twelve lines sharing a `proposal` id, which is what lets a group decision be unpicked later (workflow.md §5.6). Carries `class`, `disposition` (`rerun` | `exclude` | `zero` | `score` | `accept` | `dismiss`), a required `reason`, `by` — free text naming who decided, never a role, with room for `policy` when a standing pre-authorization applies (step 25) — `effect` (the report-facing sentence for the dispositions that mark the data), and `proposal`.
 
@@ -240,7 +240,7 @@ A ruling closes the class's window: the next instance opens a new generation car
 """
 
 SIGNOFF = "signoff"
-"""Journal event: a person accepted these results. The terminal act.
+"""Journal event: an operator accepted these results. The terminal act.
 
 **There is no un-sign event, and the absence is the design.** A signature is a thing that happened, on a date, by somebody — the journal records it and later facts qualify it rather than erasing it, exactly as a superseded ruling stays in the record. What a second signoff writes is a second signature, and the fold's last word wins.
 
@@ -275,7 +275,7 @@ class InitializedEvent(JournalEvent):
 class LaunchedEvent(JournalEvent):
     """A run was launched, and under what.
 
-    Typed because a person reads this line: it is the top of the story every later `observation` continues, and the one place the journal says what the run is *of*.
+    Typed because an operator reads this line: it is the top of the story every later `observation` continues, and the one place the journal says what the run is *of*.
     """
 
     definition: str
@@ -294,7 +294,7 @@ class Ack:
 
     id: str
     by: str
-    """`agent` or `human`. An agent disposing of a transient it investigated is its own ack, not a human's relayed through it."""
+    """`agent` or `operator`. An agent disposing of a transient it investigated is its own ack, not an operator's relayed through it."""
 
     reason: str
     ts: str
@@ -337,7 +337,7 @@ class Paused:
     """The pause in force, as the fold reports it."""
 
     by: str
-    """`agent` or `human`."""
+    """`agent` or `operator`."""
 
     reason: str
     ts: str
@@ -348,7 +348,7 @@ class RampHold:
     """One hold on the tuning loop, as the fold reports it."""
 
     by: str
-    """`agent` or `human`."""
+    """`agent` or `operator`."""
 
     reason: str
     ts: str
@@ -444,7 +444,7 @@ def read_journal(journal: Path) -> JournalRead:
 def read_acks(events: list[JournalEvent]) -> dict[str, Ack]:
     """Fold a journal down to what has been disposed of.
 
-    An acknowledgment says a person or an agent looked at something nothing will clear mechanically and accepted it. The item then leaves every surface — `status.md`, the summary, the channel, the verdict — and this record is what it leaves behind (plan.md step 14).
+    An acknowledgment says an operator or an agent looked at something nothing will clear mechanically and accepted it. The item then leaves every surface — `status.md`, the summary, the channel, the verdict — and this record is what it leaves behind (plan.md step 14).
 
     Keyed on the **item id**, which is chosen per kind so that a material change produces a different one. That is what makes a permanent-looking suppression safe: acknowledging a definition edit does not acknowledge the next edit, because the next edit hashes differently and is therefore a different item.
 
@@ -693,7 +693,7 @@ def read_launched(events: list[JournalEvent]) -> str | None:
 def read_smoked(events: list[JournalEvent]) -> Smoked:
     """Fold a journal down to the rehearsal currently in force.
 
-    **The newest smoke is the answer, whatever it concluded**, which is what makes this a statement about the definition as it stands rather than about the best day it ever had. Reading back to the most recent *pass* would let a rehearsal that just failed sit behind a passing one from an hour ago, and report the launch as rehearsed on the strength of a run whose successor said otherwise — the one reading a person would never make from the same journal. So the last `smoked` event wins, and a last word that is not `passed` covers nothing.
+    **The newest smoke is the answer, whatever it concluded**, which is what makes this a statement about the definition as it stands rather than about the best day it ever had. Reading back to the most recent *pass* would let a rehearsal that just failed sit behind a passing one from an hour ago, and report the launch as rehearsed on the strength of a run whose successor said otherwise — the one reading an operator would never make from the same journal. So the last `smoked` event wins, and a last word that is not `passed` covers nothing.
 
     Args:
         events: Events in file order, as `read_journal` returns them.

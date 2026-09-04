@@ -118,7 +118,7 @@ class TestWhatTheTasksDid:
 class TestWhatTheScannersDid:
     """A scanner that threw is the scan path saying it does not work.
 
-    Those arrive as `scanerror:` classes among the findings, which are reported and count toward nothing — so every scanner could fail on every transcript while the verdict read *rehearsed and ready* and the journal recorded a pass. During a run the same class is a question for a person, since the samples are fine and only the reading of them failed; before one it is what a rehearsal is for.
+    Those arrive as `scanerror:` classes among the findings, which are reported and count toward nothing — so every scanner could fail on every transcript while the verdict read *rehearsed and ready* and the journal recorded a pass. During a run the same class is a question for an operator, since the samples are fine and only the reading of them failed; before one it is what a rehearsal is for.
     """
 
     def test_a_scanner_that_threw_fails_the_rehearsal(self) -> None:
@@ -153,7 +153,7 @@ class TestWhatItDoesToTheVerdict:
         )
 
     def test_and_is_not_waivable(self) -> None:
-        # `--accept` waives a *check* -- a question about configuration a person
+        # `--accept` waives a *check* -- a question about configuration an operator
         # can answer better than Steward can. A sample that errored is not a
         # question, it is the answer arriving
         every = ("context_window", "reasoning", "reasoning_api")

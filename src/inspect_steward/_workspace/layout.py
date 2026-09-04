@@ -41,7 +41,7 @@ GITIGNORE_ENTRIES = (
 
 @dataclass(frozen=True)
 class Workspace:
-    """A Steward workspace: the directory a human and an agent co-inhabit.
+    """A Steward workspace: the directory an operator and an agent co-inhabit.
 
     Every path in the layout is derived here so that no other module builds one from a string. See workflow.md *`steward init` — the deliverable is a directory* for what each file is for, and *Three categories, and the one that matters* for which of them can be recovered if lost.
     """
@@ -49,7 +49,7 @@ class Workspace:
     root: Path
     """Workspace root (absolute)."""
 
-    # authored — the human's own work, and never overwritten
+    # authored — the operator's own work, and never overwritten
     @property
     def agents(self) -> Path:
         """`AGENTS.md` — the bootstrap, and the only thing discovered by convention."""
@@ -64,7 +64,7 @@ class Workspace:
     def directives(self) -> Path:
         """`_steward.yaml` — this human's standing rules, structured and not.
 
-        Settings Steward acts on unattended, and a `policies` key an agent interprets when it arrives. Steward proposes changes and writes only what the human approved (workflow.md, *The one file Steward may write but never decide*) — a rule under more pressure now the whole file is machine-shaped, and no less binding for it. The underscore sorts it to the top of a listing, beside `AGENTS.md`.
+        Settings Steward acts on unattended, and a `policies` key an agent interprets when it arrives. Steward proposes changes and writes only what the operator approved (workflow.md, *The one file Steward may write but never decide*) — a rule under more pressure now the whole file is machine-shaped, and no less binding for it. The underscore sorts it to the top of a listing, beside `AGENTS.md`.
         """
         return self.root / "_steward.yaml"
 
@@ -78,7 +78,7 @@ class Workspace:
     def analysis(self) -> Path:
         """`analysis.md` — what the numbers mean, written by the agent and kept current by Steward.
 
-        **Durable, and the only file here that is neither party's alone.** `status.md` and `anomalies.md` are Steward's and are rewritten whole every turn; `AGENTS.md` and `_steward.yaml` are the human's and are never touched. This one is co-authored (workflow.md §12.7): Steward keeps a block of facts current inside each task's section, and every word outside those markers is somebody's investigation — quoted, argued, and not regenerable from anything. Losing it loses work.
+        **Durable, and the only file here that is neither party's alone.** `status.md` and `anomalies.md` are Steward's and are rewritten whole every turn; `AGENTS.md` and `_steward.yaml` are the operator's and are never touched. This one is co-authored (workflow.md §12.7): Steward keeps a block of facts current inside each task's section, and every word outside those markers is somebody's investigation — quoted, argued, and not regenerable from anything. Losing it loses work.
 
         At the root beside `status.md`, so the sync carries it to a remote reader with no rule of its own.
         """
@@ -202,7 +202,7 @@ class Workspace:
     def anomalies(self) -> Path:
         """`anomalies.md` — the caveats that reached the final data, rewritten by every tend.
 
-        At the root beside `status.md` rather than under `.steward/`, and that does two things at once: a person reading the directory finds it where a write-up's footnotes belong, and the sync carries every non-dotfile at the top level, so it reaches a remote reader with no propagation rule of its own.
+        At the root beside `status.md` rather than under `.steward/`, and that does two things at once: an operator reading the directory finds it where a write-up's footnotes belong, and the sync carries every non-dotfile at the top level, so it reaches a remote reader with no propagation rule of its own.
         """
         return self.root / "anomalies.md"
 
@@ -210,7 +210,7 @@ class Workspace:
     def log(self) -> Path:
         """`.steward/steward.log` — whether the machinery worked, as opposed to what it found.
 
-        Disposable, and here rather than at the root because that is the category it belongs to. It used to sit at the top level for one stated reason — so the sync would carry it out without an exception to its own deny list — which is Steward dodging a rule Steward wrote. The sync names it instead, and the root is left for what a person authored and what a person reads.
+        Disposable, and here rather than at the root because that is the category it belongs to. It used to sit at the top level for one stated reason — so the sync would carry it out without an exception to its own deny list — which is Steward dodging a rule Steward wrote. The sync names it instead, and the root is left for what an operator authored and what an operator reads.
         """
         return self.state / "steward.log"
 

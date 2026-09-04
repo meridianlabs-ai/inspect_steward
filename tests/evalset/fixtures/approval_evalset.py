@@ -1,4 +1,4 @@
-"""A definition whose one sample parks waiting for a person to approve a tool call.
+"""A definition whose one sample parks waiting for an operator to approve a tool call.
 
 The only fixture here that holds a worker open without a fault marker: what
 holds it is the eval doing exactly what it was asked to do. `approver: human`

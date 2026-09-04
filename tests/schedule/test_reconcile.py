@@ -526,8 +526,8 @@ def test_the_budget_outranks_a_climbed_level_on_respawn() -> None:
 
 
 def test_a_pinned_setpoint_is_not_clamped_by_the_budget() -> None:
-    # a pin is a number a person chose. A pinned fleet can still overshoot its
-    # own `max_sandboxes`, and that is two numbers the same person owns --
+    # a pin is a number an operator chose. A pinned fleet can still overshoot its
+    # own `max_sandboxes`, and that is two numbers the same operator owns --
     # reported rather than resolved (scheduling.md §3.6)
     manifest = synth_manifest([SynthTask("sweep", args={"n": n}) for n in range(10)])
 
@@ -643,7 +643,7 @@ def test_a_task_stops_being_respawned_once_it_stops_getting_anywhere(
     assert (spawns(result) == []) == stalled
     assert result.summary.stalled == ([TASK.identifier] if stalled else [])
     # a stalled task is not queued either -- it is not waiting for a slot,
-    # it is waiting for a person
+    # it is waiting for an operator
     assert result.queued == []
 
 
@@ -855,7 +855,7 @@ def invalidate(log_dir: Path, task: SynthTask, *, at: str) -> None:
 
 
 def test_an_invalidation_clears_the_stall_behind_it(tmp_path: Path) -> None:
-    """The guard yields to a human.
+    """The guard yields to an operator.
 
     An invalidation is a decision to try again, made by the only party entitled
     to make one, so the run of fruitless attempts before it stops counting.
@@ -1026,11 +1026,11 @@ def test_a_stalled_task_frees_the_slot_it_was_holding(tmp_path: Path) -> None:
 
 
 def test_an_accepted_task_is_neither_spawned_nor_stalled(tmp_path: Path) -> None:
-    """A person ended this task, so Steward stops trying — and stops reporting.
+    """An operator ended this task, so Steward stops trying — and stops reporting.
 
     Both halves matter. Respawning would overrule the only party entitled to
     end it, and reporting it *stalled* would put the decision back in front of
-    the person who just made it: a stall says somebody should look, which is
+    the operator who just made it: a stall says somebody should look, which is
     exactly the question an acceptance answers.
     """
     manifest = synth_manifest([TASK])

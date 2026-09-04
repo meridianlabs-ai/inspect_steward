@@ -36,7 +36,7 @@ Read here and never written: `verify_scan` runs before the archive gate, where a
 class ScanError(Exception):
     """The run's scanning configuration cannot be honoured.
 
-    A message for a person: a scanner reference that does not parse, a name collision, or a re-launch whose scanners disagree with rows already recorded. The launch wraps it (`LaunchError`) like every other definition-shaped refusal.
+    A message for an operator: a scanner reference that does not parse, a name collision, or a re-launch whose scanners disagree with rows already recorded. The launch wraps it (`LaunchError`) like every other definition-shaped refusal.
     """
 
 

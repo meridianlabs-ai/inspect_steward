@@ -50,10 +50,10 @@ def status_command(
     if output_json:
         click.echo(turn_json(result))
     elif output_format == "md":
-        # the same renderer `status.md` uses, minus its generated-file comment:
-        # an agent is told to relay this in full and unfenced (agent.md, *Render
-        # the summary; do not replace it*), and a warning about editing a file
-        # is not part of what it was asked to relay
+        # the operator's page, the same renderer `status.md` uses, minus its
+        # generated-file comment: an agent is told to relay this in full and
+        # unfenced (runbook, *When the operator asks how it is going*), and a
+        # warning about editing a file is not part of what it was asked to relay
         click.echo(status_markdown(result, header=False))
     else:
         echo_turn(result)

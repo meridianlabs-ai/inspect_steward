@@ -91,7 +91,7 @@ class LogAttempt:
     mtime: float | None
     """When the file was last written, in **milliseconds** since the epoch, as `EvalLogInfo` reports it.
 
-    For a finished log this is when something last *changed* it, and a human invalidating samples in it is the only thing that does — which makes it the one record of when they acted. `None` when the filesystem does not report one.
+    For a finished log this is when something last *changed* it, and an operator invalidating samples in it is the only thing that does — which makes it the one record of when they acted. `None` when the filesystem does not report one.
     """
 
     headline: float | None = None
@@ -152,7 +152,7 @@ class UnreadableLog:
     reason: str
 
     what: str = "a log"
-    """What the file was being read as, for the item's sentence. The only reason this is a field is that the sentence is read by a person deciding whether to acknowledge it, and *could not be read as a log* over a `.parquet` sends them to look for the wrong thing."""
+    """What the file was being read as, for the item's sentence. The only reason this is a field is that the sentence is read by an operator deciding whether to acknowledge it, and *could not be read as a log* over a `.parquet` sends them to look for the wrong thing."""
 
 
 @dataclass(frozen=True)

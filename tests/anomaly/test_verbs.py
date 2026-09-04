@@ -112,7 +112,7 @@ class TestRule:
     def test_by_defaults_to_the_person_the_repository_names(
         self, workspace: Workspace, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        # an agent relaying the person whose shell this is should not have to
+        # an agent relaying the operator whose shell this is should not have to
         # ask their name -- the repository already carries it
         git = shutil.which("git")
         if git is None:
@@ -133,7 +133,7 @@ class TestRule:
         assert code == 0, output
         assert rulings(workspace)[0]["by"] == "Kaia Example"
         # and the terminal says so too. It used to echo the raw `--by`, which
-        # is `None` on exactly this path, so the one confirmation a person
+        # is `None` on exactly this path, so the one confirmation an operator
         # reads disagreed with the record it was confirming
         assert "(by Kaia Example)" in output
 
@@ -695,9 +695,9 @@ def test_a_ruling_on_a_freshly_detected_class_survives_the_next_tend(
 
 
 class TestWhatAnAgentMayDecideAlone:
-    """`dismiss` is the agent's; everything that marks the data is a person's.
+    """`dismiss` is the agent's; everything that marks the data is an operator's.
 
-    Every scanner false positive used to cost a human decision, however
+    Every scanner false positive used to cost an operator decision, however
     conclusively the agent disproved it — so a run could not reach *nothing
     left to adjudicate* by construction, and the findings that mattered sat in
     a queue beside the ones that did not. `dismiss` is the one disposition that
@@ -742,7 +742,7 @@ class TestWhatAnAgentMayDecideAlone:
         )
 
         assert code != 0
-        assert "a person's decision" in output
+        assert "an operator's decision" in output
         assert rulings(workspace) == []
 
     def test_nor_a_rerun_it_decided_on_its_own(self, workspace: Workspace) -> None:
@@ -753,7 +753,7 @@ class TestWhatAnAgentMayDecideAlone:
         )
 
         assert code != 0
-        assert "a person's decision" in output
+        assert "an operator's decision" in output
         assert rulings(workspace) == []
 
     def test_a_person_may_still_dismiss(self, workspace: Workspace) -> None:

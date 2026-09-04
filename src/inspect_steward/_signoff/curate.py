@@ -23,7 +23,7 @@ class Superseded:
     location: str
     identifier: str
     key: str
-    """The task's display key, for a message a person reads."""
+    """The task's display key, for a message an operator reads."""
 
 
 @dataclass(frozen=True)
@@ -69,7 +69,7 @@ def _leaving(task: TaskObservation) -> list[LogAttempt]:
 def curate(superseded: list[Superseded], log_dir: str) -> Curated:
     """Move each superseded attempt into the archive.
 
-    **A move that fails is reported and does not fail the signature.** The signature is the person's act; a filesystem that would not cooperate must not unmake a decision they already made, and a log that could not be archived is still a log — the direction this design fails in everywhere. The next signoff tries again.
+    **A move that fails is reported and does not fail the signature.** The signature is the operator's act; a filesystem that would not cooperate must not unmake a decision they already made, and a log that could not be archived is still a log — the direction this design fails in everywhere. The next signoff tries again.
 
     Args:
         superseded: What `plan` selected.

@@ -119,7 +119,7 @@ def parse_override(field: str, value: str) -> Any:
 
     The same two steps every *Steward* spelling goes through — `yaml.safe_load` for what the text means, then the field's own validation for whether it is allowed — so `--epochs yes` is refused here rather than reaching a worker as `True`.
 
-    Deliberately not inspect's CLI syntax. `--limit 10-20` is inspect's spelling of a range and `--limit '[10, 20]'` is Steward's, and a flag on `steward launch` sits beside `--samples-ramp '[40, 200]'` rather than beside `inspect eval`. The value is the same either way; only the surface a person is typing at differs.
+    Deliberately not inspect's CLI syntax. `--limit 10-20` is inspect's spelling of a range and `--limit '[10, 20]'` is Steward's, and a flag on `steward launch` sits beside `--samples-ramp '[40, 200]'` rather than beside `inspect eval`. The value is the same either way; only the surface an operator is typing at differs.
 
     Args:
         field: The field's name, as `EvalSetOverrides` spells it.

@@ -35,6 +35,7 @@ from inspect_steward._tend import (
     TendResult,
     TuningPlan,
     Verdict,
+    collect_markdown,
     status,
     tend,
 )
@@ -181,10 +182,10 @@ def test_a_worker_that_lands_no_log_is_tried_twice_and_then_left(
     assert third.reaped == second.spawned
     assert manifest.tasks[0].identifier == probe.identifier
 
-    # and each departure is in the history, which is the only place a reader
+    # and each departure is in the history, which is the only place an agent
     # arriving in the morning can learn that a task died twice in the night —
-    # by then the snapshot shows one stalled task and no sign of how it got there
-    written = workspace.status.read_text(encoding="utf-8")
+    # by then the page shows one stalled task and no sign of how it got there
+    written = collect_markdown(third)
     assert written.count("with probe") == 2
     # the promise of a retry is made only by the turn that made one: the second
     # departure is the one the guard gives up on, and telling a reader it is
@@ -288,9 +289,9 @@ def test_the_status_a_turn_writes_reports_what_that_turn_did(tmp_path: Path) -> 
     """A summary must not contradict its own side effects.
 
     *What happened* is projected from a journal read taken before the actions
-    run, so a turn that archives something wrote `status.md` saying nothing had
-    ever been done to the run — and the entry surfaced only when some later
-    turn happened to read the file again.
+    run, so a turn that archives something reported that nothing had ever been
+    done to the run — and the entry surfaced only when some later turn happened
+    to read the journal again.
     """
     removed = SynthTask("removed")
     kept = SynthTask("kept")
@@ -298,9 +299,7 @@ def test_the_status_a_turn_writes_reports_what_that_turn_did(tmp_path: Path) -> 
     write_log(workspace.logs, kept)
     write_log(workspace.logs, removed)
 
-    turn(workspace)
-
-    written = workspace.status.read_text(encoding="utf-8")
+    written = collect_markdown(turn(workspace))
     assert "archived a log — orphaned" in written
     assert "Nothing has been done to this run yet" not in written
 
@@ -385,7 +384,8 @@ def test_drift_is_reported_and_never_applied(tmp_path: Path) -> None:
     drifted = turn(workspace)
 
     assert drifted.drift is True
-    assert "steward launch" in workspace.status.read_text(encoding="utf-8")
+    assert "steward launch" in collect_markdown(drifted)
+    assert "### operator" in workspace.status.read_text(encoding="utf-8")
     # reported, never acted on: the manifest is still the one that was committed
     assert drifted.summary.states["complete"] == 1
     assert drifted.spawned == []
@@ -736,11 +736,11 @@ def test_status_md_says_how_old_it_is_and_what_needs_a_person(
     turn(workspace)
     rendered = workspace.status.read_text(encoding="utf-8")
 
-    # the age is a fact about the file rather than part of the snapshot: a
-    # remote reader detects a stopped timer by noticing this stopped changing
-    assert "**As of** `20" in rendered
+    # the age is on the first line: a remote reader detects a stopped timer by
+    # noticing it stopped changing
+    assert "tended just now" in rendered
     assert "stopped making progress" in rendered
-    assert "| complete | 1 |" in rendered
+    assert "| `done` |" in rendered and "100%" in rendered
 
 
 def test_a_finished_run_asks_to_be_accepted_rather_than_reading_as_all_clear(
@@ -771,7 +771,9 @@ def test_status_md_is_quiet_when_there_is_nothing_to_say(tmp_path: Path) -> None
 
     turn(workspace)
 
-    assert "Nothing needs attention." in workspace.status.read_text(encoding="utf-8")
+    rendered = workspace.status.read_text(encoding="utf-8")
+    assert "nothing needs you" in rendered
+    assert "### operator" not in rendered
 
 
 # --- pausing ------------------------------------------------------------
@@ -782,7 +784,7 @@ def test_status_md_is_quiet_when_there_is_nothing_to_say(tmp_path: Path) -> None
 
 
 def paused(workspace: Workspace, reason: str = "hold everything") -> None:
-    append_event(workspace.journal, PAUSED, by="human", reason=reason)
+    append_event(workspace.journal, PAUSED, by="operator", reason=reason)
 
 
 def test_a_paused_run_schedules_nothing(tmp_path: Path) -> None:
@@ -1072,7 +1074,7 @@ def test_a_fresh_sync_failure_is_an_episode_but_not_yet_an_item(
     tmp_path: Path,
 ) -> None:
     # the propagation already retries every turn, so the episode worth a
-    # person's attention is the one that outlives a retry -- a single slow
+    # operator's attention is the one that outlives a retry -- a single slow
     # bucket write pages nobody
     done = SynthTask("done")
     workspace, _ = prepared(tmp_path, [done])
@@ -1114,7 +1116,7 @@ def test_a_sync_episode_that_outlives_an_interval_is_an_item_until_it_recovers(
     failing = turn(workspace)
 
     (item,) = of_kind(failing, "sync_failed")
-    assert item.owner is Owner.HUMAN
+    assert item.owner is Owner.OPERATOR
     assert healthy.log_dir in item.summary
     # that same turn synced successfully, which closes the episode
     recovered = turn(workspace)
@@ -1184,7 +1186,7 @@ def test_one_wedge_break_is_recovery_and_two_in_a_row_are_a_kill_loop(
     second = broke_a_wedge(workspace)
 
     (item,) = of_kind(second, "kill_loop")
-    assert item.owner is Owner.HUMAN
+    assert item.owner is Owner.OPERATOR
     assert "2 in a row" in item.summary
 
 
@@ -1296,7 +1298,7 @@ def test_a_retune_that_was_not_filed_is_logged_as_well_as_reported(
     )
 
 
-def test_status_md_gains_an_errored_column_only_where_something_errored(
+def test_the_agent_page_gains_an_errored_column_only_where_something_errored(
     tmp_path: Path,
 ) -> None:
     flaky, clean = SynthTask("flaky"), SynthTask("clean")
@@ -1304,15 +1306,13 @@ def test_status_md_gains_an_errored_column_only_where_something_errored(
     write_log(workspace.logs, flaky, total=10, completed=7)
     write_log(workspace.logs, clean, total=10, completed=10)
 
-    turn(workspace)
-
-    written = workspace.status.read_text(encoding="utf-8")
+    written = collect_markdown(turn(workspace))
     assert "| errored |" in written
     assert "| 3 |" in written
+    # the operator's page has no such column
+    assert "| errored |" not in workspace.status.read_text(encoding="utf-8")
 
     quiet, _ = prepared(tmp_path / "quiet", [clean])
     write_log(quiet.logs, clean, total=10, completed=10)
 
-    turn(quiet)
-
-    assert "| errored |" not in quiet.status.read_text(encoding="utf-8")
+    assert "| errored |" not in collect_markdown(turn(quiet))

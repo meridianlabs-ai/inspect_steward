@@ -193,7 +193,7 @@ class TestScoreAndKind:
     def test_sanitizing_a_segment_does_not_merge_two_of_them(self) -> None:
         # `unsafe output` and `unsafe-output` are two labels a scanner can
         # plausibly emit, and one ruling settling both would close findings
-        # the person who ruled never saw
+        # the operator who ruled never saw
         spaced = scan_class("integrity", "unsafe output")
         hyphenated = scan_class("integrity", "unsafe-output")
 

@@ -24,6 +24,7 @@ from inspect_steward._tend import (
     Level,
     Owner,
     Verdict,
+    collect_markdown,
     status,
     verdict,
     verdict_line,
@@ -78,7 +79,7 @@ def items(workspace: Workspace) -> dict[str, Item]:
     return {item.kind: item for item in turn(workspace).items}
 
 
-def ack(workspace: Workspace, item: Item | str, *, by: str = "human") -> None:
+def ack(workspace: Workspace, item: Item | str, *, by: str = "operator") -> None:
     """Dispose of an item, as `steward ack` does — kind and subject included.
 
     The verb records both off the item it matched, and both are load-bearing
@@ -142,7 +143,7 @@ def test_a_definition_edited_after_capture_is_the_human_s(tmp_path: Path) -> Non
 
     item = items(workspace)[DRIFT]
 
-    assert item.owner is Owner.HUMAN
+    assert item.owner is Owner.OPERATOR
     assert item.level is Level.ATTENTION
     assert item.action == "steward launch"
     assert item.acknowledgeable
@@ -159,7 +160,7 @@ def test_a_file_that_is_not_a_log_is_the_agent_s(tmp_path: Path) -> None:
 
     assert item.owner is Owner.AGENT
     assert item.id == "unreadable:broken.eval"
-    # the location is an absolute URI; the line a person reads is not
+    # the location is an absolute URI; the line an operator reads is not
     assert item.subject.endswith("broken.eval") and item.subject != item.id
 
 
@@ -195,7 +196,7 @@ def test_an_action_that_could_not_be_carried_out_is_the_agent_s(
     # and it is the one kind nothing can dispose of: a single-turn fact, where
     # acknowledging would silence a recurrence rather than an item
     assert not item.acknowledgeable
-    assert "_transient_" in workspace.status.read_text(encoding="utf-8")
+    assert "_transient_" in collect_markdown(turn(workspace))
 
 
 def test_a_blocked_item_does_not_by_itself_stop_a_working_run() -> None:
@@ -208,7 +209,7 @@ def test_a_blocked_item_does_not_by_itself_stop_a_working_run() -> None:
     blocked = Item(
         id="parked:1",
         kind=PARKED,
-        owner=Owner.HUMAN,
+        owner=Owner.OPERATOR,
         level=Level.BLOCKING,
         subject="1",
         summary="waiting on an approval",
@@ -220,7 +221,7 @@ def test_a_blocked_item_does_not_by_itself_stop_a_working_run() -> None:
     )
 
 
-# --- a worker waiting on a person ---------------------------------------
+# --- a worker waiting on an operator ---------------------------------------
 #
 # The one condition in this file that cannot be synthesized in the workspace: a
 # park lives on a running worker's socket, and there is no directory to put one
@@ -238,7 +239,7 @@ def parked_run(
     *,
     in_flight: int = 1,
 ) -> Workspace:
-    """A run whose one worker is waiting on a person.
+    """A run whose one worker is waiting on an operator.
 
     The log is written so the task is settled and the turn spawns nothing; the
     fleet then reports it as running, which is what a resumed worker looks like
@@ -267,10 +268,10 @@ def parked_run(
 def test_a_parked_worker_is_the_human_s_and_nobody_else_may_answer(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """Blocking, human-owned, and unacknowledgeable — each for its own reason.
+    """Blocking, operator-owned, and unacknowledgeable — each for its own reason.
 
     Answering an approval is authority over what the eval measures, so it is
-    the one kind policy may not re-route. And it is the one human-owned kind
+    the one kind policy may not re-route. And it is the one operator-owned kind
     that cannot be acked: only answering clears it, so an acknowledgment would
     silence a worker still holding its slot.
     """
@@ -279,14 +280,14 @@ def test_a_parked_worker_is_the_human_s_and_nobody_else_may_answer(
     )
     item = items(workspace)[PARKED]
 
-    assert item.owner is Owner.HUMAN
+    assert item.owner is Owner.OPERATOR
     assert item.level is Level.BLOCKING
     assert not item.acknowledgeable
     # ...but its id is still on screen, because `steward raise` takes it. The
     # two questions came apart here for the first time
     assert item.addressable
     assert item.id.startswith("parked:probe:")
-    # and the whole line reaches the document a person reads
+    # and the whole line reaches the document an operator reads
     assert item.summary in workspace.status.read_text(encoding="utf-8")
 
 
@@ -315,7 +316,7 @@ PARKS: list[tuple[str, LiveParked, str]] = [
     (
         "several",
         LiveParked(approvals=2, questions=1, functions=("bash", "python")),
-        "3 samples waiting on a person: 2 approvals (bash, python) and 1 question",
+        "3 samples waiting on an operator: 2 approvals (bash, python) and 1 question",
     ),
 ]
 
@@ -398,7 +399,7 @@ def test_a_park_sorts_above_the_other_decisions_a_person_owes(
     (workspace.root / DEFINITION).write_bytes(b"# edited\n")
 
     given = turn(workspace).items
-    human = [item.kind for item in given if item.owner is Owner.HUMAN]
+    human = [item.kind for item in given if item.owner is Owner.OPERATOR]
 
     assert human[0] == PARKED
     assert DRIFT in human
@@ -459,11 +460,11 @@ def test_a_stuck_sample_carries_the_ladder_s_first_rung(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     # nothing pre-authorized: the condition is reported, the command is ready,
-    # and running it is a person's act
+    # and running it is an operator's act
     workspace = stuck_run(tmp_path, monkeypatch, wedged())
     item = items(workspace)[STUCK_SAMPLE]
 
-    assert item.owner is Owner.HUMAN
+    assert item.owner is Owner.OPERATOR
     assert item.level is Level.ATTENTION
     assert item.acknowledgeable
     assert item.id.startswith("stuck:probe:")
@@ -478,8 +479,8 @@ def test_a_stuck_sample_carries_the_ladder_s_first_rung(
     [
         pytest.param("stuck_cancel: [bash]\n", "bash", Owner.AGENT, id="named"),
         pytest.param("stuck_cancel: true\n", "bash", Owner.AGENT, id="any"),
-        pytest.param("stuck_cancel: [bash]\n", "python", Owner.HUMAN, id="unnamed"),
-        pytest.param("", "bash", Owner.HUMAN, id="ungranted"),
+        pytest.param("stuck_cancel: [bash]\n", "python", Owner.OPERATOR, id="unnamed"),
+        pytest.param("", "bash", Owner.OPERATOR, id="ungranted"),
     ],
 )
 def test_the_grant_decides_who_holds_rung_one(
@@ -514,7 +515,7 @@ def test_an_unheeded_cancel_is_a_new_item_and_a_person_s(
 
     assert quiet.id != asked.id
     assert asked.id.endswith(":asked")
-    assert asked.owner is Owner.HUMAN
+    assert asked.owner is Owner.OPERATOR
     assert "a cancel was asked and it did not stop" in asked.summary
     assert asked.action == "inspect ctl sample cancel T1 s1 1"
 
@@ -814,10 +815,10 @@ def test_acknowledging_removes_an_item_from_the_turn_entirely(
     # in what happened with who decided and why. A disposal that erased itself
     # would take *somebody dealt with this at 2am* with it, which is exactly
     # what a reader arriving at six has no other way to learn
-    rendered = workspace.status.read_text()
+    rendered = collect_markdown(result)
     decisions, _, history = rendered.partition("## what happened")
     assert "broken.eval" not in decisions
-    assert "accepted by human" in history and "broken.eval" in history
+    assert "accepted by operator" in history and "broken.eval" in history
 
 
 def test_a_second_edit_is_heard_again(tmp_path: Path) -> None:
@@ -941,7 +942,7 @@ def test_the_verdict_describes_the_run_rather_than_its_worst_item(
         Item(
             id=f"k:{n}",
             kind="k",
-            owner=Owner.HUMAN,
+            owner=Owner.OPERATOR,
             level=level,
             subject="",
             summary="",
@@ -968,7 +969,7 @@ def test_the_verdict_line_says_who_is_holding_it(tmp_path: Path) -> None:
     mine = Item(
         id="a",
         kind="k",
-        owner=Owner.HUMAN,
+        owner=Owner.OPERATOR,
         level=Level.ATTENTION,
         subject="",
         summary="",
@@ -983,10 +984,10 @@ def test_the_verdict_line_says_who_is_holding_it(tmp_path: Path) -> None:
     )
 
     assert verdict_line(Verdict.CLEAR, []) == "✅ nothing needs you"
-    assert verdict_line(Verdict.ATTENTION, [mine]) == "⚠️ 1 needs a person"
+    assert verdict_line(Verdict.ATTENTION, [mine]) == "⚠️ 1 needs an operator"
     assert (
         verdict_line(Verdict.ATTENTION, [mine, theirs])
-        == "⚠️ 1 needs a person, 1 for the agent"
+        == "⚠️ 1 needs an operator, 1 for the agent"
     )
     assert verdict_line(Verdict.PAUSED, [mine]).startswith("⏸ paused")
     assert "nothing is progressing" in verdict_line(Verdict.STOPPED, [mine])
@@ -1128,7 +1129,7 @@ def test_a_timer_that_was_armed_and_is_gone_is_reported(tmp_path: Path) -> None:
 
     item = items(workspace)[UNSUPERVISED]
 
-    assert item.owner is Owner.HUMAN
+    assert item.owner is Owner.OPERATOR
     assert item.action == "steward timer arm"
     assert item.acknowledgeable
     # acknowledging says *I am driving this by hand*, which stays true -- so no
@@ -1166,7 +1167,7 @@ def test_a_recovery_tend_does_not_report_the_silence_it_just_ended(
 
     The gap is measured against the previous turn, so a tend that has just
     converged the run would otherwise announce the very silence it broke — and
-    the reader who needs telling that supervision stopped is the person typing
+    the reader who needs telling that supervision stopped is the operator typing
     `status`, not the timer that is evidently working.
     """
     workspace = unfinished(tmp_path)

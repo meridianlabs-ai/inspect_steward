@@ -136,7 +136,7 @@ def test_a_live_proposal_is_one_consolidated_human_item(tmp_path: Path) -> None:
 
     assert len(items) == 1
     item = items[0]
-    assert item.owner is Owner.HUMAN
+    assert item.owner is Owner.OPERATOR
     assert item.id == "anomaly:prop:prop-abcd1234"
     assert item.action == "steward rule --proposal prop-abcd1234"
     # the covered class is suppressed under it, so the class key appears in
@@ -149,7 +149,7 @@ def test_a_proposed_population_crossing_a_magnitude_changes_the_item(
 ) -> None:
     # the consolidated item carries the weight bucket like a window item does,
     # so growth past 10/100/1000 re-arms the appeared-diff while the question
-    # is already in front of a person
+    # is already in front of an operator
     workspace = erroring(tmp_path, errors=12, samples=20)
     turn(workspace)
     fields: dict[str, Any] = {
@@ -194,7 +194,7 @@ def test_a_failed_rerun_is_one_human_review_item(tmp_path: Path) -> None:
 
     assert len(items) == 1
     item = items[0]
-    assert item.owner is Owner.HUMAN
+    assert item.owner is Owner.OPERATOR
     assert item.level is Level.ATTENTION
     assert item.id.endswith(":failed1")
     assert "did not hold" in item.summary
@@ -216,7 +216,7 @@ def test_signoff_holds_while_a_window_is_open_and_returns_on_a_ruling(
 
 
 def test_an_accepting_ruling_keeps_its_effect_on_the_record(tmp_path: Path) -> None:
-    from inspect_steward._tend import status_markdown
+    from inspect_steward._tend import collect_markdown, status_markdown
 
     workspace = erroring(tmp_path)
     turn(workspace)
@@ -228,13 +228,17 @@ def test_an_accepting_ruling_keeps_its_effect_on_the_record(tmp_path: Path) -> N
     assert len(accepted) == 1
     assert accepted[0].effect == "2 samples excluded from scoring"
     assert [item for item in result.items if item.kind == ANOMALY] == []
-    # the mark survives into the human-facing report, not just the fold: the
+    # the mark survives into the agent's page, not just the fold: the
     # anomalies block carries the effect sentence, and the history carries
     # the ruling that put it there
-    document = status_markdown(result)
+    document = collect_markdown(result)
     assert "### anomalies" in document
     assert "2 samples excluded from scoring" in document
     assert "exclude by kaia" in document
+    # and the operator's page carries the same samples as a count, under `nan`
+    page = status_markdown(result)
+    assert "### anomalies" in page
+    assert "| nan |" in page
 
 
 def test_an_operator_limit_window_waits_for_adjudication(tmp_path: Path) -> None:
@@ -259,9 +263,11 @@ def test_an_operator_limit_window_waits_for_adjudication(tmp_path: Path) -> None
     kinds = {item.kind for item in result.items}
     assert ANOMALY not in kinds
     assert SIGNOFF_READY in kinds
-    from inspect_steward._tend import status_markdown
+    from inspect_steward._tend import collect_markdown, status_markdown
 
-    assert "limit:operator" in status_markdown(result)
+    assert "limit:operator" in collect_markdown(result)
+    # the operator's page has it as a terminated sample, not a class
+    assert "| term |" in status_markdown(result)
 
 
 def test_a_task_window_does_not_escalate_to_an_unattended_channel(
@@ -273,7 +279,7 @@ def test_a_task_window_does_not_escalate_to_an_unattended_channel(
     done, waiting = SynthTask("done"), SynthTask("waiting")
     workspace, _ = prepared(tmp_path, [done, waiting])
     write_log(workspace.logs, done)
-    append_event(workspace.journal, PAUSED, by="human", reason="hold")
+    append_event(workspace.journal, PAUSED, by="operator", reason="hold")
     window: dict[str, Any] = {"class": "task:no-log", "kind": "task"}
     append_event(workspace.journal, OPENED, **window)
     batch: dict[str, Any] = {
@@ -301,20 +307,21 @@ def test_an_error_window_does_escalate_when_nobody_collects(tmp_path: Path) -> N
     assert any(CLASS in line for line in post.lines)
 
 
-def test_the_status_document_carries_the_anomalies_block(tmp_path: Path) -> None:
-    from inspect_steward._tend import status_markdown
+def test_the_agent_page_carries_the_anomalies_block(tmp_path: Path) -> None:
+    from inspect_steward._tend import collect_markdown, status_markdown
 
     workspace = erroring(tmp_path)
     turn(workspace)
 
-    document = status_markdown(status(workspace))
+    document = collect_markdown(status(workspace))
 
     assert "### anomalies" in document
     assert "anomalies: 1 open" in document
     assert CLASS in document
-    # and a clean run carries no empty heading
+    # and a clean run carries no empty heading, on either page
     clean, _ = prepared(tmp_path / "clean", [SynthTask("fine")])
     write_log(clean.logs, SynthTask("fine"))
+    assert "### anomalies" not in collect_markdown(status(clean))
     assert "### anomalies" not in status_markdown(status(clean))
 
 

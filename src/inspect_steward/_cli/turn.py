@@ -15,19 +15,21 @@ from .._evalset.observe import TaskState
 from .._schedule import Blocked, ManifestVersionError, Summary
 from .._tend import (
     HEADINGS,
-    LIVE_ONLY,
+    Owner,
     Refused,
     TendError,
     TendResult,
     anomalies_line,
     by_owner,
     progress_table,
-    verdict_line,
+    status_headline,
 )
-from .._workspace import DirectivesError, Held, Workspace, person_name
+from .._tend.anomalies_md import OUTCOMES_HEADER, outcomes_cells
+from .._tend.table import RESOURCES_HEADER, plain_table, resources_cells
+from .._workspace import DirectivesError, Held, Workspace, operator_name
 
 TURN_ERRORS = (TendError, ManifestError, ManifestVersionError, DirectivesError)
-"""Everything a turn raises that is a message for a person rather than a traceback."""
+"""Everything a turn raises that is a message for an operator rather than a traceback."""
 
 
 def find_workspace() -> Workspace:
@@ -45,16 +47,16 @@ def find_workspace() -> Workspace:
 
 
 def decided_by(workspace: Workspace, by: str | None) -> str:
-    """The person a decision is recorded against.
+    """The operator a decision is recorded against.
 
-    `--by` when given, passed through untouched so the verb's own refusal of a blank name still fires; otherwise the workspace's git `user.name`, or the login name. The default exists so that an agent relaying the person whose shell this is need not ask them their name — and it is refused rather than guessed when neither source answers, because a decision recorded against nobody is worse than one that asked.
+    `--by` when given, passed through untouched so the verb's own refusal of a blank name still fires; otherwise the workspace's git `user.name`, or the login name. The default exists so that an agent relaying the operator whose shell this is need not ask them their name — and it is refused rather than guessed when neither source answers, because a decision recorded against nobody is worse than one that asked.
 
     Raises:
         click.ClickException: If `--by` was omitted and no name can be resolved.
     """
     if by is not None:
         return by
-    name = person_name(workspace.root)
+    name = operator_name(workspace.root)
     if not name:
         raise click.ClickException(
             "could not work out who is deciding — pass --by NAME"
@@ -80,12 +82,14 @@ def echo_refused(refused: Refused) -> None:
 def echo_turn(result: TendResult, *, table: bool = True) -> None:
     """Print a turn: where the run stands, then what it did or would do."""
     summary = result.summary
-    click.echo(verdict_line(result.verdict, result.items))
+    # the operator's shape, in step with `status.md` (render.py): this is what
+    # an operator at the terminal reads, and the agent reads `collect`
+    click.echo(status_headline(result))
 
-    # decisions before the run, because surfacing what a person has to decide is
+    # decisions before the run, because surfacing what an operator has to decide is
     # what this output is mainly for and everything else is context for it. It
     # used to come last, under the task table, and the M2 gate showed the cost:
-    # the verdict said something needed a person and finding out what meant
+    # the verdict said something needed an operator and finding out what meant
     # scrolling past every task that did not (agent.md §4.1)
     for line in _attention(result):
         click.echo(line)
@@ -114,10 +118,8 @@ def echo_turn(result: TendResult, *, table: bool = True) -> None:
             (summary.archiving, "to archive"),
         )
         click.echo(f"{summary.running} running · next tend: {would or 'nothing to do'}")
-    # one source with the markdown's own line (`render.anomalies_line`), so the
-    # two renderings cannot disagree about what the queue holds
-    if (anomalies := anomalies_line(result.anomalies)) is not None:
-        click.echo(anomalies)
+    for line in _anomalies(result):
+        click.echo(line)
 
     if summary.queued:
         # a paused run queues everything, and saying it waits on a slot would
@@ -152,7 +154,7 @@ def echo_turn(result: TendResult, *, table: bool = True) -> None:
         click.echo(f"standing rules: {rule}" if index == 0 else f"  {rule}")
 
     # one source with the markdown's own line (`render._notification`), so the
-    # two renderings cannot disagree about whether anything reaches a person
+    # two renderings cannot disagree about whether anything reaches an operator
     if result.notification is not None:
         click.echo(f"notifications: {result.notification.description}")
 
@@ -160,13 +162,33 @@ def echo_turn(result: TendResult, *, table: bool = True) -> None:
         click.echo(line)
 
 
+def _anomalies(result: TendResult) -> list[str]:
+    """Where the anomaly queue stands, then by task the samples that did not take the normal course.
+
+    The line is `render.anomalies_line`, one source with the agent's page; the table is the one `status.md` carries, drawn without pipes. Under one label, since a reader who sees *anomalies: 5 open* and a table both named anomalies has been told one thing twice.
+    """
+    line = anomalies_line(result.anomalies)
+    cells = outcomes_cells(
+        result.dispositions.outcomes, result.progress, width=_key_width()
+    )
+    if line is None and not cells:
+        return []
+    lines = [line or "anomalies:"]
+    if cells:
+        lines += plain_table(OUTCOMES_HEADER, cells, indent="  ")
+    return lines
+
+
 def _live(result: TendResult) -> list[str]:
     """What the running processes cost, or — before any are running — what starting them would.
 
-    One or the other, in step with the markdown's own block: while something runs the measured figures are the answer, and before anything does the capture's ceiling is (agent.md §4.2). The caveat travels with the figures because every one of them shrinks as a run completes, and a falling refusal count otherwise reads as a problem fixing itself.
+    One or the other, in step with the markdown's own block: while something runs the per-task table is the answer, and before anything does the capture's ceiling is (agent.md §4.2). The caveat travels with the figures because every one of them shrinks as a run completes, and a falling refusal count otherwise reads as a problem fixing itself.
     """
-    if (live := result.progress.live) is not None:
-        return [f"running now: {live.figures}", f"  {LIVE_ONLY}"]
+    if result.progress.live is not None:
+        cells = resources_cells(result.progress, width=_key_width())
+        if not cells:
+            return []
+        return ["resources:", *plain_table(RESOURCES_HEADER, cells, indent="  ")]
 
     # what the run's width can cost to start, from the capture that read the
     # definition. A ceiling rather than an estimate, since capture builds every
@@ -205,21 +227,16 @@ def _counts(*pairs: tuple[int, str]) -> str:
 
 
 def _attention(result: TendResult) -> list[str]:
-    """What somebody has to decide, grouped by who resolves it.
+    """What is waiting on the operator, one summary per line.
 
-    Each line carries the id `steward ack` takes. A raised item is *marked* rather than dropped: it is still open and a person still owes an answer, and only the agent's own projection acts on the fact that the agent's part is done (agent.md §2.2).
+    Their items alone and the summary alone, as `status.md` has them: the agent's queue is a count in the headline, and the ids are on the agent's page (`steward collect`), which is where the verbs that take them are run from. A raised item is still shown — it is still open and an operator still owes an answer; what raising records is that the agent's part is done (agent.md §2.2).
     """
     lines: list[str] = []
     for owner, group in by_owner(result.items):
+        if owner is not Owner.OPERATOR:
+            continue
         lines.append(f"{HEADINGS[owner]}:")
-        for item in group:
-            lines.append(f"  ! {item.summary}")
-            trailer = item.id if item.addressable else "(transient)"
-            if item.action is not None:
-                trailer = f"{trailer} · {item.action}"
-            if item.raised:
-                trailer = f"{trailer} · raised"
-            lines.append(f"    {trailer}")
+        lines.extend(f"  ! {item.summary}" for item in group)
     return lines
 
 
@@ -242,7 +259,7 @@ def _claim_line(claim: Held) -> str:
 
 
 def turn_json(result: TendResult) -> str:
-    """A turn as JSON, for an agent rather than a person."""
+    """A turn as JSON, for an agent rather than an operator."""
     return json.dumps(dataclasses.asdict(result), indent=2, default=str)
 
 

@@ -2,7 +2,7 @@
 
 The scanner's whole question is whether a recorded score can be trusted. Shown
 only the number, the best it can do is say the number looks inconsistent with
-the trajectory and recommend that a person go and read the grader logs — a
+the trajectory and recommend that an operator go and read the grader logs — a
 finding nobody can act on, raised against evidence sitting on the same sample.
 
 Observed on a SWE-bench-style set: five samples flagged, every explanation

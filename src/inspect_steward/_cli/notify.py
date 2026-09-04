@@ -1,8 +1,8 @@
 """`steward notify` — the agent saying something no trigger could have said.
 
-Steward's own posts are arithmetic: an item appeared, a task finished, the queue emptied. They are worth having and they are the smaller half. The valuable half is an agent that has read forty logs at 2am, found the thing none of those triggers describes, and can put one sentence in front of a person (workflow.md §11.1). That is what this verb is.
+Steward's own posts are arithmetic: an item appeared, a task finished, the queue emptied. They are worth having and they are the smaller half. The valuable half is an agent that has read forty logs at 2am, found the thing none of those triggers describes, and can put one sentence in front of an operator (workflow.md §11.1). That is what this verb is.
 
-**Two kinds, and the other four are refused rather than merely undocumented.** `attention` and `stopped` carry judgement, which is what makes them the agent's to send. A hand-sent `gate` is a claim about the run that nobody computed; a hand-sent `signed_off` is a claim that a human adjudicated, which is the entire content of signoff. Both are the kind of thing that reads as authoritative in a channel precisely because it is usually true.
+**Two kinds, and the other four are refused rather than merely undocumented.** `attention` and `stopped` carry judgement, which is what makes them the agent's to send. A hand-sent `gate` is a claim about the run that nobody computed; a hand-sent `signed_off` is a claim that an operator adjudicated, which is the entire content of signoff. Both are the kind of thing that reads as authoritative in a channel precisely because it is usually true.
 
 **It takes no claim and writes no journal entry.** Sending a message changes nothing about the run, and the case that matters most is an agent posting while a tend is in flight. What it says is in the collection the agent already made and in whatever it does next.
 """
@@ -34,7 +34,7 @@ KINDS = sorted(kind.value for kind in AGENT_KINDS)
     show_default=True,
     help=(
         "Why you are sending this. `attention` is worth knowing and work "
-        "continues; `stopped` means nothing progresses until a person answers."
+        "continues; `stopped` means nothing progresses until an operator answers."
     ),
 )
 @click.option(

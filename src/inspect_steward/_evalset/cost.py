@@ -113,7 +113,7 @@ def fleet_width(tasks: int, *, max_workers: int | None, max_tasks: int | None) -
 
 
 def projection(peak_rss: int | None, width: int) -> str | None:
-    """What a run of this width can cost to start, as a line for a person.
+    """What a run of this width can cost to start, as a line for an operator.
 
     `None` when nothing was measured, which is the state every manifest written before this existed is in — and the state a reader should see nothing about rather than a zero.
 

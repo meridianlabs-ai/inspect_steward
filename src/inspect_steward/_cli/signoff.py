@@ -1,8 +1,8 @@
 """`steward signoff` — the one command whose *decision* is never the agent's.
 
-Running it can be. An agent that notices a run is ready and tells the person is doing its job, and carrying out their answer is the same act as `steward rule --by` relaying a ruling: what goes in `--by` is the name of whoever decided, so a signature stays traceable to a person whichever process typed it. What would make the record meaningless is not an agent at the keyboard but a signature nobody asked for.
+Running it can be. An agent that notices a run is ready and tells the operator is doing its job, and carrying out their answer is the same act as `steward rule --by` relaying a ruling: what goes in `--by` is the name of whoever decided, so a signature stays traceable to an operator whichever process typed it. What would make the record meaningless is not an agent at the keyboard but a signature nobody asked for.
 
-The refusal is the interesting half. It prints every blocker rather than the first, because a person who fixes one and meets another has walked exactly the loop the gate exists to collapse — the same discipline `launch`'s archive gate already keeps. And each blocker names the act that answers it, because what is being refused is never a hole: it is an *unnamed* hole, and the answer is to name it with a ruling rather than to make it go away.
+The refusal is the interesting half. It prints every blocker rather than the first, because an operator who fixes one and meets another has walked exactly the loop the gate exists to collapse — the same discipline `launch`'s archive gate already keeps. And each blocker names the act that answers it, because what is being refused is never a hole: it is an *unnamed* hole, and the answer is to name it with a ruling rather than to make it go away.
 """
 
 import json
@@ -72,7 +72,7 @@ def signoff_command(
 
     Runs a final turn, refuses with every blocker at once if anything is still unnamed, moves superseded attempts into `logs-archive/`, records who signed and what they signed over, and takes the timer down. It does not commit the journal — that stays yours.
 
-    A person decides this. An agent may prompt for it and may run it once they answer, recording their name, which is why the signer is recorded rather than the process. `--publish` is the same shape one step further out: exporting results into a shared store is the person's call too, so it is asked rather than configured.
+    An operator decides this. An agent may prompt for it and may run it once they answer, recording their name, which is why the signer is recorded rather than the process. `--publish` is the same shape one step further out: exporting results into a shared store is the operator's call too, so it is asked rather than configured.
     """
     workspace = find_workspace()
     decider = decided_by(workspace, by)
@@ -183,7 +183,7 @@ def _echo_signoff(result: Signoff, root: Path) -> None:
         return
     # **the last word, because it is the one thing signoff does not do.** The
     # journal is the record this attestation lives in, and committing it stays
-    # the human's job (workflow.md §18 q4); what the verb owes is that the
+    # the operator's job (workflow.md §18 q4); what the verb owes is that the
     # record is complete and quiescent by the time it says so.
     #
     # The workspace is named only when the reader is not standing in it — a
@@ -256,7 +256,7 @@ def _signoff_json(result: Signoff) -> str:
 def _findings_line(result: Signoff) -> str | None:
     """What the scanners raised over the run, and how much of it survived a look.
 
-    **A tally rather than a list, on purpose.** A dismissed finding is one nobody has to do anything about — that is what dismissing it decided — so naming each one at the moment of signing asks a person to re-read an investigation whose conclusion was *there is nothing here*. What they need is the shape: how much was raised, and how much of it stood up. The reasons are in the journal and the reading is in `analysis.md` for anyone who wants to go back through it.
+    **A tally rather than a list, on purpose.** A dismissed finding is one nobody has to do anything about — that is what dismissing it decided — so naming each one at the moment of signing asks an operator to re-read an investigation whose conclusion was *there is nothing here*. What they need is the shape: how much was raised, and how much of it stood up. The reasons are in the journal and the reading is in `analysis.md` for anyone who wants to go back through it.
 
     Returns:
         The line, or `None` where the scanners raised nothing at all — which needs no sentence.

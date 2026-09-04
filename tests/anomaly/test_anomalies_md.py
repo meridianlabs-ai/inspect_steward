@@ -17,7 +17,7 @@ from inspect_steward._anomaly.model import (
     composed_effect,
 )
 from inspect_steward._evalset.instances import Instance, InstanceBatch
-from inspect_steward._tend import status_markdown
+from inspect_steward._tend import collect_markdown, status_markdown
 from inspect_steward._tend.anomalies_md import (
     SAMPLES_NAMED,
     anomalies_markdown,
@@ -112,7 +112,7 @@ def rendered(
 def ack(kind: str, **fields: Any) -> Ack:
     return Ack(
         id=f"{kind}:probe",
-        by="human",
+        by="operator",
         reason="the sandbox host is gone for the night",
         ts="2026-08-31T03:00:00Z",
         kind=kind,
@@ -205,7 +205,7 @@ def test_two_generations_under_one_ruling_are_one_entry_and_two_are_two() -> Non
 
     A class-scoped ruling closes both generations at once — one decision, one
     reason, one entry. Two separate rulings are two decisions, and merging
-    those would file one person's reasoning under another's.
+    those would file one operator's reasoning under another's.
     """
     shared = Anomalies(settled=(window(), replace(window(), generation=2)))
     separate = Anomalies(
@@ -541,14 +541,14 @@ def test_the_by_task_table_is_aligned_in_the_source_and_shortens_its_keys() -> N
 
     # padded so that the markdown is a table before anything renders it, the
     # model every row shares named once beneath rather than on every row, and
-    # a task with nothing to show counted rather than listed
+    # a task with nothing to show given no row
     assert lines == [
-        "| task    | samples | zeroed | excluded | errored | scored early | terminated |",
-        "|---------|--------:|-------:|---------:|--------:|-------------:|-----------:|",
-        "| cybench |      50 |      2 |        · |       1 |            · |          · |",
-        "| swe     |     120 |      · |        3 |       · |            2 |          · |",
+        "| task    | zero | nan | error | early | term |",
+        "|---------|-----:|----:|------:|------:|-----:|",
+        "| cybench |    2 |   · |     1 |     · |    · |",
+        "| swe     |    · |   3 |     · |     2 |    · |",
         "",
-        "Every task runs `openai/gpt-5`. 1 other task: every sample took the normal course.",
+        "Every task runs `openai/gpt-5`.",
     ]
 
 
@@ -568,17 +568,17 @@ def test_a_tend_tabulates_what_did_not_take_the_normal_course(tmp_path: Path) ->
     result = turn(workspace)
 
     document = workspace.anomalies.read_text(encoding="utf-8")
-    assert cells(document, "probe") == ["probe", "10", "·", "·", "3", "·", "·"]
-    # and the snapshot says where the table is, from the same fold
-    pointer = "did not take the normal course: `anomalies.md`"
-    assert pointer in status_markdown(result)
-    assert pointer in workspace.status.read_text(encoding="utf-8")
+    row = ["probe", "·", "·", "3", "·", "·"]
+    assert cells(document, "probe") == row
+    # and the same row, from the same fold, on both of the operator's pages
+    assert cells(status_markdown(result), "probe") == row
+    assert cells(workspace.status.read_text(encoding="utf-8"), "probe") == row
 
     ruling(workspace, "exclude", effect="3 of 10 samples excluded from scoring")
     turn(workspace)
 
     document = workspace.anomalies.read_text(encoding="utf-8")
-    assert cells(document, "probe") == ["probe", "10", "·", "3", "·", "·", "·"]
+    assert cells(document, "probe") == ["probe", "·", "3", "·", "·", "·"]
 
 
 # --- through real turns ----------------------------------------------------
@@ -589,18 +589,15 @@ def test_a_tend_writes_the_caveats_beside_the_status(tmp_path: Path) -> None:
     turn(workspace)
     ruling(workspace, "exclude", effect="3 of 10 samples excluded from scoring")
 
-    turn(workspace)
+    result = turn(workspace)
 
     document = workspace.anomalies.read_text(encoding="utf-8")
     assert "Regenerated every turn; edits are lost" in document
     assert "3 of 10 samples excluded from scoring" in document
-    # the same denominator the status table's note carries, from one computation
+    # the same denominator the agent's table note carries, from one computation
     assert "Scores are over 7 of 10 samples (3 excluded)." in document
-    assert (
-        "Scores are over 7 of 10 samples (3 excluded)."
-        in workspace.status.read_text(encoding="utf-8")
-    )
-    # in the names a person reads, never the identifier's content hash
+    assert "Scores are over 7 of 10 samples (3 excluded)." in collect_markdown(result)
+    # in the names an operator reads, never the identifier's content hash
     assert "`probe[default]@mockllm/model`" in document
 
 
@@ -631,7 +628,7 @@ def test_an_acknowledged_stall_survives_into_the_file(tmp_path: Path) -> None:
         "kind": STALLED,
         "subject": "probe@mockllm/model",
         "summary": "has finished nothing new in 3 attempts",
-        "by": "human",
+        "by": "operator",
         "reason": "the host is gone; 8 of 10 is enough",
     }
     append_event(workspace.journal, ACKNOWLEDGED, **payload)

@@ -42,7 +42,7 @@ def test_creates_the_workspace(tmp_path: Path) -> None:
     assert workspace.agents.read_text().startswith("# AGENTS.md")
     assert workspace.directives.exists()
     # the definition is a placeholder, not a guess at what is being measured:
-    # comments only, carrying the one thing a person cannot infer
+    # comments only, carrying the one thing an operator cannot infer
     placeholder = workspace.definition("evalset").read_text()
     assert all(
         not line.strip() or line.startswith("#") for line in placeholder.splitlines()
@@ -95,7 +95,7 @@ def test_rerunning_changes_nothing(tmp_path: Path) -> None:
 
     assert set(outcomes(report).values()) == {Outcome.KEPT, Outcome.SKIPPED}
     assert not report.created_anything
-    # the human's own work, and the record, both survive untouched
+    # the operator's own work, and the record, both survive untouched
     assert workspace.directives.read_text() == "never spend over $200 without asking\n"
     assert len(workspace.journal.read_text().splitlines()) == 1
 

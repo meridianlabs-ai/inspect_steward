@@ -35,7 +35,7 @@ Retries then happen at two levels:
 
 Samples that failed the same way are grouped into a class, so a provider outage is one question instead of two hundred. A stalled task is classed the same way, on the exception in its log or on the worker's output if it died before writing one, so it arrives with its evidence attached.
 
-Classes appear under the anomalies heading in `steward status` and `status.md`, with instance counts, an example message, and any prior rulings. A class is raised once, and again only if it materially changes: the population crosses an order of magnitude, or a re-run fails.
+Classes appear under the anomalies heading in `steward collect`, with instance counts, an example message, and any prior rulings. A class is raised once, and again only if it materially changes: the population crosses an order of magnitude, or a re-run fails.
 
 Your agent works the queue from here. `steward investigate` marks a class as being worked, and `steward propose` bundles related classes into one question with the evidence attached.
 
@@ -65,7 +65,7 @@ preauthorized:
   'error:ReadTimeout@*': rerun
 ```
 
-When a new class matches a pattern, the tend records a ruling with `by: policy` naming the pattern and applies it in the same turn. Nothing is pre-authorized by default, and if a pre-authorized re-run fails, the pattern stops matching that class until a person has looked.
+When a new class matches a pattern, the tend records a ruling with `by: policy` naming the pattern and applies it in the same turn. Nothing is pre-authorized by default, and if a pre-authorized re-run fails, the pattern stops matching that class until an operator has looked.
 
 Anything more nuanced than a pattern goes in `policies:` as prose, which your agent applies when one is in session:
 

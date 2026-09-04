@@ -1,6 +1,6 @@
-"""What launching would change, and which half of it needs a person.
+"""What launching would change, and which half of it needs an operator.
 
-A launch captures a fresh manifest and commits it as desired state. The delta is what stands between those two acts, and it exists because of an asymmetry that is sharper than it first looks: **adding work is what the human just asked for, and removing work from `logs/` could equally be a typo.** A one-character change to a task arg produces a new identifier and reads identically to a deliberate removal, except that one of the two quietly buys a re-run of everything (workflow.md §2.3).
+A launch captures a fresh manifest and commits it as desired state. The delta is what stands between those two acts, and it exists because of an asymmetry that is sharper than it first looks: **adding work is what the operator just asked for, and removing work from `logs/` could equally be a typo.** A one-character change to a task arg produces a new identifier and reads identically to a deliberate removal, except that one of the two quietly buys a re-run of everything (workflow.md §2.3).
 
 **The gate is a refusal to commit, and it can only be that.** `reconcile` archives orphans with no acceptance parameter and should never grow one — once desired state says a task is not in the eval set, converging toward that is bookkeeping rather than a decision. So the moment `write_manifest` lands a manifest that orphans tasks, the 02:00 tend archives them with nobody present. The consent has to be taken *before* the commit or it cannot be taken at all.
 

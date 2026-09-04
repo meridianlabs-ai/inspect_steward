@@ -1,6 +1,6 @@
 """`analysis.md` — the one document neither party writes alone.
 
-**Two authors, one file, and a contract that keeps them apart.** `status.md` and `anomalies.md` are Steward's and are rewritten whole every turn; `AGENTS.md` and `_steward.yaml` are the human's and are never touched. This one is co-authored (workflow.md §12.7): under each task's heading Steward keeps a **facts block** current between a pair of HTML-comment markers, and every word outside those markers is somebody's investigation — quoted, argued, and regenerable from nothing.
+**Two authors, one file, and a contract that keeps them apart.** `status.md` and `anomalies.md` are Steward's and are rewritten whole every turn; `AGENTS.md` and `_steward.yaml` are the operator's and are never touched. This one is co-authored (workflow.md §12.7): under each task's heading Steward keeps a **facts block** current between a pair of HTML-comment markers, and every word outside those markers is somebody's investigation — quoted, argued, and regenerable from nothing.
 
 **So the merge is the module.** Rendering a document is easy; the hard part is rewriting part of a file whose other part is work, and every clause of the contract below exists to stop one specific loss:
 
@@ -50,7 +50,7 @@ HEADER = (
 
 INTRO = (
     "What these numbers mean. One section per task: the facts Steward keeps "
-    "current, and the reading of them that only a person can write."
+    "current, and the reading of them that only an operator can write."
 )
 
 

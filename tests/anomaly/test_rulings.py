@@ -29,7 +29,7 @@ from inspect_steward._evalset.observe import (
     UnreadableLog,
 )
 from inspect_steward._schedule import InFlight
-from inspect_steward._tend import status, status_markdown
+from inspect_steward._tend import collect_markdown, status
 from inspect_steward._tend.rulings import (
     apply_rulings,
     dispositions,
@@ -243,7 +243,7 @@ def test_a_requeue_already_coming_books_as_applied(
 def test_nothing_left_and_no_witness_is_convergence_worth_recording(
     tmp_path: Path,
 ) -> None:
-    """A human requeued by hand, or upstream retries absorbed the errors.
+    """An operator requeued by hand, or upstream retries absorbed the errors.
 
     Without this record the pass check could never credit the recovery and the
     window would stick RULED forever. And it is written once: the witness it
@@ -535,7 +535,7 @@ def test_a_substrate_class_is_never_rerun_by_a_standing_grant() -> None:
 
 
 def test_a_failed_rerun_precedent_stops_the_pattern() -> None:
-    # after a `reran_failed` a person must look, or policy re-runs every fresh
+    # after a `reran_failed` an operator must look, or policy re-runs every fresh
     # generation forever
     history = Anomalies(
         open=(window(state=AnomalyState.OPEN, generation=2),),
@@ -908,7 +908,7 @@ def test_the_report_splits_the_errored_cell_and_qualifies_the_score(
     turn(workspace)
     ruling(workspace, "exclude", effect="2 samples excluded from scoring")
 
-    document = status_markdown(turn(workspace))
+    document = collect_markdown(turn(workspace))
 
     assert "2 (2 excluded)" in document
     assert "Scores are over 2 of 4 samples (2 excluded)." in document

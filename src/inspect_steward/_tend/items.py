@@ -1,8 +1,8 @@
 """The one list a turn produces, and the verdict over it.
 
-Everything a turn wants to *say* beyond counts is an **item**: a stalled task, a definition that drifted, a file that would not read, a worker parked on a human decision, later an open anomaly. Before this there were two hand-maintained lists of the same conditions — one in the CLI, one in `status.md` — which had already drifted apart in what they reported. One list, rendered twice, cannot.
+Everything a turn wants to *say* beyond counts is an **item**: a stalled task, a definition that drifted, a file that would not read, a worker parked on an operator decision, later an open anomaly. Before this there were two hand-maintained lists of the same conditions — one in the CLI, one in `status.md` — which had already drifted apart in what they reported. One list, rendered twice, cannot.
 
-**One list with an owner, not two lists.** The obvious split is *what a human must answer* against *what an agent should work on*, and it hard-codes a routing decision that is not Steward's to make: one workspace may let the agent rule on a class the next one reserves for a person. So `owner` is a field and the projections are a filter over it. It is a function of **(kind, state, policy)** and recomputed every turn, so changing the rules re-routes items that already exist. One kind is fixed by design and policy may not move it — a parked worker is always the human's, because nobody else may answer (agent.md, *What the agent may do without asking*). See `FIXED_OWNER`.
+**One list with an owner, not two lists.** The obvious split is *what an operator must answer* against *what an agent should work on*, and it hard-codes a routing decision that is not Steward's to make: one workspace may let the agent rule on a class the next one reserves for an operator. So `owner` is a field and the projections are a filter over it. It is a function of **(kind, state, policy)** and recomputed every turn, so changing the rules re-routes items that already exist. One kind is fixed by design and policy may not move it — a parked worker is always the operator's, because nobody else may answer (agent.md, *What the agent may do without asking*). See `FIXED_OWNER`.
 
 **An item points at its subject; it does not contain it.** An anomaly carries nine fields of its own (workflow.md, *Anomalies are structured state*), and an envelope that absorbed them would be rewritten by every step that fills it. So `subject` is a task identifier, a pid, or a class key, and whoever owns that thing owns its shape.
 
@@ -40,7 +40,7 @@ class Owner(StrEnum):
     """
 
     AGENT = "agent"
-    HUMAN = "human"
+    OPERATOR = "operator"
 
 
 class Level(IntEnum):
@@ -71,7 +71,7 @@ class Verdict(StrEnum):
     Not ✅, which claims nothing is owed. A finished run owes the most consequential decision in the workflow, and reporting it as all-clear is how a sweep sits unread for a week. Distinct from ⚠️ for the opposite reason: nothing is wrong, and a warning glyph over a successful run trains a reader to discount warnings."""
 
     SIGNED_OFF = "🔒"
-    """A person accepted these results, and the signature still stands.
+    """An operator accepted these results, and the signature still stands.
 
     **Terminal in a way no other verdict is**, which is why it is checked before the pause: everything else here describes a run that could still change, and a paused signed run is a signed run somebody stopped tending — reporting it as ⏸ would put the brake ahead of the attestation. The signature comes off the same way it went on, by something happening: a relaunch that changes the task set, or a window opening after it (workflow.md §13, *It can be invalidated*)."""
 
@@ -96,23 +96,23 @@ KILL_LOOP = "kill_loop"
 ANOMALY = "anomaly"
 
 OWNERS = {
-    STALLED: Owner.HUMAN,
-    STUCK: Owner.HUMAN,
-    DRIFT: Owner.HUMAN,
-    DEGRADED: Owner.HUMAN,
-    ORPHAN_RUNNING: Owner.HUMAN,
+    STALLED: Owner.OPERATOR,
+    STUCK: Owner.OPERATOR,
+    DRIFT: Owner.OPERATOR,
+    DEGRADED: Owner.OPERATOR,
+    ORPHAN_RUNNING: Owner.OPERATOR,
     UNREADABLE: Owner.AGENT,
     ACTION_FAILED: Owner.AGENT,
-    UNSUPERVISED: Owner.HUMAN,
-    TIMER_DRIFT: Owner.HUMAN,
-    SIGNOFF_READY: Owner.HUMAN,
-    PARKED: Owner.HUMAN,
-    TUNING_PROPOSAL: Owner.HUMAN,
+    UNSUPERVISED: Owner.OPERATOR,
+    TIMER_DRIFT: Owner.OPERATOR,
+    SIGNOFF_READY: Owner.OPERATOR,
+    PARKED: Owner.OPERATOR,
+    TUNING_PROPOSAL: Owner.OPERATOR,
     UNWRITTEN: Owner.AGENT,
     JOURNAL_DAMAGE: Owner.AGENT,
-    STATUS_UNWRITABLE: Owner.HUMAN,
-    SYNC_FAILED: Owner.HUMAN,
-    KILL_LOOP: Owner.HUMAN,
+    STATUS_UNWRITABLE: Owner.OPERATOR,
+    SYNC_FAILED: Owner.OPERATOR,
+    KILL_LOOP: Owner.OPERATOR,
     ANOMALY: Owner.AGENT,
 }
 """Default owner per kind. Policy may move some of these once `_steward.yaml` can say so (step 23); a kind absent from the table is the agent's, since an unrouted item is an investigation rather than a question."""
@@ -120,7 +120,7 @@ OWNERS = {
 FIXED_OWNER = frozenset({PARKED})
 """Kinds whose owner policy may not move.
 
-One entry, and it is the reason the module docstring says `owner` is a function of *(kind, state, policy)* with an exception. A park is a request for a human decision about what an eval measures, and the agent may never answer one (agent.md §6) — so a `_steward.yaml` that routed it to the agent would not be expressing a preference, it would be asking Steward to answer an approval on a person's behalf.
+One entry, and it is the reason the module docstring says `owner` is a function of *(kind, state, policy)* with an exception. A park is a request for an operator decision about what an eval measures, and the agent may never answer one (agent.md §6) — so a `_steward.yaml` that routed it to the agent would not be expressing a preference, it would be asking Steward to answer an approval on an operator's behalf.
 """
 
 UNACKNOWLEDGEABLE = frozenset(
@@ -130,7 +130,7 @@ UNACKNOWLEDGEABLE = frozenset(
 
 An **unwritten** analysis is the one whose refusal is about the deliverable rather than the lifecycle. The item ends when the section has prose in it, and *looked, nothing here* is prose — a whole entry, worth as much as a finding (workflow.md §12.7). An acknowledgment would let the entry be waved past instead of written, which is the one outcome the item exists to prevent.
 
-Readiness to sign is the newest member and the one that *changed* category. It was acknowledgeable while `steward signoff` did not exist — the only way a person who had accepted the results could silence a reminder about a command they could not run. Now the command exists, and an ack would be somebody recording *I have decided* in the one place the decision is not: the run would go quiet with no signature, no curation, and nothing in `anomalies.md` marked final, which is precisely the silent certification workflow.md §13 opens by refusing.
+Readiness to sign is the newest member and the one that *changed* category. It was acknowledgeable while `steward signoff` did not exist — the only way an operator who had accepted the results could silence a reminder about a command they could not run. Now the command exists, and an ack would be somebody recording *I have decided* in the one place the decision is not: the run would go quiet with no signature, no curation, and nothing in `anomalies.md` marked final, which is precisely the silent certification workflow.md §13 opens by refusing.
 
 An action that failed is a single-turn fact: the next turn either hits it again or does not. Letting it be acknowledged would give it a persistence it does not have, and would silence a recurrence that happens to reuse the same words.
 
@@ -165,7 +165,7 @@ class Supervision:
     since_tend: float | None
     """Seconds since the previous recorded turn, or `None` where there has not been one.
 
-    Read by a `status` as a *report*: a turn saying how long it has been since a turn is, on a schedule, saying nothing, and on a tend recovering from a long silence it is describing a condition that turn has just ended. The reader who needs telling that supervision stopped is the human typing `status` the next morning, not the timer that is evidently working.
+    Read by a `status` as a *report*: a turn saying how long it has been since a turn is, on a schedule, saying nothing, and on a tend recovering from a long silence it is describing a condition that turn has just ended. The reader who needs telling that supervision stopped is the operator typing `status` the next morning, not the timer that is evidently working.
 
     A tend reads it for the other thing it is: the width of the gap this turn answers for. Any threshold a turn crosses on somebody's behalf was crossed somewhere in here, so a notification that fires on the crossing has to measure against the real gap rather than the nominal cadence or a skipped turn loses it (`notify._newly_unattended`).
     """
@@ -208,7 +208,7 @@ class Item:
     raised: bool = False
     """Whether the agent has put this in front of the owner who can decide it.
 
-    The third item state, and it changes exactly one projection: `steward collect` sets a raised item aside and counts it, where `status` still shows it because a person still owes an answer. Not a form of disposal — the item is as open as it was, and only the *agent's* work on it has ended (agent.md §2.2).
+    The third item state, and it changes exactly one projection: `steward collect` sets a raised item aside and counts it, where `status` still shows it because an operator still owes an answer. Not a form of disposal — the item is as open as it was, and only the *agent's* work on it has ended (agent.md §2.2).
     """
 
     @property
@@ -221,7 +221,7 @@ class Item:
 
         Not the same question as `acknowledgeable`, and they came apart with the park: `ack` refuses one because only answering clears it, while `raise` takes it, so its id has to be on screen. What is left over — unacknowledgeable *and* the agent's own — is `action_failed`, which nothing addresses because it is a single-turn fact, and whose id is a line number a reader should not be offered.
         """
-        return self.acknowledgeable or self.owner is Owner.HUMAN
+        return self.acknowledgeable or self.owner is Owner.OPERATOR
 
 
 def tend_items(
@@ -240,7 +240,7 @@ def tend_items(
         observed: The log directory read against the manifest — supplies display keys and attempt counts the summary does not carry.
         inflight: What is running, for the attempt counts that key a stall.
         acknowledged: Item ids somebody has already disposed of. Those are dropped entirely rather than marked — gone from the list and therefore from the verdict, every rendering, and the diff — with the journal event as the record (workflow.md, *The caveats that reached the final data*).
-        raised: Item ids the agent has handed to their owner. **Marked rather than dropped**, which is the difference from an acknowledgment: the item is still open and a person still owes an answer, so it stays in the list, the verdict, and `status`. Only the agent's own projection sets it aside.
+        raised: Item ids the agent has handed to their owner. **Marked rather than dropped**, which is the difference from an acknowledgment: the item is still open and an operator still owes an answer, so it stays in the list, the verdict, and `status`. Only the agent's own projection sets it aside.
 
     Returns:
         Open items, acknowledged ones removed and raised ones marked.
@@ -276,8 +276,8 @@ def tend_items(
         for item in items
         if not (item.acknowledgeable and item.id in acknowledged)
     ]
-    # owner first so a person meets their own decisions before the agent's,
-    # then level so that within a person's own the ones costing something now
+    # owner first so an operator meets their own decisions before the agent's,
+    # then level so that within an operator's own the ones costing something now
     # come before the ones that can wait (agent.md §4.1)
     return sorted(items, key=lambda item: (item.owner, -item.level, item.id))
 
@@ -308,7 +308,7 @@ def verdict(
         running: Live workers.
         spawning: Workers this turn would start.
         unfinished: Manifest tasks not yet complete.
-        parked: In-flight tasks with *nothing left running* — every one of their live samples is waiting on a person. A task with one park among fifty working samples is still progressing and does not count here, though it still produces an item. Defaulted, because a caller assembling a verdict by hand is making no claim about parks.
+        parked: In-flight tasks with *nothing left running* — every one of their live samples is waiting on an operator. A task with one park among fifty working samples is still progressing and does not count here, though it still produces an item. Defaulted, because a caller assembling a verdict by hand is making no claim about parks.
         signed: Whether an attestation is in force, as `signed_off` decides it. Defaulted for the same reason `parked` is.
 
     Returns:
@@ -330,7 +330,7 @@ def verdict(
     return Verdict.ATTENTION
 
 
-HEADINGS = {Owner.HUMAN: "needs a person", Owner.AGENT: "for the agent"}
+HEADINGS = {Owner.OPERATOR: "operator", Owner.AGENT: "agent"}
 """What each projection is called wherever items are grouped. One phrase, so the terminal, `status.md`, and eventually a channel post cannot describe the same filter differently."""
 
 
@@ -363,11 +363,11 @@ def verdict_text(verdict: Verdict, items: list[Item]) -> str:
     if verdict is Verdict.COMPLETE:
         return "complete (the results are waiting to be accepted)"
 
-    human = sum(1 for item in items if item.owner is Owner.HUMAN)
+    human = sum(1 for item in items if item.owner is Owner.OPERATOR)
     agent = len(items) - human
     parts: list[str] = []
     if human:
-        parts.append(f"{human} {'needs' if human == 1 else 'need'} a person")
+        parts.append(f"{human} {'needs' if human == 1 else 'need'} an operator")
     if agent:
         parts.append(f"{agent} for the agent")
     counts = ", ".join(parts)
@@ -420,7 +420,7 @@ def signed_off(
 def by_owner(items: list[Item]) -> list[tuple[Owner, list[Item]]]:
     """Items grouped for rendering, in the order a reader should meet them.
 
-    The human's first, always. An agent reading its own section second costs nothing; a person scrolling past the agent's work to find their own question is how a surface stops being read.
+    The operator's first, always. An agent reading its own section second costs nothing; an operator scrolling past the agent's work to find their own question is how a surface stops being read.
 
     Args:
         items: Open items.
@@ -430,7 +430,7 @@ def by_owner(items: list[Item]) -> list[tuple[Owner, list[Item]]]:
     """
     return [
         (owner, [item for item in items if item.owner is owner])
-        for owner in (Owner.HUMAN, Owner.AGENT)
+        for owner in (Owner.OPERATOR, Owner.AGENT)
         if any(item.owner is owner for item in items)
     ]
 
@@ -465,7 +465,7 @@ def _stalled(
 
 
 def _parked(result: "TendResult", lookup: dict[str, TaskObservation]) -> list[Item]:
-    """A worker waiting on a person, and the command that reaches it.
+    """A worker waiting on an operator, and the command that reaches it.
 
     **The one condition where walking away does not work.** Everything else Steward reports is either progressing or over; a parked sample is neither, and it holds its slot, its sandbox and its model connections while it waits. So it is the first kind to carry `Level.BLOCKING`, which orders it above everything else in its owner's section.
 
@@ -531,7 +531,7 @@ def _waiting(parked: LiveParked) -> str:
         parts.append(
             f"{parked.questions} question{'' if parked.questions == 1 else 's'}"
         )
-    return f"has {parked.total} samples waiting on a person: {' and '.join(parts)}"
+    return f"has {parked.total} samples waiting on an operator: {' and '.join(parts)}"
 
 
 def _stuck(result: "TendResult", lookup: dict[str, TaskObservation]) -> list[Item]:
@@ -539,9 +539,9 @@ def _stuck(result: "TendResult", lookup: dict[str, TaskObservation]) -> list[Ite
 
     Not failed and not parked — a `bash` that never returns, a connection held open silently — which is why neither the anomaly queue nor the park can say it: nothing raised, and nobody is being asked anything. One item per task, whatever it holds, because the escalation is per task and a reader climbing the ladder wants one place to stand.
 
-    **The id encodes the episode — what the item still asks about — plus `:asked`.** An acknowledgment is permanent per id (`read_acks` never expires one), so an id keyed on the task alone would let "I know, leave it" about this week's sample silence next week's forever. The digest is over the *un-asked* pending calls plus every call-less stuck sample (`_asks`): it re-arms on a different sample, when another call joins, and when rung 1 is spent on one call of several — the next call's ask is a new item the old acknowledgment does not cover, where a digest of the sample set alone would let acknowledging the first cancellation hide every rung-one action after it — and stays quiet while the same condition merely persists. The `:asked` flip is a new id for the same reason — the escalation re-notifies through the ordinary appeared diff, and an acknowledgment of the quiet wait does not cover the wedged one. The actions are execution.md §7.5's ladder, one rung at a time: `cancel-tool-call` costs one tool result, `cancel` costs the sample, and neither is ever pre-filled with an outcome — recording how a cancelled sample counts is the decision, so `--action` is left for the person to type.
+    **The id encodes the episode — what the item still asks about — plus `:asked`.** An acknowledgment is permanent per id (`read_acks` never expires one), so an id keyed on the task alone would let "I know, leave it" about this week's sample silence next week's forever. The digest is over the *un-asked* pending calls plus every call-less stuck sample (`_asks`): it re-arms on a different sample, when another call joins, and when rung 1 is spent on one call of several — the next call's ask is a new item the old acknowledgment does not cover, where a digest of the sample set alone would let acknowledging the first cancellation hide every rung-one action after it — and stays quiet while the same condition merely persists. The `:asked` flip is a new id for the same reason — the escalation re-notifies through the ordinary appeared diff, and an acknowledgment of the quiet wait does not cover the wedged one. The actions are execution.md §7.5's ladder, one rung at a time: `cancel-tool-call` costs one tool result, `cancel` costs the sample, and neither is ever pre-filled with an outcome — recording how a cancelled sample counts is the decision, so `--action` is left for the operator to type.
 
-    **Owner is the agent only where `stuck_cancel` admits everything stuck and nothing has been asked yet** — rung 1 is the one pre-authorizable act, and once it has been spent the delivered-but-unheeded state is a person's. The agent acts through `inspect ctl` itself and journals via the `ack --by agent` narrow exception; the tend never cancels anything.
+    **Owner is the agent only where `stuck_cancel` admits everything stuck and nothing has been asked yet** — rung 1 is the one pre-authorizable act, and once it has been spent the delivered-but-unheeded state is an operator's. The agent acts through `inspect ctl` itself and journals via the `ack --by agent` narrow exception; the tend never cancels anything.
     """
     items: list[Item] = []
     for row in result.progress.rows:
@@ -674,11 +674,11 @@ def _stuck_action(task_id: str, stuck: LiveStuck) -> str | None:
 def _tuning(result: "TendResult") -> list[Item]:
     """Capacity tend has no authority to take, put in front of the one who could grant it.
 
-    Two conditions with one shape (`_tend.tuning.Proposal`): a pinned setpoint holding a clean, saturated window, and a ramp at its ceiling with pushback still absent. Both mean the binding constraint is a number a person chose, so the owner is the human — and the agent's part is to relay it (`raise`) and to record the ruling for them (`ack`): "seen, happy at 60" is an acknowledgment, and the next level up would be a different item.
+    Two conditions with one shape (`_tend.tuning.Proposal`): a pinned setpoint holding a clean, saturated window, and a ramp at its ceiling with pushback still absent. Both mean the binding constraint is a number an operator chose, so the owner is the operator — and the agent's part is to relay it (`raise`) and to record the ruling for them (`ack`): "seen, happy at 60" is an acknowledgment, and the next level up would be a different item.
 
-    **The summary says what is binding and at what number, and stops.** That it is the human's to decide is what the item's owner already means, and *how* to decide it is the runbook's — repeating either in a sentence that appears in every post and every `status.md` costs a line each time to say something that never varies.
+    **The summary says what is binding and at what number, and stops.** That it is the operator's to decide is what the item's owner already means, and *how* to decide it is the runbook's — repeating either in a sentence that appears in every post and every `status.md` costs a line each time to say something that never varies.
 
-    The id carries the level, which is what makes an acknowledgment mean something narrow: capacity at 60 accepted is not capacity at 80 accepted, and a task the human authorizes higher produces a fresh item the first time it holds a clean window at its new bound.
+    The id carries the level, which is what makes an acknowledgment mean something narrow: capacity at 60 accepted is not capacity at 80 accepted, and a task the operator authorizes higher produces a fresh item the first time it holds a clean window at its new bound.
     """
     items: list[Item] = []
     for proposal in result.tuning.proposals:
@@ -793,13 +793,13 @@ def _unreadable(observed: ObservedTasks) -> list[Item]:
 def _unwritten(result: "TendResult") -> list[Item]:
     """Tasks whose `analysis.md` section carries facts and no reading of them.
 
-    **The agent's standing work, and not a signoff blocker.** agent.md §6 lists writing this under what an agent does freely; holding a person's attestation hostage to an agent's prose would be the wrong trade, and a run can be signed with the write-up still owed. What it does do is keep the run reading ⚠️ rather than 🏁, which is agent.md §4.3 exactly: unwritten is work outstanding rather than something that happened.
+    **The agent's standing work, and not a signoff blocker.** agent.md §6 lists writing this under what an agent does freely; holding an operator's attestation hostage to an agent's prose would be the wrong trade, and a run can be signed with the write-up still owed. What it does do is keep the run reading ⚠️ rather than 🏁, which is agent.md §4.3 exactly: unwritten is work outstanding rather than something that happened.
 
     **Only in a workspace an agent has actually attached to**, which is `Supervision.ever_armed`'s reasoning applied to the other kind of expectation. A run somebody drives by hand is owed no write-up by anybody — there is nobody the item is addressed to — and raising one would put every such run permanently at ⚠️ over work nobody agreed to do. The first `steward collect` is what creates the obligation.
 
     **Only once the task has stopped moving.** The section appears with the task's first log, which is right — the facts are worth keeping current from the moment there are any. The *item* used to appear then too, and that is a different claim: it asks somebody to explain numbers that are still changing. A four-task run put four of these up while every task was mid-flight and half the transcripts were unscanned, which is the same way an attention list stops being read that `analysis_md.analysis_sections` guards against one step earlier. Write-ups are owed on results, so the ask waits for results.
 
-    **Finished means the same thing here as everywhere else** (`unfinished`): complete, or settled by a person's decision. The second half matters more than it looks — a short-but-accepted task stays `INCOMPLETE` for good, deliberately, so gating on `COMPLETE` alone would mean the tasks with a known hole in them are the only ones never asked to explain it.
+    **Finished means the same thing here as everywhere else** (`unfinished`): complete, or settled by an operator's decision. The second half matters more than it looks — a short-but-accepted task stays `INCOMPLETE` for good, deliberately, so gating on `COMPLETE` alone would mean the tasks with a known hole in them are the only ones never asked to explain it.
 
     **One item for the run, not one per task.** A write-up is owed per section and they clear one at a time, so this was N items — and on a four-task run that is four near-identical lines for what a reader experiences as a single piece of work, crowding out the anomaly sitting beside them. Nothing was bought with the granularity: `UNWRITTEN` is unacknowledgeable, so the per-task ids could not be disposed of individually and existed only to be printed. The tasks are named in the summary instead, and the item clears section by section exactly as before.
 
@@ -877,7 +877,7 @@ def _silence(state: Supervision) -> float | None:
 
 
 def settled_by_decision(summary: Summary, acknowledged: Mapping[str, Ack]) -> set[str]:
-    """Tasks a person has decided about, whether by ruling or by disposal.
+    """Tasks an operator has decided about, whether by ruling or by disposal.
 
     **Two acts, one meaning.** An `accept` ruling latches a task and says the results stand with a caveat; acknowledging a `stalled` item says *this will not be run again and the results stand without it*, which `anomalies.md` has been printing as a caveat in those words since the file existed. Only the first was counted, so an acknowledged stall was a hole the gate refused over forever — and the refusal's remedy is *rule the class*, which a stall need not have: the guard fires on attempt history, not on an anomaly, so there was no class to rule and no way to finish the run.
 
@@ -955,7 +955,7 @@ def _supervision(result: "TendResult") -> list[Item]:
     # silence it is a past-tense fact stated in the present tense by the very
     # turn that disproves it -- recorded, then resolved next turn, which is
     # notification churn over a condition that has already ended. `status` is
-    # the disposition a person types hours later, and the only one for which
+    # the disposition an operator types hours later, and the only one for which
     # *nothing has tended in an hour* is still true when it is said
     if (
         not result.executed
@@ -1023,7 +1023,7 @@ def _digest8(value: str) -> str:
 def _named(observation: TaskObservation | None, identifier: str) -> str:
     """A task, as an id can carry it: something readable, then something unique.
 
-    A task identifier is a definition path, a name, an args hash, a model, and a config hash — around two hundred characters, two of them sha256. Putting one in an id would be correct and unusable: nobody can read it in a terminal and nobody will type it. So an id names the task and then pins it with the first eight hex of its identifier, which is short, stable across everything the identifier is stable across, and unique in any manifest a person is looking at.
+    A task identifier is a definition path, a name, an args hash, a model, and a config hash — around two hundred characters, two of them sha256. Putting one in an id would be correct and unusable: nobody can read it in a terminal and nobody will type it. So an id names the task and then pins it with the first eight hex of its identifier, which is short, stable across everything the identifier is stable across, and unique in any manifest an operator is looking at.
     """
     name = observation.task.name if observation is not None and observation.task else ""
     if not name and observation is not None:
@@ -1037,7 +1037,7 @@ def _named(observation: TaskObservation | None, identifier: str) -> str:
 def _journal_damage(result: "TendResult") -> list[Item]:
     """Lines the journal yielded that could not be read as events.
 
-    **The agent's, because the repair is judgement.** Damage is a torn last line after a crash — one record, recoverable by reading what remains of it — and every fold this turn ran (the pause, the acks, the diff baseline) ran without whatever the lines said. A person cannot do anything with a line number; an agent can read the fragment and re-journal what it meant, or accept it as lost.
+    **The agent's, because the repair is judgement.** Damage is a torn last line after a crash — one record, recoverable by reading what remains of it — and every fold this turn ran (the pause, the acks, the diff baseline) ran without whatever the lines said. An operator cannot do anything with a line number; an agent can read the fragment and re-journal what it meant, or accept it as lost.
 
     One item for the damage as a whole, keyed on the line numbers, so further damage is a new question and an acknowledged tear stays acknowledged.
     """
@@ -1091,7 +1091,7 @@ def _status_unwritable(result: "TendResult") -> list[Item]:
 def _sync_failed(result: "TendResult") -> list[Item]:
     """A destination the workspace has stopped reaching.
 
-    **Gated on one full tend interval**, which is what keeps a single slow bucket write from paging anybody: the propagation already retries every turn, and the episode worth a person's attention is the one that outlived a retry. The interval is the armed timer's where there is one — the actual cadence of retries — and the default where the run is tended by hand.
+    **Gated on one full tend interval**, which is what keeps a single slow bucket write from paging anybody: the propagation already retries every turn, and the episode worth an operator's attention is the one that outlived a retry. The interval is the armed timer's where there is one — the actual cadence of retries — and the default where the run is tended by hand.
     """
     interval = (
         result.supervision.armed.interval
@@ -1145,7 +1145,7 @@ def _kill_loop(result: "TendResult") -> list[Item]:
 def _anomalies(anomalies: Anomalies) -> list[Item]:
     """Every open window's item, with owner following state.
 
-    The routing (workflow.md §12.5): an OPEN window is the agent's to investigate; an INVESTIGATING one is the agent's, informationally, so a fresh session does not re-open what the last one was mid-way through; a PROPOSED one is suppressed under **one consolidated item per live proposal** — the human answers a decision, not a list; a RULED one produces nothing while the outcome is pending, because the tend applies the ruling itself and machinery in flight is not anyone's work; and a re-run that failed again is the human's review, because it means the ruling's premise did not hold.
+    The routing (workflow.md §12.5): an OPEN window is the agent's to investigate; an INVESTIGATING one is the agent's, informationally, so a fresh session does not re-open what the last one was mid-way through; a PROPOSED one is suppressed under **one consolidated item per live proposal** — the operator answers a decision, not a list; a RULED one produces nothing while the outcome is pending, because the tend applies the ruling itself and machinery in flight is not anyone's work; and a re-run that failed again is the operator's review, because it means the ruling's premise did not hold.
 
     **An OPEN `limit:` window produces no item at all.** An operator kill is somebody's own deliberate act, its window is adjudication material rather than an incident, and the run keeps going either way (workflow.md §15: anomalies are settled afterwards) — so it waits in the fold and the `### anomalies` block for the signoff conversation instead of asking inline. Engaging early still works: investigating, proposing, or ruling one puts it back on the ordinary surfaces.
 
@@ -1173,7 +1173,7 @@ def _anomalies(anomalies: Anomalies) -> list[Item]:
             Item(
                 id=f"{ANOMALY}:prop:{identifier}" + (f":{bucket}" if bucket else ""),
                 kind=ANOMALY,
-                owner=Owner.HUMAN,
+                owner=Owner.OPERATOR,
                 level=Level.ATTENTION,
                 subject=identifier,
                 summary=(
@@ -1190,7 +1190,7 @@ def _anomalies(anomalies: Anomalies) -> list[Item]:
 def self_healing(item: Item) -> bool:
     """Whether an agent item resolves without anyone acting — what the no-agent escalation skips.
 
-    A `task:` anomaly window is the one kind with a mechanical exit: Steward respawns the worker on its own, and the window resolves itself when the task completes (`_anomaly.fold`, the mechanical heal). Escalating one to a channel because no agent is attached would page a person about something nobody needs to touch — and if it *doesn't* heal, the task stalls, and the `stalled` item is the human-owned surface that says so durably.
+    A `task:` anomaly window is the one kind with a mechanical exit: Steward respawns the worker on its own, and the window resolves itself when the task completes (`_anomaly.fold`, the mechanical heal). Escalating one to a channel because no agent is attached would page an operator about something nobody needs to touch — and if it *doesn't* heal, the task stalls, and the `stalled` item is the operator-owned surface that says so durably.
     """
     return (
         item.kind == ANOMALY
@@ -1216,7 +1216,7 @@ def _window_items(anomaly: Anomaly) -> list[Item]:
                 Item(
                     id=f"{base}:failed{anomaly.failed_resolutions}",
                     kind=ANOMALY,
-                    owner=Owner.HUMAN,
+                    owner=Owner.OPERATOR,
                     level=Level.ATTENTION,
                     subject=anomaly.class_key,
                     summary=(
@@ -1276,11 +1276,11 @@ def _bucket(count: int) -> str:
 
 
 def _anomaly_name(class_key: str) -> str:
-    """The readable half of an anomaly id: the segment a person will recognise.
+    """The readable half of an anomaly id: the segment an operator will recognise.
 
     The exception's type where there is one (the segment carrying `@`), the task's name for a score class, the label for a scan class, the discriminating word otherwise — `vanished`, `no-log`, `operator`.
 
-    A scan class takes its **label** rather than its scanner, because a run's scanners are few and its labels are what tell two findings apart: `anomaly:reward_hacking:…` is the id a person recognises where `anomaly:scoring_integrity:…` would be the same word on every one of them. A scanner that sets no label falls back to its own name, which is then the only thing there is.
+    A scan class takes its **label** rather than its scanner, because a run's scanners are few and its labels are what tell two findings apart: `anomaly:reward_hacking:…` is the id an operator recognises where `anomaly:scoring_integrity:…` would be the same word on every one of them. A scanner that sets no label falls back to its own name, which is then the only thing there is.
     """
     segments = class_key.split(":")
     for segment in segments:
@@ -1342,7 +1342,7 @@ def anomaly_summary(anomaly: Anomaly) -> str:
 def _signoff(result: "TendResult") -> list[Item]:
     """The run has finished and nobody has accepted it.
 
-    **The gap the verdict had.** A sweep whose every task completed reported ✅ *nothing needs you*, which is false in the one way that matters: the results exist and no person has looked at them. Reporting a finished run as all-clear is how one sits unread for a week.
+    **The gap the verdict had.** A sweep whose every task completed reported ✅ *nothing needs you*, which is false in the one way that matters: the results exist and no operator has looked at them. Reporting a finished run as all-clear is how one sits unread for a week.
 
     **Worded as a state and carrying the command.** It said only the state for as long as `steward signoff` did not exist, because a surface telling somebody to run a command that does not exist is the same lie as a `_steward.yaml` key that parses and does nothing. Now there is a verb, so the sentence stays what is true and the action names what answers it — and the item stopped being acknowledgeable in the same move, since an ack would record *I have decided* in the one place the decision is not (`UNACKNOWLEDGEABLE`).
 
@@ -1350,7 +1350,7 @@ def _signoff(result: "TendResult") -> list[Item]:
 
     Fires on completeness alone rather than on *completeness and nothing else wrong* — a run that finished with an unreadable file beside it is still finished, and signoff accepts exceptions (workflow.md, *The attestation*) — **with one exception: an open anomaly**. Every anomaly resolved or accepted is workflow.md §12.2's definition of a resolvable run, so the readiness claim is simply false while a window is open, and a late finding un-readies the run for free: the window opens, this returns nothing, and the item disappears until somebody rules.
 
-    An open `limit:` window deliberately does **not** hold this back. Operator kills are adjudication material — the very conversation this item invites — so gating the invitation on them would hide the one line that leads a person to where they get ruled. The signoff verb itself still refuses while any window is open, which is the other half of the same split: the item invites the conversation, and the signature ends it.
+    An open `limit:` window deliberately does **not** hold this back. Operator kills are adjudication material — the very conversation this item invites — so gating the invitation on them would hide the one line that leads an operator to where they get ruled. The signoff verb itself still refuses while any window is open, which is the other half of the same split: the item invites the conversation, and the signature ends it.
 
     **A task can be settled by observation or by decision, and this counts both** — either decision, an `accept` ruling or an acknowledged stall (`settled_by_decision`). A log that is short-but-accepted stays `INCOMPLETE` forever, deliberately, because it *is* short and rewriting its results to say otherwise would put a number in the record nobody measured. So completeness alone can never be reached by a run with an accepted hole in it, and gating on completeness alone would make the one workflow §13 was written for — *accepting known holes must be explicit, not blocked* — the one workflow this item could never invite. Counted as a set, so a task somebody both ruled on and acknowledged is one settled task rather than two.
     """
@@ -1400,9 +1400,9 @@ def _signoff_summary(
 
     **Two clauses, not four.** *every task is complete (1 of 1) and nothing further will run, so the results are waiting to be accepted* said the same thing three ways: the parenthetical restates the sentence before it, *nothing further will run* is what *complete* means, and both sit directly above a table carrying the counts. This line is read on a phone at 3am and its job is to say a decision is owed.
 
-    **And a third clause where scan findings were dismissed**, which is the one thing on this line that is not about task counts. A dismissed finding leaves no caveat and reaches `anomalies.md` nowhere — correctly, since the whole content of the dismissal is *this does not change the numbers*. But *the model tried to read the grader and failed* is something the person signing wants to have been told, and this is the sentence that reaches them at the moment they are asked (workflow.md §12.6.1). It says how many and points at the account; the reasons are in the journal and in `analysis.md`.
+    **And a third clause where scan findings were dismissed**, which is the one thing on this line that is not about task counts. A dismissed finding leaves no caveat and reaches `anomalies.md` nowhere — correctly, since the whole content of the dismissal is *this does not change the numbers*. But *the model tried to read the grader and failed* is something the operator signing wants to have been told, and this is the sentence that reaches them at the moment they are asked (workflow.md §12.6.1). It says how many and points at the account; the reasons are in the journal and in `analysis.md`.
 
-    **And a fourth where a store is configured, which is a second decision rather than a fact about the run.** Publication is the one act at the end of a run that nothing does by default and no setting can turn on: exporting results into a cache other projects read is a person's call, taken once and out loud. So this line is the whole mechanism by which they are asked — an agent that is not told there is a store is an agent that signs off without mentioning it, and the run never tends again to say so afterwards.
+    **And a fourth where a store is configured, which is a second decision rather than a fact about the run.** Publication is the one act at the end of a run that nothing does by default and no setting can turn on: exporting results into a cache other projects read is an operator's call, taken once and out loud. So this line is the whole mechanism by which they are asked — an agent that is not told there is a store is an agent that signs off without mentioning it, and the run never tends again to say so afterwards.
 
     Args:
         summary: The run's shape.

@@ -208,7 +208,7 @@ class TendResult:
     drift: bool
     """The definition file no longer hashes to what the committed manifest recorded.
 
-    Reported and never acted on. Capture is expensive and a definition is a file a human edits live, so a turn that re-read it automatically would eventually read a half-saved edit — and applying a delta means weighing whether it looks like a mistake, which is judgement (workflow.md, *One trigger, and one gate on it*).
+    Reported and never acted on. Capture is expensive and a definition is a file an operator edits live, so a turn that re-read it automatically would eventually read a half-saved edit — and applying a delta means weighing whether it looks like a mistake, which is judgement (workflow.md, *One trigger, and one gate on it*).
     """
 
     degraded: str | None
@@ -325,7 +325,7 @@ class TendResult:
     notification: Channel | None = None
     """Where this run's notifications go, named without its value (`_notify.Channel`).
 
-    **Reported for the reason `log_dir` is**: it stopped being guessable, and the ways of guessing are all wrong. A channel arrives from four spellings, and the one that most often carries it is a `.env` at or above the workspace — loaded into Steward's own process by `init_dotenv()` and into no shell an agent can read. So an agent that opened `_steward.yaml`, found the key commented out, and told a person the run could reach nobody was right about everything it looked at and wrong about the run.
+    **Reported for the reason `log_dir` is**: it stopped being guessable, and the ways of guessing are all wrong. A channel arrives from four spellings, and the one that most often carries it is a `.env` at or above the workspace — loaded into Steward's own process by `init_dotenv()` and into no shell an agent can read. So an agent that opened `_steward.yaml`, found the key commented out, and told an operator the run could reach nobody was right about everything it looked at and wrong about the run.
 
     A fact rather than an item, on the argument `_cli.launch._echo_no_channel` makes: the remedy is said once, at launch, where somebody is watching. `None` only on a result assembled by hand, which settled no channel.
     """
@@ -607,7 +607,7 @@ def status(
 ) -> TendResult:
     """Report where the run stands, and what the next turn would do.
 
-    `tend --dry-run`: the same reads and the same decision, with the actions discarded. That makes it a **preview** rather than a state dump — "6 tasks: 3 complete, 2 running, 1 errored; the next tend would launch 2 workers" is what both a human and an agent actually want to see before authorizing an interval.
+    `tend --dry-run`: the same reads and the same decision, with the actions discarded. That makes it a **preview** rather than a state dump — "6 tasks: 3 complete, 2 running, 1 errored; the next tend would launch 2 workers" is what both an operator and an agent actually want to see before authorizing an interval.
 
     Not the cheap one, though. It performs the same reads; only the side effects are withheld.
 
@@ -1018,7 +1018,7 @@ class _Settings:
     log_store: str | None = None
     """The reuse store this workspace configures, or `None` for none.
 
-    **Resolved rather than expressed**, unlike `interval` and `sync`, because the only thing that reads it here is a sentence naming a location to a person — and *which store* is exactly what the precedence exists to answer. Carried for the readiness item alone: publication is the one act at signoff that nothing turns on by default, so the invitation has to say there is a decision waiting or nobody is ever asked to make one.
+    **Resolved rather than expressed**, unlike `interval` and `sync`, because the only thing that reads it here is a sentence naming a location to an operator — and *which store* is exactly what the precedence exists to answer. Carried for the readiness item alone: publication is the one act at signoff that nothing turns on by default, so the invitation has to say there is a decision waiting or nobody is ever asked to make one.
     """
 
 
@@ -1043,7 +1043,7 @@ def _turn(
     )
     # described immediately after it is settled, and from the same two values
     # that settled it: the snapshot has to be able to say whether anything will
-    # reach a person, and the spellings that answer that are unreadable from
+    # reach an operator, and the spellings that answer that are unreadable from
     # outside this process (`_notify.Channel`)
     notification = describe_channel(
         target=channel,
@@ -1060,7 +1060,7 @@ def _turn(
 
     inflight = resolve_inflight(workspace.inflight, workspace.workers)
     # read even for a `status`, which is the disposition that most needs it: a
-    # person types it to satisfy their curiosity, and a settled directory of two
+    # operator types it to satisfy their curiosity, and a settled directory of two
     # thousand logs is two thousand header reads it can skip entirely
     cache = read_attempt_cache(workspace.observed)
     try:
@@ -1181,7 +1181,7 @@ def _turn(
     # only an executing turn journals them (and then refolds from the file,
     # because a ruling's recorded instant is its identity)
     # the narrowed per-class counts, so a policy's composed effect sentence
-    # says what a person's would (`rulings.affected_refs`)
+    # says what an operator's would (`rulings.affected_refs`)
     affected = affected_refs(detection.batches, _current_locations(observed), reused)
     policy, declined = policy_rulings(anomalies, settings.preauthorized, affected)
     if policy:
@@ -1616,7 +1616,7 @@ def _act(
     """
     acted = _Acted()
     spawns: list[SpawnWorker] = []
-    # identifier to display key, because the journal is read by a person: an
+    # identifier to display key, because the journal is read by an operator: an
     # identifier is ~200 characters with two hashes in it, and an entry naming
     # one is an entry nobody reads. Both go into the payload — the key to be
     # read, the identifier to be matched against.
@@ -1828,7 +1828,7 @@ def _settings(
 ) -> _Settings:
     """What to operate under, degrading to the last known good where it must.
 
-    A human may edit `_steward.yaml` at 10pm with a fleet up, and a typo in it must not stop the fleet converging — that is exactly the unattended failure the timer exists to prevent. So a file that will not parse falls back to the settings the last turn recorded, and says so loudly enough that nobody mistakes the run for one following the file.
+    An operator may edit `_steward.yaml` at 10pm with a fleet up, and a typo in it must not stop the fleet converging — that is exactly the unattended failure the timer exists to prevent. So a file that will not parse falls back to the settings the last turn recorded, and says so loudly enough that nobody mistakes the run for one following the file.
 
     **Falling back needs somewhere to fall back to.** With no `observation` in the journal there is no last known good, and running on Steward's own defaults would silently discard whatever the operator wrote — the one outcome worse than stopping. So the first turn after a bad edit refuses, and every turn after a good one degrades.
 
@@ -2029,7 +2029,7 @@ def _pin(
 def _stamp(path: Path) -> str | None:
     """A file's modification time, as an item id can carry it.
 
-    Nanoseconds rather than seconds: someone fixing a typo and saving twice inside one second is exactly the person this must not go quiet on.
+    Nanoseconds rather than seconds: someone fixing a typo and saving twice inside one second is exactly the operator this must not go quiet on.
     """
     try:
         return str(path.stat().st_mtime_ns)
@@ -2173,11 +2173,11 @@ def _write_analysis(
 
     **The only generated document that is not regenerated.** What is written is the file as it stood with the facts blocks replaced, so an `OSError` here costs one turn's freshness on a facts list and can lose nothing that was written by hand — the merge is pure and the write is atomic, so the previous file survives whole.
 
-    **The file is re-read here rather than reused from the top of the turn**, and the difference is somebody's work. The facts were composed before the turn acted, because the items had to report what is unwritten; everything between then and now is spawns, requeues, invalidations and archive moves, which on a busy turn is minutes. The other author is a person or an agent with the file open, and this write is an atomic replace — so merging a snapshot taken before all of that would overwrite whatever they saved in the meantime. Re-reading narrows the window to the microseconds between this read and the `replace` below, which is the same exposure `status.md` has always had and the smallest one available without taking a lock on a markdown file.
+    **The file is re-read here rather than reused from the top of the turn**, and the difference is somebody's work. The facts were composed before the turn acted, because the items had to report what is unwritten; everything between then and now is spawns, requeues, invalidations and archive moves, which on a busy turn is minutes. The other author is an operator or an agent with the file open, and this write is an atomic replace — so merging a snapshot taken before all of that would overwrite whatever they saved in the meantime. Re-reading narrows the window to the microseconds between this read and the `replace` below, which is the same exposure `status.md` has always had and the smallest one available without taking a lock on a markdown file.
 
     Out of the failure episode for `anomalies.md`'s reason exactly: the episode exists because a remote reader detects a dead timer by `status.md` going stale, and a second item saying the same thing about the same directory is noise.
 
-    A section whose markers did not pair is reported here rather than fixed. Its text came back byte-identical — the merge declined to guess at a boundary in somebody's work — and the repair is a person putting the marker back.
+    A section whose markers did not pair is reported here rather than fixed. Its text came back byte-identical — the merge declined to guess at a boundary in somebody's work — and the repair is an operator putting the marker back.
 
     A file that exists and would not read (`_read_authored`) is the one case where nothing at all happens: writing what a merge from nothing would have produced would replace an investigation with a stub. An **empty body** is the other silence and a benign one — no file yet, and no task has landed anything to explain.
     """
@@ -2474,7 +2474,7 @@ def _cleared(observed: ObservedTasks) -> set[str]:
 def _latched(anomalies: Anomalies, launched: str | None) -> set[str]:
     """The tasks reconcile stops respawning, with the launch that would put them back in play.
 
-    An acceptance ends a task's attempts, and it stays ended — a person decided the results stand without it, and nothing mechanical should overrule that. **What re-arms it is a launch**, because committing a manifest is the one moment desired state is decided: the same doctrine that makes `restore_log` launch-only. So the latch holds while the accepting ruling postdates the most recent launch, and a relaunch that re-asks for the task simply outdates it — no new record, one comparison, and the same shape as the stall guard's own forgiveness instant.
+    An acceptance ends a task's attempts, and it stays ended — an operator decided the results stand without it, and nothing mechanical should overrule that. **What re-arms it is a launch**, because committing a manifest is the one moment desired state is decided: the same doctrine that makes `restore_log` launch-only. So the latch holds while the accepting ruling postdates the most recent launch, and a relaunch that re-asks for the task simply outdates it — no new record, one comparison, and the same shape as the stall guard's own forgiveness instant.
 
     **Each task is compared against the decision that accepted *it*.** An earlier version asked whether any settled window postdated the launch and then latched every accepted identifier, which is a different question with the same answer most of the time: after a relaunch, an unrelated `exclude` on the same task was enough to re-latch it and stop its respawns under a decision nobody had made about whether it should run.
     """

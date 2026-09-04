@@ -277,7 +277,7 @@ def test_a_tests_own_undo_cannot_revoke_the_ambient_channel_guard(
 # carries a channel most often is a `.env` at or above the workspace — loaded
 # into Steward's own process by `init_dotenv()` and into no shell an agent
 # holds — so an agent that opened `_steward.yaml`, found the key commented out,
-# and told its person the run could reach nobody was right about everything it
+# and told its operator the run could reach nobody was right about everything it
 # had looked at and wrong about the run. These are the snapshot being able to
 # say otherwise, and being unable to say the URL while it does.
 

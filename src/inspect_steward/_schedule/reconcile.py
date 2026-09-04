@@ -234,7 +234,7 @@ class ArchiveLog:
 
     Never a delete. A log leaving `logs/` is always a move to the sibling archive — reversible, journaled with its reason, and restorable for free if the edit that orphaned it is reverted (workflow.md, *Steward never destroys a result, but it does curate the directory*).
 
-    **Mechanical here because the gate is somewhere else.** Archiving is the one action that removes a result from view, and a one-character change to a task arg reads identically to a deliberate removal — so it is gated on explicit acceptance at the moment the manifest is *committed*, where a human is present and the delta can be shown. Once desired state says a task is not in the eval set, converging toward it is bookkeeping.
+    **Mechanical here because the gate is somewhere else.** Archiving is the one action that removes a result from view, and a one-character change to a task arg reads identically to a deliberate removal — so it is gated on explicit acceptance at the moment the manifest is *committed*, where an operator is present and the delta can be shown. Once desired state says a task is not in the eval set, converging toward it is bookkeeping.
     """
 
     location: str
@@ -278,7 +278,7 @@ class Summary:
     queued: int
 
     stalled: list[str]
-    """Identifiers left alone because respawning them has stopped accomplishing anything (`_stalled`). Work that needs a person, and the one thing in this summary nothing mechanical will resolve."""
+    """Identifiers left alone because respawning them has stopped accomplishing anything (`_stalled`). Work that needs an operator, and the one thing in this summary nothing mechanical will resolve."""
 
     orphans: list[str]
     """Identifiers in the log directory that the manifest does not name. Archived as the manifest converges, except for any still running."""
@@ -313,7 +313,7 @@ class Summary:
     """Authorized re-runs among the tasks spawning and queued — invalidated, or covered by a standing `rerun` ruling. The counts line's account of why these go first (scheduling.md §5.5)."""
 
     accepted: list[str] = field(default_factory=list[str])
-    """Identifiers Steward has stopped respawning because a person accepted the class that keeps them incomplete.
+    """Identifiers Steward has stopped respawning because an operator accepted the class that keeps them incomplete.
 
     Distinct from `stalled` in the one way that matters: a stall is work that still needs somebody, and this is work somebody has already settled. **Never overlaps `states[COMPLETE]` by construction** — the list is built inside the spawn loop, which `_spawn_order` has already narrowed to tasks that need work — which is what lets the signoff gate add the two rather than reconcile them.
     """
@@ -392,7 +392,7 @@ def reconcile(
         paused: Stop scheduling new work. Workers already running finish normally — this is what almost everyone means by pausing a run, and it needs no control channel at all (workflow.md, *What `pause` actually pauses*).
         levels: Where the tuning loop has already climbed each task's sample concurrency, by identifier. A respawn spawns at its task's level rather than restarting at the floor — the climb was earned against measured headroom, and a worker crash does not unmeasure it. Consulted only while a ramp is active, so a pinned run cannot be moved by stale levels.
         ruled: Tasks a standing `rerun` ruling covers, each with the ruling's instant (ISO), folded by the turn. Two effects, both the ruling's application: the stall guard forgives attempt history at or before the instant — the decision to try again was made by the only party entitled to make one — and the covered tasks sort ahead of fresh work, by queue order rather than preemption (scheduling.md §5.5).
-        accepted: Tasks a standing `accept` ruling has settled, folded by the turn. Neither spawned nor stalled: an accepted task's remaining work is work a person decided not to do, so respawning it would be Steward overruling the only party entitled to end it.
+        accepted: Tasks a standing `accept` ruling has settled, folded by the turn. Neither spawned nor stalled: an accepted task's remaining work is work an operator decided not to do, so respawning it would be Steward overruling the only party entitled to end it.
         budget: The machine's sandbox concurrency budget, where one is known — the definition's `max_sandboxes`, else what the last turn read back off the workers. Spawns are clamped to an even share of it, because a task's containers never exceed its running samples and every worker otherwise starts at a floor that knows nothing about the host (scheduling.md §3.6). `None` where no budget is known, which is an elastic provider, or the first tend of a run whose definition declared none.
 
     Returns:
@@ -428,9 +428,9 @@ def reconcile(
             continue
         if observation.identifier in settled:
             # before the stall guard, and never both. The guard's finding is
-            # *respawning this has stopped accomplishing anything and a person
+            # *respawning this has stopped accomplishing anything and an operator
             # should look*, which is the question an acceptance answers --
-            # reporting both would put a decision back in front of the person
+            # reporting both would put a decision back in front of the operator
             # who just made it
             latched.append(observation.identifier)
             continue
@@ -468,9 +468,9 @@ def reconcile(
     )
     queued = poured.queued
     ramp = resolve_samples_ramp(manifest, pool)
-    # only while a ramp is in force: under a pin the level is a number a person
+    # only while a ramp is in force: under a pin the level is a number an operator
     # chose, and a pinned fleet overshooting its own `max_sandboxes` is two
-    # numbers the same person owns -- reported rather than resolved (§3.6)
+    # numbers the same operator owns -- reported rather than resolved (§3.6)
     share = (
         _sandbox_share(
             budget,
@@ -627,7 +627,7 @@ def _stalled(
 
     **An invalidation clears the history before it, and only that.** Somebody reached in and marked samples for a re-run, which is a decision to try again made by the only party entitled to make one — so nothing that happened before they acted counts against the task any more. What they cannot do is exempt it forever: a retry that dies before landing a replacement leaves the invalidated log current, so *returning* here rather than resetting made the one branch with no ceiling on it, and an import error under an invalidated log respawned every ten minutes for as long as the run lasted. Attempts since the invalidation count normally.
 
-    **A rerun ruling forgives everything at or before it, and only that.** The same shape as the invalidation clause below, reached one layer up: a person (or a standing policy) ruled the class re-runnable, which is a decision to try again by the only party entitled to make one — so the attempts before the ruling stop counting, the first post-ruling attempt starts a fresh progress baseline, and `stall_after` fresh fruitless attempts re-stall (errors.qmd, the cleared-history doctrine). The forgiveness instant is the later of the ruling and the invalidation's own write time, since the applier's invalidation always postdates the ruling it applies.
+    **A rerun ruling forgives everything at or before it, and only that.** The same shape as the invalidation clause below, reached one layer up: an operator (or a standing policy) ruled the class re-runnable, which is a decision to try again by the only party entitled to make one — so the attempts before the ruling stop counting, the first post-ruling attempt starts a fresh progress baseline, and `stall_after` fresh fruitless attempts re-stall (errors.qmd, the cleared-history doctrine). The forgiveness instant is the later of the ruling and the invalidation's own write time, since the applier's invalidation always postdates the ruling it applies.
 
     **An instant that will not read is reported, never counted.** Every unparseable time here weakens the guard in the lenient direction — losing a stall rather than inventing one — and that used to be silent, so a task whose record was damaged looked exactly like one converging. `warnings` collects one line per skipped instant, for the executing turn to log.
     """

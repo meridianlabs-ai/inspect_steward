@@ -1,6 +1,6 @@
 """`_steward.yaml` — everything this human has told Steward, structured and not.
 
-One file with two regions. **The settings are what Steward executes at 3am with nobody watching; `policies` is what an agent applies when it arrives.** They live together because the line between them is a fact about Steward's current capability rather than about the author's intent, and it moves as Steward improves — two files would make the reader's mental model track the implementation. Adjacency is the point: a human writes one sentence about concurrency and the executable half sits directly beside the reasoning, where neither can drift from the other. The seam being a key rather than a delimiter is what lets a rule graduate from prose to setting by moving out of `policies` and up the file, with nothing reformatted.
+One file with two regions. **The settings are what Steward executes at 3am with nobody watching; `policies` is what an agent applies when it arrives.** They live together because the line between them is a fact about Steward's current capability rather than about the author's intent, and it moves as Steward improves — two files would make the reader's mental model track the implementation. Adjacency is the point: an operator writes one sentence about concurrency and the executable half sits directly beside the reasoning, where neither can drift from the other. The seam being a key rather than a delimiter is what lets a rule graduate from prose to setting by moving out of `policies` and up the file, with nothing reformatted.
 
 **The rule that makes the file safe is that it may express only what the definition cannot** (workflow.md, *A config file may not say anything the definition can*). Things affecting Steward, never things affecting Inspect. The sharpest form of the rule, and the one the current key set obeys with no exceptions to explain: **inspect's words go in the definition; this file holds only words `eval_set()` does not know.** `max_workers` qualifies because fanning an eval set across processes is Steward's invention and no `eval_set()` argument reaches it; `max_samples` and `max_tasks` do not, and are refused by name.
 
@@ -15,9 +15,9 @@ That rule is stricter than the test it replaced. `max_tasks` used to live here, 
 
 The cost of the format is here rather than hidden. When the prose sat below a fence, no prose however malformed could break a tend, because the parser stopped at the closing delimiter. Now it is a YAML value, so a mis-indented block scalar is a parse failure for the whole file. That is a real loss and it is survivable for a reason that already existed: parsing raises, and a tend degrades. See below.
 
-**Every value is typed, and validated strictly.** That is what answers YAML's coercion hazards, which workflow.md §5.3 could dismiss for the journal on the grounds that Steward wrote it and here cannot, because a human does. Typing alone is not enough and it is worth saying why: pydantic's default is coercive and YAML's is too, so the two compose into the hazard rather than cancelling it — `max_workers: yes` arrives as `True` and validates as `1`, throttling a fleet to a single worker with nothing reported. `strict=True` is what turns that into a refusal, and the error names the value that arrived so the author can see what YAML did to it.
+**Every value is typed, and validated strictly.** That is what answers YAML's coercion hazards, which workflow.md §5.3 could dismiss for the journal on the grounds that Steward wrote it and here cannot, because an operator does. Typing alone is not enough and it is worth saying why: pydantic's default is coercive and YAML's is too, so the two compose into the hazard rather than cancelling it — `max_workers: yes` arrives as `True` and validates as `1`, throttling a fleet to a single worker with nothing reported. `strict=True` is what turns that into a refusal, and the error names the value that arrived so the author can see what YAML did to it.
 
-**Parsing is strict, and degrading is the caller's.** A malformed file raises here, always — this module has no way to know whether the caller has anything better to fall back on. A tend does: the settings in force are recorded in every `observation`, so it can carry on with the last known good ones and say so, which is the right behaviour for a file a human may edit at 10pm while a fleet is up. A command with no such history still refuses (`_tend.turn`).
+**Parsing is strict, and degrading is the caller's.** A malformed file raises here, always — this module has no way to know whether the caller has anything better to fall back on. A tend does: the settings in force are recorded in every `observation`, so it can carry on with the last known good ones and say so, which is the right behaviour for a file an operator may edit at 10pm while a fleet is up. A command with no such history still refuses (`_tend.turn`).
 
 That §5.3 rejected markdown-with-front-matter for `journal.jsonl` is not in tension with this, and is in fact the argument that eventually removed the fence here too. Its case was that block-delimited formats fail *globally* — one mistyped `---` swallows the remainder of a file — which is disqualifying for an append-only log of thousands of machine-written entries and merely unhelpful for one human-authored file read at startup. What settled it is that the fence was never buying anything: the prose below it was already a value Steward carried rather than a document it parsed, so making that explicit costs one failure mode and removes a delimiter nobody needed to learn.
 """
@@ -120,7 +120,7 @@ Everything above the notification rows is the definition's, and configuration.md
 
 `notify` and `store` are renames rather than relocations: both keys used to exist here under those names and both still exist under others, so pointing at the new name is the whole message.
 
-**The notification channel used to be refused here and is now `notification` below**, which reverses the position this table took. The old rule was inherited from upstream, where notification config is reference-only so that credentials stay out of source, shell history, process listings, and eval logs — and the half of it Steward keeps is that nothing ever *prints* or *propagates* the value (`status` renders policies alone; `_workspace.sync` omits this key from the copy it writes beside the logs). What changed is the judgement about the file itself: an unattended run that cannot reach a person is the failure the whole design exists to prevent, and making the channel sayable in the one place that survives to 02:00 is worth more than the discipline of refusing it. A workspace that would rather not commit one writes `.env` or the variable, which is what the template recommends.
+**The notification channel used to be refused here and is now `notification` below**, which reverses the position this table took. The old rule was inherited from upstream, where notification config is reference-only so that credentials stay out of source, shell history, process listings, and eval logs — and the half of it Steward keeps is that nothing ever *prints* or *propagates* the value (`status` renders policies alone; `_workspace.sync` omits this key from the copy it writes beside the logs). What changed is the judgement about the file itself: an unattended run that cannot reach an operator is the failure the whole design exists to prevent, and making the channel sayable in the one place that survives to 02:00 is worth more than the discipline of refusing it. A workspace that would rather not commit one writes `.env` or the variable, which is what the template recommends.
 """
 
 
@@ -162,13 +162,13 @@ class Directives(BaseModel):
 
     Written with a unit — `stuck_after: 5h` — and stored as seconds, exactly like `tend_interval`. Named to rhyme with `stall_after`, because the two are siblings: a *stalled* task's worker keeps dying, a *stuck* sample's worker is perfectly healthy and one call inside it never returns.
 
-    **A reporting threshold, never a limit.** Nothing is cancelled when it trips — a `stuck` item appears, carrying the `inspect ctl` line that would act. The enforced budget is the definition's `working_limit`, which is refused here by name; this key decides when a person hears about a sample the limit has not caught. Passes the admission test the same way `stall_after` does: watching a fleet for silence is Steward's invention, and no `eval_set()` argument reaches it. Default: `DEFAULT_STUCK_AFTER` (`_worker.live`), five hours.
+    **A reporting threshold, never a limit.** Nothing is cancelled when it trips — a `stuck` item appears, carrying the `inspect ctl` line that would act. The enforced budget is the definition's `working_limit`, which is refused here by name; this key decides when an operator hears about a sample the limit has not caught. Passes the admission test the same way `stall_after` does: watching a fleet for silence is Steward's invention, and no `eval_set()` argument reaches it. Default: `DEFAULT_STUCK_AFTER` (`_worker.live`), five hours.
     """
 
     stuck_cancel: bool | list[str] | None = Field(default=None)
     """Which stuck pending tool calls the agent may cancel without asking, or unset for none.
 
-    `true` admits any tool function; a list admits only those named (`stuck_cancel: [bash]`); unset or `false` admits nothing — the default, because cancelling a call loses whatever it was mid-way through. What it moves is the `stuck` item's owner: a task whose every stuck sample is a pending call this key admits is the agent's to act on (rung 1 of the ladder, execution.md §7.5), and everything else stays a person's.
+    `true` admits any tool function; a list admits only those named (`stuck_cancel: [bash]`); unset or `false` admits nothing — the default, because cancelling a call loses whatever it was mid-way through. What it moves is the `stuck` item's owner: a task whose every stuck sample is a pending call this key admits is the agent's to act on (rung 1 of the ladder, execution.md §7.5), and everything else stays an operator's.
 
     `true` is meaningful here where `notification: true` is refused, because *any tool call* is a real universal where *somewhere* is not an address.
     """
@@ -318,7 +318,7 @@ class Directives(BaseModel):
 
     **A URL here is committed, and that is a real cost accepted rather than overlooked.** `_steward.yaml` is tracked; `.env` and the variable are not, and the template says so. What the design keeps from the reference-only discipline it is departing from is that the value never *travels*: `status` renders policies alone, and `_workspace.sync` replaces this key before writing the copy that lands beside the logs, which is the one path that would otherwise put a token in an object store.
 
-    **`false` silences Steward and not the fleet.** A worker's notifications are blocking human-in-the-loop moments — `ask_user()`, the human approver — and the opposite semantics on the same pipe (workflow.md §11.4). Silencing those would hang a sample with nobody told, which is a worse failure than the noise being declined.
+    **`false` silences Steward and not the fleet.** A worker's notifications are blocking human-in-the-loop moments — `ask_user()`, the operator approver — and the opposite semantics on the same pipe (workflow.md §11.4). Silencing those would hang a sample with nobody told, which is a worse failure than the noise being declined.
     """
 
     @field_validator("notification", mode="before")
@@ -497,7 +497,7 @@ class Directives(BaseModel):
 
     The half of the file Steward does not execute. It is typed only enough to be carried and reported: a block scalar for a project whose standards want paragraphs, a list for one whose standards are three sentences, and no attempt to tell them apart. Nothing here parses the text, so a rule Steward cannot act on costs nothing beyond the words.
 
-    Last in the model because it is last in the file a person writes — settings first, then the reasoning nobody has taught Steward to execute yet.
+    Last in the model because it is last in the file an operator writes — settings first, then the reasoning nobody has taught Steward to execute yet.
     """
 
     @field_validator("policies", mode="before")

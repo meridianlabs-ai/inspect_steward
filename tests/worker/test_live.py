@@ -260,7 +260,7 @@ def test_connection_pools_are_summed_across_a_task_s_controllers(
     assert (task.connections.in_use, task.connections.limit) == (12, 30)
 
 
-# --- samples waiting on a person ----------------------------------------
+# --- samples waiting on an operator ----------------------------------------
 
 
 def parked_samples(*activities: dict[str, object] | None) -> Routes:
@@ -332,7 +332,7 @@ def test_a_worker_with_nothing_waiting_reports_no_park(sockets: Path) -> None:
 
 
 def test_two_samples_parked_on_the_same_tool_name_it_once(sockets: Path) -> None:
-    # the functions are what a person reads, so they are deduplicated; the
+    # the functions are what an operator reads, so they are deduplicated; the
     # counts are what says how many decisions are owed
     routes = parked_samples(approval("bash"), approval("bash"))
     with worker(sockets / "w.sock", routes) as target:
@@ -430,7 +430,7 @@ def test_a_slow_but_streaming_generate_is_never_stuck(sockets: Path) -> None:
 
 
 def test_a_parked_sample_is_waiting_on_a_person_and_not_stuck(sockets: Path) -> None:
-    # the human branch of the classification leads upstream precisely so the
+    # the operator branch of the classification leads upstream precisely so the
     # two never conflate: a park however old is a decision owed, not a wedge
     routes = moving(row(3600, approval("bash")), row(3600, QUESTION, sample_id="s2"))
     with worker(sockets / "w.sock", routes) as target:

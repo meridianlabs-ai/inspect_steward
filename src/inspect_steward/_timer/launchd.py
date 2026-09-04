@@ -1,6 +1,6 @@
 """launchd — the timer macOS actually has.
 
-A user agent in `~/Library/LaunchAgents`, loaded into the GUI domain so it runs whenever the user is logged in. `StartInterval` takes seconds and needs no expression language, which makes this the one backend where the interval a person asked for is the interval installed.
+A user agent in `~/Library/LaunchAgents`, loaded into the GUI domain so it runs whenever the user is logged in. `StartInterval` takes seconds and needs no expression language, which makes this the one backend where the interval an operator asked for is the interval installed.
 
 **The plist is built by `plistlib` rather than by a template.** A workspace path can contain an ampersand, and a hand-written XML template would produce a file launchd rejects with a message about the wrong line of an encoded document.
 """

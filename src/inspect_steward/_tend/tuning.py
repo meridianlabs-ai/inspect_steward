@@ -63,7 +63,7 @@ class TaskSignals:
     identifier: str
 
     key: str
-    """Display key, because every sentence this module writes is read by a person."""
+    """Display key, because every sentence this module writes is read by an operator."""
 
     task_id: str
     """The control channel's selector, carried so a move needs no second lookup."""
@@ -177,7 +177,7 @@ class Move:
 class Proposal:
     """Capacity somebody chose not to authorize, surfaced to the one who could.
 
-    Two shapes with one meaning — *the binding constraint is yours*. A pinned setpoint showing a clean, saturated window for two turns running; a ramp at its ceiling with pushback still absent. In both, tend has no authority left to spend, so the item's owner is the human whose number binds (scheduling.md §3.3).
+    Two shapes with one meaning — *the binding constraint is yours*. A pinned setpoint showing a clean, saturated window for two turns running; a ramp at its ceiling with pushback still absent. In both, tend has no authority left to spend, so the item's owner is the operator whose number binds (scheduling.md §3.3).
     """
 
     identifier: str

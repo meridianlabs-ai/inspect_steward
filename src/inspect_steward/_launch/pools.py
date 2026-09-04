@@ -10,7 +10,7 @@ which reads like a network fault rather than a ceiling somebody is allowed to ra
 
 **The daemon reports this by omission**, which is what makes detecting it one subprocess rather than an argument about config files. `docker info` carries `DefaultAddressPools` only where it was configured, so an absent field *is* the built-in default rather than an unknown. Steward reads the daemon and never infers from `daemon.json`, which says what was asked for rather than what is in force — the file is consulted only when writing a fix into it.
 
-**Steward writes the file and never restarts the daemon.** A restart is what makes the change take effect and it kills every running container on the host — including work Steward has no claim on, which on a shared eval box belongs to somebody else. Writing is one `mv` from undone and needs no privilege on Docker Desktop, where the file is the user's own; the restart is left to the person, with the command for their platform printed.
+**Steward writes the file and never restarts the daemon.** A restart is what makes the change take effect and it kills every running container on the host — including work Steward has no claim on, which on a shared eval box belongs to somebody else. Writing is one `mv` from undone and needs no privilege on Docker Desktop, where the file is the user's own; the restart is left to the operator, with the command for their platform printed.
 
 See https://straz.to/2021-09-08-docker-address-pools/, which is where this ceiling is worked out.
 """
@@ -166,7 +166,7 @@ def daemon_config_path() -> Path:
 def write_pools(advice: PoolAdvice) -> Path | None:
     """Merge the proposed pools into `daemon.json`, keeping a copy of what was there.
 
-    **A merge rather than a write**, because the file is rarely only ours: Docker Desktop ships one carrying `builder` and `experimental`, and replacing it would silently drop settings the person chose. Only `default-address-pools` is set.
+    **A merge rather than a write**, because the file is rarely only ours: Docker Desktop ships one carrying `builder` and `experimental`, and replacing it would silently drop settings the operator chose. Only `default-address-pools` is set.
 
     Args:
         advice: What to write, and where.
@@ -176,7 +176,7 @@ def write_pools(advice: PoolAdvice) -> Path | None:
 
     Raises:
         OSError: The file could not be read or written — on Linux, most often because `/etc/docker/daemon.json` needs root, which is a refusal to report rather than a privilege to acquire.
-        ValueError: The existing file is not JSON, which is a file to show a person rather than one to overwrite.
+        ValueError: The existing file is not JSON, which is a file to show an operator rather than one to overwrite.
     """
     config: dict[str, Any] = {}
     backup: Path | None = None

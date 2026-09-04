@@ -1,6 +1,6 @@
-"""What happened to this run, as a person reads it.
+"""What happened to this run, as an operator reads it.
 
-The summary's third section (agent.md §4.3). Where the items above it say what is *open* and the table says where the run *stands*, this says what has been *done* — by Steward, by an agent, by a person — and it is the only place a reader arriving at six can learn that somebody dealt with something at two.
+The summary's third section (agent.md §4.3). Where the items above it say what is *open* and the table says where the run *stands*, this says what has been *done* — by Steward, by an agent, by an operator — and it is the only place a reader arriving at six can learn that somebody dealt with something at two.
 
 **Complete rather than a delta, deliberately.** It reports everything material since the workspace began, not everything since some mark, which is what keeps the summary stateless: `status` needs no cursor, and the collection cursor is left with one job instead of two.
 
@@ -112,7 +112,7 @@ def happened(events: list[JournalEvent]) -> Happened:
 def _describe(event: JournalEvent) -> str:
     """One line for an event, or empty where its payload does not support one.
 
-    A payload this version does not understand yields nothing rather than a partial line: the journal is history and an unrecognised shape is still history, but rendering half of it to a person is worse than rendering none.
+    A payload this version does not understand yields nothing rather than a partial line: the journal is history and an unrecognised shape is still history, but rendering half of it to an operator is worse than rendering none.
     """
     payload = event.payload
     if event.type == ACKNOWLEDGED:
@@ -123,7 +123,7 @@ def _describe(event: JournalEvent) -> str:
     if event.type == RAISED:
         summary = _text(payload, "summary") or _text(payload, "id")
         note = _text(payload, "note")
-        return f"raised with a person: {summary}" + (f" — {note}" if note else "")
+        return f"raised with an operator: {summary}" + (f" — {note}" if note else "")
     if event.type == ACTION:
         return _action(payload)
     if event.type == PAUSED:
@@ -332,7 +332,7 @@ def _reap(payload: dict[str, object]) -> str:
 
     **The promise of a retry is made only where the turn actually made one.** A departure on the turn the stall guard trips is reaped and not respawned, and so is one on a run already at its width; saying *it will be tried again* there sends a reader looking for a worker that was never going to start.
     """
-    # the display keys, never the identifiers beside them: an entry a person
+    # the display keys, never the identifiers beside them: an entry an operator
     # cannot read is an entry that costs the section its readers
     tasks = ", ".join(_strings(payload.get("tasks")))
     where = f" (pid {pid})" if isinstance(pid := payload.get("pid"), int) else ""

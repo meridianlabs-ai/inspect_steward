@@ -30,10 +30,10 @@ from .turn import find_workspace
 )
 @click.option(
     "--by",
-    type=click.Choice(["human", "agent"]),
-    default="human",
+    type=click.Choice(["operator", "agent"]),
+    default="operator",
     show_default=True,
-    help="Who decided. An agent relaying a person's instruction records `human`.",
+    help="Who decided. An agent relaying an operator's instruction records `operator`.",
 )
 def pause_command(reason: str, by: str) -> None:
     """Stop scheduling new work, leaving what is running to finish.

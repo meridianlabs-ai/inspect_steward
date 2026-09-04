@@ -85,6 +85,7 @@ from .layout import (
     resolve_log_dir,
 )
 from .log import LOG_BOUND, steward_log, truncate_log
+from .operator import operator_name
 from .overrides import (
     ALIASED,
     LOG_DIR,
@@ -92,7 +93,6 @@ from .overrides import (
     read_overrides,
     spellings,
 )
-from .person import person_name
 from .sync import (
     OMITTED,
     OMITTED_VALUE,
@@ -165,7 +165,7 @@ __all__ = [
     "acquire",
     "append_event",
     "create_workspace",
-    "person_name",
+    "operator_name",
     "ensure_gitignore",
     "read_acks",
     "read_armed",

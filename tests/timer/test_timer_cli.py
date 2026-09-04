@@ -194,7 +194,7 @@ def test_a_dotenv_holding_the_key_arms_normally(
 def test_a_dotenv_above_the_workspace_arms_normally(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
-    """One `.env` over a directory of runs is how a person with several keeps keys.
+    """One `.env` over a directory of runs is how an operator with several keeps keys.
 
     A scheduled tend runs in the workspace root and inspect's `find_dotenv`
     walks up from there, so that file is read at 02:00 exactly as it is now.
@@ -414,7 +414,7 @@ def test_pausing_records_who_and_why(workspace: Workspace) -> None:
     assert "⏸" in output
     paused = read_pause(read_journal(workspace.journal).events)
     assert paused is not None
-    assert (paused.by, paused.reason) == ("human", "waiting on a quota increase")
+    assert (paused.by, paused.reason) == ("operator", "waiting on a quota increase")
 
 
 def test_pausing_refuses_without_a_reason(workspace: Workspace) -> None:

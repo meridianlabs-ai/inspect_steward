@@ -1,9 +1,9 @@
-"""A detached worker waiting for a person, on a real worker.
+"""A detached worker waiting for an operator, on a real worker.
 
 The one claim in step 20 no synthesized state can make, and the reason the step
 exists at all. Human input dispatches **ACP → Textual panel → console**; a
 Steward worker has no display and a closed stdin, so before this the last of the
-three raised `EOFError` into the tool call and a request for a human decision
+three raised `EOFError` into the tool call and a request for an operator decision
 landed as an errored sample in an otherwise successful log — not a hang, not a
 visible failure, an anomaly that did not say what it was.
 
@@ -76,7 +76,7 @@ def test_a_worker_waiting_on_an_approval_is_reported_with_the_way_to_answer_it(
     item = found[0]
 
     # the whole item, and each part of it for its own reason
-    assert item.owner is Owner.HUMAN
+    assert item.owner is Owner.OPERATOR
     assert item.level is Level.BLOCKING
     assert not item.acknowledgeable
     # the tool the model asked to call, which is the one structural part of a

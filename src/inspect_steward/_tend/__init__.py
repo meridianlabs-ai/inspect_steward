@@ -16,7 +16,7 @@ from .items import (
 )
 from .notify import notify_failure, notify_turn, turn_post
 from .progress import LIVE_ONLY, Budget, Live, Progress, TaskProgress, task_progress
-from .render import anomalies_line, status_markdown
+from .render import anomalies_line, collect_markdown, status_headline, status_markdown
 from .table import progress_table
 from .tuning import (
     Baseline,
@@ -67,6 +67,7 @@ __all__ = [
     "TuningPlan",
     "Verdict",
     "anomalies_line",
+    "collect_markdown",
     "by_owner",
     "notify_failure",
     "notify_turn",
@@ -77,6 +78,7 @@ __all__ = [
     "read_ramp_record",
     "signals",
     "status",
+    "status_headline",
     "status_markdown",
     "task_progress",
     "tend",

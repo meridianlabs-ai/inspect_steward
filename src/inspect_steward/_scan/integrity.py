@@ -111,7 +111,7 @@ evidence for it; false = the score can be trusted as a reflection of what the ag
 actually did.)
 
 Answer true only for what you can show, not for what would merit a look. A true \
-answer costs a person a decision, so a finding you cannot make the case for is \
+answer costs an operator a decision, so a finding you cannot make the case for is \
 worse than silence: it buries the ones that matter. If your conclusion would be \
 that somebody ought to investigate further, the answer is false — say what you \
 found in the explanation and let the score stand.
@@ -230,7 +230,7 @@ class IntegrityAnswer(BaseModel):
 def _outcome_line(transcript: Transcript) -> str:
     """Describe the sample's recorded score so the reviewer can audit it.
 
-    **The scorer's own account goes in, not only its verdict.** Asked whether a score can be trusted while shown nothing but the number, the reviewer can do no better than report that the number looks inconsistent with the trajectory and recommend a person go and read the grader logs — a finding nobody can act on, raised against evidence that was sitting on the same sample. Observed on a SWE-bench-style set: five samples flagged, every explanation ending in *a reviewer should inspect the grader logs*, four of them resolvable from the explanation alone. A test-suite scorer records its required/passed/missing counts here, and that is exactly what separates a task the agent failed from one the grading got wrong.
+    **The scorer's own account goes in, not only its verdict.** Asked whether a score can be trusted while shown nothing but the number, the reviewer can do no better than report that the number looks inconsistent with the trajectory and recommend an operator go and read the grader logs — a finding nobody can act on, raised against evidence that was sitting on the same sample. Observed on a SWE-bench-style set: five samples flagged, every explanation ending in *a reviewer should inspect the grader logs*, four of them resolvable from the explanation alone. A test-suite scorer records its required/passed/missing counts here, and that is exactly what separates a task the agent failed from one the grading got wrong.
 
     **The field is upstream in inspect_scout**, which this project tracks at `main` (`tool.uv.sources`), so it is read as a plain attribute rather than defensively.
     """

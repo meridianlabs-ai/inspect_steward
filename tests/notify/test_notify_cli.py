@@ -1,4 +1,4 @@
-"""The three surfaces a person types at, and the one they never see.
+"""The three surfaces an operator types at, and the one they never see.
 
 Thin, like every CLI suite here: resolution is `test_channel.py`'s subject and
 the triggers are `test_triggers.py`'s. What is only true at this layer is the
@@ -98,7 +98,7 @@ def test_stewards_own_kinds_are_refused_rather_than_undocumented(
     kind: str, workspace: Workspace
 ) -> None:
     # a hand-sent `gate` is a claim about the run nobody computed, and a
-    # hand-sent `signed_off` is a claim that a human adjudicated
+    # hand-sent `signed_off` is a claim that an operator adjudicated
     code, output = run("notify", "--kind", kind, "something happened")
 
     assert code != 0
@@ -196,7 +196,7 @@ def test_a_channel_that_resolves_to_nothing_says_so_at_launch(
     assert code == 0, output
     assert "no usable targets" in output
     # and not the other line, which would tell them to set what they have set
-    assert "nothing will reach you if this run needs a person — set" not in output
+    assert "nothing will reach you if this run needs an operator — set" not in output
 
 
 def test_a_workspace_that_declined_is_not_nagged(

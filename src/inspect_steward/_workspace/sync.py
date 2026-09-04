@@ -6,7 +6,7 @@ So each tend mirrors the workspace's files into the log directory. Somebody read
 
 **Always, rather than only when the log directory is remote.** The rule used to test for remoteness, which silently skipped a definition pointing at a mounted NAS or `/data/runs/oct/logs` — the same need, the same absent files, and a discriminator that answers a question nobody asked. The workspace follows its logs.
 
-**Exclusionary, because the point is to carry out what nobody predicted.** An analysis an agent wrote, a note a human left, a report a scaffold generated: an allow-list leaves every one of those behind, which is the failure you notice last and regret most. So everything at the top level goes, minus a short deny list — and dotfiles are on it, which is what keeps a stray `.env` out of a bucket.
+**Exclusionary, because the point is to carry out what nobody predicted.** An analysis an agent wrote, a note an operator left, a report a scaffold generated: an allow-list leaves every one of those behind, which is the failure you notice last and regret most. So everything at the top level goes, minus a short deny list — and dotfiles are on it, which is what keeps a stray `.env` out of a bucket.
 
 **What leaves is transcript-derived, and Steward does not pretend otherwise.** `journal.jsonl` holds error text; an agent's writeup quotes what it read. Usually the destination is the same place as the logs, so the audience is unchanged — but an `.eval` is a zip that needs tooling and a text file is greppable by anyone with read access, and easy extraction is what turns a theoretical exposure into a real one. There is no redactor here, deliberately: one that catches most secrets converts *this holds transcript material* into an implied guarantee that it does not (workflow.md §9.2).
 
@@ -254,7 +254,7 @@ HARMLESS = frozenset({"tag:yaml.org,2002:bool", "tag:yaml.org,2002:null"})
 def _omitted(workspace: Workspace, path: Path) -> Path | None:
     """The file to upload for this one — itself, unless it is `_steward.yaml`.
 
-    **Line-based rather than a YAML round-trip**, because the file is mostly comments: re-emitting it from a parse would land a copy in the log store that shares none of the original's explanation of itself. The value is replaced in place and any continuation lines under it are dropped, which covers the block scalar nobody should write and one person eventually will.
+    **Line-based rather than a YAML round-trip**, because the file is mostly comments: re-emitting it from a parse would land a copy in the log store that shares none of the original's explanation of itself. The value is replaced in place and any continuation lines under it are dropped, which covers the block scalar nobody should write and one operator eventually will.
 
     **And then verified, which is what makes it a guarantee rather than a pattern that has held so far.** A rewrite driven by a regex is a rewrite that can be evaded — a flow mapping (`{notification: slack://…}`) is valid YAML on one line and matches nothing line-shaped — and the cost of a miss here is a bearer token in an object store. So the scrubbed text is parsed back, and a file still carrying a channel is **withheld rather than sent**. Failing closed is right for this one file: what is lost is a remote reader's copy of settings they can also see in `status.md`, and what is prevented is a credential nobody can recall.
 
@@ -335,7 +335,7 @@ def _is_channel(value: yaml.Node) -> bool:
 def _without_notification(text: str) -> str:
     """`_steward.yaml` with the channel replaced by a note saying so.
 
-    Continuation lines under the key are dropped with it, which covers the block scalar nobody should write and one person eventually will. Blank lines are kept, so the copy still reads like the file it came from.
+    Continuation lines under the key are dropped with it, which covers the block scalar nobody should write and one operator eventually will. Blank lines are kept, so the copy still reads like the file it came from.
     """
     lines: list[str] = []
     dropping: int | None = None

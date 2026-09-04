@@ -28,7 +28,7 @@ class Scheduler(Protocol):
         ...
 
     def describe(self, entry: TimerEntry) -> str:
-        """What was installed, in words, for a person reading a command's output."""
+        """What was installed, in words, for an operator reading a command's output."""
         ...
 
     def arm(self, entry: TimerEntry) -> None:

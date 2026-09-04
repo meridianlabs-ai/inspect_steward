@@ -6,9 +6,9 @@
 
 **The latches need no state of their own.** A `gate` posts once because `signoff_ready`'s id is keyed on the manifest digest, so it appears in one turn's diff and no later one — and a relaunch that changes the task set mints a new id, which is the re-arming workflow.md §11.1 says a manual convention would get wrong. The one thing with no edge to stand on is a turn that *raises*: it never reaches its observation, so `NOTIFIED` is written for that case alone.
 
-**A channel reaches a person, so it carries the person's items and not the agent's.** An `unreadable` log or a failed action is routed to the agent precisely because a person is not the one who should look at it, and a post that names it anyway is the notification advertising work its reader was told not to do — which is how a channel becomes one somebody mutes. The projections that a *human* reads on purpose (`status.md`, the terminal) still show both, grouped by owner; this is the one surface where a reader did not choose the moment.
+**A channel reaches an operator, so it carries the operator's items and not the agent's.** An `unreadable` log or a failed action is routed to the agent precisely because an operator is not the one who should look at it, and a post that names it anyway is the notification advertising work its reader was told not to do — which is how a channel becomes one somebody mutes. The projections that a *human* reads on purpose (`status.md`, the terminal) still show both, grouped by owner; this is the one surface where a reader did not choose the moment.
 
-**Unless nobody is picking them up, at which point they are the person's after all.** An agent's item is only the agent's while there is an agent — and the thing a person has to do about a workspace nobody has attached to is attach to it. `_unattended` is the whole of that judgement, and it is deliberately made from what the journal already records rather than from a new setting: `collect` stamps the journal, so the collection age is a fact about this run rather than a promise about anyone's tooling.
+**Unless nobody is picking them up, at which point they are the operator's after all.** An agent's item is only the agent's while there is an agent — and the thing an operator has to do about a workspace nobody has attached to is attach to it. `_unattended` is the whole of that judgement, and it is deliberately made from what the journal already records rather than from a new setting: `collect` stamps the journal, so the collection age is a fact about this run rather than a promise about anyone's tooling.
 """
 
 import time
@@ -38,6 +38,7 @@ from .._workspace import (
     read_journal,
     read_notified,
 )
+from .anomalies_md import outcomes_table
 from .items import (
     FIXED_OWNER,
     UNWRITTEN,
@@ -74,7 +75,7 @@ SAID = 180
 """
 
 UNATTENDED_INTERVALS = 2
-"""Tends without a collection before the agent's items become the person's.
+"""Tends without a collection before the agent's items become the operator's.
 
 **Counted in tends rather than in minutes**, because what is being asked is *has an agent had the chance* — and the chances are turns. A workspace tended every ten minutes and one tended hourly are the same run from the agent's side, and a fixed duration would make the second one shout constantly and the first one stay quiet through most of a working day.
 
@@ -86,7 +87,7 @@ HOLD_TENDS = 6
 
 **Why hold at all.** A task whose scan flagged something is not *finished* in the sense a reader takes from a completion post — it is finished and now needs a decision. Posting *finished cybench* and then, twenty minutes later, *a decision needs attention* is two messages about one moment, and the first one is misleading for as long as it stands alone. So where there is an agent to do the investigating, the finish waits for it and the run says one thing once.
 
-**And why hold for a bounded time.** An agent that has attached and then stopped answering would otherwise hold a completion for the rest of the night, which is the failure this whole module exists to prevent. Six is about an hour at the default cadence — long enough for an investigation that involves reading transcripts, short enough that a person who checks after lunch has been told.
+**And why hold for a bounded time.** An agent that has attached and then stopped answering would otherwise hold a completion for the rest of the night, which is the failure this whole module exists to prevent. Six is about an hour at the default cadence — long enough for an investigation that involves reading transcripts, short enough that an operator who checks after lunch has been told.
 
 Counted in tends rather than minutes for `UNATTENDED_INTERVALS`' reason exactly: the question is how many chances the agent has had, and the chances are turns.
 """
@@ -240,7 +241,7 @@ def turn_post(result: "TendResult") -> Post | None:
         if _reaches(item, arriving, unattended=unattended, newly=newly)
     ]
     # over every open item rather than the shown ones, which keeps a `clear`
-    # from firing on a turn where the agent merely disposed of its own. A human
+    # from firing on a turn where the agent merely disposed of its own. An operator
     # queue that empties while the agent's stays busy therefore hears nothing
     # until the next post — under-firing the one kind that is good news, which
     # is the cheap direction to be wrong in
@@ -248,26 +249,38 @@ def turn_post(result: "TendResult") -> Post | None:
 
     if (kind := _kind(result, shown, cleared=cleared)) is None:
         return None
+    # the gate is the moment somebody is asked to accept results, so its post
+    # carries the by-task table beside the progress table; a progress post
+    # does not, since nothing there is being decided
+    gated = kind is Kind.GATE
     return Post(
         kind=kind,
         glyph=result.verdict.value,
         title=_title(result, shown),
         lines=_lines(result, _named(kind, shown)),
-        table=_table(result.progress, WIDTH),
-        narrow=_table(result.progress, NARROW),
+        table=_table(result.progress, WIDTH)
+        + (_outcomes(result, WIDTH) if gated else []),
+        narrow=_table(result.progress, NARROW)
+        + (_outcomes(result, NARROW) if gated else []),
     )
 
 
-def _reaches(item: Item, arriving: set[str], *, unattended: bool, newly: bool) -> bool:
-    """Whether one item is something to wake a person for, this turn.
+def _outcomes(result: "TendResult", width: int) -> list[str]:
+    """The by-task anomalies table for a post, blank-separated from the progress table above it, or nothing where every sample took the normal course."""
+    table = outcomes_table(result.dispositions.outcomes, result.progress, width=width)
+    return ["", *table] if table else []
 
-    A human item reaches them when it is new, which is the whole of the edge policy: the id changes when the condition materially does, so one post per condition follows for free.
+
+def _reaches(item: Item, arriving: set[str], *, unattended: bool, newly: bool) -> bool:
+    """Whether one item is something to wake an operator for, this turn.
+
+    An operator item reaches them when it is new, which is the whole of the edge policy: the id changes when the condition materially does, so one post per condition follows for free.
 
     **An agent item is different, and the difference had a hole in it.** It reaches them only where nobody is picking it up (`_unattended`) — except the self-healing ones, which Steward's own respawn is already resolving. But *newness* and *nobody is picking it up* are two edges that need not coincide: an item that appeared at 11pm to an attending agent is filtered out and spent, so when the agent goes quiet at 2am it is in no later diff and is escalated never. The escalation only ever caught items that happened to arrive after the agent had already gone.
 
     So the transition itself is an edge, and on that one turn every open agent item is offered — the same *once per condition* policy the ids give everything else, arrived at from the other side. What re-arms it is the workspace becoming unattended rather than the item becoming new.
 
-    **Two kinds are held back from that escalation for two different reasons.** A `task:` window is self-healing — Steward's own respawn is already resolving it. An **unwritten** analysis is the other case: it is standing work the agent does freely rather than an incident, and waking a person at 3am to say *nobody has written up the results yet* is paging them about the absence of prose. It stays on every surface a person can go and look at; it is simply not something a channel interrupts them for.
+    **Two kinds are held back from that escalation for two different reasons.** A `task:` window is self-healing — Steward's own respawn is already resolving it. An **unwritten** analysis is the other case: it is standing work the agent does freely rather than an incident, and waking an operator at 3am to say *nobody has written up the results yet* is paging them about the absence of prose. It stays on every surface an operator can go and look at; it is simply not something a channel interrupts them for.
     """
     if item.owner is not Owner.AGENT:
         return item.id in arriving
@@ -353,7 +366,7 @@ def _landed(result: "TendResult") -> dict[str, float]:
 
 
 def _newly_unattended(result: "TendResult") -> bool:
-    """Whether *this* is the turn on which the agent's items became the person's.
+    """Whether *this* is the turn on which the agent's items became the operator's.
 
     **Stateless, and it can be**, which is what keeps this module's *no latches of its own* property: `_unattended` is a threshold on the collection age, so the turn that crossed it is the one whose age passed the horizon somewhere inside the gap it is answering for. Nothing has to be remembered about the previous turn.
 
@@ -413,7 +426,7 @@ def _kind(result: "TendResult", shown: list[Item], *, cleared: bool) -> Kind | N
 def _title(result: "TendResult", shown: list[Item]) -> str:
     """The verdict as one line, counting only what this reader has to act on.
 
-    **One undifferentiated count, and the one place the wording leaves `verdict_line` behind.** That function splits *needs a person* from *for the agent* because its readers — `status.md`, the terminal — include the agent, for whom the split is the routing. Here there is one reader and everything in front of them is theirs by construction: an item that is only here because nobody collected is a person's job in exactly the way a `stalled` task is, and asking them to sort the two would be exporting Steward's bookkeeping to the person it is supposed to spare.
+    **One undifferentiated count, and the one place the wording leaves `verdict_line` behind.** That function splits *needs an operator* from *for the agent* because its readers — `status.md`, the terminal — include the agent, for whom the split is the routing. Here there is one reader and everything in front of them is theirs by construction: an item that is only here because nobody collected is an operator's job in exactly the way a `stalled` task is, and asking them to sort the two would be exporting Steward's bookkeeping to the operator it is supposed to spare.
 
     **Counted in decisions, which is the one noun that is true of all of them.** *Tasks* would be wrong about half the vocabulary — `drift`, `degraded`, `unsupervised`, `timer_drift` and `signoff_ready` are facts about the run with no task behind them — and a bare count is a sentence with a hole in it. `decisions` is also what the body already calls them where it runs out of room (`_capped`), so the title and the line under it are not two words for one thing.
 
@@ -512,9 +525,9 @@ def _shortened(line: str, short: dict[str, str]) -> str:
 def _item(item: Item, short: dict[str, str]) -> str:
     """One new decision, said the way its owner would ask about it.
 
-    Unmarked by owner, because by the time a line is here the distinction has already been made: the agent's items reach this list only where there is no agent, and tagging one *for the agent* in front of the person who has to go and start one would be naming the routing rather than the job.
+    Unmarked by owner, because by the time a line is here the distinction has already been made: the agent's items reach this list only where there is no agent, and tagging one *for the agent* in front of the operator who has to go and start one would be naming the routing rather than the job.
 
-    **And carrying a command only where a person is the one who runs it.** `steward launch`, `steward timer arm` and `steward timer status` are right on the item — `status.md` is read by the agent, and they are exactly what it should do — but printing one into a channel invites the reader to drive Steward by hand, when the arrangement everywhere else is that they say what they want and the agent does it. The kinds whose action survives are the ones in `FIXED_OWNER`: a kind whose owner policy may never move to the agent is, for the same reason, one whose action no agent can perform. Today that is the park, whose command reaches the worker holding a sample hostage — the one thing in the whole vocabulary that a person and only a person can end.
+    **And carrying a command only where an operator is the one who runs it.** `steward launch`, `steward timer arm` and `steward timer status` are right on the item — `status.md` is read by the agent, and they are exactly what it should do — but printing one into a channel invites the reader to drive Steward by hand, when the arrangement everywhere else is that they say what they want and the agent does it. The kinds whose action survives are the ones in `FIXED_OWNER`: a kind whose owner policy may never move to the agent is, for the same reason, one whose action no agent can perform. Today that is the park, whose command reaches the worker holding a sample hostage — the one thing in the whole vocabulary that an operator and only an operator can end.
 
     Where a command does travel it travels whole, trimmed summary or not: a command is either runnable or worthless, where half a sentence still says most of what the sentence said.
     """

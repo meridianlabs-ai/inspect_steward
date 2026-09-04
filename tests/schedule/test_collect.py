@@ -19,6 +19,7 @@ saying so*.
 """
 
 import os
+import re
 from pathlib import Path
 
 import pytest
@@ -46,7 +47,7 @@ DONE = SynthTask("done")
 def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Workspace:
     """A finished run with one decision of each ownership, and a little history.
 
-    The drift is the human's and the unreadable file is the agent's, which is
+    The drift is the operator's and the unreadable file is the agent's, which is
     what makes *raised* observable at all: raising is only ever the right verb
     for something the agent cannot itself close.
     """
@@ -95,12 +96,12 @@ def test_a_second_collection_shows_what_the_first_did_not(
     run("ack", "unreadable", "--reason", "a stray file", "--by", "agent")
     second = run("collect")
 
-    assert "paused by human — thinking about it" in first
+    assert "paused by operator — thinking about it" in first
     # the ack is the only thing that happened since, and the two entries the
     # first collection already showed are counted rather than repeated
     _, latest = sections(second)
     assert "accepted by agent" in latest
-    assert "paused by human" not in latest
+    assert "paused by operator" not in latest
     assert "2 earlier, not shown — `--since 0` for all." in latest
 
 
@@ -125,7 +126,7 @@ def test_a_collection_that_did_not_land_is_offered_again(
     run("collect", "--peek")
     _, latest = sections(run("collect"))
 
-    assert "paused by human — thinking about it" in latest
+    assert "paused by operator — thinking about it" in latest
     assert read_collected(read_journal(workspace.journal).events) is not None
 
 
@@ -140,7 +141,7 @@ def test_reaching_back_does_not_uncollect_what_came_after(
 
     # `--since` governs what is *shown*; the collection still records how far
     # the agent has now read, so re-reading the night does not replay it
-    assert "paused by human — thinking about it" in reached
+    assert "paused by operator — thinking about it" in reached
     assert "Nothing new." in latest
 
 
@@ -152,7 +153,7 @@ def test_raising_takes_an_item_out_of_the_queue_and_leaves_it_open(
 ) -> None:
     """The state an item-as-stream design has no room for.
 
-    Only a human can close a human-owned item, so without this the agent's own
+    Only an operator can close an operator-owned item, so without this the agent's own
     queue holds it at every collection all night — sixty appearances of one
     decision the agent has already done everything about.
     """
@@ -162,10 +163,10 @@ def test_raising_takes_an_item_out_of_the_queue_and_leaves_it_open(
     summary = run("status", "--format", "md")
 
     assert "the definition has changed" not in collected
-    # still open, still the person's, and still counted by the verdict: what
+    # still open, still the operator's, and still counted by the verdict: what
     # raising records is that the *agent's* part is done
     assert "the definition has changed" in summary
-    assert "⚠️ 2 need a person" in summary
+    assert "⚠️ 2 need an operator" in summary
 
 
 def test_nothing_the_projection_sets_aside_is_dropped_silently(
@@ -174,7 +175,7 @@ def test_nothing_the_projection_sets_aside_is_dropped_silently(
     """The rule that makes the filter safe, asserted as its own case.
 
     A shortened list with nothing saying so invites an agent to conclude there
-    are no open decisions when one is sitting with a human — and a test that
+    are no open decisions when one is sitting with an operator — and a test that
     only checked absence would pass against exactly that version.
     """
     run("raise", "drift", "--note", "asked in #evals")
@@ -182,7 +183,7 @@ def test_nothing_the_projection_sets_aside_is_dropped_silently(
 
     collected, _ = sections(run("collect"))
 
-    assert "2 raised, awaiting a person" in collected
+    assert "2 raised, awaiting an operator" in collected
 
 
 def test_a_queue_with_nothing_left_in_it_still_says_what_is_pending(
@@ -194,7 +195,7 @@ def test_a_queue_with_nothing_left_in_it_still_says_what_is_pending(
 
     collected, _ = sections(run("collect"))
 
-    assert "Nothing for you. 2 raised, awaiting a person." in collected
+    assert "Nothing for you. 2 raised, awaiting an operator." in collected
 
 
 def test_a_condition_that_changes_comes_back_as_new_work(tmp_path: Path) -> None:
@@ -209,7 +210,7 @@ def test_a_condition_that_changes_comes_back_as_new_work(tmp_path: Path) -> None
     stalling(workspace, 3)
     os.chdir(workspace.root)
 
-    first = run("status", "--format", "md")
+    first = run("collect", "--peek")
     raised = next(
         line.split("`")[-2] for line in first.splitlines() if "`stalled:" in line
     )
@@ -276,7 +277,7 @@ def test_an_exact_id_wins_before_prefixes_are_considered() -> None:
         return Item(
             id=identifier,
             kind="stalled",
-            owner=Owner.HUMAN,
+            owner=Owner.OPERATOR,
             level=Level.ATTENTION,
             subject="t",
             summary=identifier,
@@ -308,7 +309,7 @@ def test_raising_something_that_is_no_longer_open_says_when_it_was_raised(
     workspace: Workspace,
 ) -> None:
     # raising closes nothing, so reaching this message means the item went away
-    # for some other reason — here, the person it was handed to accepted it
+    # for some other reason — here, the operator it was handed to accepted it
     run("raise", "drift", "--note", "sent the diff over")
     run("ack", "drift", "--reason", "the edit was mine")
 
@@ -332,10 +333,11 @@ def test_an_agent_owned_item_cannot_be_raised(workspace: Workspace) -> None:
     assert result.exit_code != 0
     assert "the agent's own to resolve" in result.output
     assert "steward ack --by agent" in result.output
-    # and it is genuinely still there, in both projections
+    # and it is genuinely still there: on the agent's page, and counted on the
+    # operator's
     collected, _ = sections(run("collect"))
     assert "broken.eval" in collected
-    assert "broken.eval" in run("status", "--format", "md")
+    assert re.search(r"agent: \d+ open item", run("status", "--format", "md"))
 
 
 # --- a park: raisable, never acknowledgeable ----------------------------
@@ -373,7 +375,7 @@ def test_a_park_can_be_raised_even_though_it_cannot_be_acknowledged(
 ) -> None:
     """The gate is ownership alone, and this pair is why.
 
-    Under the old gate — acknowledgeable *and* human-owned — a park could be
+    Under the old gate — acknowledgeable *and* operator-owned — a park could be
     neither acked nor raised, so it sat in the agent's queue at every
     collection all night, which is the exact failure `raise` exists to prevent.
     """
@@ -382,7 +384,7 @@ def test_a_park_can_be_raised_even_though_it_cannot_be_acknowledged(
 
     assert "raised parked:" in run("raise", "parked", "--note", "texted them")
 
-    # out of the agent's queue and still in the person's, because a person
+    # out of the agent's queue and still in the operator's, because an operator
     # still owes an answer
     after, _ = sections(run("collect"))
     assert "waiting on an approval" not in after

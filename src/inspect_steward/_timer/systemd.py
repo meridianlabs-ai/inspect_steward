@@ -1,6 +1,6 @@
 """systemd — the timer a modern Linux has, in its user manager.
 
-Two units: a `oneshot` service that runs the tend and a timer that starts it. `--user` throughout, because Steward supervises one person's runs on one machine and a system unit would need root to install and would run as the wrong user anyway.
+Two units: a `oneshot` service that runs the tend and a timer that starts it. `--user` throughout, because Steward supervises one operator's runs on one machine and a system unit would need root to install and would run as the wrong user anyway.
 
 **`OnUnitActiveSec` rather than `OnCalendar`**, so the interval is a duration in seconds and not a calendar expression that has to be reverse-engineered from one. `Persistent` is deliberately off: a laptop that slept through four intervals should tend once when it wakes, which is what the next interval does anyway, rather than firing a backlog at a fleet that has moved on.
 """

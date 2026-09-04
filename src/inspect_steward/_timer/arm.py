@@ -32,7 +32,7 @@ class Armament:
     interval: int
     label: str
     description: str
-    """What was installed, in words, for a person reading the command's output."""
+    """What was installed, in words, for an operator reading the command's output."""
 
 
 def entry_for(workspace: Workspace, interval: int) -> TimerEntry:

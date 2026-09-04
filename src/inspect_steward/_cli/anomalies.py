@@ -4,7 +4,7 @@ Three verbs take class keys — `rule` decides them, `propose` groups them, `inv
 
 The failure messages are composed per verb, because the three ways a token can fail to name a class say different things depending on the act attempted — except the two shared here, which mean the same thing everywhere: *ambiguous* and *already settled*.
 
-The disposition matrix is shared too, because `propose` must not put in front of a person a question `rule` would refuse to answer. And so is `persist_windows`, the step every deciding verb takes first: a `status` computes newly detected windows without writing them, so the fold a verb consulted can be ahead of the journal — and a decision recorded against a window the journal does not hold would be skipped by the next fold, reported successful, and ignored.
+The disposition matrix is shared too, because `propose` must not put in front of an operator a question `rule` would refuse to answer. And so is `persist_windows`, the step every deciding verb takes first: a `status` computes newly detected windows without writing them, so the fold a verb consulted can be ahead of the journal — and a decision recorded against a window the journal does not hold would be skipped by the next fold, reported successful, and ignored.
 """
 
 from collections.abc import Sequence
@@ -33,7 +33,7 @@ DOCTRINE = (
 def refuse_dishonest(targets: list[str], decided: Disposition) -> None:
     """The disposition-kind pairings refused rather than recorded.
 
-    The matrix itself is `_anomaly.model.honest` — shared with the tend's policy rulings, so a pattern cannot grant what a person could not type. Three rows. `accept` on an `error:` class would leave errored samples in the data with a caveat saying so — silent exclusion wearing a decision's clothes, precisely what the four answers exist to prevent. The three sample marks (`exclude`, `zero`, `score`) mean nothing where the residue is not a sample's data: a `task:` or `score:` class has no sample population to mark at all, and a `scanerror:` class has one and still nothing to mark, since what it left behind is a missing verdict rather than a wrong row. And `rerun` on a `scanerror:` class names an act nothing can carry out — the eval is fine and only the reading of it failed, so there are no samples to requeue.
+    The matrix itself is `_anomaly.model.honest` — shared with the tend's policy rulings, so a pattern cannot grant what an operator could not type. Three rows. `accept` on an `error:` class would leave errored samples in the data with a caveat saying so — silent exclusion wearing a decision's clothes, precisely what the four answers exist to prevent. The three sample marks (`exclude`, `zero`, `score`) mean nothing where the residue is not a sample's data: a `task:` or `score:` class has no sample population to mark at all, and a `scanerror:` class has one and still nothing to mark, since what it left behind is a missing verdict rather than a wrong row. And `rerun` on a `scanerror:` class names an act nothing can carry out — the eval is fine and only the reading of it failed, so there are no samples to requeue.
 
     Raises:
         click.ClickException: Naming each refused class and its kind.

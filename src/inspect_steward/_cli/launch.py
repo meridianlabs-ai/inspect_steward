@@ -1,4 +1,4 @@
-"""`steward launch` — starting a run, and the one moment a person is present.
+"""`steward launch` — starting a run, and the one moment an operator is present.
 
 Almost every other surface in Steward is written for a reader who is not there: `status.md` for whoever arrives in the morning, the journal for an agent with no memory of last night, the item list for a channel. This one is written for somebody at a terminal who is about to walk away, which changes what the output is for. It has to say what the run *is* — which backend is watching it, how many tasks, how many samples — and it has to put the one thing that could be a mistake where it cannot be missed.
 
@@ -185,7 +185,7 @@ _LABELS = {
     default=False,
     help=(
         "Post nothing about this run. Silences Steward only — a worker waiting "
-        "on a person still asks."
+        "on an operator still asks."
     ),
 )
 @click.option(
@@ -586,7 +586,7 @@ def _next_launch(workspace: Workspace, definition: Path, given: _Given) -> str:
 def _typed(value: Any) -> str:
     """One override value, spelled the way `parse_override` reads it back.
 
-    JSON, because that parser is `yaml.safe_load` and every JSON document is a YAML one — so a range comes back as `[100, 200]` and a boolean as `true`, both of which survive the round trip. A plain string is passed through as itself rather than quoted into `"gpt-5"`, since YAML reads the bare word the same way and the quoted form is what a person would not have typed.
+    JSON, because that parser is `yaml.safe_load` and every JSON document is a YAML one — so a range comes back as `[100, 200]` and a boolean as `true`, both of which survive the round trip. A plain string is passed through as itself rather than quoted into `"gpt-5"`, since YAML reads the bare word the same way and the quoted form is what an operator would not have typed.
     """
     return value if isinstance(value, str) else json.dumps(value)
 
@@ -612,7 +612,7 @@ def _durable_channel(workspace: Workspace) -> str | bool | None:
 
 
 def _echo_no_channel(*, one_launch: bool) -> None:
-    """One line, where a run has just been launched and nothing will reach a person.
+    """One line, where a run has just been launched and nothing will reach an operator.
 
     **The one feature whose absence is silent by construction**, which is what earns it a line nothing else here gets: a run with no channel behaves exactly like a run with one until the night it needs somebody, and then it behaves exactly like a run that is going fine. Everything else worth saying at launch is already visible in what the launch printed.
 
@@ -629,7 +629,7 @@ def _echo_no_channel(*, one_launch: bool) -> None:
         )
         return
     click.echo(
-        "\nnothing will reach you if this run needs a person — set "
+        "\nnothing will reach you if this run needs an operator — set "
         "notification in _steward.yaml, or STEWARD_NOTIFICATION in .env, "
         "to an Apprise URL (slack://…, mailto://…)"
     )
@@ -642,17 +642,17 @@ def _echo_unusable_channel() -> None:
     """
     click.echo(
         "\nthe notification setting resolves to no usable targets, so nothing "
-        "will reach you if this run needs a person — check the URL, or the "
+        "will reach you if this run needs an operator — check the URL, or the "
         "Apprise config file it names"
     )
 
 
 def _offer_pools(workspace: Workspace, advice: PoolAdvice) -> None:
-    """Tell a person their Docker cannot allocate enough networks, and offer the edit.
+    """Tell an operator their Docker cannot allocate enough networks, and offer the edit.
 
-    **The one place Steward proposes changing something outside the workspace**, which is why the offer is explicit, declining is the default, and what it would write is printed *before* the question rather than after the yes. A person is being asked to let a tool edit their Docker configuration; they get to read it first.
+    **The one place Steward proposes changing something outside the workspace**, which is why the offer is explicit, declining is the default, and what it would write is printed *before* the question rather than after the yes. An operator is being asked to let a tool edit their Docker configuration; they get to read it first.
 
-    **Steward writes the file and never restarts the daemon.** The restart is what makes it take effect and it kills every running container on the host, which on a shared box is somebody else's work — not a thing to do behind a `y/n` at launch. So the command is printed and left to the person, who is also the one who knows what else is running.
+    **Steward writes the file and never restarts the daemon.** The restart is what makes it take effect and it kills every running container on the host, which on a shared box is somebody else's work — not a thing to do behind a `y/n` at launch. So the command is printed and left to the operator, who is also the one who knows what else is running.
 
     Declining prints the same JSON with the file to put it in, because *no* here means *not by you*, not *never*.
     """
@@ -750,7 +750,7 @@ def _echo_launch(result: Launch, root: Path) -> None:
 
     if result.unrehearsed is not None:
         # **printed even where the launch then refuses at the archive gate**,
-        # because both are things to fix before running this again and a person
+        # because both are things to fix before running this again and an operator
         # who fixes one and rediscovers the other has been made to look twice
         click.echo("")
         click.echo(f"⚠️  {result.unrehearsed} — `steward launch --smoke` rehearses it")
@@ -808,7 +808,7 @@ def _echo_launch(result: Launch, root: Path) -> None:
 
 
 def delta_lines(delta: Delta, *, root: Path | None = None) -> list[str]:
-    """The delta as a person reads it.
+    """The delta as an operator reads it.
 
     One line per kind rather than per task, because the decision the reader is making is about *kinds*: forty extended tasks is one fact, and forty lines of it buries the eight being archived underneath. The tasks themselves are in the manifest and in the turn that follows.
 
@@ -898,7 +898,7 @@ def _plural(count: int, noun: str) -> str:
 def _short(directory: str, root: Path | None) -> str:
     """A log directory as somebody reads it rather than as it resolves.
 
-    A workspace's own `logs/` resolves to an absolute path two hundred characters long under a pytest temp root or a deep home directory, and the relocation message is precisely the one a person is reading while deciding whether to accept it — two of those side by side bury the sentence they are in. Anything outside the workspace, an S3 prefix included, is left exactly as it is: it is not this workspace's to abbreviate.
+    A workspace's own `logs/` resolves to an absolute path two hundred characters long under a pytest temp root or a deep home directory, and the relocation message is precisely the one an operator is reading while deciding whether to accept it — two of those side by side bury the sentence they are in. Anything outside the workspace, an S3 prefix included, is left exactly as it is: it is not this workspace's to abbreviate.
     """
     if root is None:
         return directory
@@ -943,7 +943,7 @@ def _echo_held(held: Held) -> NoReturn:
 
 
 def _launch_json(result: Launch) -> str:
-    """A launch as JSON, for an agent rather than a person.
+    """A launch as JSON, for an agent rather than an operator.
 
     The manifest is dumped by pydantic rather than by `dataclasses.asdict`, which does not recurse into a model and would render the whole eval set as one `str()` of a repr. Every other field is a dataclass and goes through the same path `turn_json` uses.
     """

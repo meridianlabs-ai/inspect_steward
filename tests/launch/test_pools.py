@@ -177,7 +177,7 @@ def test_writing_the_pools_keeps_the_settings_already_in_the_file(
     tmp_path: Path,
 ) -> None:
     # Docker Desktop ships a daemon.json carrying `builder` and `experimental`,
-    # and replacing it would silently drop settings the person chose
+    # and replacing it would silently drop settings the operator chose
     config = tmp_path / "daemon.json"
     config.write_text(
         json.dumps({"builder": {"gc": {"enabled": True}}, "experimental": False}),
@@ -230,7 +230,7 @@ def test_a_file_holding_a_json_array_is_refused(tmp_path: Path) -> None:
 
 
 def test_the_platform_answers_are_stated_rather_than_guessed() -> None:
-    # both are read by a person and pasted into a shell, so the only thing
+    # both are read by an operator and pasted into a shell, so the only thing
     # asserted is that they are answers rather than empty
     assert daemon_config_path().name == "daemon.json"
     assert restart_command()

@@ -75,7 +75,7 @@ class LiveConnections:
 
 @dataclass(frozen=True)
 class LiveParked:
-    """Samples in this task waiting on a person, and what they are waiting for.
+    """Samples in this task waiting on an operator, and what they are waiting for.
 
     A detached worker has no terminal, so an approval or an `ask_user` question routes to the ACP server the worker binds and waits there — indefinitely, holding its slot, its sandbox and its model connections. Nothing else Steward reads says this: the sample is `running`, its transcript shows a pending tool call, and it will still show one tomorrow morning.
     """
@@ -97,7 +97,7 @@ class LiveParked:
 DEFAULT_STUCK_AFTER = 5 * 60 * 60
 """Seconds a running sample may go without activity before it reads as stuck.
 
-Five hours, because the threshold is a *reporting* one and the cost of tripping early is a person paged about a slow sandbox: a long tool call is the ordinary shape of agentic work, and `last_activity_at` already advances per streamed model chunk, so what crosses this is genuinely silent. `stuck_after` in `_steward.yaml` overrides it.
+Five hours, because the threshold is a *reporting* one and the cost of tripping early is an operator paged about a slow sandbox: a long tool call is the ordinary shape of agentic work, and `last_activity_at` already advances per streamed model chunk, so what crosses this is genuinely silent. `stuck_after` in `_steward.yaml` overrides it.
 """
 
 
@@ -125,7 +125,7 @@ class StuckSample:
 class LiveStuck:
     """Samples in this task that have stopped moving past the threshold.
 
-    Not parked, not failed — a `bash` that never returns, a connection held open silently. A parked sample is excluded (the human branch of the activity classification leads upstream, precisely so this reading can tell them apart), and so is a `retry_wait` whose deadline is still ahead: waiting out a backoff is progress of a kind.
+    Not parked, not failed — a `bash` that never returns, a connection held open silently. A parked sample is excluded (the operator branch of the activity classification leads upstream, precisely so this reading can tell them apart), and so is a `retry_wait` whose deadline is still ahead: waiting out a backoff is progress of a kind.
     """
 
     count: int = 0
@@ -182,7 +182,7 @@ class LiveTask:
     connections_limit: int | None = None
     """The highest limit any of this row's controllers currently holds, or `None` where none is adaptive.
 
-    Where a storm cut clamps the ceiling to, which is why it is a maximum and **not** `connections.limit`'s sum. The two answer different questions: the sum is how many connections the row may have open across its models, which is what a person reading the live block wants; the ceiling is a single number applied to every controller alike, so the sum would set each one's bound to what all of them together were using — a cut that is really a raise.
+    Where a storm cut clamps the ceiling to, which is why it is a maximum and **not** `connections.limit`'s sum. The two answer different questions: the sum is how many connections the row may have open across its models, which is what an operator reading the live block wants; the ceiling is a single number applied to every controller alike, so the sum would set each one's bound to what all of them together were using — a cut that is really a raise.
     """
 
     refusals: int = 0
@@ -460,7 +460,7 @@ def _running_samples(payload: object) -> list[dict[str, object]]:
 
 
 def _parked(payload: object) -> LiveParked:
-    """Samples parked on a human decision, from each running row's `activity`.
+    """Samples parked on an operator decision, from each running row's `activity`.
 
     A pending interaction leads inspect's activity classification precisely so this reading is possible: an approval is awaited *before* its tool call is recorded, so a parked sample has no pending event of any kind and would otherwise be reported as one that has simply gone quiet.
     """
@@ -486,7 +486,7 @@ def _parked(payload: object) -> LiveParked:
 def _stuck(payload: object, stuck_after: float, now: float) -> LiveStuck:
     """Samples that have stopped moving, from each running row's `last_activity_at`.
 
-    The third walk of the rows `_read` already fetched, beside `_usage` and `_parked`, so the reading costs no request. Per running row, stuck means: not waiting on a person (`approval`/`question` — that is a park, and the human branch leads upstream precisely so the two never conflate); not inside a `retry_wait` whose deadline is still ahead (waiting out a backoff is progress); and `last_activity_at` more than `stuck_after` seconds ago. `last_activity_at` advances per streamed model chunk, so a slow-but-streaming generate never reads as idle.
+    The third walk of the rows `_read` already fetched, beside `_usage` and `_parked`, so the reading costs no request. Per running row, stuck means: not waiting on an operator (`approval`/`question` — that is a park, and the operator branch leads upstream precisely so the two never conflate); not inside a `retry_wait` whose deadline is still ahead (waiting out a backoff is progress); and `last_activity_at` more than `stuck_after` seconds ago. `last_activity_at` advances per streamed model chunk, so a slow-but-streaming generate never reads as idle.
 
     A tool row contributes one `StuckSample` per pending call — `sample cancel-tool-call` targets a call, so the calls are what the item has to be able to name. Everything else stuck contributes one call-less entry.
     """

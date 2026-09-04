@@ -1,4 +1,4 @@
-"""Notification — the only channel that reaches a human who is not watching.
+"""Notification — the only channel that reaches an operator who is not watching.
 
 `status.md` is a file on a machine nobody is looking at, and the journal is a record nobody is reading at 02:00. This package is what makes an unattended run answerable: a channel resolved from one setting that both halves of the system honour (`channel`), a post whose reason is explicit (`post`), rendered in whatever markup its target actually understands (`dialect`, `render`), and sent in a way that cannot cost a turn (`send`).
 """

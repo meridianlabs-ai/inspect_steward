@@ -135,7 +135,7 @@ def test_a_worker_that_did_not_answer_falls_back_to_the_log(tmp_path: Path) -> N
 def test_a_row_carries_the_samples_its_worker_is_waiting_on(tmp_path: Path) -> None:
     # not a column: a park is a decision somebody owes, so it leaves here as an
     # item. The row is how it gets out of the fleet read, and the pid is how the
-    # item finds the socket a person answers on
+    # item finds the socket an operator answers on
     write_log(tmp_path, TASK, status="started", total=10, completed=2)
     parked = LiveParked(approvals=1, functions=("bash",))
 
@@ -243,12 +243,14 @@ def test_a_column_nothing_has_to_say_is_dropped(tmp_path: Path) -> None:
     assert line == line.rstrip()
 
 
-def test_errored_samples_are_a_column_beside_the_queue(tmp_path: Path) -> None:
-    """The count the anomaly queue exists for, visible per task.
+def test_errored_samples_are_a_total_under_the_table_and_not_a_column(
+    tmp_path: Path,
+) -> None:
+    """Which task the errors are in is the by-task anomalies table's question.
 
-    The totals line already sums it; only a row can say *which* task the
-    errors are in, and until somebody rules on them that is the reader's
-    first question.
+    The terminal's task table keeps to progress; the footer keeps the sum, so
+    a reader still learns that something errored before scrolling to the
+    table that says where.
     """
     flaky = SynthTask("flaky", samples=10, epochs=1)
     clean = SynthTask("clean", samples=10, epochs=1)
@@ -258,10 +260,8 @@ def test_errored_samples_are_a_column_beside_the_queue(tmp_path: Path) -> None:
     lines = progress_table(rows(tmp_path, [flaky, clean], LiveFleet()))
 
     flaky_line = next(line for line in lines if "flaky" in line)
-    clean_line = next(line for line in lines if "clean" in line)
-    assert "3e" in flaky_line
-    # gated like running and queued: zero is the ordinary case and says nothing
-    assert re.search(r"\d+e\b", clean_line) is None
+    assert re.search(r"\d+e\b", flaky_line) is None
+    assert "3 errored" in lines[-1]
 
 
 QUEUES = [
@@ -380,7 +380,7 @@ def test_a_live_row_carries_every_column(tmp_path: Path) -> None:
         )
     )
 
-    for cell in ("5/123", "4%", "57r", "61q", "52/80c", "115/300t"):
+    for cell in ("5/123", "4%", "57r", "61q", "(52/80)", "115/300t"):
         assert cell in line, f"{cell!r} missing from {line!r}"
 
 
@@ -461,7 +461,7 @@ def test_a_busy_sweep_fits_the_narrowest_surface(tmp_path: Path) -> None:
     for line in lines:
         assert len(line) <= SLACK, f"{len(line)} columns: {line!r}"
     # and it is not fitting by having thrown the numbers away
-    assert "52/80c" in lines[0] and "115/300t" in lines[0]
+    assert "(52/80)" in lines[0] and "115/300t" in lines[0]
 
 
 def test_the_shared_model_is_named_once_rather_than_on_every_row(

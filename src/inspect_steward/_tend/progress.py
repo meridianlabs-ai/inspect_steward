@@ -127,9 +127,9 @@ class TaskProgress:
     """Model connections in use and the pool's ceiling, for a running task."""
 
     parked: LiveParked = field(default_factory=LiveParked)
-    """Samples of this task waiting on a person. Empty for anything not running.
+    """Samples of this task waiting on an operator. Empty for anything not running.
 
-    Not a column — a park is a *decision somebody owes*, so it becomes an item rather than a number in a table, and the row is only how it gets here. Carried per task rather than per worker because that is what a person recognises: a packed worker holding two parked tasks is two decisions.
+    Not a column — a park is a *decision somebody owes*, so it becomes an item rather than a number in a table, and the row is only how it gets here. Carried per task rather than per worker because that is what an operator recognises: a packed worker holding two parked tasks is two decisions.
     """
 
     stuck: LiveStuck = field(default_factory=LiveStuck)
@@ -193,6 +193,22 @@ def task_progress(
 
 
 @dataclass(frozen=True)
+class TaskResources:
+    """One running task: what it has met on the way, and its share of what its worker costs.
+
+    Refusals and retries are the task's own, read off its worker's control socket. Memory and CPU are the *process's*, and a packed worker holds several tasks in one process — so each task is given an even share, which sums to the fleet total and never shows a task more than its process. Exact for the ordinary one-task worker, honest enough at a glance for a packed one, and the per-process figure is still in `ProcessUsage` for anyone who needs it.
+    """
+
+    identifier: str
+    refusals: int
+    http_retries: int
+    rss: int
+    """Resident memory in bytes, this task's share."""
+    cores: float
+    """Cores' worth of CPU since the worker started, this task's share."""
+
+
+@dataclass(frozen=True)
 class Live:
     """What only a running process can say, and nothing writes down.
 
@@ -212,6 +228,9 @@ class Live:
 
     Counted and named rather than dropped, for the reason every other omission in this summary is: `0 refusals` over a fleet where nothing answered is a claim about the run, and the reading that produced it made no such claim.
     """
+
+    resources: tuple[TaskResources, ...] = ()
+    """Per running task, in fleet order — the `### resources` table's rows."""
 
     usage: ProcessUsage = field(default_factory=ProcessUsage)
     """What the live processes are costing the machine, counted once per pid.
@@ -273,11 +292,24 @@ def live_totals(fleet: LiveFleet, pids: Iterable[int] = ()) -> Live | None:
     usage = process_usage([*pids, *(task.pid for task in answered)])
     if not answered and not usage.processes:
         return None
+    held: dict[int, int] = {}
+    for task in answered:
+        held[task.pid] = held.get(task.pid, 0) + 1
     return Live(
         tasks=len(answered),
         refusals=sum(task.refusals for task in answered),
         http_retries=sum(task.http_retries for task in answered),
         unavailable=len(running) - len(answered),
+        resources=tuple(
+            TaskResources(
+                identifier=task.identifier,
+                refusals=task.refusals,
+                http_retries=task.http_retries,
+                rss=usage.rss_by_pid.get(task.pid, 0) // held[task.pid],
+                cores=usage.cores_by_pid.get(task.pid, 0.0) / held[task.pid],
+            )
+            for task in answered
+        ),
         usage=usage,
     )
 

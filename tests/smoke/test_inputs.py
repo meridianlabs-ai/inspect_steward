@@ -238,7 +238,7 @@ class TestWhatTheWorkersInherit:
 
 
 class TestTheCommandItPrintsBack:
-    """The follow-up a person copies out of the terminal, and the two ways it was not runnable.
+    """The follow-up an operator copies out of the terminal, and the two ways it was not runnable.
 
     A bare `steward launch` after a first smoke launches at the definition's own shape — there is no committed manifest yet to reuse what the rehearsal was given — so what the rehearsal was shaped by has to be printed back. Both halves of doing that were wrong. Half of it came off a command line and can hold whitespace or a quote, and was concatenated with spaces; the other half was *parsed* on the way in and was printed with `str()`, which for a `(100, 200)` window is not valid input to the flag that produced it.
     """

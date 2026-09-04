@@ -1,4 +1,4 @@
-"""Carrying out an acceptance: the log says what the person decided about it.
+"""Carrying out an acceptance: the log says what the operator decided about it.
 
 A `rerun` ruling acts on samples; an `accept` acts on the **log** — it says *this attempt is the result, with a caveat the report carries* — and until step 26 the log on disk went on saying `error` while Steward's own state said accepted. These are the claims worth defending: the amendment marks the header and **leaves every sample where it was** (the one mistake here would destroy a result rather than fail to change one), the ruling travels inside the log as provenance, the halting error moves rather than being kept or dropped, and the whole thing is idempotent from either of its two witnesses — the journal record, and the log's own status.
 
@@ -508,7 +508,7 @@ def test_an_accepted_incomplete_run_is_not_reported_as_stopped(tmp_path: Path) -
 def test_a_launch_puts_an_accepted_task_back_in_play(tmp_path: Path) -> None:
     """Committing a manifest is the one moment desired state is decided.
 
-    A person who relaunches a run that re-asks for this task has said it should
+    An operator who relaunches a run that re-asks for this task has said it should
     run again, and no record needs to be undone to say so — the accepting
     ruling simply stops postdating the launch.
     """

@@ -38,6 +38,12 @@ class ProcessUsage:
     The raw material for a *windowed* measure, which this module cannot compute and the tend loop can: a turn records these beside its observation, and the next turn's delta over the inter-tend interval is a real utilization figure — reactive where `cores` is a lifetime average, and still stateless here (workflow.md, the tuning loop's CPU gate).
     """
 
+    rss_by_pid: dict[int, int] = field(default_factory=dict[int, int])
+    """Resident memory per pid, for a caller sharing a process's figure out among the tasks it holds."""
+
+    cores_by_pid: dict[int, float] = field(default_factory=dict[int, float])
+    """Cores per pid, the same way."""
+
 
 def process_usage(pids: Iterable[int]) -> ProcessUsage:
     """Read memory and CPU for a set of processes.
@@ -52,6 +58,8 @@ def process_usage(pids: Iterable[int]) -> ProcessUsage:
     rss = 0
     cores = 0.0
     seconds: dict[int, float] = {}
+    rss_by_pid: dict[int, int] = {}
+    cores_by_pid: dict[int, float] = {}
     now = time.time()
 
     for pid in sorted(set(pids)):
@@ -71,8 +79,17 @@ def process_usage(pids: Iterable[int]) -> ProcessUsage:
 
         processes += 1
         rss += resident
+        rss_by_pid[pid] = resident
         seconds[pid] = times.user + times.system
         if (elapsed := now - started) > 0:
-            cores += seconds[pid] / elapsed
+            cores_by_pid[pid] = seconds[pid] / elapsed
+            cores += cores_by_pid[pid]
 
-    return ProcessUsage(processes=processes, rss=rss, cores=cores, seconds=seconds)
+    return ProcessUsage(
+        processes=processes,
+        rss=rss,
+        cores=cores,
+        seconds=seconds,
+        rss_by_pid=rss_by_pid,
+        cores_by_pid=cores_by_pid,
+    )

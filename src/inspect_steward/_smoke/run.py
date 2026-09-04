@@ -163,7 +163,7 @@ def prepare(
 
     # **a refusal, not a degraded rehearsal, and not a traceback.** A malformed
     # `scanners:` entry or a name colliding with the built-in is a message for a
-    # person about a file they just edited -- the same refusal `_launch` turns
+    # operator about a file they just edited -- the same refusal `_launch` turns
     # this into, arriving through the same exception the CLI already prints
     try:
         material = scan_material(manifest.scan, scanners)
@@ -465,7 +465,7 @@ class Folded:
     threw: int = 0
     """Transcripts a scanner threw on.
 
-    **Blocking, and it was not.** These arrive as `scanerror:` classes among the findings, which are reported and count toward nothing — so every scanner in the run could fail on every transcript while the digest read *rehearsed and ready* and the journal recorded a pass. During a run that class is a question for a person, because the samples are fine and only the reading of them failed; before one it is the scan path telling you it does not work, which is among the things workflow.md §7.1 says a rehearsal is for.
+    **Blocking, and it was not.** These arrive as `scanerror:` classes among the findings, which are reported and count toward nothing — so every scanner in the run could fail on every transcript while the digest read *rehearsed and ready* and the journal recorded a pass. During a run that class is a question for an operator, because the samples are fine and only the reading of them failed; before one it is the scan path telling you it does not work, which is among the things workflow.md §7.1 says a rehearsal is for.
     """
 
     reviewed: int = 0
@@ -816,7 +816,7 @@ def smoke(
 ) -> Smoke | Held:
     """Rehearse the definition, and say whether the run it precedes is ready.
 
-    **No credentials pre-check, unlike a launch, and the difference is what that check is about.** `launch` refuses when a credential is set in this shell and absent from `.env`, because a *scheduled tend* inherits a stripped environment and would fail every fire at 02:00 with nobody watching. A smoke arms no timer and spawns its workers from this process, so they inherit exactly what the person at the terminal has. A missing key is still caught — by the rehearsal failing, which is one of the things workflow.md §7.1 says it is for — rather than by a question about a scheduler that is not going to exist.
+    **No credentials pre-check, unlike a launch, and the difference is what that check is about.** `launch` refuses when a credential is set in this shell and absent from `.env`, because a *scheduled tend* inherits a stripped environment and would fail every fire at 02:00 with nobody watching. A smoke arms no timer and spawns its workers from this process, so they inherit exactly what the operator at the terminal has. A missing key is still caught — by the rehearsal failing, which is one of the things workflow.md §7.1 says it is for — rather than by a question about a scheduler that is not going to exist.
 
     **The claim is held for the whole rehearsal**, which is the one place a smoke is expensive in a way a launch is not: fifteen minutes is a long time to hold a workspace. It is correct anyway — a tend converging the real run while a rehearsal spawns workers into the same workspace would have two writers of `inflight.jsonl` and one process table nobody can read cleanly — and it is bounded by the cap, which is the argument for the cap having a default at all.
 
@@ -909,7 +909,7 @@ def _record(
 ) -> Smoke:
     """Write the digest down, journal what it concluded, and say so if it failed.
 
-    **The notification is not optional and not the agent's.** Before the first worker of the *real* run starts, silence is total: a launch blocked here has no tend, no `status.md`, and nothing posting at all, so a failed gate does not announce itself (agent.md §7). This is the second `stopped` Steward sends without an agent present, on exactly the reasoning the parked-worker one already carries — nothing progresses until a person answers, and nobody else is going to say so.
+    **The notification is not optional and not the agent's.** Before the first worker of the *real* run starts, silence is total: a launch blocked here has no tend, no `status.md`, and nothing posting at all, so a failed gate does not announce itself (agent.md §7). This is the second `stopped` Steward sends without an agent present, on exactly the reasoning the parked-worker one already carries — nothing progresses until an operator answers, and nobody else is going to say so.
 
     **A rehearsal nobody can read the result of has not passed.** Both writes used to be swallowed into `steward.log`, which is the wrong reading of *best effort* for these two in particular: the digest is one of the four artifacts agent.md §9 tells an agent to trust over an exit code, and the journal is what a later `launch` reads to decide the run is rehearsed. Lose the first and keep the second and the gate says *rehearsed* while the terminal points at a file that is not there. So a write that fails is an error of the rehearsal, the verdict is recomputed over it, and the journal records **that** — which also invalidates any older pass, since the newest smoke is the answer whatever it concluded.
 

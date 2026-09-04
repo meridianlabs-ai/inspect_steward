@@ -81,7 +81,7 @@ class Smoke:
     threw: int = 0
     """Transcripts a scanner threw on.
 
-    Also blocking, and it was not. These arrive as `scanerror:` classes among `findings`, which count toward nothing — so every scanner could fail on every transcript while the verdict read *rehearsed and ready*. During a run the same class is a question for a person, since the samples are fine and only the reading of them failed; before one it is the scan path saying it does not work.
+    Also blocking, and it was not. These arrive as `scanerror:` classes among `findings`, which count toward nothing — so every scanner could fail on every transcript while the verdict read *rehearsed and ready*. During a run the same class is a question for an operator, since the samples are fine and only the reading of them failed; before one it is the scan path saying it does not work.
     """
 
     errors: tuple[str, ...] = ()
@@ -139,7 +139,7 @@ def outcome(
 
     **So the cap decides nothing on its own, and only speaks where the rehearsal is otherwise clean.** A deadline that fires before a single sample lands *is* worth stopping for, because then no check could answer and there is nothing to have an opinion about — that is `CAPPED`, and it is the only shape of it left.
 
-    **An errored sample fails the rehearsal, and is not waivable.** `--accept` waives a *check* — a question about configuration that a person can answer better than Steward can, like a pre-deployment model with no registry entry. A sample that errored is not a question: it is the thing a smoke was run to find out, arriving. Somebody who wants to launch anyway already can, because the gate on the real launch only ever warns.
+    **An errored sample fails the rehearsal, and is not waivable.** `--accept` waives a *check* — a question about configuration that an operator can answer better than Steward can, like a pre-deployment model with no registry entry. A sample that errored is not a question: it is the thing a smoke was run to find out, arriving. Somebody who wants to launch anyway already can, because the gate on the real launch only ever warns.
 
     **A scanner that threw fails it too**, and that one was a hole: those arrive as `scanerror:` classes among the findings, which are reported and counted toward nothing, so every scanner could fail on every transcript under a verdict of *rehearsed and ready*.
 
@@ -175,7 +175,7 @@ def findings(instances: Sequence[Instance]) -> tuple[str, ...]:
 
 
 def digest_markdown(smoke: Smoke) -> str:
-    """Render the digest a person reads and an agent relays."""
+    """Render the digest an operator reads and an agent relays."""
     lines = [
         "# smoke",
         "",
@@ -196,7 +196,7 @@ def digest_markdown(smoke: Smoke) -> str:
 def _verdict(smoke: Smoke) -> str:
     """The one line a reader who reads nothing else should have read.
 
-    **Every reason at once, rather than the first one found**, on the rule `signoff` already keeps: a rehearsal can fail its context-window check *and* error half its samples, and a person who fixes one and is refused for the other has been made to look twice at a document that knew both.
+    **Every reason at once, rather than the first one found**, on the rule `signoff` already keeps: a rehearsal can fail its context-window check *and* error half its samples, and an operator who fixes one and is refused for the other has been made to look twice at a document that knew both.
     """
     if smoke.outcome is Outcome.CAPPED:
         return (

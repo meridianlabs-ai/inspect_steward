@@ -203,7 +203,7 @@ def _readable(value: str) -> str:
 def _segment(value: str) -> str:
     """A key segment that is readable where it can be and identity-preserving always.
 
-    **Sanitizing alone merges what it should split.** `unsafe output` and `unsafe-output` are two labels a scanner can plausibly emit and `_readable` maps both to `unsafe-output` — one ruling then settles findings the person who made it never saw, which is the one direction this module's over-merge-is-recoverable doctrine does *not* cover: an over-merged exception class holds two call sites of one failure, where an over-merged label holds two different findings.
+    **Sanitizing alone merges what it should split.** `unsafe output` and `unsafe-output` are two labels a scanner can plausibly emit and `_readable` maps both to `unsafe-output` — one ruling then settles findings the operator who made it never saw, which is the one direction this module's over-merge-is-recoverable doctrine does *not* cover: an over-merged exception class holds two call sites of one failure, where an over-merged label holds two different findings.
 
     So a value the sanitizer changed carries a digest of its original, and one it left alone carries nothing. The common case — every `IntegrityLabel`, every ordinary scanner name — is untouched and stays typable, and the awkward case is unambiguous rather than pretty. `zero_class` reaches this differently and needs no help: its identity rides in a `digest8` of the task identifier that is always appended.
     """
@@ -268,7 +268,7 @@ _SUBSTRATE_MARKERS = (
 def substrate(parsed: ParsedError | None, message: str | None) -> bool:
     """Whether a failure is the machinery under the run rather than the run.
 
-    Eager by design, because the asymmetry is real (execution.md §9.1): a false negative re-runs into a broken substrate and burns the work twice; a false positive delays a re-run until a person confirms — cheap, visible, recoverable. A substrate class gets no re-run proposal; a human ruling on it *is* the by-hand verification the doctrine asks for.
+    Eager by design, because the asymmetry is real (execution.md §9.1): a false negative re-runs into a broken substrate and burns the work twice; a false positive delays a re-run until an operator confirms — cheap, visible, recoverable. A substrate class gets no re-run proposal; an operator ruling on it *is* the by-hand verification the doctrine asks for.
     """
     if parsed is not None:
         if any(marker in parsed.path for marker in _STORAGE_PATHS):

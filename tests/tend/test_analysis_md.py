@@ -264,7 +264,7 @@ class TestThroughATurn:
         assert not items[0].acknowledgeable
         # and it keeps the run at ⚠️ rather than reading as finished
         assert result.verdict is Verdict.ATTENTION
-        # but it does not stand between a person and their attestation: holding
+        # but it does not stand between an operator and their attestation: holding
         # a signature hostage to an agent's prose is the wrong trade
         assert check(result, None) == []
 
@@ -293,7 +293,7 @@ class TestThroughATurn:
         The facts are composed near the top of the turn, because the items have
         to report what is unwritten; the write happens at the end, after spawns,
         requeues, invalidations and archive moves — minutes on a busy turn. A
-        person or an agent with the file open saves somewhere in the middle, and
+        operator or an agent with the file open saves somewhere in the middle, and
         an atomic replace of a snapshot taken before all of that is their work
         gone. So the write re-reads.
 

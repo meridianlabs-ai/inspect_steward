@@ -145,7 +145,7 @@ def _create_definition(
 
     **Nothing runnable, on purpose.** A placeholder says where the definition goes; a scaffolded example would be a guess at what is being measured, and has to be deleted before it can be useful.
 
-    What the `evalset` placeholder does carry is comments, which is a different thing from an example and costs nothing to leave in place. They exist for one fact a person cannot infer and will otherwise get wrong: **omit `log_dir`.** `eval_set()` takes one, every example on the internet passes one, and under Steward passing one opts out of the resolution that puts a run's logs where the machine keeps logs. The `flow` and `hawk` placeholders stay empty — hawk has no log-directory option at all, and a flow spec's is a different key under a different schema.
+    What the `evalset` placeholder does carry is comments, which is a different thing from an example and costs nothing to leave in place. They exist for one fact an operator cannot infer and will otherwise get wrong: **omit `log_dir`.** `eval_set()` takes one, every example on the internet passes one, and under Steward passing one opts out of the resolution that puts a run's logs where the machine keeps logs. The `flow` and `hawk` placeholders stay empty — hawk has no log-directory option at all, and a flow spec's is a different key under a different schema.
     """
     if (existing := workspace.find_definition()) is not None:
         report.record(_relative(workspace, existing), Outcome.KEPT)

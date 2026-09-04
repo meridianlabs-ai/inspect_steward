@@ -19,7 +19,7 @@ from inspect_steward._evalset.manifest import ManifestScan, write_manifest
 from inspect_steward._scan import initialize_scan, scan_dir_location, sync_scan
 from inspect_steward._schedule import SpawnTask
 from inspect_steward._signoff import OPEN_WINDOW, UNREAD, check
-from inspect_steward._tend import Level, Owner, Verdict, progress_table, turn_post
+from inspect_steward._tend import Level, Owner, Verdict, collect_markdown, turn_post
 from inspect_steward._tend.coverage import Coverage, TaskCoverage
 from inspect_steward._tend.items import (
     ANOMALY,
@@ -305,7 +305,7 @@ def test_signoff_waits_on_an_untriaged_flag_and_returns_on_the_ruling(
 
 def test_the_signer_is_told_what_was_dismissed(tmp_path: Path) -> None:
     # decision 7a: a dismissal is not a caveat and reaches `anomalies.md`
-    # nowhere, but *the model tried to read the grader* is something the person
+    # nowhere, but *the model tried to read the grader* is something the operator
     # signing wants to have been told
     workspace = scanning(tmp_path)
     turn(workspace)
@@ -331,7 +331,7 @@ def test_a_confirmed_hack_is_a_sample_the_scores_are_no_longer_over(
     # §12.6.1's validity route, and the reason `honest()` admits the sample
     # marks here at all: a confirmed reward hack is a sample excluded from
     # scoring exactly as an excluded timeout is, and a ruling that moved no
-    # denominator would be a decision the person made and the numbers never
+    # denominator would be a decision the operator made and the numbers never
     # heard
     workspace = scanning(tmp_path)
     turn(workspace)
@@ -376,7 +376,7 @@ class TestAScannerThatCouldNotScan:
 
     The two are indistinguishable in the findings — an errored row is read past exactly as a `false` one is — so a run whose every scan threw would read as a run with nothing to report, and the signature would say so.
 
-    **It is a window like any other**, which is what this class asserts. It was an acknowledgeable item and a blocker of its own for exactly one step; both are gone, because the decision a person is being asked for is *these transcripts carry no verdict and the results stand anyway* — a ruling with a disposition on it, not a wave-past — and two machines refusing over one fact is the shape that lets one of them drift.
+    **It is a window like any other**, which is what this class asserts. It was an acknowledgeable item and a blocker of its own for exactly one step; both are gone, because the decision an operator is being asked for is *these transcripts carry no verdict and the results stand anyway* — a ruling with a disposition on it, not a wave-past — and two machines refusing over one fact is the shape that lets one of them drift.
     """
 
     def erroring(self, workspace: Workspace, count: int = 1) -> str:
@@ -416,7 +416,7 @@ class TestAScannerThatCouldNotScan:
         self, tmp_path: Path
     ) -> None:
         # not twice: an `unscanned` blocker beside the open window would be two
-        # refusals over one fact, and the one a person cleared first would
+        # refusals over one fact, and the one an operator cleared first would
         # decide which of them they heard about
         workspace = scanning(tmp_path, land=False)
         class_key = self.erroring(workspace)
@@ -542,7 +542,7 @@ class TestCoverage:
         note = coverage_note(result)
         assert note is not None
         assert "over 2 of 4 samples (2 not yet scanned)" in note
-        assert "2/4sc" in " ".join(progress_table(result.progress))
+        assert "| 2/4 |" in collect_markdown(result)
 
     def test_a_reused_sample_scanned_under_the_old_log_still_counts(
         self, tmp_path: Path
@@ -611,7 +611,7 @@ class TestCoverage:
         assert result.coverage.unverified == (TASK.identifier,)
         # and it is out of the run's totals, so the gap stays a counted number
         assert (result.coverage.scanned, result.coverage.landed) == (0, 0)
-        assert "?/4sc" in " ".join(progress_table(result.progress))
+        assert "| ?/4 |" in collect_markdown(result)
         note = coverage_note(result)
         assert note is not None
         assert "could not be checked for 1 task" in note
@@ -656,9 +656,7 @@ class TestCoverage:
 
         assert result.coverage == Coverage()
         assert coverage_note(result) is None
-        assert not any(
-            "sc" in line.split()[-1] for line in progress_table(result.progress)
-        )
+        assert "| scanned |" not in collect_markdown(result)
 
 
 class TestTheFoldsCadence:
@@ -888,7 +886,7 @@ def test_an_agent_that_goes_quiet_hands_its_investigation_to_the_person(
 ) -> None:
     """The item was offered once, to somebody who is no longer there.
 
-    An agent-owned item reaches the person by *arriving*, and a scan finding first seen while an agent was attached has already arrived — so without a second way in, the one item nobody picked up is the one item nobody is ever told about.
+    An agent-owned item reaches the operator by *arriving*, and a scan finding first seen while an agent was attached has already arrived — so without a second way in, the one item nobody picked up is the one item nobody is ever told about.
     """
     workspace = scanning(tmp_path)
     collected(workspace)

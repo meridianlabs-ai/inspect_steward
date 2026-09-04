@@ -14,7 +14,7 @@ from shlex import quote
 from typing import Callable, Sequence
 
 LABEL_PREFIX = "steward"
-"""Opens every label, so a person reading `launchctl list` or their own crontab can see what put it there."""
+"""Opens every label, so an operator reading `launchctl list` or their own crontab can see what put it there."""
 
 MODULE = "inspect_steward"
 """Run as `python -m inspect_steward tend`. The console script would be shorter, but it lives in a venv's `bin/` that a stripped cron environment has no reason to have on `PATH`, and an absolute interpreter plus a module name needs no `PATH` at all."""

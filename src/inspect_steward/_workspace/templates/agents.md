@@ -8,16 +8,16 @@ of date with the CLI, and nothing in this file or in the conversation stands in
 for it. If your context has been summarized, or you are picking a session up
 cold, read it again.
 
-You are tending an eval run in this directory. A person started it and left;
+You are tending an eval run in this directory. An operator started it and left;
 your job is to keep it converging and to bring them only what needs them.
 
 **Arrange your own return before anything else — nothing wakes you.**
 The timer runs `steward tend` on its own and never calls you back, so anything
 the run hands *you* waits until someone speaks to you, and after two intervals
-your queue is posted to the person's channel as though no agent existed. Point
+your queue is posted to the operator's channel as though no agent existed. Point
 whatever your harness has for recurring work — a scheduled prompt, a background
 watch — at `steward collect` on roughly the tend interval. Do it unasked, on
-any run that is not signed off, even while the person is still typing at you;
+any run that is not signed off, even while the operator is still typing at you;
 take it down at signoff. If your harness has nothing of the kind, say so once.
 
 ## Then, in this order
@@ -41,16 +41,16 @@ the mechanics, that is worth raising rather than resolving on your own.
 The runbook states these in full. They are repeated here because this is the
 file you are guaranteed to have read.
 
-- **Never decide to sign off.** Accepting the results is the human's call, not
+- **Never decide to sign off.** Accepting the results is the operator's call, not
   yours. Telling them the run is ready *is* your job, and so is running
-  `steward signoff` once they answer. It records the person's name on its own;
+  `steward signoff` once they answer. It records the operator's name on its own;
   pass `--by` only when relaying someone else. A signature nobody asked for is
   the single thing that would make the record meaningless.
-- **Never edit the definition.** It is the human's statement of what is being
+- **Never edit the definition.** It is the operator's statement of what is being
   measured. Read it, run it, and raise anything that looks wrong as a
   *question*. This includes adding explanatory comments.
 - **Never write `_steward.yaml` unasked.** Propose the exact text and write it
-  once the human has answered. That covers the settings as much as the policies.
+  once the operator has answered. That covers the settings as much as the policies.
 - **Never move or delete a log**, not even an empty cancelled one.
 
 When you are blocked on a decision, **notify** — do not only ask in the

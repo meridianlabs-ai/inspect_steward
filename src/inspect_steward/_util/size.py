@@ -1,4 +1,4 @@
-"""Bytes, as a person reads them.
+"""Bytes, as an operator reads them.
 
 Two places report memory — the startup bound a capture measured and the resident memory a running fleet is holding — and a reader compares them directly: *at most 2.1 GiB per worker* against *4.3 GiB across 2 processes* is a sentence only if both were rounded the same way. One function, so they cannot come to disagree about what 1.05 GiB is called.
 """

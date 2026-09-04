@@ -17,6 +17,7 @@ from .._evalset.instances import InstanceBatch, in_results
 from .._workspace.journal import Ack
 from .items import STALLED, UNREADABLE
 from .progress import Progress, short_keys
+from .table import clip, markdown_table
 
 HEADER = "<!-- Written by `steward tend`. Regenerated every turn; edits are lost. -->"
 """The same banner `status.md` carries, and this document needs it more.
@@ -33,13 +34,13 @@ Two entries. Acknowledging a **stalled** task says *this will not be run again a
 """
 
 OUTCOME_COLUMNS = (
-    ("zeroed", "zeroed"),
-    ("excluded", "excluded"),
-    ("errored", "errored"),
-    ("scored_early", "scored early"),
-    ("terminated", "terminated"),
+    ("zeroed", "zero"),
+    ("excluded", "nan"),
+    ("errored", "error"),
+    ("scored_early", "early"),
+    ("terminated", "term"),
 )
-"""The by-task table's columns in reading order: the `rulings.OUTCOMES` cell, and the heading a person reads. Every column is always shown, so the table has one shape across runs and a reader learns where to look."""
+"""The by-task table's columns in reading order: the `rulings.OUTCOMES` cell, and its heading. Short on purpose — the same table goes into a phone-width Slack post — and one set everywhere rather than a long form for the file and a short one for the channel. `nan` is what an excluded sample's score becomes. Every column is always shown, so the table has one shape across runs and a reader learns where to look."""
 
 EMPTY = "·"
 """An empty cell. A glyph rather than a blank, so that a column of nothing still reads as a column in a source file, and zero is never confused with unrendered."""
@@ -99,7 +100,7 @@ def caveats(
 ) -> list[Caveat]:
     """Every caveat the record carries, from both ways in.
 
-    Accepted windows grouped by `(class, ruling instant)` — **the same key the executor applies on**: a class-scoped ruling closing two generations is one decision with one reason, so their refs, tasks and members are **merged**; two generations under two different rulings are two decisions, and merging *those* would file one person's reasoning under another's.
+    Accepted windows grouped by `(class, ruling instant)` — **the same key the executor applies on**: a class-scoped ruling closing two generations is one decision with one reason, so their refs, tasks and members are **merged**; two generations under two different rulings are two decisions, and merging *those* would file one operator's reasoning under another's.
 
     **The counts are what reached the data, not what the window absorbed**, and the difference is the whole point of the document. Three samples that failed, were re-run, and failed again put six instances in one window — six failures over three samples, of which only the current attempt's three are in the results. Counting the window would print *6 samples excluded* three lines under a denominator line saying three, which is a footnote contradicting itself. So membership is narrowed to the current attempt exactly as `dispositions` narrows the errored cell, and the extra failures are reported as what they are.
 
@@ -107,7 +108,7 @@ def caveats(
         anomalies: The fold — `accepted()` is the filter.
         acks: Acknowledgments, by item id. Those whose kind is in `MARKED` become caveats.
         batches: The turn's census, joined against each window's refs for membership. Absent for a caller that has none, where the window's capped evidence stands in unnarrowed.
-        keys: Task identifier to the display key a person reads. An identifier carries a content hash of the whole task, which is the right thing to key state on and the wrong thing to print in a sentence somebody quotes.
+        keys: Task identifier to the display key an operator reads. An identifier carries a content hash of the whole task, which is the right thing to key state on and the wrong thing to print in a sentence somebody quotes.
         current: Task identifier to its current attempt's log location — the narrowing. Empty for a caller that has none, which then reports the window's own population.
         cleared: The subjects whose condition demonstrably no longer holds — a log that now reads, a task that has since completed. An acknowledgment names a condition rather than an instant, so one whose condition has cleared is not a caveat: a replaced upload reads, and a stalled task that later finished is in the numbers. Stated as what *cleared* rather than what stands, because a subject nothing here recognises must keep its caveat — dropping a footnote nobody asked to drop is the worse of the two mistakes.
         reused: Per resumed task, the sample uuids its current log holds — what keeps a scan finding on a reused sample in the entry that covers it.
@@ -179,7 +180,7 @@ def _caveat(
     current: Mapping[str, str],
     reused: Mapping[str, frozenset[str]] = {},
 ) -> Caveat | None:
-    """One decision, as the entry a person quotes — or nothing, where it left no mark after all.
+    """One decision, as the entry an operator quotes — or nothing, where it left no mark after all.
 
     **A decision that no longer touches the data is not a caveat**, which is the document's own filter applied to a case the state machine cannot see. A class accepted on one attempt, relaunched, and come home clean has an `accepted` window forever — that is what the fold records — but nothing of it is in the results, and a footnote saying *3 samples excluded* over samples that are not excluded is worse than no footnote. The decision itself is not lost: it is in the journal, and in *what happened*, which is where an acknowledgment with no mark ends up for the same reason.
     """
@@ -241,7 +242,7 @@ def _what(group: _Group, affected: int) -> str:
 
 
 def _scope(group: _Group, affected: int, keys: Mapping[str, str] = {}) -> str:
-    """How many, and where — in the names a person reads rather than the ones state is keyed on.
+    """How many, and where — in the names an operator reads rather than the ones state is keyed on.
 
     A task identifier carries a content hash of the whole task, which is exactly right for keying state and unreadable in a sentence somebody quotes into a write-up.
     """
@@ -360,25 +361,29 @@ def caveat_line(caveat: Caveat) -> str:
     )
 
 
-def outcomes_table(
-    outcomes: Mapping[str, Mapping[str, int]], progress: Progress
-) -> list[str]:
-    """The by-task table: each task's samples that did not take the normal course.
+OUTCOMES_HEADER = ("task", *(label for _, label in OUTCOME_COLUMNS))
+"""The by-task table's header row."""
 
-    **Padded in the source**, because this file is read in an editor at least as often as it is rendered: every column is aligned so the markdown is a legible table before anything renders it. Keys are shortened the way the status table shortens them, so a model appears only where it separates two rows, and the model every row shares is named once beneath.
+
+def outcomes_cells(
+    outcomes: Mapping[str, Mapping[str, int]], progress: Progress, *, width: int = 0
+) -> list[tuple[str, ...]]:
+    """The by-task rows: each task's samples that did not take the normal course, in the task table's order.
+
+    Keys are shortened the way the task table shortens them, so a model appears only where it separates two rows. Tasks with nothing to show have no row.
 
     Args:
         outcomes: Per task identifier, the counts per outcome cell — `Dispositions.outcomes`.
-        progress: The turn's rows, for each task's display key, its sample count and the render order.
+        progress: The turn's rows, for each task's display key and the render order.
+        width: Cut display keys to this many characters, or 0 for whole.
 
     Returns:
-        The table's lines, then a blank line and one sentence for what it leaves out — or nothing at all where every sample took the normal course.
+        One row per task with a count in some cell; nothing where every sample took the normal course.
     """
     short = short_keys(progress.rows)
     named = {
         row.identifier: key for row, key in zip(progress.rows, short.keys, strict=True)
     }
-    totals = {row.identifier: row.total for row in progress.rows}
     listed = [
         row.identifier
         for row in progress.rows
@@ -390,16 +395,11 @@ def outcomes_table(
     listed += sorted(
         identifier
         for identifier, cells in outcomes.items()
-        if identifier not in totals and any(cells.values())
+        if identifier not in named and any(cells.values())
     )
-    if not listed:
-        return []
-
-    header = ("task", "samples", *(label for _, label in OUTCOME_COLUMNS))
-    body = [
+    return [
         (
-            named.get(identifier, identifier),
-            str(totals[identifier]) if identifier in totals else "?",
+            clip(named.get(identifier, identifier), width),
             *(
                 str(outcomes[identifier][cell])
                 if outcomes[identifier].get(cell)
@@ -409,31 +409,19 @@ def outcomes_table(
         )
         for identifier in listed
     ]
-    widths = [max(len(row[n]) for row in (header, *body)) for n in range(len(header))]
-    rule = "|".join(
-        ["", "-" * (widths[0] + 2), *("-" * (w + 1) + ":" for w in widths[1:]), ""]
-    )
-    lines = [_row(header, widths), rule, *(_row(row, widths) for row in body)]
-
-    notes: list[str] = []
-    if short.model is not None:
-        notes.append(f"Every task runs `{short.model}`.")
-    if rest := len(progress.rows) - sum(1 for one in listed if one in totals):
-        notes.append(
-            f"{rest} other task{'' if rest == 1 else 's'}: every sample took "
-            "the normal course."
-        )
-    return [*lines, "", " ".join(notes)] if notes else lines
 
 
-def _row(cells: tuple[str, ...], widths: list[int]) -> str:
-    """One padded table row: the task name left-aligned, every count right-aligned under its heading."""
-    name, *rest = cells
-    padded = [
-        name.ljust(widths[0]),
-        *(cell.rjust(width) for cell, width in zip(rest, widths[1:], strict=True)),
-    ]
-    return f"| {' | '.join(padded)} |"
+def outcomes_table(
+    outcomes: Mapping[str, Mapping[str, int]], progress: Progress, *, width: int = 0
+) -> list[str]:
+    """`outcomes_cells` as a padded markdown table, then the model every row shares named once beneath — or nothing at all where every sample took the normal course."""
+    cells = outcomes_cells(outcomes, progress, width=width)
+    if not cells:
+        return []
+    lines = markdown_table(OUTCOMES_HEADER, cells)
+    if (model := short_keys(progress.rows).model) is not None:
+        lines += ["", f"Every task runs `{model}`."]
+    return lines
 
 
 def anomalies_markdown(

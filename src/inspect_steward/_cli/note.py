@@ -15,7 +15,7 @@ from .turn import find_workspace
 @click.argument("message")
 @click.option(
     "--by",
-    type=click.Choice(["human", "agent"]),
+    type=click.Choice(["operator", "agent"]),
     default="agent",
     show_default=True,
     help="Whose note. Defaults to the agent, whose observations are what this verb exists to keep.",

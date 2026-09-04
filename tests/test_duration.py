@@ -1,8 +1,8 @@
-"""Durations, as a human writes them.
+"""Durations, as an operator writes them.
 
 Small, and here because one interval reaches Steward from two directions —
 `_steward.yaml`'s front matter and a `--interval` flag — and both are typed by a
-person. What earns the tests is the refusal: a bare number is the one input
+operator. What earns the tests is the refusal: a bare number is the one input
 where being helpful would be being wrong, since `10` is ten minutes to whoever
 wrote it and ten seconds to whoever wrote the parser.
 """
@@ -76,6 +76,6 @@ def test_seconds_are_rendered_the_way_they_were_written(
     seconds: int, text: str
 ) -> None:
     # messages say `10m` because that is what the author typed; the largest
-    # unit that divides evenly recovers it for every value a person writes
+    # unit that divides evenly recovers it for every value an operator writes
     assert format_duration(seconds) == text
     assert parse_duration(text) == seconds

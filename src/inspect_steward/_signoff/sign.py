@@ -1,12 +1,12 @@
 """`signoff` — the attestation, and the end of the run.
 
-Steward can compute that no anomaly is open. Only a person can say **I accept these results**, and conflating those is how a run ends up looking certified because a machine ran out of things to flag (workflow.md §13). So this verb records who, when, the manifest digest it covered, and the exceptions accepted by name — and then stops the run: it curates the superseded attempts out of `logs/` and takes the timer down.
+Steward can compute that no anomaly is open. Only an operator can say **I accept these results**, and conflating those is how a run ends up looking certified because a machine ran out of things to flag (workflow.md §13). So this verb records who, when, the manifest digest it covered, and the exceptions accepted by name — and then stops the run: it curates the superseded attempts out of `logs/` and takes the timer down.
 
-**It runs a real turn rather than a preview, and holds the claim across both.** Three things follow from that and none of them would from a `status`. The artifacts a person is about to attest to are current at the moment they sign — `status.md`, `anomalies.md`, and any acceptance ruling that landed since the last tend, whose status flip is what makes the logs on disk agree with the decision. The gate judges an executed turn rather than a projection of one. And curation gets the still directory it needs, because the tend that could have spawned a worker into it is the same tend the claim is being held for. This is `launch`'s composition read backwards — capture, gate, commit, tend at one end; tend, gate, curate, sign at the other — and the claim spans it for the same reason.
+**It runs a real turn rather than a preview, and holds the claim across both.** Three things follow from that and none of them would from a `status`. The artifacts an operator is about to attest to are current at the moment they sign — `status.md`, `anomalies.md`, and any acceptance ruling that landed since the last tend, whose status flip is what makes the logs on disk agree with the decision. The gate judges an executed turn rather than a projection of one. And curation gets the still directory it needs, because the tend that could have spawned a worker into it is the same tend the claim is being held for. This is `launch`'s composition read backwards — capture, gate, commit, tend at one end; tend, gate, curate, sign at the other — and the claim spans it for the same reason.
 
-**It is an attestation, not access control.** What is the human's is the *decision*, never the keystroke: an agent that notices a run is ready, tells them, and carries out their answer is doing its job, and it records their name in `by` exactly as `rule` does for a ruling it is relaying. So this records the signer rather than gating the caller, and a signature nobody asked for is visible rather than prevented — the bargain a commit author line already makes.
+**It is an attestation, not access control.** What is the operator's is the *decision*, never the keystroke: an agent that notices a run is ready, tells them, and carries out their answer is doing its job, and it records their name in `by` exactly as `rule` does for a ruling it is relaying. So this records the signer rather than gating the caller, and a signature nobody asked for is visible rather than prevented — the bargain a commit author line already makes.
 
-**Signing does not commit the journal**, and that stays the human's job (workflow.md §18 q4). What this verb owes instead is that at the moment it returns, the record is complete and quiescent — nothing further will be appended without somebody asking for it — so a commit taken any time afterwards captures the same thing. It says so on the way out.
+**Signing does not commit the journal**, and that stays the operator's job (workflow.md §18 q4). What this verb owes instead is that at the moment it returns, the record is complete and quiescent — nothing further will be appended without somebody asking for it — so a commit taken any time afterwards captures the same thing. It says so on the way out.
 """
 
 from collections.abc import Set
@@ -18,6 +18,8 @@ from inspect_scout import Summary as ScanSummary
 
 from .._evalset.manifest import ManifestError, read_manifest
 from .._notify import (
+    NARROW,
+    WIDTH,
     Kind,
     Post,
     channel_apprise,
@@ -27,6 +29,7 @@ from .._notify import (
 from .._scan import finalize_scan, scan_dir_location
 from .._store import Published, StoreError, open_store, store_location
 from .._tend import TendError, TendResult, tend
+from .._tend.anomalies_md import outcomes_table
 from .._tend.turn import SCAN_FOLD_RESTORED
 from .._timer import TimerError, disarm
 from .._workspace import (
@@ -65,7 +68,7 @@ A snapshot rather than a delta: the newest event for a store is what is still ow
 class SignoffError(Exception):
     """A signoff could not be completed.
 
-    A message for a person, never a traceback. A refusal at the gate is **not** one of these — that is an outcome with its blockers attached, and the blockers are the whole point of it.
+    A message for an operator, never a traceback. A refusal at the gate is **not** one of these — that is an outcome with its blockers attached, and the blockers are the whole point of it.
     """
 
 
@@ -123,7 +126,7 @@ def signoff(
         by: Who is signing. Free text — a name on a document, never a role.
         note: What they want said about it, or `None`. Optional by design: the account of every decision is already in the journal, and a required field here collects *results look good* at scale.
         again: Record a second signature over a run whose first one still stands. The only blocker with an override, because it is the only one that is not about the run.
-        publish: Put the signed logs into the configured log store, so another project can reuse them without running the task. **Defaults to off and has no configured default that could turn it on**: exporting somebody's results into a shared cache is a decision a person makes, once, out loud — so what a `_steward.yaml` key would buy here is publication nobody was asked about, which is the one thing this must not do.
+        publish: Put the signed logs into the configured log store, so another project can reuse them without running the task. **Defaults to off and has no configured default that could turn it on**: exporting somebody's results into a shared cache is a decision an operator makes, once, out loud — so what a `_steward.yaml` key would buy here is publication nobody was asked about, which is the one thing this must not do.
         break_stale: Kill a wedged claim holder and take the claim from it.
 
     Returns:
@@ -218,7 +221,7 @@ def _signoff(
     # and the signature counts what it counts
     exceptions = sorted({caveat.subject for caveat in result.caveats})
     # **and the coverage shortfall, which is a caveat nobody declared.** Every
-    # other exception here was decided by a person and carries their reasoning;
+    # other exception here was decided by an operator and carries their reasoning;
     # this one is decided by the flag that got past the gate, and it has to
     # reach the record for the same reason the others do -- a signature reading
     # "no accepted exceptions" over a run whose scanners saw none of it is the
@@ -369,9 +372,9 @@ def _rerender(
 
     Never at the cost of the signature: it has already landed in the journal, which is the record nothing can rebuild, and a turn that will not run leaves the artifacts stale rather than the attestation undone. So a failure here does not raise.
 
-    **But it is said out loud, and reported rather than inferred.** This was swallowed entirely, and the two acts after it — the disarm, and a success message — then left a run whose only durable snapshot said *finished, waiting to be accepted* forever, with no timer to ever correct it and nothing said to the person who had just signed. A turn that raises is not the only way to end up there: `_write_rendered` swallows an `OSError` by design, so a turn that returns perfectly well proves nothing about the files. Nor does the files' *existence* — a stale `anomalies.md` from an earlier turn is a file, and a caveat list a signature does not match is worse than an absent one. So the turn now says which documents it actually wrote (`TendResult.rendered`), and anything not in that list is named with the command that repairs it.
+    **But it is said out loud, and reported rather than inferred.** This was swallowed entirely, and the two acts after it — the disarm, and a success message — then left a run whose only durable snapshot said *finished, waiting to be accepted* forever, with no timer to ever correct it and nothing said to the operator who had just signed. A turn that raises is not the only way to end up there: `_write_rendered` swallows an `OSError` by design, so a turn that returns perfectly well proves nothing about the files. Nor does the files' *existence* — a stale `anomalies.md` from an earlier turn is a file, and a caveat list a signature does not match is worse than an absent one. So the turn now says which documents it actually wrote (`TendResult.rendered`), and anything not in that list is named with the command that repairs it.
 
-    **Whether it ran is returned rather than inferred, and the caller cannot do without it.** `before` is the turn that ran *before* the signature existed, so it reads unsigned — and a caller testing the returned turn for the signature would take a second turn that merely failed to run as a signature that was invalidated: it would report `UNSIGNED` over an attestation sitting in the journal, leave the timer armed, and tell the person nothing was signed. There is no state of the run that distinguishes those two, because the difference is not about the run at all.
+    **Whether it ran is returned rather than inferred, and the caller cannot do without it.** `before` is the turn that ran *before* the signature existed, so it reads unsigned — and a caller testing the returned turn for the signature would take a second turn that merely failed to run as a signature that was invalidated: it would report `UNSIGNED` over an attestation sitting in the journal, leave the timer armed, and tell the operator nothing was signed. There is no state of the run that distinguishes those two, because the difference is not about the run at all.
 
     Args:
         workspace: The workspace, whose files this rewrites.
@@ -407,7 +410,7 @@ def _rerender(
 def _warnings(result: TendResult) -> list[str]:
     """What the signer should be told and is not being refused over.
 
-    **Journal damage is here rather than in the gate, and it is counted rather than described.** The person is being asked to attest to a record, so they are told what of it could not be read — and refusing over it would make a damaged line, which nothing can repair mechanically, into a run nobody may ever sign.
+    **Journal damage is here rather than in the gate, and it is counted rather than described.** The operator is being asked to attest to a record, so they are told what of it could not be read — and refusing over it would make a damaged line, which nothing can repair mechanically, into a run nobody may ever sign.
     """
     warnings: list[str] = []
     if result.summary.paused:
@@ -458,7 +461,7 @@ def _journal_curated(workspace: Workspace, curated: Curated) -> None:
 def _store_location(workspace: Workspace) -> str | None:
     """The log store this workspace configures, or `None`.
 
-    **Re-resolved here rather than read back off the committed manifest**, and the two questions are genuinely different. What a launch recorded is *which store this run read from*, months ago on whatever machine ran it; what publication needs is *where this machine's store is now*, and a person is standing here to have gotten that wrong in front of. The resolution is the ordinary one — the file, then the variable — minus the flag, because there is no `--log-store` on this verb.
+    **Re-resolved here rather than read back off the committed manifest**, and the two questions are genuinely different. What a launch recorded is *which store this run read from*, months ago on whatever machine ran it; what publication needs is *where this machine's store is now*, and an operator is standing here to have gotten that wrong in front of. The resolution is the ordinary one — the file, then the variable — minus the flag, because there is no `--log-store` on this verb.
 
     **Resolved to a location rather than left as the setting**, which matters here more than anywhere: this is the identity a warning names, the journal records, and `_pending` matches a debt against. A relative `log_store` that stayed relative would be a different store to a signoff typed in a subdirectory than to the launch that read it — and a ledger keyed on the setting rather than the place would then hand one store's debt to another.
     """
@@ -479,7 +482,7 @@ def _publish(
 
     **What is published is what `logs/` holds *after* curation, which takes two filters rather than none.** The observation in hand was read before the moves, so reading `current` off it publishes a set the directory no longer has. **Orphans** are the sharp half: an identifier the definition no longer names has a current log, `plan` archives every one of its attempts including that one, and a signature does not cover any of them. Publishing straight off the observation therefore exported results the attestation excludes — and, where the move had already landed, failed partway through the batch on a path that was no longer there, after copying some of the valid logs. So the set is narrowed by both things this function knows exactly: **a manifest row** (`task.task is not None`, which is what an orphan lacks) and **not among what curation just moved**.
 
-    **Including the tasks carrying accepted exceptions.** A signature is a signature: two samples accepted as errored is a legitimate result with a caveat, and the caveat lives in this project's `anomalies.md` and travels nowhere. That is a hole, it is accepted knowingly, and the alternative — withholding results a person explicitly accepted — makes the store lie in the other direction about what a project produced.
+    **Including the tasks carrying accepted exceptions.** A signature is a signature: two samples accepted as errored is a legitimate result with a caveat, and the caveat lives in this project's `anomalies.md` and travels nowhere. That is a hole, it is accepted knowingly, and the alternative — withholding results an operator explicitly accepted — makes the store lie in the other direction about what a project produced.
 
     **What actually reached the store is journalled by name, and that record is what `_withdraw` reads.** A count is enough to report a publication and is not enough to undo one: withdrawal has to know *which store holds which log because this project put it there*, and nothing else in the workspace can answer that afterwards. So the event carries `written` — the logs this call itself wrote, which for a directory store excludes any that were already present under their own name and therefore belong to whoever produced them.
 
@@ -668,7 +671,7 @@ def _deferred(
 def _cleared(workspace: Workspace, location: str, pending: Set[str]) -> None:
     """Close out a debt a previous signoff recorded, once it is actually paid.
 
-    Written only where there was one, so the ordinary signoff — which owes nothing and withdraws what it just archived — adds no event to a journal a person reads.
+    Written only where there was one, so the ordinary signoff — which owes nothing and withdraws what it just archived — adds no event to a journal an operator reads.
     """
     if pending:
         append_event(
@@ -743,7 +746,7 @@ def _withheld(location: str | None, publish: bool) -> str | None:
 def _recorded(workspace: Workspace) -> str:
     """When the signature landed, read back from the journal rather than minted here.
 
-    The event's own `ts` is the record; a second clock reading would be a second answer, and the one a person quotes should be the one in the file.
+    The event's own `ts` is the record; a second clock reading would be a second answer, and the one an operator quotes should be the one in the file.
     """
     try:
         signature = read_signoff(read_journal(workspace.journal).events)
@@ -787,6 +790,13 @@ def _post(workspace: Workspace, result: TendResult, signature: Signature) -> Non
                 workspace=workspace.root.name,
                 title=f"signed off by {signature.by} ({exceptions})",
                 lines=[signature.note] if signature.note else [],
+                # what was signed over, by task, at the width each channel reads
+                table=outcomes_table(
+                    result.dispositions.outcomes, result.progress, width=WIDTH
+                ),
+                narrow=outcomes_table(
+                    result.dispositions.outcomes, result.progress, width=NARROW
+                ),
             ),
             workspace.log,
         )
@@ -801,9 +811,9 @@ def _finalize_scan(
 
     **A finalize that succeeded closes the fold episode, and it has to.** The episode keeps a mid-run `sync(complete=False)` running every turn until one works (`_tend.turn._findings`), which is exactly right until this call lands — after it, the buffer has been cleaned and the summary rebuilt from the rows, and one more mid-run fold would overwrite that summary with `complete=false` and the counts of a buffer that is no longer there. `_rerender`'s turn is the one that would do it, so the edge is journalled here rather than after it. A finalize that *failed* deliberately leaves the episode open: nothing was cleaned, the rows are still owed, and the next turn should go on trying.
 
-    **What the finalize could not do is a refusal and not a warning.** It was a warning on `_rerender`'s reasoning — a filesystem that will not cooperate must not unmake a decision a person made — and that reasoning does not reach this call, which happens *before* the `SIGNOFF` event and so unmakes nothing by stopping. What it costs is not tidiness: rows that were never compacted are rows the census never read, so a signature taken over them says *nothing was flagged* about samples nothing has looked at. `FAILED` is the precedent and the remedy is its: run it again, and one that keeps failing is a defect rather than a state to sign around.
+    **What the finalize could not do is a refusal and not a warning.** It was a warning on `_rerender`'s reasoning — a filesystem that will not cooperate must not unmake a decision an operator made — and that reasoning does not reach this call, which happens *before* the `SIGNOFF` event and so unmakes nothing by stopping. What it costs is not tidiness: rows that were never compacted are rows the census never read, so a signature taken over them says *nothing was flagged* about samples nothing has looked at. `FAILED` is the precedent and the remedy is its: run it again, and one that keeps failing is a defect rather than a state to sign around.
 
-    **The *incompleteness* the finalize reports is deliberately not read here**, and the reason is that its two halves already have better homes than a second predicate over a summary file. A scanner that **errored** is a `scanerror:` window, refused by `OPEN_WINDOW` until it is ruled — read off the compacted rows both this verb and the tend share, so the gate and the census cannot come to disagree. A transcript nothing **reached** is a coverage shortfall (`_tend.coverage`), reported on the table and in the note under it and deliberately **not** refused: what would close it is scout's resume over the scan directory, which Steward has no verb for, so a blocker over a scanner added at a re-launch would wedge the run permanently — the same trap the acknowledgeable `scan_incomplete` item was retired for. The person signing is told the number and decides.
+    **The *incompleteness* the finalize reports is deliberately not read here**, and the reason is that its two halves already have better homes than a second predicate over a summary file. A scanner that **errored** is a `scanerror:` window, refused by `OPEN_WINDOW` until it is ruled — read off the compacted rows both this verb and the tend share, so the gate and the census cannot come to disagree. A transcript nothing **reached** is a coverage shortfall (`_tend.coverage`), reported on the table and in the note under it and deliberately **not** refused: what would close it is scout's resume over the scan directory, which Steward has no verb for, so a blocker over a scanner added at a re-launch would wedge the run permanently — the same trap the acknowledgeable `scan_incomplete` item was retired for. The operator signing is told the number and decides.
 
     Args:
         workspace: The workspace, whose journal carries the episode's edges.
@@ -849,9 +859,9 @@ def _finalize_scan(
 def _uncovered_exception(result: TendResult, folded: ScanSummary | None) -> str | None:
     """How much of this run the scanners actually reviewed, as one line in the signature.
 
-    **A caveat nobody declared, and it was reaching the record as silence.** Every other exception here was decided by a person and carries their reasoning; this one is a fact about the evidence, and leaving it out let a signature read *no accepted exceptions* over a completed four-sample run whose census covered none of it. Reproduced. That is the same failure as an unread log, arriving where nobody had put a predicate.
+    **A caveat nobody declared, and it was reaching the record as silence.** Every other exception here was decided by an operator and carries their reasoning; this one is a fact about the evidence, and leaving it out let a signature read *no accepted exceptions* over a completed four-sample run whose census covered none of it. Reproduced. That is the same failure as an unread log, arriving where nobody had put a predicate.
 
-    **Not a refusal, deliberately, and `gate` is where that argument lives** — briefly: nothing in Steward closes a coverage gap, several perfectly correct configurations produce one, and a flag every signoff has to carry is the same as no gate. So the person signing is told the number and the number is recorded. That is the *explicit, durable* half; the decision is the signature itself.
+    **Not a refusal, deliberately, and `gate` is where that argument lives** — briefly: nothing in Steward closes a coverage gap, several perfectly correct configurations produce one, and a flag every signoff has to carry is the same as no gate. So the operator signing is told the number and the number is recorded. That is the *explicit, durable* half; the decision is the signature itself.
 
     **Read off the finalize rather than off the turn**, because the two disagree and only one of them is taken after the prune. Coverage on the turn was computed before curation moved the superseded attempts and before the finalize dropped the rows naming them, so it can be wider than the census that survived — 3 of 4 against an actual 0 of 4, measured on a fixture that does exactly this. Per scanner rather than intersected: it is what the finalize counts, it needs no second read of the directory, and it is the more useful sentence anyway — *which* scanner fell short is what somebody would go and look at.
 

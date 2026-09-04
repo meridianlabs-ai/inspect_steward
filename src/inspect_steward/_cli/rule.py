@@ -1,10 +1,10 @@
 """`steward rule` — deciding what a class of failures means.
 
-The verb the whole anomaly machinery exists to reach: five hundred errored samples become one class, the class becomes one question, and this is where a person answers it — with a disposition, a required reason, and their name. One `ruling` event lands per class, sharing a proposal id when the decision answered one, which is what lets a group decision be unpicked later (workflow.md §5.6).
+The verb the whole anomaly machinery exists to reach: five hundred errored samples become one class, the class becomes one question, and this is where an operator answers it — with a disposition, a required reason, and their name. One `ruling` event lands per class, sharing a proposal id when the decision answered one, which is what lets a group decision be unpicked later (workflow.md §5.6).
 
-**It takes no claim**, for the same reason `ack` does not: a ruling is one append to an append-only file, and the moment that matters most is a person reading a status while a tend is in flight.
+**It takes no claim**, for the same reason `ack` does not: a ruling is one append to an append-only file, and the moment that matters most is an operator reading a status while a tend is in flight.
 
-**`--by` is free text naming a person, with one role permitted.** An agent relaying a person's decision records who decided, never itself — except for `dismiss`, the one disposition that marks nothing, which an agent may record as its own after investigating (`_anomaly.model.Ruling.by`). Every other answer changes what the results say and stays a person's.
+**`--by` is free text naming an operator, with one role permitted.** An agent relaying an operator's decision records who decided, never itself — except for `dismiss`, the one disposition that marks nothing, which an agent may record as its own after investigating (`_anomaly.model.Ruling.by`). Every other answer changes what the results say and stays an operator's.
 """
 
 import json
@@ -149,7 +149,7 @@ def rule_command(
         return
     for key in targets:
         # `decider`, never `by` -- the option is `None` whenever the name
-        # was resolved from the repository, and echoing it told a person
+        # was resolved from the repository, and echoing it told an operator
         # their ruling was recorded `by None` while the journal beside it
         # correctly held their name. The `--json` branch above was already
         # right, which is the shape of every two-renderings bug here
@@ -252,7 +252,7 @@ def _effects(
         return {key: effect for key in targets}
     if effect is not None:
         return {key: effect for key in targets}
-    # the shared composition, so a person's ruling and a policy's cannot word
+    # the shared composition, so an operator's ruling and a policy's cannot word
     # the same mark differently
     return {key: composed_effect(anomalies, key, decided, affected) for key in targets}
 
@@ -276,7 +276,7 @@ def _refuse_agent(decider: str, decided: Disposition) -> None:
     if decider.strip().lower() != AGENT or agent_may(decided):
         return
     raise click.ClickException(
-        f"{decided.value} marks the data, so it is a person's decision — "
+        f"{decided.value} marks the data, so it is an operator's decision — "
         f"an agent may record only dismiss as its own. Propose it instead "
         f"(`steward propose`) and record the answer with their name."
     )

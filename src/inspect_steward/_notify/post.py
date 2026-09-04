@@ -16,7 +16,7 @@ class Kind(StrEnum):
     """Something worth knowing, and work continues. The agent's, and Steward's when an item appears at that level."""
 
     STOPPED = "stopped"
-    """Nothing progresses until a person answers. The agent's, and Steward's for a parked worker — the one `stopped` it sends without an agent present, because an absent agent plus a parked worker is the silence-while-stalled the timer exists to prevent."""
+    """Nothing progresses until an operator answers. The agent's, and Steward's for a parked worker — the one `stopped` it sends without an agent present, because an absent agent plus a parked worker is the silence-while-stalled the timer exists to prevent."""
 
     PROGRESS = "progress"
     """Tasks finished this turn. Steward's alone, and **batched by the tend**: a turn that finishes five tasks posts once naming five, because the tend is already the clock and a post per task is the noise-fatigue failure workflow.md §11 opens with."""
@@ -39,7 +39,7 @@ class Kind(StrEnum):
 AGENT_KINDS = frozenset({Kind.ATTENTION, Kind.STOPPED})
 """What `steward notify` may send.
 
-The rest are refused there rather than merely undocumented: a hand-sent `gate` is a claim about the run that nobody computed, and a hand-sent `signed_off` is a claim that a human adjudicated, which is the whole content of signoff.
+The rest are refused there rather than merely undocumented: a hand-sent `gate` is a claim about the run that nobody computed, and a hand-sent `signed_off` is a claim that an operator adjudicated, which is the whole content of signoff.
 """
 
 GLYPH = {Kind.ATTENTION: "⚠️", Kind.STOPPED: "🛑"}
@@ -95,7 +95,7 @@ class Post:
     workspace: str | None = None
     """The workspace directory's name, which the target shows in front of the title.
 
-    **One channel serves however many runs a person has going**, and every title here is a sentence about *a* run — *2 decisions need attention* names nothing, and two workspaces posting it an hour apart are indistinguishable. The directory name is what a person calls the run in conversation and in `cd`, so it is the name they will recognise; nothing else Steward holds is both stable and theirs.
+    **One channel serves however many runs an operator has going**, and every title here is a sentence about *a* run — *2 decisions need attention* names nothing, and two workspaces posting it an hour apart are indistinguishable. The directory name is what an operator calls the run in conversation and in `cd`, so it is the name they will recognise; nothing else Steward holds is both stable and theirs.
 
     Carried rather than baked into `title` so that the callers assembling a title stay about the run, and one place decides how the two are joined.
     """

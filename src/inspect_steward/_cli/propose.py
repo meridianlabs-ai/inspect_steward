@@ -1,6 +1,6 @@
-"""`steward propose` — the agent's grouping judgement, put in front of a person.
+"""`steward propose` — the agent's grouping judgement, put in front of an operator.
 
-A night's failures are usually two or three causes wearing many class keys, and the proposal is the layer that says *these are one decision*: one action, the covered classes, and per-class evidence **snapshotted from the fold** — so the record shows what the human was shown, and so they can answer part of it (`steward rule --proposal ID CLASS` rules just that class; the remainder stays proposed).
+A night's failures are usually two or three causes wearing many class keys, and the proposal is the layer that says *these are one decision*: one action, the covered classes, and per-class evidence **snapshotted from the fold** — so the record shows what the operator was shown, and so they can answer part of it (`steward rule --proposal ID CLASS` rules just that class; the remainder stays proposed).
 
 Optional ceremony, never a gate: with no agent, classes stand alone and `steward rule CLASS` works bare (workflow.md §12.4). Re-proposing a class supersedes its earlier coverage, loudly.
 """
@@ -146,7 +146,7 @@ def _matched(anomalies: Anomalies, token: str) -> str:
 def _refused(anomalies: Anomalies, targets: list[str], decided: Disposition) -> None:
     """What may not even be proposed.
 
-    The same disposition matrix `rule` applies — proposing what cannot be ruled would put an unanswerable question in front of a person — plus the substrate gate: a substrate-flagged class gets no re-run proposal until a person has looked, because re-running into broken machinery burns the work twice (execution.md §9.1). A human's direct `rule rerun` *is* that look; an agent's proposal is not.
+    The same disposition matrix `rule` applies — proposing what cannot be ruled would put an unanswerable question in front of an operator — plus the substrate gate: a substrate-flagged class gets no re-run proposal until an operator has looked, because re-running into broken machinery burns the work twice (execution.md §9.1). An operator's direct `rule rerun` *is* that look; an agent's proposal is not.
     """
     refuse_dishonest(targets, decided)
     if decided is Disposition.RERUN:
@@ -161,7 +161,7 @@ def _refused(anomalies: Anomalies, targets: list[str], decided: Disposition) -> 
             raise click.ClickException(
                 f"{', '.join(flagged)} looks like the machinery under the run, "
                 f"and a re-run into a broken substrate burns the work twice — "
-                f"verify storage first; a person ruling rerun directly is that "
+                f"verify storage first; an operator ruling rerun directly is that "
                 f"verification"
             )
 

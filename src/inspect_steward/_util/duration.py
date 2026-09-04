@@ -1,6 +1,6 @@
-"""Durations, as a human writes them and Steward stores them.
+"""Durations, as an operator writes them and Steward stores them.
 
-One interval reaches Steward from two directions — `_steward.yaml`'s `tend_interval` and a `--tend-interval` flag — and both are typed by a person. A bare number would make each of them ambiguous in the way that matters most: `tend_interval: 10` is ten seconds to whoever wrote the parser and ten minutes to whoever wrote the file, and the failure is silent in both directions. So the written form always carries its unit and the stored form is always seconds.
+One interval reaches Steward from two directions — `_steward.yaml`'s `tend_interval` and a `--tend-interval` flag — and both are typed by an operator. A bare number would make each of them ambiguous in the way that matters most: `tend_interval: 10` is ten seconds to whoever wrote the parser and ten minutes to whoever wrote the file, and the failure is silent in both directions. So the written form always carries its unit and the stored form is always seconds.
 """
 
 import re
@@ -90,7 +90,7 @@ def _instant(value: str) -> datetime | None:
 def format_duration(seconds: int) -> str:
     """Render seconds the way they would have been written.
 
-    The inverse of `parse_duration` wherever the value divides evenly, which every value a person typed does. Used in messages rather than in storage, so an interval read back out of a journal is described the way its author wrote it.
+    The inverse of `parse_duration` wherever the value divides evenly, which every value an operator typed does. Used in messages rather than in storage, so an interval read back out of a journal is described the way its author wrote it.
 
     Args:
         seconds: A duration.

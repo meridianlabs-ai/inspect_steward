@@ -252,7 +252,7 @@ class TestAScannerThatThrew:
     def test_one_exception_from_two_scanners_is_two_classes(
         self, tmp_path: Path
     ) -> None:
-        # the scanner is what a person decides about — *this scanner did not
+        # the scanner is what an operator decides about — *this scanner did not
         # read these transcripts* — so one flaky provider under two scanners is
         # two holes, not one
         scan_dir = scan_dir_with(tmp_path, [errored()])

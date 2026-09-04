@@ -252,7 +252,7 @@ def test_the_passthrough_flags_are_generated_and_belong_to_launch_alone() -> Non
         for name in spellings(field):
             assert name in launch_help, name
     # under their own heading, because thirty-seven of them would otherwise bury
-    # the six a person types
+    # the six an operator types
     assert PASSTHROUGH in launch_help
 
 
@@ -285,7 +285,7 @@ def test_the_startup_memory_bound_is_printed_once(
 def test_an_additive_delta_is_committed_without_being_asked(
     workspace: Workspace, capture: FakeCapture
 ) -> None:
-    """Adding work is what the human just typed; asking whether they meant it is the interruption this design exists to remove."""
+    """Adding work is what the operator just typed; asking whether they meant it is the interruption this design exists to remove."""
     capture.manifest = synth_manifest([ADDITION, ECHO, SynthTask("extra", samples=3)])
 
     result = run("--no-timer")
@@ -421,7 +421,7 @@ def test_a_launch_lays_the_scan_directory_down_and_writes_the_scanners_down(
 def test_an_operator_scanner_colliding_with_the_builtin_refuses_before_anything_is_written(
     workspace: Workspace, capture: FakeCapture
 ) -> None:
-    """A collision cannot be resolved without silently changing what one of the two records, so it is refused at the launch — the one moment a human is present to rename it."""
+    """A collision cannot be resolved without silently changing what one of the two records, so it is refused at the launch — the one moment an operator is present to rename it."""
     workspace.directives.write_text(
         "scanners:\n  scoring_integrity:\n    name: some_pkg/other\n"
     )
@@ -885,7 +885,7 @@ def test_a_cramped_daemon_is_named_with_the_json_that_fixes_it(
 ) -> None:
     """Declining is the default, and *no* means *not by you* rather than *never*.
 
-    A person is being asked to let a tool edit their Docker configuration, so
+    An operator is being asked to let a tool edit their Docker configuration, so
     what it would write is printed before the question rather than after the
     yes -- and printed again when they say no, with the file to put it in.
     """

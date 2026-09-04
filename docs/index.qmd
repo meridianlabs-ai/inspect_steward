@@ -52,7 +52,7 @@ Inspect Steward is a system for automated execution and supervision of long-runn
 :::
 
 ::: {.overview-bullets}
-- Evaluation runs are fully unattended by design, but can escalate to humans when required.
+- Evaluation runs are fully unattended by design, but can escalate to operators when required.
 - Opinionated defaults for error handling keep tasks running, with an agent driven workflow for error resolution and retry.
 - Slack, email, or webhook notifications to keep operators apprised of status and pending decisions.
 - Works with `eval_set()` as well as with execution frameworks like [Inspect Flow](https://meridianlabs-ai.github.io/inspect_flow/) and [Inspect Hawk](https://hawk.metr.org).
@@ -156,7 +156,7 @@ from scoring?
 
 ## Workflow
 
-Steward provides a system that is fully unattended by default but which escalates for things that only the human operator can decide. The basic workflow is:
+Steward provides a system that is fully unattended by default but which escalates for things that only the operator operator can decide. The basic workflow is:
 
 1. Define your eval set and policies that will govern the run.
 

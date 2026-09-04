@@ -296,7 +296,7 @@ def test_a_directory_named_dotenv_is_not_one(tmp_path: Path) -> None:
 def test_a_key_an_ancestor_defines_is_not_missing(tmp_path: Path) -> None:
     """The refusal this whole resolution exists to stop.
 
-    One `.env` above a directory of workspaces is how a person with more than
+    One `.env` above a directory of workspaces is how an operator with more than
     one run keeps their keys, and a tend at 02:00 reads it exactly as the shell
     reading it now does. Reporting it missing refuses to arm over a credential
     that was never going to be gone.
@@ -343,7 +343,7 @@ RUNNERS: list[tuple[str, str, bool]] = [
     ("an agent harness, by prefix", "CLAUDE_CODE_MESSAGING_TOKEN", True),
     ("anything else in that namespace", "CLAUDE_CODE_SOMETHING_ELSE_TOKEN", True),
     # exported on purpose, which is exactly the signal that something wanted it
-    ("a secret store token a person exported", "VAULT_TOKEN", False),
+    ("a secret store token an operator exported", "VAULT_TOKEN", False),
     ("a cli's own token", "GH_TOKEN", False),
     ("a provider key", "ANTHROPIC_API_KEY", False),
     ("the notification channel", "STEWARD_NOTIFICATION", False),

@@ -1,12 +1,12 @@
 """Where Steward posts, and how the fleet comes to agree with it.
 
-**One channel, two consumers.** Steward posts what a turn found; a worker posts what a sample asked — `ask_user()`, the human approver — and those are opposite semantics on one pipe (workflow.md §11.4). What they must not be is two *destinations*, because the failure that produces is silent: a fleet notifying somewhere nobody reads, or not at all, while `status.md` says everything is fine.
+**One channel, two consumers.** Steward posts what a turn found; a worker posts what a sample asked — `ask_user()`, the operator approver — and those are opposite semantics on one pipe (workflow.md §11.4). What they must not be is two *destinations*, because the failure that produces is silent: a fleet notifying somewhere nobody reads, or not at all, while `status.md` says everything is fine.
 
 **So the relationship is reflexive, and both directions are here.** Steward's own setting is exported as `INSPECT_EVAL_NOTIFICATION`, which `_worker.spawn` spreads into every worker; and where only inspect's variable is set, Steward posts to that. Either spelling configures both halves, which is the whole point of taking `notification` out of the override aliases (`_workspace.directives.STEWARDS`).
 
 **Exporting is not the whole of reaching the fleet.** `build_apprise(True)` reads the variable, but a worker's `eval_set()` only calls it when its `notification` argument is truthy — so the value alone leaves the fleet silent, and the `notification` override in each worker's selection is the other half (`_worker.spawn`).
 
-**And the resolution has to be reportable, because every spelling of it is invisible from outside this process.** The channel that reaches a person most often comes from a `.env` at or above the workspace, which inspect loads into Steward and into nothing else — so a reader who checks `_steward.yaml` and their own shell finds no channel and is wrong. `describe_channel` is the answer to that, and `Channel` is what it may say: a name, a count, and no value.
+**And the resolution has to be reportable, because every spelling of it is invisible from outside this process.** The channel that reaches an operator most often comes from a `.env` at or above the workspace, which inspect loads into Steward and into nothing else — so a reader who checks `_steward.yaml` and their own shell finds no channel and is wrong. `describe_channel` is the answer to that, and `Channel` is what it may say: a name, a count, and no value.
 
 **A scheduled tend inherits neither variable**, which is why the `_steward.yaml` key earns its place: it is the one spelling still there at 02:00. `_timer.env` refuses to arm when the arming shell holds a channel the workspace's `.env` does not, so the case is caught rather than discovered in the morning.
 """
@@ -144,7 +144,7 @@ def _located(workspace: Workspace, target: str) -> str:
 class Channel:
     """Where this run's notifications go, said without ever naming the value.
 
-    **The one setting whose absence and whose presence were both invisible.** A channel is configured in four places and read from a fifth: `notification` in `_steward.yaml`, `STEWARD_NOTIFICATION`, `INSPECT_EVAL_NOTIFICATION`, `--notification`, and — the one that produced this type — a `.env` at or above the workspace, which `init_dotenv()` loads into Steward's own process and into nobody else's. An agent that reads the file and the shell it was handed sees none of it, concludes the run cannot reach anybody, and asks a person to fix a thing that is not broken. Nothing in the snapshot contradicted it, because the snapshot did not mention notification at all.
+    **The one setting whose absence and whose presence were both invisible.** A channel is configured in four places and read from a fifth: `notification` in `_steward.yaml`, `STEWARD_NOTIFICATION`, `INSPECT_EVAL_NOTIFICATION`, `--notification`, and — the one that produced this type — a `.env` at or above the workspace, which `init_dotenv()` loads into Steward's own process and into nobody else's. An agent that reads the file and the shell it was handed sees none of it, concludes the run cannot reach anybody, and asks an operator to fix a thing that is not broken. Nothing in the snapshot contradicted it, because the snapshot did not mention notification at all.
 
     So this is reported beside the log directory, on the same grounds: it stopped being guessable, and the two ways of guessing are both wrong. It is a **fact line and never an item** — the argument in `_cli.launch._echo_no_channel` still holds, that a remedy repeated every ten minutes is what teaches a reader to skip the channel it is advertising. Stating what is in force is not that; the sentence carries no advice, and the advice stays at launch where it is heard once.
 
@@ -154,7 +154,7 @@ class Channel:
     source: str | None = None
     """Which spelling put a channel in front of Steward, or `None` where none did.
 
-    One of `DIRECTIVES`, `STEWARD_NOTIFICATION`, `INSPECT_NOTIFICATION` or `COMMAND_LINE` — the name a person would search for, rather than a category they would then have to translate. `None` while Steward is declining, which is `declined`'s to explain.
+    One of `DIRECTIVES`, `STEWARD_NOTIFICATION`, `INSPECT_NOTIFICATION` or `COMMAND_LINE` — the name an operator would search for, rather than a category they would then have to translate. `None` while Steward is declining, which is `declined`'s to explain.
     """
 
     targets: int | None = None
@@ -223,7 +223,7 @@ def describe_channel(
     env = os.environ if environ is None else environ
     fleet = bool(env.get(INSPECT_NOTIFICATION, "").strip())
     if target is None:
-        # `False` is a person declining; `None` is nobody having said anything,
+        # `False` is an operator declining; `None` is nobody having said anything,
         # and the two want different sentences from a reader's point of view
         return Channel(declined=notification is False, fleet=fleet)
     return Channel(

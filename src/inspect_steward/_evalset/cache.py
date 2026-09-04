@@ -4,7 +4,7 @@ Observation reads the header of every log in the directory, every turn. That is 
 
 **The listing already carries the key, which is what makes this nearly free.** `list_eval_logs` returns `mtime` and `size` per file for about 0.011ms each and no file opens at all, against 1.4ms and two opens for a header read of an `.eval`. So a turn can decide what it needs to re-read before reading anything, and a directory of two thousand settled logs costs the listing rather than the reads.
 
-**Keyed on modification time and size together, which is exactly the mutation signal.** A finished log is immutable, so it hits. A running log grows, so it misses and is re-read. An *invalidated* log is rewritten by the human who invalidated it, so its mtime moves and it is re-read — the same signal `_stalled` reads to date an invalidation, so the two cannot disagree about when it happened.
+**Keyed on modification time and size together, which is exactly the mutation signal.** A finished log is immutable, so it hits. A running log grows, so it misses and is re-read. An *invalidated* log is rewritten by the operator who invalidated it, so its mtime moves and it is re-read — the same signal `_stalled` reads to date an invalidation, so the two cannot disagree about when it happened.
 
 **A `started` log is never cached at all.** It is the one file that changes constantly, and the one where a same-second rewrite that happened to preserve the size would go unnoticed. Excluding it costs nothing — a running fleet is a handful of files against a directory of thousands — and removes the only case where the key is not conclusive.
 

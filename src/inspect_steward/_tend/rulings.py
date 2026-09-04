@@ -1,4 +1,4 @@
-"""Applying rulings: the tend acts on what a person (or a standing policy) decided.
+"""Applying rulings: the tend acts on what an operator (or a standing policy) decided.
 
 Step 23 made an errored class a question with a recorded answer; this module is the acting half. A `rerun` ruling on a **running** task is applied warm — `inspect ctl sample requeue`, one errored sample at a time, re-running in-attempt under a fresh uuid — and on a **landed** one by invalidation: the log is reopened (`invalidate_samples` + `write_eval_log`), which flips the observation to `INVALIDATED` and authorizes the respawn reconcile schedules first. A task-kind rerun needs no executor at all — the errored task respawns mechanically, and the ruling's whole application is the stall-guard forgiveness (`reconcile`'s `ruled`). `limit:` samples in a still-running task are the one population neither path can reach (requeue refuses non-errored samples; the landed path waits) — they wait for the task to complete, deliberately.
 
@@ -6,7 +6,7 @@ Step 23 made an errored class a question with a recorded answer; this module is 
 
 **Effect first, journal after** — the `_carry_out` archive argument: an entry describing an effect that never happened is a lie in the one record nothing can rebuild, where a crash between the two costs a repeat against upstream operations that are idempotent (invalidation skips already-invalid samples; a repeated requeue answers `changed: false` and books as converged).
 
-Standing pre-authorizations (`preauthorized:` in `_steward.yaml`) become ordinary `ruling` events here, `by: policy`, before the applier reads the fold — so a pattern's ruling lands and applies in one turn, and everything downstream (precedent, forgiveness, the pass check) treats it exactly like a person's.
+Standing pre-authorizations (`preauthorized:` in `_steward.yaml`) become ordinary `ruling` events here, `by: policy`, before the applier reads the fold — so a pattern's ruling lands and applies in one turn, and everything downstream (precedent, forgiveness, the pass check) treats it exactly like an operator's.
 """
 
 from collections.abc import Mapping, Sequence
@@ -145,7 +145,7 @@ def policy_rulings(
 
     One pending `ruling` per absorbing window whose class matches a pattern — first match wins, in file order — worded `by: policy` with the pattern named in the reason and the effect composed exactly as `steward rule` would compose it. Once per generation by construction: the ruling closes the window, and a recurrence opens the next generation to be matched afresh, precedent accumulating.
 
-    Three grants are declined with a note rather than recorded. A disposition the class's kind cannot honestly carry (the `honest` matrix — a pattern must not grant what a person could not type). A `rerun` of a substrate-flagged class (a standing pattern is not the human look §9.1 requires before re-running into broken machinery). And a `rerun` of a class whose earlier re-run already failed — after a `reran_failed` a person must look, or policy re-runs every fresh generation forever.
+    Three grants are declined with a note rather than recorded. A disposition the class's kind cannot honestly carry (the `honest` matrix — a pattern must not grant what an operator could not type). A `rerun` of a substrate-flagged class (a standing pattern is not the operator look §9.1 requires before re-running into broken machinery). And a `rerun` of a class whose earlier re-run already failed — after a `reran_failed` an operator must look, or policy re-runs every fresh generation forever.
 
     Returns:
         The pending ruling events, and one note per declined grant for `steward.log`.
@@ -185,7 +185,7 @@ def policy_rulings(
             if anomaly.substrate:
                 notes.append(
                     f"preauthorized pattern '{pattern}' grants rerun, and {key} "
-                    f"looks like the machinery under the run — a person must "
+                    f"looks like the machinery under the run — an operator must "
                     f"look before it re-runs (skipped)"
                 )
                 continue
@@ -196,7 +196,7 @@ def policy_rulings(
             if any(window.failed_resolutions > 0 for window in anomalies.of_class(key)):
                 notes.append(
                     f"preauthorized pattern '{pattern}' grants rerun, and a "
-                    f"re-run of {key} already failed — a person must rule "
+                    f"re-run of {key} already failed — an operator must rule "
                     f"(skipped)"
                 )
                 continue
@@ -230,7 +230,7 @@ def apply_rulings(
 
     Per decision — windows grouped by `(class, ruling instant)`, since a class-scoped ruling can close two generations at once and they must not double-apply.
 
-    A **rerun** takes RULED sample-kind windows: the ruled population is `unapplied` over the windows' merged refs — the one membership definition the routing and the pass check share — grouped per evidence task and partitioned by liveness. A running task's targets are warm-requeued; a landed one's are invalidated in its current attempt; a task with nothing left and no witness yet gets a `converged` record (a human requeued by hand, or upstream retries absorbed the errors — without the witness the window would stick RULED forever). What could not be reached this turn — a 409 mid-finish, a busy worker, a task a worker was just spawned for — is deferred with **no record**, so exactly the remainder retries next turn.
+    A **rerun** takes RULED sample-kind windows: the ruled population is `unapplied` over the windows' merged refs — the one membership definition the routing and the pass check share — grouped per evidence task and partitioned by liveness. A running task's targets are warm-requeued; a landed one's are invalidated in its current attempt; a task with nothing left and no witness yet gets a `converged` record (an operator requeued by hand, or upstream retries absorbed the errors — without the witness the window would stick RULED forever). What could not be reached this turn — a 409 mid-finish, a busy worker, a task a worker was just spawned for — is deferred with **no record**, so exactly the remainder retries next turn.
 
     An **acceptance** takes ACCEPTED windows and reads from `anomalies.settled` rather than `.open`, because that is where the fold puts them: every accepting disposition settles its window on the spot (`_ruled_state`), so a carrier looking in `.open` would find nothing at all. **The two differ in the grain of their target, and everything else follows from that.** A rerun acts on samples, so its remainder is `unapplied` over the census; an acceptance acts on *logs*, so its remainder is the window's evidence tasks minus the ones this ruling already reached. Same doctrine one level up: nothing stores *fully applied*, a deferral leaves no record, and one failing class costs that class and never the turn — the `_act` posture.
     """
@@ -568,7 +568,7 @@ def _accept(
 ) -> None:
     """Carry out one acceptance: mark the logs it covers `success`, and record that it landed.
 
-    An acceptance says *this attempt is the result, with a caveat the report carries*. Steward's own machinery already honours that through the latch (`accepted_tasks`), but the log on disk still says `error`, and every downstream reader — `eval_set`, the viewer, `samples_df`, whoever opens the directory in six months — reads the wreckage rather than the decision. So the header is amended to agree with the person who ruled, and the ruling travels inside the log as provenance.
+    An acceptance says *this attempt is the result, with a caveat the report carries*. Steward's own machinery already honours that through the latch (`accepted_tasks`), but the log on disk still says `error`, and every downstream reader — `eval_set`, the viewer, `samples_df`, whoever opens the directory in six months — reads the wreckage rather than the decision. So the header is amended to agree with the operator who ruled, and the ruling travels inside the log as provenance.
 
     **Two signals say a task has already been accepted, and they answer different questions.** The journal record (`Applied.accepted_tasks`) is the *memory*: the only thing that can settle a partial application, a deferral or a re-ruling, and the only witness for a `limit:` or `score:` acceptance whose log was already `success` and needed no write at all. The log's own status is the *guard*: a crash between the effect and the journal append leaves the amendment landed and the record missing, and the next turn must find `success` and book it rather than swap a header a second time. This is `_landed`'s "found already invalidated" reasoning applied to a header field instead of a sample field.
     """
@@ -775,7 +775,7 @@ class Dispositions:
     )
     """Per class, the instances it left **in the data** — those in a current attempt, which is what a ruling's effect sentence is counting.
 
-    **The number a window cannot supply.** `Evidence.count` is what the window absorbed, and a sample that failed, was re-run and failed again is two instances of one row: counting it composes *6 samples excluded from scoring* over three excluded samples, three lines above a denominator line that says three. Computed here because this is the one fold that already holds both the census and the current-attempt map, and read by `composed_effect` so that a person's ruling and a policy's compose the same sentence from the same number.
+    **The number a window cannot supply.** `Evidence.count` is what the window absorbed, and a sample that failed, was re-run and failed again is two instances of one row: counting it composes *6 samples excluded from scoring* over three excluded samples, three lines above a denominator line that says three. Computed here because this is the one fold that already holds both the census and the current-attempt map, and read by `composed_effect` so that an operator's ruling and a policy's compose the same sentence from the same number.
     """
 
 
@@ -902,7 +902,7 @@ def _stronger(mark: str | None, bucket: str) -> str:
 
     **Exclusion wins**, and it is the only answer arithmetic admits: `marks_note` subtracts the exclusions from the denominator, so a row counted as both is a row simultaneously in and out of the population being scored. Once a decision has taken a row out of the scores there is nothing left for a second decision to zero, which makes the precedence a statement about the data rather than a tie-break.
 
-    Two rulings this far apart are worth a person's attention, and they get it where it belongs: both classes appear in `anomalies.md` with their own reasons, and the signature names both as exceptions. What is settled here is only what the one denominator line says.
+    Two rulings this far apart are worth an operator's attention, and they get it where it belongs: both classes appear in `anomalies.md` with their own reasons, and the signature names both as exceptions. What is settled here is only what the one denominator line says.
     """
     return "excluded" if "excluded" in (mark, bucket) else bucket
 

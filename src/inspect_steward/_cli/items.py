@@ -1,6 +1,6 @@
 """Naming an item on a command line.
 
-Two commands take an item id — `steward ack` disposes of one, `steward raise` hands one to its owner — and both take any unambiguous prefix, because a full id is something a person has to type. The matching is here so the two cannot come to disagree about what a prefix means, and the *messages* are not, because the three ways a match can fail say different things depending on which act was attempted.
+Two commands take an item id — `steward ack` disposes of one, `steward raise` hands one to its owner — and both take any unambiguous prefix, because a full id is something an operator has to type. The matching is here so the two cannot come to disagree about what a prefix means, and the *messages* are not, because the three ways a match can fail say different things depending on which act was attempted.
 """
 
 import click

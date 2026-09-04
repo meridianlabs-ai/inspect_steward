@@ -1,6 +1,6 @@
 """`steward signoff` — the attestation, and the end of the run.
 
-The claims worth defending: the gate names *every* reason at once and each one names the act that answers it; a hole that was ruled on is signed over and one nobody named refuses; curation moves rather than deletes, and moves the superseded attempt rather than the one the run reports; a signature is keyed to the results it covered, so a relaunch un-signs and an unlaunched edit does not; a filesystem that will not cooperate cannot unmake a decision a person made; and the timer comes down, because a signed run that goes on tending is spending money against an explicit instruction.
+The claims worth defending: the gate names *every* reason at once and each one names the act that answers it; a hole that was ruled on is signed over and one nobody named refuses; curation moves rather than deletes, and moves the superseded attempt rather than the one the run reports; a signature is keyed to the results it covered, so a relaunch un-signs and an unlaunched edit does not; a filesystem that will not cooperate cannot unmake a decision an operator made; and the timer comes down, because a signed run that goes on tending is spending money against an explicit instruction.
 """
 
 import shutil
@@ -29,7 +29,7 @@ from inspect_steward._signoff import (
     check,
     signoff,
 )
-from inspect_steward._tend import Verdict, status
+from inspect_steward._tend import Verdict, collect_markdown, status
 from inspect_steward._tend.items import UNREADABLE
 from inspect_steward._tend.turn import SCAN_FOLD_FAILED
 from inspect_steward._workspace import (
@@ -144,7 +144,7 @@ def test_an_open_window_is_refused_even_where_it_raised_no_item(
 
     `signoff_ready` deliberately ignores a `limit:` window — it is the
     conversation that item exists to start, and gating on it would hide the
-    line that leads a person to where it gets ruled. The signature is the end
+    line that leads an operator to where it gets ruled. The signature is the end
     of that conversation, so an operator kill nobody ruled on is a caveat
     missing from a record claiming to be complete.
     """
@@ -164,7 +164,7 @@ def test_an_open_window_is_refused_even_where_it_raised_no_item(
 
 
 def test_every_blocker_arrives_at_once(tmp_path: Path) -> None:
-    """A person who fixes one refusal and meets another has walked the loop twice."""
+    """An operator who fixes one refusal and meets another has walked the loop twice."""
     workspace = erroring(tmp_path, errors=2, samples=4)
     write_log(workspace.logs, SynthTask("second", samples=4), status="started")
     prepared(tmp_path, [SynthTask("probe", samples=4), SynthTask("second", samples=4)])
@@ -240,7 +240,7 @@ def test_an_acknowledged_caveat_is_named_in_the_signature_too(tmp_path: Path) ->
         kind=UNREADABLE,
         subject="broken.eval",
         summary="could not be read",
-        by="human",
+        by="operator",
         reason="a partial upload; the numbers are over the rest",
     )
 
@@ -252,8 +252,8 @@ def test_an_acknowledged_caveat_is_named_in_the_signature_too(tmp_path: Path) ->
     assert "the numbers are over what could be read" in workspace.anomalies.read_text(
         encoding="utf-8"
     )
-    assert "the numbers are over what could be read" in workspace.status.read_text(
-        encoding="utf-8"
+    assert "the numbers are over what could be read" in collect_markdown(
+        status(workspace)
     )
 
 
@@ -406,7 +406,7 @@ def test_an_accepted_short_task_keeps_its_errored_current_log(
 
 
 def test_a_move_that_fails_is_reported_and_still_signs(tmp_path: Path) -> None:
-    """The signature is the person's act; a filesystem must not unmake it."""
+    """The signature is the operator's act; a filesystem must not unmake it."""
     workspace, _ = prepared(tmp_path, [TASK])
     superseded = write_log(
         workspace.logs, TASK, created="2026-01-01T00:00:00Z", completed=2
@@ -506,7 +506,7 @@ def test_the_signature_reaches_the_files_a_reader_opens(tmp_path: Path) -> None:
 
     rendered = workspace.status.read_text(encoding="utf-8")
     assert "🔒" in rendered
-    assert "signed off by kaia" in rendered
+    assert "**Signed off** by kaia" in rendered
     assert "the scores look right" in rendered
     # and the turn the verb reports is the one that saw the signature
     assert result.turn.verdict is Verdict.SIGNED_OFF
@@ -519,7 +519,7 @@ def test_a_snapshot_that_could_not_be_written_is_said_out_loud(
     """A signature the durable record does not carry is worth knowing about.
 
     The write is allowed to fail — the signature has already landed in the
-    journal, and a filesystem must not unmake a decision a person made. What is
+    journal, and a filesystem must not unmake a decision an operator made. What is
     not allowed is silence: the timer comes down straight after this, so no
     scheduled turn will ever repair the files, and the signer would be told the
     run was signed while the only thing a remote reader can see went on saying
@@ -693,7 +693,7 @@ def test_an_ack_recorded_before_the_verb_existed_no_longer_silences_it(
     workspace = done(tmp_path)
     ready = next(item for item in turn(workspace).items if item.kind == "signoff_ready")
     append_event(
-        workspace.journal, ACKNOWLEDGED, id=ready.id, by="human", reason="accepted"
+        workspace.journal, ACKNOWLEDGED, id=ready.id, by="operator", reason="accepted"
     )
 
     assert any(item.kind == "signoff_ready" for item in turn(workspace).items)
@@ -754,7 +754,7 @@ def test_a_finalize_that_fails_refuses_and_signs_nothing(
 ) -> None:
     """Unlike a move that failed, and the difference is what it costs.
 
-    `_rerender`'s reasoning — a filesystem that will not cooperate must not unmake a decision a person made — does not reach this call, which runs *before* the `SIGNOFF` event and so unmakes nothing by stopping. What it costs is not tidiness: rows nothing compacted are rows the census never read, so a signature taken over them says *nothing was flagged* about samples nothing has looked at.
+    `_rerender`'s reasoning — a filesystem that will not cooperate must not unmake a decision an operator made — does not reach this call, which runs *before* the `SIGNOFF` event and so unmakes nothing by stopping. What it costs is not tidiness: rows nothing compacted are rows the census never read, so a signature taken over them says *nothing was flagged* about samples nothing has looked at.
     """
     import importlib
 
@@ -887,7 +887,7 @@ def test_a_final_turn_that_cannot_run_leaves_the_signature_standing(
 ) -> None:
     """A turn that would not run is not a run that was un-signed, and nothing about the run says which.
 
-    The pre-signature turn is what `_rerender` hands back when its own turn raises, and that turn reads unsigned because it ran before the signature existed. Testing it for the signature would report the attestation invalidated over an attestation sitting in the journal — and then leave the timer armed and tell the person nothing was signed.
+    The pre-signature turn is what `_rerender` hands back when its own turn raises, and that turn reads unsigned because it ran before the signature existed. Testing it for the signature would report the attestation invalidated over an attestation sitting in the journal — and then leave the timer armed and tell the operator nothing was signed.
     """
     import importlib
 
@@ -1078,7 +1078,6 @@ def test_the_command_prints_the_by_task_table_it_is_signing_over(
     )
     assert [cell.strip() for cell in row.split("|")][1:-1] == [
         "probe",
-        "4",
         "·",
         "2",
         "·",

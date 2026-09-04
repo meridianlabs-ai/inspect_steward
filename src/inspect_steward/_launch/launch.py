@@ -102,7 +102,7 @@ from .pools import POOLS_ADVISED, PoolAdvice, advise
 class LaunchError(Exception):
     """A launch could not be completed.
 
-    A message for a person, never a traceback: everything reachable here is a condition of the machine or the definition rather than a defect. A refusal at the archive gate is *not* one of these — that is an outcome with a delta attached, and the delta is the whole point of it.
+    A message for an operator, never a traceback: everything reachable here is a condition of the machine or the definition rather than a defect. A refusal at the archive gate is *not* one of these — that is an outcome with a delta attached, and the delta is the whole point of it.
     """
 
 
@@ -167,7 +167,7 @@ class Launch:
     pools: PoolAdvice | None = None
     """A host whose Docker will run out of bridge networks before it runs out of room, or `None` where it will not — no Docker, pools already carved finely enough, or a run small enough that thirty networks is ample (`_launch.pools`).
 
-    **Advice rather than an outcome, and offered once per workspace.** Nothing about the launch depends on it: the run starts either way and the fix needs a daemon restart the launch has no business performing. It rides here so the surface that has a person in front of it can offer to write the file, and so `--json` carries it for one that does not.
+    **Advice rather than an outcome, and offered once per workspace.** Nothing about the launch depends on it: the run starts either way and the fix needs a daemon restart the launch has no business performing. It rides here so the surface that has an operator in front of it can offer to write the file, and so `--json` carries it for one that does not.
     """
 
 
@@ -558,11 +558,11 @@ def _torn_tail(read: JournalRead) -> bool:
 
 
 def _pool_advice(workspace: Workspace, manifest: Manifest) -> PoolAdvice | None:
-    """Whether to tell this person about their Docker address pools, and once only.
+    """Whether to tell this operator about their Docker address pools, and once only.
 
     Asked after the run is committed rather than before, because the number to compare against is the provider's — `default_concurrency()`, which is what will actually be in force — and asking the provider means the answer tracks whatever inspect_ai is installed rather than a copy of its arithmetic that drifts.
 
-    **Once per workspace**, recorded in the journal. The condition is a property of the host rather than of the run, so a person who has heard it and decided against changing their daemon has answered for every later launch too, and repeating it on each one is how advice becomes something people learn to scroll past.
+    **Once per workspace**, recorded in the journal. The condition is a property of the host rather than of the run, so an operator who has heard it and decided against changing their daemon has answered for every later launch too, and repeating it on each one is how advice becomes something people learn to scroll past.
 
     **A journal that will not read costs the advice, and that is the opposite of what `_unrehearsed` does with the same failure.** The asymmetry is the point rather than an oversight: that one is a warning *about the run*, where saying nothing asserts something false — this one is a tip about somebody's Docker daemon, where saying nothing asserts nothing at all. What an unreadable journal actually costs here is the *once*, and repeating a tip somebody already declined is the failure mode this function exists to avoid. Either way it must not raise: this runs after the run is committed, and a launch that succeeded and then died rendering an aside is a launch nobody can tell succeeded.
     """
@@ -897,7 +897,7 @@ def _chosen(
 
     **Every candidate, because the store's own ranking cannot see the question.** It orders by size and recency, which is all a manifest-blind index can do — so the log it puts first may be the one that answers a different slice while the one behind it matches exactly. Checking only the front of the list turned this filter into a veto: it rejected the best-ranked log and never found out the store had what it was asked for.
 
-    **The predicate is `observe`'s own**, not a second one assembled from the same ingredients. `incomplete_reason` is what `observe_tasks` classifies a task with, so a log this accepts is a log the next tend calls complete — which is the whole claim being made. A near copy of it drifted the way near copies do: it compared `completed_samples` where observation compares `total_samples`, so a signed log carrying samples a person accepted as errored was publishable by one rule and unreusable by the other.
+    **The predicate is `observe`'s own**, not a second one assembled from the same ingredients. `incomplete_reason` is what `observe_tasks` classifies a task with, so a log this accepts is a log the next tend calls complete — which is the whole claim being made. A near copy of it drifted the way near copies do: it compared `completed_samples` where observation compares `total_samples`, so a signed log carrying samples an operator accepted as errored was publishable by one rule and unreusable by the other.
 
     A log that fails is not refused so much as not *claimed*. It stays in the store, where a run asking a different question will match it.
     """
