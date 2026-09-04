@@ -37,7 +37,7 @@ Samples that failed the same way are grouped into a class, so a provider outage 
 
 Classes appear under the anomalies heading in `steward collect`, with instance counts, an example message, and any prior rulings. A class is raised once, and again only if it materially changes: the population crosses an order of magnitude, or a re-run fails.
 
-Your agent works the queue from here. `steward investigate` marks a class as being worked, and `steward propose` bundles related classes into one question with the evidence attached.
+Your agent works the queue from here. `steward propose` bundles related classes into one question with the evidence attached and prints the sentence you will be asked; `steward rule` records your answer by the finding's name or the task's, taking the proposal's disposition unless you change it.
 
 ## Decide
 

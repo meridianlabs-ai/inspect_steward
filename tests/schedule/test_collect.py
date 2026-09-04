@@ -290,6 +290,30 @@ def test_an_exact_id_wins_before_prefixes_are_considered() -> None:
     assert match_item(items, "missing") is None
 
 
+def test_an_item_about_a_task_answers_to_the_tasks_display_key() -> None:
+    # what an operator says is the task's key, not the id's readable half --
+    # and the id's segments name it too, so `ack stalled:gaia` works without
+    # the attempt count
+    def item(identifier: str, subject: str) -> Item:
+        return Item(
+            id=identifier,
+            kind=identifier.partition(":")[0],
+            owner=Owner.OPERATOR,
+            level=Level.ATTENTION,
+            subject=subject,
+            summary=identifier,
+        )
+
+    # the drift item is about the same task and is not nameable by it: only
+    # the kinds whose subject *is* a task answer to a display key
+    items = [item("stalled:gaia:1a2b3c4d:2", "gaia#1"), item("drift:abc", "gaia#1")]
+    named = {"gaia#1": "gaia@openai/gpt-5"}
+
+    assert match_item(items, "stalled:gaia", named) is items[0]
+    assert match_item(items, "gaia@openai", named) is items[0]
+    assert match_item(items, "gaia@anthropic", named) is None
+
+
 def test_raising_again_records_the_newer_note_and_says_it_is_not_the_first(
     workspace: Workspace,
 ) -> None:

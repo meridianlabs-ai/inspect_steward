@@ -13,20 +13,30 @@ Everything a turn wants to *say* beyond counts is an **item**: a stalled task, a
 **A summary names its task in full, where the table beside it does not.** That looks like an inconsistency and is the deliberate consequence of what each is for. A table row is a *comparison*, so `shorten_keys` elides whatever every row shares; an item is a *statement*, and it travels alone — into a channel, into a notification title, into a line somebody reads with no table under it. `sec_bench_pro` is enough to pick a row out of five; only the full key is enough to name a task to somebody who cannot see the other four.
 """
 
+import re
 import shlex
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, replace
 from enum import IntEnum, StrEnum
 from hashlib import sha256
+from types import MappingProxyType
 from typing import TYPE_CHECKING
 
-from .._anomaly.model import Anomalies, Anomaly, AnomalyState, Disposition, Ruling
-from .._evalset.classify import scan_task
+from .._anomaly.model import (
+    Anomalies,
+    Anomaly,
+    AnomalyState,
+    Disposition,
+    Proposal,
+    Ruling,
+)
+from .._evalset.classify import kind_of, scan_task, short_token
 from .._evalset.observe import ObservedTasks, TaskObservation, TaskState
 from .._schedule import InFlight, Summary, attempts_made
 from .._util.duration import format_duration, is_after, seconds_since
 from .._worker import LiveParked, LiveStuck, acp_sockets
 from .._workspace import DEFAULT_TEND_INTERVAL, Ack, Armed, Signature
+from .progress import display_keys
 
 if TYPE_CHECKING:
     # the turn assembles its result and then projects it, so the type it passes
@@ -270,6 +280,7 @@ def tend_items(
                 for identifier, task in lookup.items()
                 if task.state is TaskState.COMPLETE
             ),
+            named=display_keys(result.progress),
         ),
         *_signoff(result),
     ]
@@ -447,9 +458,12 @@ def _stalled(
     result: "TendResult", lookup: dict[str, TaskObservation], inflight: InFlight
 ) -> list[Item]:
     items: list[Item] = []
+    named = display_keys(result.progress)
     for identifier in result.summary.stalled:
         observation = lookup.get(identifier)
-        key = observation.key if observation is not None else identifier
+        key = named.get(identifier) or (
+            observation.key if observation is not None else identifier
+        )
         attempts = (
             attempts_made(observation, inflight) if observation is not None else 0
         )
@@ -1150,8 +1164,15 @@ def _kill_loop(result: "TendResult") -> list[Item]:
     ]
 
 
-def _anomalies(anomalies: Anomalies, *, landed: frozenset[str]) -> list[Item]:
+def _anomalies(
+    anomalies: Anomalies,
+    *,
+    landed: frozenset[str],
+    named: Mapping[str, str] = MappingProxyType({}),
+) -> list[Item]:
     """Every open window's item, with owner following state.
+
+    **The operator's items are worded in the eval's terms, not Steward's.** A proposal reaches them as *5 samples in cybench@gpt-5 (scoring artifact): the agent proposes to drop them from scoring — reason*, never as a proposal id acting on instances across classes. They know tasks, samples and scores; a window, a class key or a `prop-` id is a word from this codebase, and a summary built from those is one they cannot answer. `named` maps task identifiers to display keys for that sentence.
 
     **An OPEN `scan:` window produces no item until its task has landed.** A scan finding is decided when the task is done — the agent reads the task's flagged transcripts against the task's scores and puts every finding the task has to the operator at once — so a window on a running task is not yet anyone's work, and an item for it would start an investigation the runbook says to wait on. `landed` is the set of tasks in `TaskState.COMPLETE`; a rerun that reopens a task takes its windows back out of the queue until it lands again.
 
@@ -1171,13 +1192,12 @@ def _anomalies(anomalies: Anomalies, *, landed: frozenset[str]) -> list[Item]:
             continue
         if anomaly.state is AnomalyState.OPEN and waiting_to_land(anomaly, landed):
             continue
-        items.extend(_window_items(anomaly))
+        items.extend(_window_items(anomaly, named))
     for identifier, proposal in anomalies.proposals.items():
         windows = covered.get(identifier, [])
         if not windows:
             continue
         count = sum(window.evidence.count for window in windows)
-        classes = ", ".join(window.class_key for window in windows)
         # the bucket rides here too: a proposed population crossing an order
         # of magnitude is news even while the question is already asked
         bucket = _bucket(count)
@@ -1188,15 +1208,70 @@ def _anomalies(anomalies: Anomalies, *, landed: frozenset[str]) -> list[Item]:
                 owner=Owner.OPERATOR,
                 level=Level.ATTENTION,
                 subject=identifier,
-                summary=(
-                    f"proposal {identifier} asks to {proposal.action.value} "
-                    f"{count} instances across {len(windows)} "
-                    f"{'class' if len(windows) == 1 else 'classes'} ({classes})"
+                summary=proposal_summary(proposal, windows, named),
+                action=answer_command(
+                    anomalies, [window.class_key for window in windows], named
                 ),
-                action=f"steward rule --proposal {identifier}",
             )
         )
     return items
+
+
+def answer_command(
+    anomalies: Anomalies, keys: Sequence[str], named: Mapping[str, str]
+) -> str:
+    """The `steward rule` an agent runs to record the operator's answer on these classes, by their shortest unambiguous tokens.
+
+    `steward rule internet_egress grader_missing_tests`, not `steward rule --proposal prop-914eeddb`: the tokens are the findings' own names, so the agent carries nothing from the proposal to the answer but what it said to the operator. The proposal's disposition is the default; `--disposition` on the same line changes it.
+    """
+    open_keys = [anomaly.class_key for anomaly in anomalies.open]
+    tokens = [
+        short_token(open_keys, key, reserved=tuple(named.values())) for key in keys
+    ]
+    return "steward rule " + " ".join(_shell_word(token) for token in tokens)
+
+
+def _shell_word(token: str) -> str:
+    """A token as a shell takes it — bare where it is plain, quoted where the key's punctuation would not survive."""
+    return token if re.fullmatch(r"[A-Za-z0-9_.:-]+", token) else f"'{token}'"
+
+
+PLAIN = {
+    Disposition.EXCLUDE: "to drop them from scoring",
+    Disposition.ZERO: "to score them zero",
+    Disposition.SCORE: "to keep their scores as recorded",
+    Disposition.ACCEPT: "to keep them, with a note in the report",
+    Disposition.RERUN: "to run them again",
+    Disposition.DISMISS: "that nothing was wrong with them",
+}
+"""Each disposition as what it does to the samples, for a sentence an operator reads. The verb names are what `steward rule` takes and what the agent answers with; they are not what the operator is told."""
+
+
+def proposal_summary(
+    proposal: Proposal, windows: list[Anomaly], named: Mapping[str, str]
+) -> str:
+    """One sentence for a proposal, in the eval's words.
+
+    `5 samples in cybench@openai/gpt-5 (scoring artifact): the agent proposes to drop them from scoring — the grader could not find its own tests`. The task by its display key, the finding by its label in words, the disposition by its effect, and the agent's reason verbatim — which is the whole of what the operator needs to answer, and nothing they have to look up.
+    """
+    count = sum(window.evidence.count for window in windows)
+    tasks = sorted(
+        {
+            named.get(identifier, identifier)
+            for window in windows
+            for identifier in window.evidence.tasks
+        }
+    )
+    labels = sorted(
+        {anomaly_name(window.class_key).replace("_", " ") for window in windows}
+    )
+    where = f" in {', '.join(tasks)}" if tasks else ""
+    who = "the agent" if proposal.by in ("", "agent") else proposal.by
+    reason = f" — {proposal.reason}" if proposal.reason else ""
+    return (
+        f"{count} sample{'' if count == 1 else 's'}{where} ({', '.join(labels)}): "
+        f"{who} proposes {PLAIN[proposal.action]}{reason}"
+    )
 
 
 def waiting_to_land(anomaly: Anomaly, landed: frozenset[str]) -> bool:
@@ -1231,9 +1306,14 @@ def self_healing(item: Item) -> bool:
     )
 
 
-def _window_items(anomaly: Anomaly) -> list[Item]:
+def _window_items(anomaly: Anomaly, named: Mapping[str, str]) -> list[Item]:
+    """One window's item, worded as the finding rather than as the window.
+
+    The summary is the sentence an agent would say to an operator — the task, the samples, what they did — and the class key rides in the action, where a verb needs it. A summary that led with the key put the key in every message the agent then wrote (workflow.md §12.5).
+    """
     base = _anomaly_id(anomaly)
-    summary = anomaly_summary(anomaly)
+    key = anomaly.class_key
+    summary = anomaly_summary(anomaly, named)
     if anomaly.state is AnomalyState.RULED:
         if anomaly.failed_resolutions:
             # the outcome *has* been observed, so the pending-outcome status
@@ -1252,10 +1332,10 @@ def _window_items(anomaly: Anomaly) -> list[Item]:
                     level=Level.ATTENTION,
                     subject=anomaly.class_key,
                     summary=(
-                        f"{anomaly.class_key} re-ran and {detail} — the "
-                        f"premise of the ruling did not hold"
+                        f"{finding_label(key)}: the samples re-ran and {detail} "
+                        f"— the premise of the ruling did not hold"
                     ),
-                    action=f"steward rule '{anomaly.class_key}'",
+                    action=f"steward rule '{key}'",
                 )
             ]
         # no item while the outcome is pending: the tend applies the ruling
@@ -1264,15 +1344,16 @@ def _window_items(anomaly: Anomaly) -> list[Item]:
         # re-run" for whoever asks
         return []
     if anomaly.state is AnomalyState.INVESTIGATING:
-        note = f" ({anomaly.note})" if anomaly.note else ""
+        note = f": {anomaly.note}" if anomaly.note else ""
         return [
             Item(
                 id=f"{base}:investigating",
                 kind=ANOMALY,
                 owner=Owner.AGENT,
                 level=Level.INFO,
-                subject=anomaly.class_key,
-                summary=f"{anomaly.class_key} is being investigated{note}",
+                subject=key,
+                summary=f"{summary} — under investigation{note}",
+                action=f"steward propose '{key}' --action ... --reason ...",
             )
         ]
     return [
@@ -1281,16 +1362,16 @@ def _window_items(anomaly: Anomaly) -> list[Item]:
             kind=ANOMALY,
             owner=Owner.AGENT,
             level=Level.ATTENTION,
-            subject=anomaly.class_key,
+            subject=key,
             summary=summary,
-            action=f"steward investigate '{anomaly.class_key}'",
+            action=f"steward propose '{key}' --action ... --reason ...",
         )
     ]
 
 
 def _anomaly_id(anomaly: Anomaly) -> str:
     """`anomaly:<Name>:<digest8>:g<n>[:x<bucket>]` — readable, then unique, then the edges."""
-    name = _anomaly_name(anomaly.class_key)
+    name = anomaly_name(anomaly.class_key)
     generation = f"g{anomaly.generation}"
     parts = [ANOMALY, name, _digest8(anomaly.class_key), generation]
     bucket = _bucket(anomaly.evidence.count)
@@ -1307,7 +1388,7 @@ def _bucket(count: int) -> str:
     return f"x{10 ** (len(str(count)) - 1)}" if count >= 10 else ""
 
 
-def _anomaly_name(class_key: str) -> str:
+def anomaly_name(class_key: str) -> str:
     """The readable half of an anomaly id: the segment an operator will recognise.
 
     The exception's type where there is one (the segment carrying `@`), the task's name for a score class, the label for a scan class, the discriminating word otherwise — `vanished`, `no-log`, `operator`.
@@ -1331,38 +1412,114 @@ def _anomaly_name(class_key: str) -> str:
     return readable or "unclassed"
 
 
-def class_summary(kind: str, class_key: str, count: int) -> str:
+def class_summary(
+    kind: str, class_key: str, count: int, *, tasks: Sequence[str] = ()
+) -> str:
     """One sentence for a class of findings, from what a bare census already knows.
 
+    **In the eval's words, without the class key.** *5 samples in cybench@gpt-5 flagged for reward hacking*, *2 samples errored the same way (TimeoutError)*: the task, the samples, what they did. The key is an address a verb takes, and a caller that has a verb to offer appends it; a sentence that carried it went into every message an agent wrote about the finding, and the operator reading that message has no idea what a class is.
+
     **Separated from `anomaly_summary` because a third reader arrived without a window.** The wording exists so that the decision queue and `anomalies.md` cannot describe one finding two ways; a smoke reports findings from a scan it just folded, before any window has been opened over them, and would otherwise have had to write a fourth phrasing of the same sentence. What a window adds — generation, prior rulings, the substrate warning — stays with `anomaly_summary`, since none of it is a fact a census holds.
+
+    Args:
+        kind: The class's kind, as `kind_of` names it.
+        class_key: The class.
+        count: How many instances.
+        tasks: The tasks the instances are in, by display key, for a caller that has them. A scan class names its task itself, so a caller without display keys still gets one.
     """
     plural = "s" if count != 1 else ""
+    name = anomaly_name(class_key)
+    where = _where(tasks)
+    if not where and kind == "scan" and (task := scan_task(class_key)):
+        where = f" in {task}"
     if kind == "limit":
         return (
-            f"{count} sample{plural} {'were' if count != 1 else 'was'} "
+            f"{count} sample{plural}{where} {'were' if count != 1 else 'was'} "
             f"terminated by an operator"
         )
     if kind == "task":
-        return f"{count} task attempt{plural} failed — {class_key}"
+        return f"{count} task attempt{plural}{where} {_task_failure(class_key)}"
     if kind == "score":
-        return f"every score converts to zero — {class_key}"
+        task = tasks[0] if len(tasks) == 1 else name
+        return f"every score in {task} converts to zero"
     if kind == "scan":
-        return f"{count} sample{plural} flagged for scoring integrity — {class_key}"
+        return f"{count} sample{plural}{where} flagged for {name.replace('_', ' ')}"
     if kind == "scanerror":
         return (
-            f"{count} transcript{plural} could not be scanned, so "
+            f"{count} transcript{plural}{where} could not be scanned, so "
             f"{'they carry' if count != 1 else 'it carries'} no verdict either "
-            f"way — {class_key}"
+            f"way ({_scan_failure(class_key)})"
         )
-    return f"{count} sample{plural} errored the same way — {class_key}"
+    return f"{count} sample{plural}{where} errored the same way ({name})"
 
 
-def anomaly_summary(anomaly: Anomaly) -> str:
+def finding_label(class_key: str) -> str:
+    """A class as a short noun phrase in the eval's words, for a line that names it without counting it.
+
+    *reward hacking in cybench*, *TimeoutError errors*, *task attempts that vanished*: what a history line, a gate refusal or a verb's echo says before the key it says it about. The same reading of the key `class_summary` makes, minus the count.
+    """
+    kind = kind_of(class_key)
+    name = anomaly_name(class_key)
+    words = name.replace("_", " ")
+    if kind == "scan":
+        task = scan_task(class_key)
+        return f"{words} in {task}" if task else words
+    if kind == "scanerror":
+        return f"scans that failed ({_scan_failure(class_key)})"
+    if kind == "score":
+        return f"every score zero in {name}"
+    if kind == "limit":
+        return "samples an operator terminated"
+    if kind == "task":
+        return f"task attempts that {_task_failure(class_key)}"
+    return f"{name} errors"
+
+
+def _where(tasks: Sequence[str]) -> str:
+    """The *in which tasks* phrase, naming up to three and counting past that."""
+    if not tasks:
+        return ""
+    if len(tasks) <= 3:
+        return f" in {', '.join(tasks)}"
+    return f" across {len(tasks)} tasks"
+
+
+def _task_failure(class_key: str) -> str:
+    """What a `task:` class says the attempts did, from the key's second segment."""
+    segments = class_key.split(":")
+    how = segments[1] if len(segments) > 1 else ""
+    typed = anomaly_name(class_key) if "@" in class_key else ""
+    if how == "vanished":
+        return "vanished"
+    if how == "no-log":
+        return "left no log"
+    if how == "no-log-exit":
+        return f"exited without a log ({typed})" if typed else "exited without a log"
+    return f"failed with {typed}" if typed else "failed"
+
+
+def _scan_failure(class_key: str) -> str:
+    """What broke a `scanerror:` class's scan — the exception where the key carries one, else the scanner."""
+    if "@" in class_key:
+        return anomaly_name(class_key)
+    segments = class_key.split(":")
+    scanner = segments[1] if len(segments) > 1 else "the scanner"
+    return f"the {scanner} scanner"
+
+
+def anomaly_summary(anomaly: Anomaly, named: Mapping[str, str] | None = None) -> str:
     """One sentence saying what happened to a class, plus what its window adds.
 
-    Shared with `anomalies.md`, so the caveat list and the decision queue cannot word the same finding differently — and sharing its first half with the smoke digest, for the same reason one layer down.
+    Shared with `anomalies.md`, so the caveat list and the decision queue cannot word the same finding differently — and sharing its first half with the smoke digest, for the same reason one layer down. `named` maps task identifiers to display keys; given, the sentence says which tasks the window's instances are in.
     """
-    line = class_summary(anomaly.kind, anomaly.class_key, anomaly.evidence.count)
+    tasks = (
+        [named.get(task, task) for task in anomaly.evidence.tasks]
+        if named is not None
+        else []
+    )
+    line = class_summary(
+        anomaly.kind, anomaly.class_key, anomaly.evidence.count, tasks=tasks
+    )
     if anomaly.generation > 1:
         rulings = len(anomaly.precedent)
         line += (

@@ -10,7 +10,7 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .._tend.items import ORPHAN_RUNNING, UNREADABLE, unfinished
+from .._tend.items import ORPHAN_RUNNING, UNREADABLE, finding_label, unfinished
 from .._workspace import Signature
 
 if TYPE_CHECKING:
@@ -111,13 +111,14 @@ def check(result: "TendResult", signature: Signature | None) -> list[Blocker]:
         # end of that conversation, and an operator kill nobody ruled on is a
         # caveat missing from the record it is supposed to be complete
         keys = sorted({anomaly.class_key for anomaly in open_windows})
-        one = len(open_windows) == 1
+        one = len(keys) == 1
+        named = ", ".join(f"{finding_label(key)} (`{key}`)" for key in keys)
         blockers.append(
             Blocker(
                 kind=OPEN_WINDOW,
                 summary=(
-                    f"{len(open_windows)} anomaly window{'' if one else 's'} "
-                    f"{'is' if one else 'are'} open: {', '.join(keys)}"
+                    f"{len(keys)} finding{'' if one else 's'} "
+                    f"{'has' if one else 'have'} no decision yet: {named}"
                 ),
                 remedy="`steward rule CLASS --disposition ... --reason ... --by NAME`",
             )

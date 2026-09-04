@@ -15,11 +15,13 @@ from inspect_steward._evalset.classify import (
     digest8,
     error_class,
     kind_of,
+    matching_keys,
     no_log_class,
     parse_error,
     scan_class,
     scan_family,
     scan_task,
+    short_token,
     substrate,
     task_error_class,
     zero_class,
@@ -304,3 +306,86 @@ class TestSubstrate:
         )
 
         assert not substrate(parsed, "ValueError('bad completion')")
+
+
+class TestMatchingKeys:
+    """Naming a class by what it is rather than by all of its key."""
+
+    KEYS = [
+        "error:TimeoutError@openai/_client.py:post",
+        "error:TimeoutError@anthropic/_client.py:post",
+        "error:ValueError@evals/scorer.py:score",
+        "scan:scoring_integrity:internet_egress:cybench:1a2b3c4d",
+        "scan:scoring_integrity:internet_egress:gaia:5e6f7a8b",
+        "scan:scoring_integrity:internet:gaia:5e6f7a8b",
+        "task:vanished",
+    ]
+
+    @pytest.mark.parametrize(
+        ("token", "expected"),
+        [
+            ("task:vanished", ["task:vanished"]),
+            ("error:Value", ["error:ValueError@evals/scorer.py:score"]),
+            ("ValueError", ["error:ValueError@evals/scorer.py:score"]),
+            (
+                "TimeoutError",
+                [
+                    "error:TimeoutError@openai/_client.py:post",
+                    "error:TimeoutError@anthropic/_client.py:post",
+                ],
+            ),
+            (
+                "TimeoutError@anthropic",
+                ["error:TimeoutError@anthropic/_client.py:post"],
+            ),
+            (
+                "internet_egress",
+                [
+                    "scan:scoring_integrity:internet_egress:cybench:1a2b3c4d",
+                    "scan:scoring_integrity:internet_egress:gaia:5e6f7a8b",
+                ],
+            ),
+            (
+                "internet_egress:cybench",
+                ["scan:scoring_integrity:internet_egress:cybench:1a2b3c4d"],
+            ),
+            # a whole segment beats a prefix of a longer one
+            ("internet", ["scan:scoring_integrity:internet:gaia:5e6f7a8b"]),
+            ("egress", []),
+            ("", []),
+        ],
+    )
+    def test_the_narrowest_tier_that_names_any(
+        self, token: str, expected: list[str]
+    ) -> None:
+        assert matching_keys(self.KEYS, token) == expected
+
+    @pytest.mark.parametrize(
+        ("key", "expected"),
+        [
+            ("error:ValueError@evals/scorer.py:score", "ValueError"),
+            # two frames share the type, so the type alone names neither
+            (
+                "error:TimeoutError@openai/_client.py:post",
+                "error:TimeoutError@openai/_client.py:post",
+            ),
+            (
+                "scan:scoring_integrity:internet_egress:cybench:1a2b3c4d",
+                "internet_egress:cybench",
+            ),
+            ("scan:scoring_integrity:internet:gaia:5e6f7a8b", "internet"),
+            ("task:vanished", "task:vanished"),
+        ],
+    )
+    def test_the_shortest_unambiguous_token(self, key: str, expected: str) -> None:
+        assert short_token(self.KEYS, key) == expected
+
+    def test_a_token_that_starts_a_task_name_is_not_used(self) -> None:
+        keys = ["scan:scoring_integrity:cybench_probe:cybench:1a2b3c4d"]
+        key = keys[0]
+
+        assert short_token(keys, key) == "cybench_probe"
+        assert (
+            short_token(keys, key, reserved=["cybench_probe@openai/gpt-5"])
+            == "cybench_probe:cybench"
+        )

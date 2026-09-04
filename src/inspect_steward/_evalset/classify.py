@@ -12,6 +12,7 @@ Everything here is pure text: no filesystem, no clock, no reads. The read path t
 """
 
 import re
+from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
 
@@ -238,6 +239,70 @@ def kind_of(class_key: str) -> str:
     return class_key.partition(":")[0]
 
 
+def matching_keys(keys: Sequence[str], token: str) -> list[str]:
+    """The keys a token names, by the narrowest tier that names any.
+
+    Three tiers, each consulted only where the one before names nothing: the token is a key; the token is a prefix of a key; the token's `:`-separated parts name successive segments of a key. In the last tier every part is tried as a whole segment before any is taken as a prefix of one, so a label that is also the start of a longer label is not ambiguous with it. `internet_egress` names `scan:scoring_integrity:internet_egress:cybench:1a2b3c4d`, `internet_egress:cybench` picks that one out from the same finding on another task, and `TimeoutError` names `error:TimeoutError@openai/_client.py:post`.
+
+    Args:
+        keys: The keys a token may name.
+        token: What somebody typed.
+
+    Returns:
+        Every key the narrowest tier names — one where the token is unambiguous, several where it is not, none where it names nothing.
+    """
+    if not token:
+        return []
+    if exact := [key for key in keys if key == token]:
+        return exact
+    if prefixed := [key for key in keys if key.startswith(token)]:
+        return prefixed
+    parts = [part for part in token.split(":") if part]
+    if not parts:
+        return []
+    whole = [key for key in keys if _subsequence(key.split(":"), parts, str.__eq__)]
+    if whole:
+        return whole
+    return [key for key in keys if _subsequence(key.split(":"), parts, str.startswith)]
+
+
+def _subsequence(
+    segments: Sequence[str], parts: Sequence[str], match: Callable[[str, str], bool]
+) -> bool:
+    """Whether `parts` name segments of `segments` in order, under `match`, skipping any."""
+    remaining = iter(segments)
+    return all(any(match(segment, part) for segment in remaining) for part in parts)
+
+
+def short_token(
+    keys: Sequence[str], key: str, *, reserved: Collection[str] = ()
+) -> str:
+    """The shortest token `matching_keys` resolves to exactly `key` among `keys`.
+
+    A scan class answers to its label, then `label:task`; an error class to its exception type; a score class to `zero:task`; a task class to its two leading segments — and any of them to the whole key when nothing shorter is unique. `reserved` are the names a verb reads before it reads class tokens (task display keys), which a token must not be the start of.
+    """
+    segments = key.split(":")
+    kind = segments[0]
+    candidates: list[str] = []
+    if kind == "scan" and len(segments) == 5:
+        candidates += [segments[2], f"{segments[2]}:{segments[3]}"]
+    elif kind == "scan" and len(segments) == 4:
+        candidates += [segments[1], f"{segments[1]}:{segments[2]}"]
+    elif "@" in key:
+        typed = next(segment for segment in segments if "@" in segment)
+        candidates.append(typed.partition("@")[0])
+    elif kind == "score" and len(segments) >= 3:
+        candidates.append(f"zero:{segments[2]}")
+    elif len(segments) >= 2:
+        candidates.append(":".join(segments[:2]))
+    for candidate in candidates:
+        if any(name.startswith(candidate) for name in reserved):
+            continue
+        if matching_keys(keys, candidate) == [key]:
+            return candidate
+    return key
+
+
 def digest8(value: str) -> str:
     """Eight hex of a hash, for keys built over text nobody should read back."""
     return sha256(value.encode("utf-8")).hexdigest()[:8]
@@ -310,11 +375,13 @@ __all__ = [
     "digest8",
     "error_class",
     "kind_of",
+    "matching_keys",
     "no_log_class",
     "parse_error",
     "scan_class",
     "scan_family",
     "scan_task",
+    "short_token",
     "scan_error_class",
     "substrate",
     "task_error_class",

@@ -9,8 +9,15 @@ import click
 
 from .._anomaly.model import Anomalies
 from .._tend import status
+from .._tend.items import finding_label
 from .._workspace import INVESTIGATING, append_event
-from .anomalies import match_class, open_classes, persist_windows, settled_ruling
+from .anomalies import (
+    listed,
+    match_class,
+    open_classes,
+    persist_windows,
+    settled_ruling,
+)
 from .turn import TURN_ERRORS, find_workspace
 
 
@@ -42,7 +49,7 @@ def investigate_command(class_key: str, note: str, by: str) -> None:
     persist_windows(workspace.journal, result.anomaly_pending, [matched])
     fields: dict[str, Any] = {"class": matched, "by": by, "note": note}
     append_event(workspace.journal, INVESTIGATING, **fields)
-    click.echo(f"investigating {matched}")
+    click.echo(f"investigating {finding_label(matched)} · `{matched}`")
     click.echo(f"  {note}")
 
 
@@ -57,5 +64,5 @@ def _matched(anomalies: Anomalies, token: str) -> str:
             f"by {settled.by} at {settled.ts}. There is nothing to investigate"
         )
     keys = open_classes(anomalies)
-    listed = "\n".join(f"  {key}" for key in keys) if keys else "  (none are open)"
-    raise click.ClickException(f"no open class matches '{token}' — open now:\n{listed}")
+    shown = "\n".join(listed(keys)) if keys else "  (none are open)"
+    raise click.ClickException(f"no open class matches '{token}' — open now:\n{shown}")

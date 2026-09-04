@@ -15,7 +15,7 @@ from dataclasses import dataclass, field
 from .._anomaly.model import SAMPLE_SHAPED, Anomalies, Anomaly, Ruling
 from .._evalset.instances import InstanceBatch, in_results
 from .._workspace.journal import Ack
-from .items import STALLED, UNREADABLE
+from .items import STALLED, UNREADABLE, anomaly_name
 from .progress import Progress, short_keys
 from .table import clip, markdown_table
 
@@ -79,6 +79,9 @@ class Caveat:
 
     decision: str
     """How it was settled — a disposition, or `acknowledged`."""
+
+    where: str = ""
+    """The *in which tasks* phrase, by display key — empty where the subject is not a class."""
 
     members: tuple[str, ...] = ()
     """`id:epoch` per member sample, or the attempts for a window with no sample population."""
@@ -196,6 +199,7 @@ def _caveat(
         when=group.ruling.ts,
         effect=group.anomaly.effect or f"accepted — {group.ruling.reason}",
         decision=group.ruling.disposition.value,
+        where=_where([keys.get(task, task) for task in group.tasks]),
         members=members,
         unnamed=unnamed,
         kind=group.anomaly.kind,
@@ -221,7 +225,8 @@ def _what(group: _Group, affected: int) -> str:
     elif anomaly.kind == "score":
         line = "every score converts to zero"
     elif anomaly.kind == "scan":
-        line = f"{affected} sample{plural} flagged for scoring integrity"
+        label = anomaly_name(anomaly.class_key).replace("_", " ")
+        line = f"{affected} sample{plural} flagged for {label}"
     elif anomaly.kind == "scanerror":
         # **the sample did not error; its scan did**, and the fallback below says
         # the opposite. This entry is the report-facing account of what reached
@@ -233,7 +238,10 @@ def _what(group: _Group, affected: int) -> str:
             f"no verdict either way — the sample{plural} ran normally"
         )
     else:
-        line = f"{affected} sample{plural} errored the same way"
+        line = (
+            f"{affected} sample{plural} errored the same way "
+            f"({anomaly_name(anomaly.class_key)})"
+        )
     if group.absorbed > affected and anomaly.kind in SAMPLE_SHAPED:
         line += f" ({group.absorbed} failures in all, counting re-runs)"
     if anomaly.substrate:
@@ -248,13 +256,17 @@ def _scope(group: _Group, affected: int, keys: Mapping[str, str] = {}) -> str:
     """
     tasks = [keys.get(task, task) for task in group.tasks]
     unit = "sample" if group.anomaly.kind in SAMPLE_SHAPED else "attempt"
-    if not tasks:
-        where = ""
-    elif len(tasks) <= 3:
-        where = f" in {', '.join(f'`{task}`' for task in tasks)}"
-    else:
-        where = f" across {len(tasks)} tasks"
+    where = _where([f"`{task}`" for task in tasks])
     return f"{affected} {unit}{'' if affected == 1 else 's'}{where}"
+
+
+def _where(tasks: Sequence[str]) -> str:
+    """The *in which tasks* phrase, naming up to three and counting past that."""
+    if not tasks:
+        return ""
+    if len(tasks) <= 3:
+        return f" in {', '.join(tasks)}"
+    return f" across {len(tasks)} tasks"
 
 
 def _members(
@@ -351,13 +363,13 @@ _ACK_SCOPE = {STALLED: "1 task"}
 
 
 def caveat_line(caveat: Caveat) -> str:
-    """One caveat as a single line — what `status.md` carries under its anomalies heading.
+    """One caveat as a single line — what `steward collect` carries under its anomalies heading.
 
-    The short rendering of the same facts the document below spells out, so a reader glancing at a run and a reader quoting it are told the same thing at two lengths.
+    The short rendering of the same facts the document below spells out, so a reader glancing at a run and a reader quoting it are told the same thing at two lengths. The finding first, in the eval's words, and the subject last as the address: the sentence is what an agent relays, the key is what it looks up.
     """
     return (
-        f"`{caveat.subject}` — {caveat.effect} "
-        f"({caveat.decision} by {caveat.who or 'somebody'})"
+        f"{caveat.what}{caveat.where} — {caveat.effect} "
+        f"({caveat.decision} by {caveat.who or 'somebody'}) · `{caveat.subject}`"
     )
 
 

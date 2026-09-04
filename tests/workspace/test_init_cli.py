@@ -61,8 +61,8 @@ def test_runbook_carries_the_bounds() -> None:
 
     assert result.exit_code == 0, result.output
     for bound in (
-        "## What you may do",
-        "## When to stop and ask",
+        "### What you may do",
+        "### Stopping",
         "Edit the definition",
         "Writing `_steward.yaml`",
         "Move or delete a log",

@@ -7,7 +7,7 @@ The failure messages are composed per verb, because the three ways a token can f
 The disposition matrix is shared too, because `propose` must not put in front of an operator a question `rule` would refuse to answer. And so is `persist_windows`, the step every deciding verb takes first: a `status` computes newly detected windows without writing them, so the fold a verb consulted can be ahead of the journal — and a decision recorded against a window the journal does not hold would be skipped by the next fold, reported successful, and ignored.
 """
 
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 
 import click
@@ -21,8 +21,8 @@ from .._anomaly.model import (
     Ruling,
     honest,
 )
-from .._evalset.classify import kind_of
-from .._tend.items import precedent_line
+from .._evalset.classify import kind_of, matching_keys
+from .._tend.items import finding_label, precedent_line
 from .._workspace import INSTANCE, OPENED, append_event
 
 DOCTRINE = (
@@ -83,7 +83,7 @@ def match_class(keys: list[str], token: str) -> str | None:
 
     Args:
         keys: The class keys the caller's act applies to.
-        token: A full class key or a prefix of one.
+        token: A full class key, a prefix of one, or the finding's own name — its label, `label:task`, or its exception type (`classify.matching_keys`).
 
     Returns:
         The match, or `None` — the caller composes that message, since *no such class* and *already ruled* are the same empty result and not the same mistake.
@@ -91,14 +91,38 @@ def match_class(keys: list[str], token: str) -> str | None:
     Raises:
         click.ClickException: If the token names more than one, listing them.
     """
-    exact = [key for key in keys if key == token]
-    matched = exact or [key for key in keys if key.startswith(token)]
+    matched = matching_keys(keys, token)
     if len(matched) > 1:
         raise click.ClickException(
-            f"'{token}' matches {len(matched)} classes:\n"
-            + "\n".join(f"  {key}" for key in matched)
+            f"'{token}' matches {len(matched)} classes — add the task "
+            f"(`{token}:TASK`) or more of the key:\n" + "\n".join(listed(matched))
         )
     return matched[0] if matched else None
+
+
+def match_task(named: Mapping[str, str], token: str) -> str | None:
+    """The one task this token names by its display key, or `None` where it names none.
+
+    A display key or an unambiguous prefix of one — `cybench`, or `cybench@openai` where the same task runs under two models. What lets `steward rule cybench` answer a finished task's proposals as they stand.
+
+    Raises:
+        click.ClickException: If the token starts more than one display key, listing them.
+    """
+    exact = [identifier for identifier, key in named.items() if key == token]
+    matched = exact or [
+        identifier for identifier, key in named.items() if key.startswith(token)
+    ]
+    if len(matched) > 1:
+        raise click.ClickException(
+            f"'{token}' names {len(matched)} tasks — add the model:\n"
+            + "\n".join(f"  {named[identifier]}" for identifier in matched)
+        )
+    return matched[0] if matched else None
+
+
+def listed(keys: Sequence[str]) -> list[str]:
+    """Classes as the lines a refusal lists them on: the finding in words, then the key."""
+    return [f"  {finding_label(key)} · {key}" for key in keys]
 
 
 def settled_ruling(anomalies: Anomalies, token: str) -> Ruling | None:
@@ -106,11 +130,11 @@ def settled_ruling(anomalies: Anomalies, token: str) -> Ruling | None:
 
     What turns *no open class matches* into the honest message: the class existed, somebody already decided it, and recurrence — not re-ruling — is what would open it again.
     """
+    keys = matching_keys(sorted({one.class_key for one in anomalies.settled}), token)
     matched = [
         anomaly
         for anomaly in anomalies.settled
-        if (anomaly.class_key == token or anomaly.class_key.startswith(token))
-        and anomaly.ruling is not None
+        if anomaly.class_key in keys and anomaly.ruling is not None
     ]
     if not matched:
         return None
@@ -125,7 +149,9 @@ def precedent_lines(anomaly: Anomaly) -> list[str]:
 __all__ = [
     "DOCTRINE",
     "SAMPLE_MARKS",
+    "listed",
     "match_class",
+    "match_task",
     "open_classes",
     "persist_windows",
     "precedent_lines",

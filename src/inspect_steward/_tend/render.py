@@ -22,12 +22,15 @@ from .coverage import TaskCoverage
 from .items import (
     HEADINGS,
     Owner,
+    answer_command,
     by_owner,
+    class_summary,
     precedent_line,
+    proposal_summary,
     verdict_line,
     waiting_to_land,
 )
-from .progress import LIVE_ONLY, TaskProgress, compact, short_keys
+from .progress import LIVE_ONLY, TaskProgress, compact, display_keys, short_keys
 from .table import resources_table
 
 if TYPE_CHECKING:
@@ -563,9 +566,20 @@ def _anomalies(result: "TendResult") -> list[str]:
     if line is not None:
         lines += [line, ""]
     landed = _landed(result)
+    named = display_keys(result.progress)
+    # the finding first, in the eval's words, and the key last: the sentence is
+    # what the agent says to an operator, the key is what it types to a verb
     for anomaly in anomalies.open:
         waiting = waiting_to_land(anomaly, landed)
-        lines.append(f"- `{anomaly.class_key}` — {_window_line(anomaly, waiting)}")
+        what = class_summary(
+            anomaly.kind,
+            anomaly.class_key,
+            anomaly.evidence.count,
+            tasks=[named.get(task, task) for task in anomaly.evidence.tasks],
+        )
+        lines.append(
+            f"- {what} — {_window_line(anomaly, waiting)} · `{anomaly.class_key}`"
+        )
         if anomaly.evidence.exemplar:
             lines.append(f"  - `{anomaly.evidence.exemplar}`")
         for ruling in anomaly.precedent:
@@ -573,12 +587,15 @@ def _anomalies(result: "TendResult") -> list[str]:
             # up (workflow.md §12.8)
             lines.append(f"  - precedent: {precedent_line(ruling, anomaly.class_key)}")
     for identifier, proposal in anomalies.proposals.items():
-        covered = len(proposal.classes)
-        lines.append(
-            f"- {identifier} proposes {proposal.action.value} for {covered} "
-            f"{'class' if covered == 1 else 'classes'} — "
-            f"`steward rule --proposal {identifier}`"
+        windows = [
+            anomaly
+            for anomaly in anomalies.open
+            if anomaly.state is AnomalyState.PROPOSED and anomaly.proposal == identifier
+        ]
+        command = answer_command(
+            anomalies, [window.class_key for window in windows], named
         )
+        lines.append(f"- {proposal_summary(proposal, windows, named)} — `{command}`")
     # one line each here against the five fields there — two lengths of one
     # list, so the glance and the quotation cannot disagree about which windows
     # left a mark or what their effect sentence says
@@ -619,7 +636,7 @@ def _window_line(anomaly: Anomaly, waiting: bool = False) -> str:
         note = f": {anomaly.note}" if anomaly.note else ""
         line = f"investigating{note} — {count} instance{plural}"
     elif anomaly.state is AnomalyState.PROPOSED:
-        line = f"proposed under {anomaly.proposal} — {count} instance{plural}"
+        line = f"proposed, awaiting the operator — {count} instance{plural}"
     else:
         line = f"open, {count} instance{plural}"
     if anomaly.generation > 1:

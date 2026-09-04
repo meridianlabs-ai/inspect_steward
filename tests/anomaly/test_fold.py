@@ -983,3 +983,32 @@ class TestFamilyPrecedent:
         )
         (unrelated,) = [one for one in anomalies.open if one.class_key == other]
         assert unrelated.precedent == ()
+
+    def test_a_run_wide_window_is_retired_and_its_ruling_kept(self) -> None:
+        # keys from before they carried the task: the census re-keys every
+        # sample under its task, so an open run-wide window is the same
+        # question twice and leaves the queue -- while a ruling on one is
+        # precedent for the per-task windows of the same finding
+        legacy = "scan:scoring_integrity:reward_hacking"
+        legacy_other = "scan:scoring_integrity:refusal"
+        per_task = scan_class(
+            "scoring_integrity", "reward_hacking", task="cybench", identifier="a"
+        )
+
+        anomalies = read_anomalies(
+            [
+                opened(legacy, kind="scan"),
+                instance(legacy),
+                ruling(legacy, disposition="zero", reason="gamed", ts=T1),
+                opened(legacy_other, kind="scan", ts=T2),
+                instance(legacy_other, ts=T2, refs=[ref("s2")]),
+                opened(per_task, kind="scan", ts=T2),
+                instance(per_task, ts=T2, refs=[ref("s1", eval_id="ev2")]),
+            ]
+        )
+
+        assert [one.class_key for one in anomalies.open] == [per_task]
+        (window,) = anomalies.open
+        assert [(one.class_key, one.disposition.value) for one in window.precedent] == [
+            (legacy, "zero")
+        ]

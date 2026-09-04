@@ -461,6 +461,17 @@ class Progress:
         return self.completed / self.total if self.total else 0.0
 
 
+def display_keys(progress: Progress) -> dict[str, str]:
+    """Task identifier to the key an operator reads — the table's own spelling, so a sentence about a task and the row about it agree.
+
+    `cybench@openai/gpt-5`, never `cybench[default]@openai/gpt-5`: the shortening is the table's, and a proposal, a caveat or a `steward rule` token that spelled the task the long way would be naming something the operator has not seen.
+    """
+    short = short_keys(progress.rows)
+    return {
+        row.identifier: key for row, key in zip(progress.rows, short.keys, strict=True)
+    }
+
+
 def short_keys(rows: list[TaskProgress]) -> ShortKeys:
     """The display keys for these rows, no longer than they have to be.
 

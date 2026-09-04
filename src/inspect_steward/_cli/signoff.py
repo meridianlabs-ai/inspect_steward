@@ -17,6 +17,7 @@ from .._anomaly.model import Disposition
 from .._evalset.manifest import ManifestError
 from .._signoff import Signoff, SignoffError, committed_manifest, signoff
 from .._tend.anomalies_md import outcomes_table
+from .._tend.items import finding_label
 from .._workspace import Held
 from .turn import TURN_ERRORS, decided_by, find_workspace
 
@@ -150,7 +151,7 @@ def _echo_signoff(result: Signoff, root: Path) -> None:
         count = len(signature.exceptions)
         click.echo(f"  {count} accepted exception{'s' if count != 1 else ''}:")
         for key in signature.exceptions:
-            click.echo(f"    {key}")
+            click.echo(f"    {finding_label(key)} · `{key}`")
     else:
         click.echo("  no accepted exceptions")
     # the same table `anomalies.md` opens on: what did not take the normal

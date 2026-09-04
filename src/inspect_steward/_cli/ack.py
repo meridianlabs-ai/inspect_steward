@@ -16,6 +16,7 @@ from pathlib import Path
 import click
 
 from .._tend import ANOMALY, PARKED, SIGNOFF_READY, TendResult, status
+from .._tend.progress import display_keys
 from .._workspace import ACKNOWLEDGED, append_event, read_acks, read_journal
 from .items import match_item
 from .turn import TURN_ERRORS, find_workspace
@@ -58,7 +59,7 @@ def ack_command(item: str, reason: str, by: str, output_json: bool) -> None:
         raise click.ClickException(str(ex)) from ex
 
     open_items = [entry for entry in result.items if entry.acknowledgeable]
-    target = match_item(open_items, item)
+    target = match_item(open_items, item, display_keys(result.progress))
     if target is None:
         raise click.ClickException(_nothing_matched(workspace.journal, item, result))
 

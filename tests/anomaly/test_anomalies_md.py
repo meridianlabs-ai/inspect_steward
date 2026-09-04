@@ -597,8 +597,11 @@ def test_a_tend_writes_the_caveats_beside_the_status(tmp_path: Path) -> None:
     # the same denominator the agent's table note carries, from one computation
     assert "Scores are over 7 of 10 samples (3 excluded)." in document
     assert "Scores are over 7 of 10 samples (3 excluded)." in collect_markdown(result)
-    # in the names an operator reads, never the identifier's content hash
-    assert "`probe[default]@mockllm/model`" in document
+    # in the name the operator's table gives the task -- the same shortening,
+    # so neither the identifier's content hash nor the `[default]` the table
+    # elides reaches the sentence
+    assert "in `probe`" in document
+    assert "[default]" not in document
 
 
 def test_a_status_writes_no_caveats_either(tmp_path: Path) -> None:

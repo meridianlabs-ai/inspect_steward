@@ -255,8 +255,11 @@ def test_a_flagged_sample_is_the_agents_investigation(tmp_path: Path) -> None:
     # the label is the readable half, not the scanner: every finding in a run
     # would otherwise carry the same word
     assert item.id.startswith("anomaly:reward_hacking:")
-    assert "2 samples flagged for scoring integrity" in item.summary
-    assert item.action == f"steward investigate '{CLASS}'"
+    # in the eval's words: the task, the samples, the finding -- no key
+    assert item.summary.startswith("2 samples in probe")
+    assert "flagged for reward hacking" in item.summary
+    assert CLASS not in item.summary
+    assert item.action == f"steward propose '{CLASS}' --action ... --reason ..."
     # an ack cannot close it — an anomaly closes on a ruling and nothing else
     assert not item.acknowledgeable
 
@@ -411,7 +414,8 @@ class TestAScannerThatCouldNotScan:
         assert result.anomalies.open[0].evidence.count == 2
         items = [item for item in result.items if item.kind == ANOMALY]
         assert items[0].owner is Owner.AGENT
-        assert "2 transcripts could not be scanned" in items[0].summary
+        assert "2 transcripts in probe" in items[0].summary
+        assert "could not be scanned" in items[0].summary
         # the exception is the recognisable half here, exactly as the label is
         # for a finding — every scan error in a run would otherwise read alike
         assert items[0].id.startswith("anomaly:TimeoutError:")
@@ -778,7 +782,7 @@ class TestWaitingToLand:
 
         (item,) = [item for item in result.items if item.subject == CLASS]
         assert item.owner is Owner.AGENT
-        assert item.action == f"steward investigate '{CLASS}'"
+        assert item.action == f"steward propose '{CLASS}' --action ... --reason ..."
         assert "waiting for the task to land" not in collect_markdown(result)
 
 
@@ -975,7 +979,7 @@ def test_an_agent_that_goes_quiet_hands_its_investigation_to_the_person(
     post = turn_post(turn(workspace))
 
     assert post is not None
-    assert any("flagged for scoring integrity" in line for line in post.lines)
+    assert any("flagged for reward hacking" in line for line in post.lines)
 
 
 def _age_the_wait(workspace: Workspace, *, seconds: float) -> None:

@@ -13,7 +13,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, cast
 
-from .._evalset.classify import kind_of, scan_family
+from .._evalset.classify import kind_of, scan_family, scan_task
 from .._evalset.instances import Instance, InstanceBatch
 from .._util.duration import is_after as _after
 from .._workspace.journal import (
@@ -408,6 +408,18 @@ def _build(
                 # a stale replay beside a concurrent writer. Invisible rather
                 # than an empty question: if instances exist they were never
                 # absorbed, so a later turn re-emits them and the window fills
+                continue
+            if (
+                kind_of(class_key) == "scan"
+                and not scan_task(class_key)
+                and window.state not in TERMINAL
+            ):
+                # a run-wide scan window, from before the keys carried the
+                # task. The census re-keys every one of its samples under the
+                # task's own window, so this one is the same question asked a
+                # second time: gone from the queue, while a ruling it already
+                # has stays as precedent for the per-task windows (its family
+                # is the key itself)
                 continue
             anomaly = _anomaly(
                 window, tuple([*precedent, *window.superseded, *related])

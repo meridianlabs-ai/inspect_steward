@@ -18,6 +18,7 @@ from pathlib import Path
 import click
 
 from .._tend import Owner, TendResult, status
+from .._tend.progress import display_keys
 from .._workspace import (
     RAISED,
     JournalEvent,
@@ -71,7 +72,7 @@ def raise_command(item: str, note: str, output_json: bool) -> None:
     # queue at every collection all night. Which is the precise failure `raise`
     # exists to prevent.
     open_items = [entry for entry in result.items if entry.owner is Owner.OPERATOR]
-    target = match_item(open_items, item)
+    target = match_item(open_items, item, display_keys(result.progress))
     if target is None:
         raise click.ClickException(_nothing_matched(workspace.journal, item, result))
 

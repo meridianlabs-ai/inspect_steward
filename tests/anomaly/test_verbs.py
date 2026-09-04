@@ -14,6 +14,7 @@ from typing import Any
 import pytest
 from click.testing import CliRunner
 from inspect_steward._cli.main import steward
+from inspect_steward._evalset.classify import scan_class
 from inspect_steward._workspace import (
     INSTANCE,
     INVESTIGATING,
@@ -31,13 +32,14 @@ from ..schedule.test_tend import prepared, turn
 
 CLASS_A = "error:TimeoutError@openai/_client.py:post"
 CLASS_B = "error:ValueError@evals/scorer.py:score"
+DONE = SynthTask("done")
 
 
 @pytest.fixture
 def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Workspace:
     """A finished run with two open anomaly classes on the record."""
     create_workspace(tmp_path, git=False)
-    done = SynthTask("done")
+    done = DONE
     workspace, _ = prepared(tmp_path, [done])
     write_log(workspace.logs, done)
     opened(workspace, CLASS_A, count=3)
@@ -54,6 +56,7 @@ def opened(
     substrate: bool = False,
     kind: str = "error",
     refs: list[str] | None = None,
+    tasks: list[str] | None = None,
 ) -> None:
     window: dict[str, Any] = {
         "class": class_key,
@@ -69,7 +72,13 @@ def opened(
         else [f"ev1:s{n}:1:u{n}" for n in range(count)],
         "exemplar": "TimeoutError('too slow')",
     }
+    if tasks is not None:
+        instances["tasks"] = tasks
     append_event(workspace.journal, INSTANCE, **instances)
+
+
+def proposal_id(output: str) -> str:
+    return next(word for word in output.split() if word.startswith("prop-")).rstrip(":")
 
 
 def run(*argv: str) -> tuple[int, str]:
@@ -107,7 +116,9 @@ class TestRule:
         assert all(entry["disposition"] == "rerun" for entry in landed)
         assert all(entry["reason"] == "provider outage overnight" for entry in landed)
         assert all(entry["by"] == "kaia" for entry in landed)
-        assert f"ruled {CLASS_A}: rerun" in output
+        # the finding in words first, the key last as the address
+        assert "ruled TimeoutError errors: rerun" in output
+        assert f"`{CLASS_A}`" in output
 
     def test_by_defaults_to_the_person_the_repository_names(
         self, workspace: Workspace, monkeypatch: pytest.MonkeyPatch
@@ -234,7 +245,9 @@ class TestRule:
         # a flagged sample is one row in the results, so "1 sample excluded
         # from scoring" is the true sentence — and refusing it would leave
         # `accept` and `dismiss` as the only answers to a score known wrong
-        scan = "scan:scoring_integrity:reward_hacking"
+        scan = scan_class(
+            "scoring_integrity", "reward_hacking", task="done", identifier="done@m"
+        )
         opened(workspace, scan, count=1, kind="scan")
 
         code, _ = run(
@@ -254,7 +267,9 @@ class TestRule:
     def test_accept_on_a_scan_class_is_allowed(self, workspace: Workspace) -> None:
         # unlike an `error:` class: the data is there and readable, and the
         # caveat is what the reader needs rather than a silent exclusion
-        scan = "scan:scoring_integrity:refusal"
+        scan = scan_class(
+            "scoring_integrity", "refusal", task="done", identifier="done@m"
+        )
         opened(workspace, scan, count=1, kind="scan")
 
         code, _ = run(
@@ -598,6 +613,199 @@ class TestProposals:
         assert code != 0
         assert "no live proposal" in output
         assert rulings(workspace) == []
+
+
+class TestRuleByFinding:
+    """Answering a proposal by naming what it is about, never by its id.
+
+    The id is what the fold keys the proposal on; the operator was told about findings and tasks, and the agent should be able to record their answer in those words. The proposal's own disposition is the default, `--disposition` changes one row, and a task stands for everything proposed for it.
+    """
+
+    SCAN_A = scan_class(
+        "scoring_integrity", "reward_hacking", task="done", identifier=DONE.identifier
+    )
+    SCAN_B = scan_class(
+        "scoring_integrity", "internet_egress", task="done", identifier=DONE.identifier
+    )
+
+    def propose(self, *classes: str, action: str = "rerun") -> str:
+        code, output = run(
+            "propose", *classes, "--action", action, "--reason", "the same cause"
+        )
+        assert code == 0, output
+        return proposal_id(output)
+
+    def test_a_finding_answers_its_proposal_as_proposed(
+        self, workspace: Workspace
+    ) -> None:
+        identifier = self.propose("TimeoutError", "ValueError")
+
+        code, output = run("rule", "TimeoutError", "--reason", "agreed", "--by", "kaia")
+
+        assert code == 0, output
+        (landed,) = rulings(workspace)
+        assert landed["class"] == CLASS_A
+        assert landed["disposition"] == "rerun"
+        assert landed["proposal"] == identifier
+        assert f"answers {identifier} as proposed" in output
+        # the other row is still the operator's question
+        code, _ = run(
+            "rule", "--proposal", identifier, "--reason", "rest", "--by", "kaia"
+        )
+        assert code == 0
+        assert [entry["class"] for entry in rulings(workspace)] == [CLASS_A, CLASS_B]
+
+    def test_a_disposition_changes_one_row_and_keeps_the_rest_proposed(
+        self, workspace: Workspace
+    ) -> None:
+        identifier = self.propose("TimeoutError", "ValueError")
+
+        code, output = run(
+            "rule",
+            "TimeoutError",
+            "--disposition",
+            "exclude",
+            "--reason",
+            "these are the scorer's fault",
+            "--by",
+            "kaia",
+        )
+
+        assert code == 0, output
+        (landed,) = rulings(workspace)
+        assert landed["disposition"] == "exclude"
+        assert landed["proposal"] == identifier
+        assert f"answers {identifier} (proposed rerun)" in output
+        # no re-proposal needed: the remainder answers by the same proposal
+        code, _ = run(
+            "rule", "--proposal", identifier, "--reason", "rest", "--by", "kaia"
+        )
+        assert code == 0
+        assert [entry["disposition"] for entry in rulings(workspace)] == [
+            "exclude",
+            "rerun",
+        ]
+
+    def test_a_task_answers_everything_proposed_for_it(
+        self, workspace: Workspace
+    ) -> None:
+        opened(workspace, self.SCAN_A, count=2, kind="scan", tasks=[DONE.identifier])
+        opened(workspace, self.SCAN_B, count=1, kind="scan", tasks=[DONE.identifier])
+        identifier = self.propose("reward_hacking", "internet_egress", action="exclude")
+
+        code, output = run(
+            "rule", "done", "--reason", "as you proposed", "--by", "kaia"
+        )
+
+        assert code == 0, output
+        landed = rulings(workspace)
+        assert [entry["class"] for entry in landed] == [self.SCAN_B, self.SCAN_A]
+        assert all(entry["disposition"] == "exclude" for entry in landed)
+        assert all(entry["proposal"] == identifier for entry in landed)
+        # the error classes nobody proposed are untouched, even though the
+        # task token would have named them had it fanned out to open classes
+        assert {CLASS_A, CLASS_B} & {entry["class"] for entry in landed} == set()
+
+    def test_a_task_with_nothing_proposed_is_refused(
+        self, workspace: Workspace
+    ) -> None:
+        code, output = run("rule", "done", "--reason", "r", "--by", "kaia")
+
+        assert code != 0
+        assert "nothing is proposed for done" in output
+        assert rulings(workspace) == []
+
+    def test_a_finding_nobody_proposed_still_needs_the_disposition(
+        self, workspace: Workspace
+    ) -> None:
+        code, output = run("rule", "TimeoutError", "--reason", "r", "--by", "kaia")
+
+        assert code != 0
+        assert "--disposition is required" in output
+        assert "TimeoutError errors" in output
+        assert rulings(workspace) == []
+
+    def test_a_label_open_on_two_tasks_takes_the_task(
+        self, workspace: Workspace
+    ) -> None:
+        elsewhere = scan_class(
+            "scoring_integrity", "reward_hacking", task="other", identifier="other@m"
+        )
+        opened(workspace, self.SCAN_A, count=2, kind="scan", tasks=[DONE.identifier])
+        opened(workspace, elsewhere, count=1, kind="scan", tasks=["other@m"])
+
+        code, output = run(
+            "rule",
+            "reward_hacking",
+            "--disposition",
+            "zero",
+            "--reason",
+            "r",
+            "--by",
+            "k",
+        )
+        assert code != 0
+        assert "matches 2 classes" in output
+        assert "reward hacking in done" in output
+
+        code, output = run(
+            "rule",
+            "reward_hacking:done",
+            "--disposition",
+            "zero",
+            "--reason",
+            "r",
+            "--by",
+            "k",
+        )
+
+        assert code == 0, output
+        assert [entry["class"] for entry in rulings(workspace)] == [self.SCAN_A]
+
+    def test_the_proposal_id_still_answers_and_takes_a_prefix(
+        self, workspace: Workspace
+    ) -> None:
+        identifier = self.propose("TimeoutError")
+
+        code, _ = run(
+            "rule", "--proposal", identifier[:9], "--reason", "agreed", "--by", "kaia"
+        )
+
+        assert code == 0
+        assert [entry["proposal"] for entry in rulings(workspace)] == [identifier]
+
+    def test_propose_prints_the_sentence_and_an_id_free_answer(
+        self, workspace: Workspace
+    ) -> None:
+        code, output = run(
+            "propose",
+            "TimeoutError",
+            "ValueError",
+            "--action",
+            "rerun",
+            "--reason",
+            "the provider was down",
+        )
+
+        assert code == 0, output
+        assert (
+            "for the operator: 5 samples (TimeoutError, ValueError): the agent "
+            "proposes to run them again — the provider was down"
+        ) in output
+        assert (
+            "answer with: steward rule TimeoutError ValueError --reason ..." in output
+        )
+        assert "--proposal" not in output.split("answer with:")[1]
+
+    def test_propose_json_carries_the_sentence(self, workspace: Workspace) -> None:
+        code, output = run(
+            "propose", "TimeoutError", "--action", "rerun", "--reason", "r", "--json"
+        )
+
+        assert code == 0, output
+        payload = json.loads(output)
+        assert payload["summary"].startswith("3 samples (TimeoutError): the agent")
+        assert payload["answer"] == "steward rule TimeoutError"
 
 
 class TestInvestigate:

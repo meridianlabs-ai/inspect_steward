@@ -9,6 +9,7 @@ The verb the whole anomaly machinery exists to reach: five hundred errored sampl
 
 import json
 from collections.abc import Mapping
+from dataclasses import dataclass
 from typing import Any
 
 import click
@@ -17,14 +18,19 @@ from .._anomaly.model import (
     AGENT,
     Anomalies,
     Anomaly,
+    AnomalyState,
     Disposition,
     agent_may,
     composed_effect,
 )
 from .._tend import status
+from .._tend.items import finding_label
+from .._tend.progress import display_keys
 from .._workspace import RULING, append_event
 from .anomalies import (
+    listed,
     match_class,
+    match_task,
     open_classes,
     persist_windows,
     precedent_lines,
@@ -35,7 +41,7 @@ from .turn import TURN_ERRORS, decided_by, find_workspace
 
 
 @click.command("rule")
-@click.argument("classes", nargs=-1)
+@click.argument("classes", nargs=-1, metavar="[FINDING|TASK]...")
 @click.option(
     "--proposal",
     "proposal_id",
@@ -46,7 +52,7 @@ from .turn import TURN_ERRORS, decided_by, find_workspace
     "--disposition",
     type=click.Choice([disposition.value for disposition in Disposition]),
     default=None,
-    help="The answer. Required unless `--proposal` supplies it; given with one, it overrides for the named classes.",
+    help="The answer. A finding a proposal covers takes the proposal's answer by default; given, this one overrides it. Required for a finding nothing proposes.",
 )
 @click.option(
     "--reason",
@@ -81,7 +87,7 @@ def rule_command(
 ) -> None:
     """Rule on anomaly classes: what the failures mean, and what happens to the data.
 
-    `CLASSES` are class keys as `steward status` prints them, or any unambiguous prefix. A ruling closes the class's window — every open generation of it — and recurrence afterwards opens a new one carrying this decision as precedent.
+    Each argument names a finding — its label (`internet_egress`), `label:task` where the same finding is open on two tasks, its exception type (`TimeoutError`), or the class key as `steward status` prints it or any prefix of one — or a task by its display key (`cybench`, `cybench@openai`), which answers every finding proposed for that task as proposed. A finding a proposal covers is answered with the proposal's disposition unless `--disposition` says otherwise; one nothing proposes needs `--disposition`. A ruling closes the class's window — every open generation of it — and recurrence afterwards opens a new one carrying this decision as precedent.
     """
     workspace = find_workspace()
     decider = decided_by(workspace, by)
@@ -90,41 +96,45 @@ def rule_command(
     except TURN_ERRORS as ex:
         raise click.ClickException(str(ex)) from ex
     anomalies = result.anomalies
+    named = display_keys(result.progress)
 
     if proposal_id is not None:
+        proposal_id = _live_proposal(anomalies, proposal_id)
         targets, decided = _from_proposal(anomalies, proposal_id, classes, disposition)
+        decisions = {key: Decision(decided, proposal_id) for key in targets}
     else:
         if not classes:
             raise click.ClickException(
-                "name at least one class, or answer a proposal with --proposal ID"
+                "name at least one finding or task, or answer a proposal with "
+                "--proposal ID"
             )
-        if disposition is None:
-            raise click.ClickException(
-                "--disposition is required — one of "
-                + ", ".join(entry.value for entry in Disposition)
-            )
-        # deduped, because two prefixes naming one class must land one ruling,
-        # not a ruling immediately superseded by its own copy
-        targets = list(dict.fromkeys(_matched(anomalies, token) for token in classes))
-        decided = Disposition(disposition)
+        targets = _targets(anomalies, named, classes)
+        decisions = _decisions(anomalies, targets, disposition)
 
-    _refuse_agent(decider, decided)
-    refuse_dishonest(targets, decided)
-    effects = _effects(
-        anomalies, targets, decided, effect, result.dispositions.affected
-    )
+    # the doctrine and the effects are per disposition, and one answer can
+    # now carry two -- a finding overridden beside its proposal's remainder
+    effects: dict[str, str] = {}
+    for decided in dict.fromkeys(decision.decided for decision in decisions.values()):
+        keys = [
+            key for key, decision in decisions.items() if decision.decided is decided
+        ]
+        _refuse_agent(decider, decided)
+        refuse_dishonest(keys, decided)
+        effects.update(
+            _effects(anomalies, keys, decided, effect, result.dispositions.affected)
+        )
 
     persist_windows(workspace.journal, result.anomaly_pending, targets)
-    for key in targets:
+    for key, decision in decisions.items():
         fields: dict[str, Any] = {
             "class": key,
-            "disposition": decided.value,
+            "disposition": decision.decided.value,
             "reason": reason,
             "by": decider,
             "effect": effects.get(key, ""),
         }
-        if proposal_id is not None:
-            fields["proposal"] = proposal_id
+        if decision.proposal is not None:
+            fields["proposal"] = decision.proposal
         append_event(workspace.journal, RULING, **fields)
 
     if output_json:
@@ -134,26 +144,36 @@ def rule_command(
                     "ruled": [
                         {
                             "class": key,
-                            "disposition": decided.value,
+                            "disposition": decision.decided.value,
                             "reason": reason,
                             "by": decider,
                             "effect": effects.get(key, ""),
-                            "proposal": proposal_id,
+                            "proposal": decision.proposal,
                         }
-                        for key in targets
+                        for key, decision in decisions.items()
                     ]
                 },
                 indent=2,
             )
         )
         return
-    for key in targets:
+    for key, decision in decisions.items():
+        decided = decision.decided
         # `decider`, never `by` -- the option is `None` whenever the name
         # was resolved from the repository, and echoing it told an operator
         # their ruling was recorded `by None` while the journal beside it
         # correctly held their name. The `--json` branch above was already
         # right, which is the shape of every two-renderings bug here
-        click.echo(f"ruled {key}: {decided.value} — {reason} (by {decider})")
+        click.echo(
+            f"ruled {finding_label(key)}: {decided.value} — {reason} "
+            f"(by {decider}) · `{key}`"
+        )
+        if decision.proposal is not None:
+            proposed = anomalies.proposals[decision.proposal].action
+            how = (
+                "as proposed" if proposed is decided else f"(proposed {proposed.value})"
+            )
+            click.echo(f"  answers {decision.proposal} {how}")
         if effects.get(key):
             click.echo(f"  effect: {effects[key]}")
         for window in _open_windows(anomalies, key):
@@ -168,6 +188,101 @@ def rule_command(
                 click.echo(f"  precedent: {line}")
 
 
+@dataclass(frozen=True)
+class Decision:
+    """What one class is ruled, and the proposal the ruling answers, if any."""
+
+    decided: Disposition
+    proposal: str | None = None
+
+
+def _targets(
+    anomalies: Anomalies, named: Mapping[str, str], tokens: tuple[str, ...]
+) -> list[str]:
+    """The classes the arguments name, a task token standing for every class proposed for it.
+
+    Deduped, because two tokens naming one class must land one ruling, not a ruling immediately superseded by its own copy. A task fans out only to what is *proposed* for it — the operator is answering the question they were asked, and a class nobody has put to them is not part of it.
+    """
+    targets: list[str] = []
+    for token in tokens:
+        task = match_task(named, token)
+        if task is None:
+            keys = [_matched(anomalies, token)]
+        else:
+            keys = _proposed_for(anomalies, task)
+            if not keys:
+                raise click.ClickException(
+                    f"nothing is proposed for {named[task]} — name a finding "
+                    f"and give --disposition to rule one directly"
+                )
+        targets.extend(key for key in keys if key not in targets)
+    return targets
+
+
+def _proposed_for(anomalies: Anomalies, task: str) -> list[str]:
+    """The classes proposed for one task — those whose every instance is in it."""
+    return sorted(
+        {
+            anomaly.class_key
+            for anomaly in anomalies.open
+            if anomaly.state is AnomalyState.PROPOSED
+            and anomaly.proposal is not None
+            and anomaly.evidence.tasks
+            and set(anomaly.evidence.tasks) <= {task}
+        }
+    )
+
+
+def _decisions(
+    anomalies: Anomalies, targets: list[str], disposition: str | None
+) -> dict[str, Decision]:
+    """Per class, the disposition it takes and the proposal that answers.
+
+    A class a live proposal covers is answered through it — the ruling records the proposal, and takes its action unless `--disposition` overrides — so an agent answers by naming the finding, never by carrying the proposal's id from the question to the answer. A class nothing proposes needs the disposition said.
+    """
+    decisions: dict[str, Decision] = {}
+    missing: list[str] = []
+    for key in targets:
+        window = anomalies.absorbing(key)
+        covering = window.proposal if window is not None else None
+        if disposition is not None:
+            decisions[key] = Decision(Disposition(disposition), covering)
+        elif covering is not None:
+            decisions[key] = Decision(anomalies.proposals[covering].action, covering)
+        else:
+            missing.append(key)
+    if missing:
+        raise click.ClickException(
+            f"--disposition is required — no proposal covers "
+            f"{'this' if len(missing) == 1 else 'these'}, so nothing supplies "
+            f"the answer:\n"
+            + "\n".join(listed(missing))
+            + "\none of "
+            + ", ".join(entry.value for entry in Disposition)
+        )
+    return decisions
+
+
+def _live_proposal(anomalies: Anomalies, token: str) -> str:
+    """The live proposal an id or an unambiguous prefix names."""
+    exact = [identifier for identifier in anomalies.proposals if identifier == token]
+    matched = exact or [
+        identifier for identifier in anomalies.proposals if identifier.startswith(token)
+    ]
+    if len(matched) > 1:
+        raise click.ClickException(
+            f"'{token}' matches {len(matched)} live proposals: "
+            + ", ".join(sorted(matched))
+        )
+    if not matched:
+        live = ", ".join(sorted(anomalies.proposals)) or "none are live"
+        raise click.ClickException(
+            f"no live proposal '{token}' — {live}. A proposal already "
+            f"fully answered is no longer live; its classes rule directly"
+        )
+    return matched[0]
+
+
 def _from_proposal(
     anomalies: Anomalies,
     proposal_id: str,
@@ -175,13 +290,7 @@ def _from_proposal(
     disposition: str | None,
 ) -> tuple[list[str], Disposition]:
     """The classes a proposal answer covers, and the disposition it lands."""
-    proposal = anomalies.proposals.get(proposal_id)
-    if proposal is None:
-        live = ", ".join(sorted(anomalies.proposals)) or "none are live"
-        raise click.ClickException(
-            f"no live proposal '{proposal_id}' — {live}. A proposal already "
-            f"fully answered is no longer live; its classes rule directly"
-        )
+    proposal = anomalies.proposals[proposal_id]
     # what still stands proposed *under this proposal* — a class already ruled
     # through it is not re-ruled by answering the remainder, one pulled out by
     # an investigation is back in the agent's hands, and one superseded into a
@@ -224,8 +333,8 @@ def _matched(anomalies: Anomalies, token: str) -> str:
             f"opens a new window; nothing is open now"
         )
     keys = open_classes(anomalies)
-    listed = "\n".join(f"  {key}" for key in keys) if keys else "  (none are open)"
-    raise click.ClickException(f"no open class matches '{token}' — open now:\n{listed}")
+    shown = "\n".join(listed(keys)) if keys else "  (none are open)"
+    raise click.ClickException(f"no open class matches '{token}' — open now:\n{shown}")
 
 
 def _effects(

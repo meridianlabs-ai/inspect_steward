@@ -48,7 +48,7 @@ class TestWhatTheSamplesDid:
         )
 
         assert count == 2
-        assert lines == (f"2 samples errored the same way — {CLASS}",)
+        assert lines == ("2 samples errored the same way (ReadTimeout)",)
 
     def test_samples_that_failed_the_same_way_are_one_line(
         self, tmp_path: Path
@@ -58,7 +58,7 @@ class TestWhatTheSamplesDid:
         lines, count = landed(tmp_path, *(errored(str(one)) for one in range(4)))
 
         assert count == 4
-        assert lines == (f"4 samples errored the same way — {CLASS}",)
+        assert lines == ("4 samples errored the same way (ReadTimeout)",)
 
     def test_an_operator_limit_is_reported_and_does_not_block(
         self, tmp_path: Path
@@ -175,10 +175,10 @@ class TestWhatItDoesToTheVerdict:
             outcome=Outcome.FAILED,
             errored=2,
             landed=4,
-            failures=(f"2 samples errored the same way — {CLASS}",),
+            failures=("2 samples errored the same way (ReadTimeout)",),
         )
 
         body = digest_markdown(smoke)
 
         assert "## what the samples did" in body
-        assert CLASS in body
+        assert "- 2 samples errored the same way (ReadTimeout)" in body

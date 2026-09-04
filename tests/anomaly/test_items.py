@@ -78,8 +78,9 @@ def test_an_open_window_is_the_agents_attention(tmp_path: Path) -> None:
     assert item.level is Level.ATTENTION
     assert item.subject == CLASS
     assert item.id == f"anomaly:openai.APITimeoutError:{_digest8(CLASS)}:g1"
-    assert "2 samples errored the same way" in item.summary
-    assert item.action == f"steward investigate '{CLASS}'"
+    assert item.summary.startswith("2 samples in probe")
+    assert "errored the same way (openai.APITimeoutError)" in item.summary
+    assert item.action == f"steward propose '{CLASS}' --action ... --reason ..."
     assert not item.acknowledgeable
 
 
@@ -138,10 +139,18 @@ def test_a_live_proposal_is_one_consolidated_human_item(tmp_path: Path) -> None:
     item = items[0]
     assert item.owner is Owner.OPERATOR
     assert item.id == "anomaly:prop:prop-abcd1234"
-    assert item.action == "steward rule --proposal prop-abcd1234"
-    # the covered class is suppressed under it, so the class key appears in
-    # the proposal's own summary and nowhere else
-    assert CLASS in item.summary
+    # answered by the finding's own name, never by the proposal id
+    assert item.action == "steward rule openai.APITimeoutError"
+    # the covered class is suppressed under it, and the proposal's own summary
+    # is in the eval's words: the task, the finding, what happens to the
+    # samples, and why -- never the class key or the proposal id
+    assert item.summary.startswith("2 samples in probe")
+    assert (
+        "(openai.APITimeoutError): the agent proposes to run them again — transient"
+        in (item.summary)
+    )
+    assert CLASS not in item.summary
+    assert "prop-" not in item.summary
 
 
 def test_a_proposed_population_crossing_a_magnitude_changes_the_item(
@@ -304,7 +313,9 @@ def test_an_error_window_does_escalate_when_nobody_collects(tmp_path: Path) -> N
     post = turn_post(turn(workspace))
 
     assert post is not None
-    assert any(CLASS in line for line in post.lines)
+    assert any(
+        "errored the same way (openai.APITimeoutError)" in line for line in post.lines
+    )
 
 
 def test_the_agent_page_carries_the_anomalies_block(tmp_path: Path) -> None:

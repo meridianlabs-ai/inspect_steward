@@ -10,11 +10,18 @@ from typing import Any
 
 import click
 
-from .._anomaly.model import Anomalies, Disposition
+from .._anomaly.model import Anomalies, Disposition, Proposal
 from .._evalset.classify import digest8
 from .._tend import status
+from .._tend.items import (
+    answer_command,
+    finding_label,
+    proposal_summary,
+)
+from .._tend.progress import display_keys
 from .._workspace import PROPOSAL, append_event
 from .anomalies import (
+    listed,
     match_class,
     open_classes,
     persist_windows,
@@ -60,7 +67,7 @@ def propose_command(
 ) -> None:
     """Propose one disposition for one or more anomaly classes.
 
-    `CLASSES` are open class keys, or unambiguous prefixes. The proposal becomes one consolidated item for its owner, answered whole or in part by `steward rule --proposal ID`.
+    `CLASSES` name open classes — a finding's label, `label:task`, an exception type, or a class key or prefix of one. Prints the sentence the operator is to be given and the `steward rule` that records their answer. The proposal becomes one consolidated item for its owner, answered whole or in part by naming its findings or its task to `steward rule`.
     """
     workspace = find_workspace()
     try:
@@ -95,6 +102,20 @@ def propose_command(
         by=by,
     )
 
+    # the sentence and the answer, in the same words the operator's item will
+    # carry -- so what the agent says and what it types are settled here, and
+    # the proposal id never has to travel from the question to the answer
+    named = display_keys(result.progress)
+    windows = [anomaly for anomaly in anomalies.open if anomaly.class_key in targets]
+    summary = proposal_summary(
+        Proposal(
+            id=identifier, action=decided, classes=tuple(targets), reason=reason, by=by
+        ),
+        windows,
+        named,
+    )
+    answer = answer_command(anomalies, targets, named)
+
     if output_json:
         click.echo(
             json.dumps(
@@ -104,6 +125,8 @@ def propose_command(
                     "classes": evidence,
                     "reason": reason,
                     "by": by,
+                    "summary": summary,
+                    "answer": answer,
                 },
                 indent=2,
             )
@@ -111,13 +134,15 @@ def propose_command(
         return
     click.echo(f"proposed {identifier}: {decided.value} — {reason}")
     for key, snapshot in evidence.items():
-        click.echo(f"  {key} ({snapshot['count']} instances)")
+        click.echo(f"  {finding_label(key)} ({snapshot['count']} instances) · `{key}`")
         for line in snapshot.get("precedent", []):
             click.echo(f"    precedent: {line}")
     for key, earlier in superseded.items():
-        click.echo(f"  supersedes {earlier} for {key}")
+        click.echo(f"  supersedes {earlier} for {finding_label(key)}")
+    click.echo(f"for the operator: {summary}")
     click.echo(
-        f"answer with: steward rule --proposal {identifier} --reason ... --by ..."
+        f"answer with: {answer} --reason ...   "
+        f"(as proposed; add --disposition to change it)"
     )
 
 
@@ -139,8 +164,8 @@ def _matched(anomalies: Anomalies, token: str) -> str:
             f"by {settled.by} at {settled.ts}. There is nothing to propose"
         )
     keys = open_classes(anomalies)
-    listed = "\n".join(f"  {key}" for key in keys) if keys else "  (none are open)"
-    raise click.ClickException(f"no open class matches '{token}' — open now:\n{listed}")
+    shown = "\n".join(listed(keys)) if keys else "  (none are open)"
+    raise click.ClickException(f"no open class matches '{token}' — open now:\n{shown}")
 
 
 def _refused(anomalies: Anomalies, targets: list[str], decided: Disposition) -> None:

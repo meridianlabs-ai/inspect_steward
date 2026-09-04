@@ -34,6 +34,7 @@ from .._workspace import (
     SIGNOFF,
     JournalEvent,
 )
+from .items import finding_label
 
 _ADMITTED = frozenset(
     {
@@ -168,12 +169,12 @@ def _describe(event: JournalEvent) -> str:
         by = _text(payload, "by") or "somebody"
         reason = _text(payload, "reason")
         effect = _text(payload, "effect")
-        line = f"ruled {class_key}: {disposition} by {by}"
+        line = f"ruled {finding_label(class_key)}: {disposition} by {by}"
         if reason:
             line += f" — {reason}"
         if effect:
             line += f" ({effect})"
-        return line
+        return f"{line} · `{class_key}`"
     if event.type == SIGNOFF:
         # the last line of the story, and the one a reader arriving months
         # later is looking for: who accepted these numbers, and what they
@@ -264,7 +265,7 @@ def _applied(payload: dict[str, object]) -> str:
 
     **The verb comes from the keys present, not from the action name.** Re-runs and acceptances share one `ruling_applied` action, because a second action name would need adding both here and to `_ADMITTED`, and a miss there does not fail — the line silently stops rendering. Sharing costs one branch and cannot go quiet; what it must not do is call an acceptance a re-run, which is why this reads the payload rather than assuming.
     """
-    class_key = _text(payload, "class") or "an anomaly"
+    class_key = _text(payload, "class")
     parts: list[str] = []
     accepted = payload.get("accepted")
     if isinstance(accepted, list) and accepted:
@@ -307,7 +308,9 @@ def _applied(payload: dict[str, object]) -> str:
         parts.append(f"{n} deferred to the next turn")
     what = f": {', '.join(parts)}" if parts else ""
     which = "acceptance" if isinstance(accepted, list) and accepted else "rerun ruling"
-    return f"applied the {which} on {class_key}{what}"
+    if not class_key:
+        return f"applied the {which} on an anomaly{what}"
+    return f"applied the {which} on {finding_label(class_key)}{what} · `{class_key}`"
 
 
 def _ramp(payload: dict[str, object]) -> str:

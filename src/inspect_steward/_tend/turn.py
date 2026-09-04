@@ -147,7 +147,7 @@ from .items import (
     verdict,
 )
 from .notify import held_tasks, notify_turn
-from .progress import Progress, live_totals, task_progress
+from .progress import Progress, display_keys, live_totals, task_progress
 from .render import marks_note, status_markdown
 from .rulings import (
     Dispositions,
@@ -1268,7 +1268,7 @@ def _turn(
             anomalies,
             history.acknowledged,
             detection.batches,
-            {task.identifier: task.key for task in observed.tasks},
+            display_keys(progress),
             _current_locations(observed),
             _cleared(observed),
             reused,
