@@ -112,6 +112,16 @@ dev = [
     # for the hawk definition tests; 3.13+ only, so those tests skip on 3.12
     "hawk[cli,runner]>=2.4.0; python_version >= '3.13'",
     "uv>=0.5; python_version >= '3.13'",
+    # the eval-set definitions under runs/ import inspect_harbor and name
+    # openai/ and anthropic/ models. inspect-ai makes provider SDKs optional
+    # because an eval that never calls a provider needs none, so nothing else
+    # here pulls them in and a `uv sync` takes them back out again — which is
+    # how a workspace that ran clean an hour ago comes back
+    # ModuleNotFoundError. The floors are inspect's own gates
+    # (`validate_openai_client`, `validate_anthropic_client`), not guesses.
+    "openai>=3.1.0",
+    "anthropic>=1.0.0",
+    "inspect_harbor",
     {include-group = "doc"},
 ]
 doc = [
@@ -148,7 +158,19 @@ managed = true
 # scout's own dependencies pin `inspect-ai @ git+...@main`, which uv reads as
 # a distinct (and thus conflicting) URL requirement even when the source below
 # names the same branch — the override lets the source answer alone
-override-dependencies = ["inspect-ai"]
+#
+# openai, for a conflict that has no satisfying resolution: harbor depends on
+# litellm, which caps `openai>=2.20.0,<3.0.0`, while inspect-ai's OpenAI
+# provider gates on `openai>=3.1.0`. Left alone uv resolves it the only way it
+# can — by walking inspect-harbor back to 0.4.17 and harbor to 0.2.0, which
+# predate the registry tasks the runs/ definitions name, so the lock "succeeds"
+# and the eval set then fails to import its own tasks. The override says take
+# inspect's floor and let litellm's cap go unmet. That is a real claim, not a
+# formality: it ships a combination litellm declares unsupported. It holds
+# because nothing on the inspect path calls litellm — harbor's use of it is in
+# its own orchestrators, which Steward's runs never enter. Revisit when litellm
+# widens the cap; the pin can go the day `litellm` accepts openai 3.x.
+override-dependencies = ["inspect-ai", "openai"]
 
 # TEMPORARY: both pinned to main until releases carry what this branch needs —
 # inspect_ai's record-only selection scanning (selection v7 / capture v3, the
@@ -170,6 +192,14 @@ override-dependencies = ["inspect-ai"]
 [tool.uv.sources]
 inspect-ai = { git = "https://github.com/UKGovernmentBEIS/inspect_ai", branch = "main" }
 inspect-scout = { git = "https://github.com/meridianlabs-ai/inspect_scout", branch = "main" }
+
+# inspect-harbor from git rather than PyPI, because the registry tasks the
+# runs/ definitions name (cais/swebenchpro, datacurve/deep-swe) reach the
+# generated `_tasks.py` ahead of a release: the logs of the last clean run
+# record `inspect_harbor: 0.7.6.dev1`, a commit past the 0.7.5 wheel. A run
+# resolved to the wheel is a different eval, and the task identifier hash says
+# so.
+inspect-harbor = { git = "https://github.com/meridianlabs-ai/inspect_harbor", branch = "main" }
 
 [tool.ruff]
 extend-exclude = ["docs"]
