@@ -133,7 +133,7 @@ from .._workspace import (
     utc_now,
 )
 from .analysis_md import Section, analysis_sections, merge_analysis
-from .anomalies_md import Caveat, anomalies_markdown, caveats
+from .anomalies_md import Caveat, anomalies_markdown, caveats, outcomes_table
 from .coverage import Coverage, coverage
 from .detect import detect, scan_attempts, task_health
 from .history import Happened, happened
@@ -2155,7 +2155,11 @@ def _write_anomalies(workspace: Workspace, result: TendResult) -> None:
     if _write_rendered(
         workspace,
         workspace.anomalies,
-        anomalies_markdown(result.caveats, scored=marks_note(result) or ""),
+        anomalies_markdown(
+            result.caveats,
+            scored=marks_note(result) or "",
+            table=outcomes_table(result.dispositions.outcomes, result.progress),
+        ),
         failing_since=None,
         episode=False,
     ):

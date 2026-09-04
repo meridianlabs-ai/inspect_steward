@@ -84,7 +84,7 @@ Use a policy to stop a run on error rates. Pausing is reversible and stops the w
 
 The refusal tells you what to answer. It is not a quality bar: `accept` and `dismiss` are answers, and "2 samples accepted as errored, the provider was down all night" is a signed statement about the results.
 
-The classes you accepted become the entries in `anomalies.md`, each with its reason, who decided, when, and the effect on the numbers.
+The classes you accepted become the entries in `anomalies.md`, each with its reason, who decided, when, and the effect on the numbers. The file opens with a table, one row per task, of the samples that did not take the normal course: zeroed, excluded, errored, scored early by an operator, or terminated by one.
 
 ## Stuck Samples
 

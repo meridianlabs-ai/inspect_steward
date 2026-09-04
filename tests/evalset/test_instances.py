@@ -8,6 +8,7 @@ Every log here is a file `tests/_logs.py` wrote; no evals run.
 from pathlib import Path
 
 from inspect_steward._evalset.instances import (
+    CLASSED_VERSION,
     ClassedCache,
     Instance,
     classed_instances,
@@ -241,7 +242,9 @@ def test_the_cache_survives_a_round_trip_and_discards_other_versions(
     entry, original = next(iter(loaded.logs.values())), next(iter(cache.logs.values()))
     assert entry == original
 
-    stamped = path.read_text(encoding="utf-8").replace('"version": 1', '"version": 0')
+    stamped = path.read_text(encoding="utf-8").replace(
+        f'"version": {CLASSED_VERSION}', '"version": 0'
+    )
     path.write_text(stamped, encoding="utf-8")
     assert read_classed_cache(path).logs == {}
 

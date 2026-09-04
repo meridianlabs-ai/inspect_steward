@@ -949,3 +949,137 @@ def test_an_unruled_class_is_undecided_and_a_ruled_rerun_is_rerunning() -> None:
     assert undecided.by_task == {IDENT: {"undecided": 1}}
     assert rerunning.by_task == {IDENT: {"rerunning": 1}}
     assert undecided.excluded == rerunning.excluded == 0
+
+
+# --- the by-task table's fold -------------------------------------------------
+
+OPERATOR = "limit:operator"
+SCAN = "scan:scoring_integrity:reward_hacking"
+INTERRUPTED = "Sample errored: interrupted by operator"
+
+
+def batch(class_key: str, *instances: Instance) -> InstanceBatch:
+    """A census batch of one class, re-keying the instances to it."""
+    return InstanceBatch(
+        class_key=class_key,
+        kind=kind_of(class_key),
+        substrate=False,
+        instances=tuple(replace(one, class_key=class_key) for one in instances),
+    )
+
+
+def decided(
+    class_key: str, *instances: Instance, disposition: Disposition | None
+) -> Anomaly:
+    """A window over these instances: open where `disposition` is `None`, ruled otherwise."""
+    if disposition is None:
+        state = AnomalyState.OPEN
+    elif disposition is Disposition.RERUN:
+        state = AnomalyState.RULED
+    else:
+        state = AnomalyState.ACCEPTED
+    one = over(
+        *instances,
+        state=state,
+        disposition=disposition or Disposition.RERUN,
+        kind=kind_of(class_key),
+    )
+    return replace(
+        one,
+        class_key=class_key,
+        ruling=replace(one.ruling, class_key=class_key)
+        if one.ruling is not None
+        else None,
+    )
+
+
+def folded(windows: tuple[Anomaly, ...]) -> Anomalies:
+    return Anomalies(
+        open=tuple(one for one in windows if one.open),
+        settled=tuple(one for one in windows if not one.open),
+    )
+
+
+@pytest.mark.parametrize(
+    ("class_key", "message", "scored", "disposition", "cell"),
+    [
+        (CLASS, "", False, None, "errored"),
+        (CLASS, "", False, Disposition.DISMISS, "errored"),
+        (CLASS, "", False, Disposition.ACCEPT, "errored"),
+        (CLASS, "", False, Disposition.RERUN, "errored"),
+        (CLASS, "", False, Disposition.EXCLUDE, "excluded"),
+        (CLASS, "", False, Disposition.ZERO, "zeroed"),
+        (CLASS, INTERRUPTED, False, None, "terminated"),
+        (OPERATOR, "", True, None, "scored_early"),
+        (OPERATOR, "", True, Disposition.ACCEPT, "scored_early"),
+        (OPERATOR, "", False, None, "terminated"),
+        (OPERATOR, "", True, Disposition.EXCLUDE, "excluded"),
+        (SCAN, "", False, None, None),
+        (SCAN, "", False, Disposition.DISMISS, None),
+        (SCAN, "", False, Disposition.ACCEPT, None),
+        (SCAN, "", False, Disposition.ZERO, "zeroed"),
+        (SCAN, "", False, Disposition.EXCLUDE, "excluded"),
+    ],
+)
+def test_each_sample_row_lands_in_one_cell_of_the_by_task_table(
+    class_key: str,
+    message: str,
+    scored: bool,
+    disposition: Disposition | None,
+    cell: str | None,
+) -> None:
+    one = replace(inst("s1"), message=message, scored=scored)
+
+    fold = dispositions(
+        [batch(class_key, one)],
+        folded((decided(class_key, one, disposition=disposition),)),
+        {IDENT: "logs/a.eval"},
+    )
+
+    assert fold.outcomes == ({IDENT: {cell: 1}} if cell else {})
+
+
+def test_a_row_two_classes_describe_takes_the_stronger_outcome_once() -> None:
+    errored = inst("s1")
+    flagged = replace(inst("s1"), class_key=SCAN)
+    census_of_both = [batch(CLASS, errored), batch(SCAN, flagged)]
+
+    # a scan ruling zeroes a sample that also errored: one row, and it is zeroed
+    zeroed = dispositions(
+        census_of_both,
+        folded(
+            (
+                decided(CLASS, errored, disposition=None),
+                decided(SCAN, flagged, disposition=Disposition.ZERO),
+            )
+        ),
+        {IDENT: "logs/a.eval"},
+    )
+    assert zeroed.outcomes == {IDENT: {"zeroed": 1}}
+
+    # and exclusion wins over zeroing, as the denominator already decides
+    both = dispositions(
+        census_of_both,
+        folded(
+            (
+                decided(CLASS, errored, disposition=Disposition.EXCLUDE),
+                decided(SCAN, flagged, disposition=Disposition.ZERO),
+            )
+        ),
+        {IDENT: "logs/a.eval"},
+    )
+    assert both.outcomes == {IDENT: {"excluded": 1}}
+
+
+def test_the_table_counts_per_task_and_only_the_current_attempt() -> None:
+    # a ref carries its eval id, so one sample id in two tasks is two refs
+    other = replace(inst("s1", task="task-two"), ref="e2:s1:1:u2-s1", eval_id="e2")
+    superseded = replace(inst("s9"), location="logs/old.eval")
+
+    fold = dispositions(
+        census(inst("s1"), inst("s2"), other, superseded),
+        folded((decided(CLASS, inst("s1"), inst("s2"), other, disposition=None),)),
+        {IDENT: "logs/a.eval", "task-two": "logs/a.eval"},
+    )
+
+    assert fold.outcomes == {IDENT: {"errored": 2}, "task-two": {"errored": 1}}

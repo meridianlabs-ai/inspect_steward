@@ -17,13 +17,16 @@ from inspect_steward._anomaly.model import (
     composed_effect,
 )
 from inspect_steward._evalset.instances import Instance, InstanceBatch
+from inspect_steward._tend import status_markdown
 from inspect_steward._tend.anomalies_md import (
     SAMPLES_NAMED,
     anomalies_markdown,
     caveat_line,
     caveats,
+    outcomes_table,
 )
 from inspect_steward._tend.items import STALLED, SYNC_FAILED, UNREADABLE
+from inspect_steward._tend.progress import Progress, TaskProgress
 from inspect_steward._workspace import ACKNOWLEDGED, Workspace, append_event
 from inspect_steward._workspace.journal import Ack
 
@@ -494,6 +497,88 @@ def test_the_document_says_so_when_nothing_was_accepted() -> None:
     # an absent file is indistinguishable from a tend that never ran, and
     # "no caveats" is worth stating to somebody about to quote the numbers
     assert "No caveats" in rendered(Anomalies())
+
+
+# --- the by-task table -------------------------------------------------------
+
+
+def progress(*rows: tuple[str, str, int]) -> Progress:
+    return Progress(
+        rows=[
+            TaskProgress(
+                key=f"{name}@{model}",
+                name=name,
+                model=model,
+                identifier=f"id-{name}",
+                total=total,
+            )
+            for name, model, total in rows
+        ]
+    )
+
+
+def cells(document: str, name: str) -> list[str]:
+    """The row for this task, cell by cell, as a reader of the source sees it."""
+    row = next(line for line in document.splitlines() if line.startswith(f"| {name} "))
+    return [cell.strip() for cell in row.split("|")][1:-1]
+
+
+def test_the_by_task_table_is_aligned_in_the_source_and_shortens_its_keys() -> None:
+    rows = progress(
+        ("cybench", "openai/gpt-5", 50),
+        ("swe", "openai/gpt-5", 120),
+        ("gaia", "openai/gpt-5", 10),
+    )
+
+    lines = outcomes_table(
+        {
+            "id-cybench": {"zeroed": 2, "errored": 1},
+            "id-swe": {"excluded": 3, "scored_early": 2},
+            "id-gaia": {},
+        },
+        rows,
+    )
+
+    # padded so that the markdown is a table before anything renders it, the
+    # model every row shares named once beneath rather than on every row, and
+    # a task with nothing to show counted rather than listed
+    assert lines == [
+        "| task    | samples | zeroed | excluded | errored | scored early | terminated |",
+        "|---------|--------:|-------:|---------:|--------:|-------------:|-----------:|",
+        "| cybench |      50 |      2 |        · |       1 |            · |          · |",
+        "| swe     |     120 |      · |        3 |       · |            2 |          · |",
+        "",
+        "Every task runs `openai/gpt-5`. 1 other task: every sample took the normal course.",
+    ]
+
+
+def test_no_table_where_every_sample_took_the_normal_course() -> None:
+    assert outcomes_table({"id-cybench": {}}, progress(("cybench", "m", 50))) == []
+    assert "By task" not in anomalies_markdown([], table=[])
+
+
+def test_the_document_opens_on_the_table_ahead_of_the_caveats() -> None:
+    document = anomalies_markdown([], table=["| task |"])
+
+    assert document.index("## By task") < document.index("No caveats")
+
+
+def test_a_tend_tabulates_what_did_not_take_the_normal_course(tmp_path: Path) -> None:
+    workspace = erroring(tmp_path, errors=3, samples=10)
+    result = turn(workspace)
+
+    document = workspace.anomalies.read_text(encoding="utf-8")
+    assert cells(document, "probe") == ["probe", "10", "·", "·", "3", "·", "·"]
+    # and the snapshot says where the table is, from the same fold
+    pointer = "did not take the normal course: `anomalies.md`"
+    assert pointer in status_markdown(result)
+    assert pointer in workspace.status.read_text(encoding="utf-8")
+
+    ruling(workspace, "exclude", effect="3 of 10 samples excluded from scoring")
+    turn(workspace)
+
+    document = workspace.anomalies.read_text(encoding="utf-8")
+    assert cells(document, "probe") == ["probe", "10", "·", "3", "·", "·", "·"]
 
 
 # --- through real turns ----------------------------------------------------

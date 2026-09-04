@@ -16,6 +16,7 @@ from .._anomaly.model import SAMPLE_SHAPED, Anomalies, Anomaly, Ruling
 from .._evalset.instances import InstanceBatch, in_results
 from .._workspace.journal import Ack
 from .items import STALLED, UNREADABLE
+from .progress import Progress, short_keys
 
 HEADER = "<!-- Written by `steward tend`. Regenerated every turn; edits are lost. -->"
 """The same banner `status.md` carries, and this document needs it more.
@@ -30,6 +31,18 @@ An allow-list rather than a deny-list, and one notch stronger than `history._ADM
 
 Two entries. Acknowledging a **stalled** task says *this will not be run again and the results stand without it*, which is a hole in the data with a name on it. Acknowledging an **unreadable** log says *the numbers are over what could be read*, which moves the denominator. Everything else in the vocabulary is machinery or a decision with no residue: a drift nobody applied, a propagation that stopped, a claim holder that was killed, a tuning proposal, a park, a stuck sample. `anomaly` is absent by construction — an anomaly closes through a ruling and an ack of one is refused, precisely so that no anomaly reaches this file except through a decision with a disposition on it. A scanner that could not scan is absent for the same reason: it is a `scanerror:` window now, and it reaches this file through the ruling that closes it.
 """
+
+OUTCOME_COLUMNS = (
+    ("zeroed", "zeroed"),
+    ("excluded", "excluded"),
+    ("errored", "errored"),
+    ("scored_early", "scored early"),
+    ("terminated", "terminated"),
+)
+"""The by-task table's columns in reading order: the `rulings.OUTCOMES` cell, and the heading a person reads. Every column is always shown, so the table has one shape across runs and a reader learns where to look."""
+
+EMPTY = "·"
+"""An empty cell. A glyph rather than a blank, so that a column of nothing still reads as a column in a source file, and zero is never confused with unrendered."""
 
 SAMPLES_NAMED = 50
 """Member samples named per entry before the rest become a count.
@@ -347,11 +360,88 @@ def caveat_line(caveat: Caveat) -> str:
     )
 
 
+def outcomes_table(
+    outcomes: Mapping[str, Mapping[str, int]], progress: Progress
+) -> list[str]:
+    """The by-task table: each task's samples that did not take the normal course.
+
+    **Padded in the source**, because this file is read in an editor at least as often as it is rendered: every column is aligned so the markdown is a legible table before anything renders it. Keys are shortened the way the status table shortens them, so a model appears only where it separates two rows, and the model every row shares is named once beneath.
+
+    Args:
+        outcomes: Per task identifier, the counts per outcome cell — `Dispositions.outcomes`.
+        progress: The turn's rows, for each task's display key, its sample count and the render order.
+
+    Returns:
+        The table's lines, then a blank line and one sentence for what it leaves out — or nothing at all where every sample took the normal course.
+    """
+    short = short_keys(progress.rows)
+    named = {
+        row.identifier: key for row, key in zip(progress.rows, short.keys, strict=True)
+    }
+    totals = {row.identifier: row.total for row in progress.rows}
+    listed = [
+        row.identifier
+        for row in progress.rows
+        if any(outcomes.get(row.identifier, {}).values())
+    ]
+    # a task the census counts and the progress table does not name is not
+    # expected, and a table that silently dropped it would be worse than one
+    # that prints an identifier
+    listed += sorted(
+        identifier
+        for identifier, cells in outcomes.items()
+        if identifier not in totals and any(cells.values())
+    )
+    if not listed:
+        return []
+
+    header = ("task", "samples", *(label for _, label in OUTCOME_COLUMNS))
+    body = [
+        (
+            named.get(identifier, identifier),
+            str(totals[identifier]) if identifier in totals else "?",
+            *(
+                str(outcomes[identifier][cell])
+                if outcomes[identifier].get(cell)
+                else EMPTY
+                for cell, _ in OUTCOME_COLUMNS
+            ),
+        )
+        for identifier in listed
+    ]
+    widths = [max(len(row[n]) for row in (header, *body)) for n in range(len(header))]
+    rule = "|".join(
+        ["", "-" * (widths[0] + 2), *("-" * (w + 1) + ":" for w in widths[1:]), ""]
+    )
+    lines = [_row(header, widths), rule, *(_row(row, widths) for row in body)]
+
+    notes: list[str] = []
+    if short.model is not None:
+        notes.append(f"Every task runs `{short.model}`.")
+    if rest := len(progress.rows) - sum(1 for one in listed if one in totals):
+        notes.append(
+            f"{rest} other task{'' if rest == 1 else 's'}: every sample took "
+            "the normal course."
+        )
+    return [*lines, "", " ".join(notes)] if notes else lines
+
+
+def _row(cells: tuple[str, ...], widths: list[int]) -> str:
+    """One padded table row: the task name left-aligned, every count right-aligned under its heading."""
+    name, *rest = cells
+    padded = [
+        name.ljust(widths[0]),
+        *(cell.rjust(width) for cell, width in zip(rest, widths[1:], strict=True)),
+    ]
+    return f"| {' | '.join(padded)} |"
+
+
 def anomalies_markdown(
     listed: Sequence[Caveat],
     *,
     scored: str = "",
     header: bool = True,
+    table: Sequence[str] = (),
 ) -> str:
     """The whole document.
 
@@ -361,6 +451,7 @@ def anomalies_markdown(
         listed: The caveats, from `caveats()`.
         scored: The denominator sentence (`998 of 1000 samples scored; 2 excluded`), composed by the caller from the same `Dispositions` the status table's marks note uses — one computation, so the two documents cannot report different denominators.
         header: Whether to carry the regenerated-file banner.
+        table: The by-task table from `outcomes_table`, which opens the document ahead of the caveats — the glance before the footnotes. Empty where every sample took the normal course.
 
     Returns:
         The document. A run with nothing accepted still gets one, saying so — an absent file is indistinguishable from a tend that never ran, and *no caveats* is a finding worth stating to somebody about to quote the numbers.
@@ -369,12 +460,15 @@ def anomalies_markdown(
     if header:
         lines += [HEADER, ""]
     lines += [
-        "Every caveat that reached the final data. Derived from `journal.jsonl`; "
-        "nothing here is a second record, so it cannot disagree with it.",
+        "Every caveat that reached the final data, and per task the samples that "
+        "did not take the normal course. Derived from `journal.jsonl` and the "
+        "logs; nothing here is a second record, so it cannot disagree with them.",
         "",
     ]
     if scored:
         lines += [scored, ""]
+    if table:
+        lines += ["## By task", "", *table, ""]
 
     if not listed:
         lines += ["No caveats: nothing was accepted into these results.", ""]
@@ -410,4 +504,5 @@ __all__ = [
     "anomalies_markdown",
     "caveat_line",
     "caveats",
+    "outcomes_table",
 ]

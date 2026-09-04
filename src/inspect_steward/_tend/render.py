@@ -425,7 +425,12 @@ def _anomalies(result: "TendResult") -> list[str]:
     # an accepted window does, and one the other document drops cannot survive
     # as a line here
     marks = result.caveats
-    if line is None and not marks:
+    # the by-task table lives in `anomalies.md` alone, and this line is how a
+    # reader of the snapshot learns it is there
+    tabulated = any(
+        any(cells.values()) for cells in result.dispositions.outcomes.values()
+    )
+    if line is None and not marks and not tabulated:
         return []
     lines = ["### anomalies", ""]
     if line is not None:
@@ -453,6 +458,11 @@ def _anomalies(result: "TendResult") -> list[str]:
     # left a mark or what their effect sentence says
     for caveat in marks:
         lines.append(f"- {caveat_line(caveat)}")
+    if tabulated:
+        lines += [
+            "",
+            "By task, the samples that did not take the normal course: `anomalies.md`.",
+        ]
     return lines + [""]
 
 

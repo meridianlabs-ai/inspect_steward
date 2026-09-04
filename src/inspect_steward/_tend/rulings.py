@@ -36,7 +36,7 @@ from .._anomaly.model import (
     composed_effect,
     honest,
 )
-from .._evalset.classify import task_error_class
+from .._evalset.classify import OPERATOR_LIMIT, task_error_class
 from .._evalset.instances import Instance, InstanceBatch, in_results
 from .._evalset.observe import ObservedTasks, TaskObservation
 from .._schedule import InFlight
@@ -765,6 +765,11 @@ class Dispositions:
     zeroed: int = 0
     """Samples ruled zeroed, run-wide."""
 
+    outcomes: dict[str, dict[str, int]] = field(
+        default_factory=dict[str, dict[str, int]]
+    )
+    """Task identifier to the samples that did not take the normal course, counted per `OUTCOMES` cell — what `anomalies.md` tabulates per task. Over every sample-marked kind, one cell per sample row."""
+
     affected: dict[str, frozenset[str]] = field(
         default_factory=dict[str, frozenset[str]]
     )
@@ -808,6 +813,7 @@ def dispositions(
     """
     by_task: dict[str, dict[str, int]] = {}
     marked: dict[str, str] = {}
+    outcome_of: dict[str, tuple[str, str]] = {}
     for batch in batches:
         # the totals are about rows in the results, so every kind a mark can
         # honestly be recorded against counts toward them — an excluded reward
@@ -841,16 +847,54 @@ def dispositions(
                 counts[bucket] = counts.get(bucket, 0) + 1
             if bucket in MARKS:
                 marked[instance.ref] = _stronger(marked.get(instance.ref), bucket)
+            # one cell per sample row, the strongest outcome any of its
+            # instances puts it in -- an errored sample a scan also flagged is
+            # one row, and the ruling that moved it is what a reader is owed
+            outcome = _outcome(batch.kind, bucket, instance)
+            standing = outcome_of.get(instance.ref)
+            if outcome is not None and (
+                standing is None
+                or OUTCOMES.index(outcome) < OUTCOMES.index(standing[1])
+            ):
+                outcome_of[instance.ref] = (instance.task, outcome)
+    outcomes: dict[str, dict[str, int]] = {}
+    for task, outcome in outcome_of.values():
+        cells = outcomes.setdefault(task, {})
+        cells[outcome] = cells.get(outcome, 0) + 1
     return Dispositions(
         by_task=by_task,
         excluded=sum(1 for mark in marked.values() if mark == "excluded"),
         zeroed=sum(1 for mark in marked.values() if mark == "zeroed"),
         affected=affected_refs(batches, current, reused),
+        outcomes=outcomes,
     )
 
 
 MARKS = ("excluded", "zeroed")
 """The two buckets that move the scoring population, strongest first."""
+
+OUTCOMES = ("excluded", "zeroed", "terminated", "scored_early", "errored")
+"""The cell one sample row lands in when it did not take the normal course, strongest first.
+
+`anomalies.md` opens on a table of these per task, and a row is counted once. A ruling that moved it out of the scoring population wins over whatever the sample did on its own, and exclusion over zeroing for the reason `_stronger` gives; an operator ending a sample wins over the error inspect recorded to end it. A scan finding contributes only through such a ruling — a flagged sample the ruling kept, or dismissed, changed nothing about the data. Limits the definition set never appear: a sample stopped at its own `time_limit` took the course the eval laid out for it.
+"""
+
+OPERATOR_INTERRUPT = "interrupted by operator"
+"""What inspect writes into a sample an operator ended with `--action error`.
+
+That action records a `RuntimeError` rather than a limit, deliberately upstream, so that the sample counts as errored rather than cancelled; here it is an error instance whose message is the only trace of the operator, and the phrase is inspect's own.
+"""
+
+
+def _outcome(kind: str, bucket: str, instance: Instance) -> str | None:
+    """Where one instance puts its sample row in the by-task table, or `None` where it changed nothing."""
+    if bucket in MARKS:
+        return bucket
+    if kind == "error":
+        return "terminated" if OPERATOR_INTERRUPT in instance.message else "errored"
+    if kind == "limit" and instance.class_key == OPERATOR_LIMIT:
+        return "scored_early" if instance.scored else "terminated"
+    return None
 
 
 def _stronger(mark: str | None, bucket: str) -> str:
@@ -876,6 +920,7 @@ __all__ = [
     "ACCEPTANCE_KEY",
     "BUCKETS",
     "Dispositions",
+    "OUTCOMES",
     "accepted_tasks",
     "apply_rulings",
     "dispositions",

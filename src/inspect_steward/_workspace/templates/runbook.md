@@ -210,7 +210,7 @@ Write anywhere outside the markers, and never move or delete them; a section who
 
 At 🏁 every task has finished and nobody has accepted the results. Tell the person by notification, then get the run to where their answer is one command. A refused `steward signoff` signs nothing and prints every blocker with its remedy, so run it early and work the list: windows to rule (`limit:operator` included, since it raises no item), errored samples to cover, tasks to settle, unreadable logs to acknowledge, `scanerror:` classes to rule. Acknowledging a stall or an unreadable log is a decision about the data, so give it a ruling's reason.
 
-Three things the gate does not refuse over, so say them yourself. Read the `scanned` column aloud: 48 of 50 scanned is a different thing to sign than 50 of 50. Name the scan findings you dismissed and why; the person hears that from you, not from the file. When the readiness item names a log store, ask whether to publish and never assume; a published log is a claim other projects reuse sight-unseen.
+The gate does not refuse over these, so say them yourself. Render the by-task table that opens `anomalies.md`; it is the samples they are signing over. Read the `scanned` column aloud: 48 of 50 scanned is a different thing to sign than 50 of 50. Name the scan findings you dismissed and why; the person hears that from you, not from the file. When the readiness item names a log store, ask whether to publish and never assume; a published log is a claim other projects reuse sight-unseen.
 
 Then, when they answer:
 

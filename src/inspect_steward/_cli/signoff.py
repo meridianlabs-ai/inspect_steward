@@ -16,6 +16,7 @@ import click
 from .._anomaly.model import Disposition
 from .._evalset.manifest import ManifestError
 from .._signoff import Signoff, SignoffError, committed_manifest, signoff
+from .._tend.anomalies_md import outcomes_table
 from .._workspace import Held
 from .turn import TURN_ERRORS, decided_by, find_workspace
 
@@ -152,6 +153,12 @@ def _echo_signoff(result: Signoff, root: Path) -> None:
             click.echo(f"    {key}")
     else:
         click.echo("  no accepted exceptions")
+    # the same table `anomalies.md` opens on: what did not take the normal
+    # course, per task, at the moment somebody is putting their name to it
+    if table := outcomes_table(result.turn.dispositions.outcomes, result.turn.progress):
+        click.echo("  by task, the samples that did not take the normal course:")
+        for line in table:
+            click.echo(f"    {line}")
     if (findings := _findings_line(result)) is not None:
         click.echo(f"  {findings}")
     if result.curated is not None and result.curated.moved:

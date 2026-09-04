@@ -36,7 +36,7 @@ from .classify import (
 )
 from .observe import LogAttempt, ObservedLogs, UnreadableLog
 
-CLASSED_VERSION = 1
+CLASSED_VERSION = 2
 """Bumped when `Instance` changes shape. Derived data; rebuilding costs one turn."""
 
 EXCLUDED_FIELDS = frozenset({"messages", "events", "store", "attachments"})
@@ -73,6 +73,8 @@ class Instance:
     uuid: str = ""
     limit_reason: str = ""
     retries: int = 0
+    scored: bool = False
+    """Whether the sample carries a score. What separates an operator interrupt that scored the work so far from one that ended the sample unscored — the by-task table's `scored early` and `terminated` cells."""
 
     @property
     def kind(self) -> str:
@@ -374,6 +376,7 @@ def _instance(
     uuid = summary.uuid if isinstance(summary.uuid, str) else ""
     retries = summary.retries if isinstance(summary.retries, int) else 0
     reason = summary.limit_reason if isinstance(summary.limit_reason, str) else ""
+    scores: dict[str, Any] | None = summary.scores
     return Instance(
         class_key=class_key,
         ref=f"{attempt.eval_id}:{summary.id}:{summary.epoch}:{uuid}",
@@ -388,6 +391,7 @@ def _instance(
         uuid=uuid,
         limit_reason=reason[:MESSAGE_CAP],
         retries=retries,
+        scored=bool(scores),
     )
 
 
