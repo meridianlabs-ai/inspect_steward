@@ -186,8 +186,6 @@ Post rather than agonize, and do not batch. Steward limits its own posts to one 
 
 Notify and raise are separate acts; do both when you hand something over.
 
-Whether this run has a channel is the *Notifications* line of `steward status`, and nowhere else — a commented-out `notification:` in `_steward.yaml` proves nothing, since the channel usually comes from a `.env` only Steward's own process reads. Setting one up is the person's, and they have already been told; it is not something to raise.
-
 ## Standing rules
 
 When you ask the same question twice, or the person answers it the same way twice, the answer belongs in `_steward.yaml`. `policies:` is prose you apply in session; Steward carries it and never interprets it. `preauthorized:` maps a class pattern to the disposition it may receive, and tend applies it alone with nobody watching.

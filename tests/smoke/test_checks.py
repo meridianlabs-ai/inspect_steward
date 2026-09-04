@@ -202,14 +202,21 @@ class TestTheContextWindow:
         assert window(MODEL).tokens == 128000
         assert window(MODEL).undetermined is None
 
-    def test_a_model_with_no_provider_installed_is_undetermined_not_failed(
+    def test_a_model_this_interpreter_cannot_resolve_is_undetermined_not_failed(
         self,
     ) -> None:
-        # a provider SDK absent from *Steward's* interpreter says nothing about
-        # the worker's, so this reports and never blocks. `get_model` raises
-        # here rather than returning nothing, which is what keeps *could not
-        # check* separable from *checked, and it is wrong*
-        result = probe([log(sample())], models=["openai/gpt-5"])
+        # a provider Steward's interpreter cannot load says nothing about the
+        # worker's, so this reports and never blocks. `get_model` raises here
+        # rather than returning nothing, which is what keeps *could not check*
+        # separable from *checked, and it is wrong*.
+        #
+        # **A name no provider claims, rather than a real one whose SDK is
+        # absent.** This read `openai/gpt-5` and passed only where the openai
+        # package happened not to be installed — which is not the machine that
+        # runs openai evals, so `pytest` was red for everybody working on this
+        # repo and green in CI. Which extras a developer has is not the
+        # subject; what `window` does when the call raises is
+        result = probe([log(sample())], models=["nosuchprovider/gpt-5"])
 
         entry = check(result, CONTEXT_WINDOW)
         assert entry.verdict is Verdict.UNDETERMINED

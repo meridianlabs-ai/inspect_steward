@@ -105,9 +105,7 @@ def no_ambient_settings() -> Iterator[None]:
         loaded = cli.init_dotenv
 
         def guarded() -> None:
-            held = {
-                name: value for name, value in os.environ.items() if ambient(name)
-            }
+            held = {name: value for name, value in os.environ.items() if ambient(name)}
             loaded()
             # what the load put back that the caller did not have, rather than
             # a fixed list of names: the `.env` decides which settings it
