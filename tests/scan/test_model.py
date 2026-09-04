@@ -1,6 +1,6 @@
 """`establish_scan_model`: the one mutation, in both directions.
 
-The resolution *into* the declared value — flag over file over `STEWARD_SCAN_MODEL` — is `_settings`' work and tested with it; what is only true here is the reflexive contract with `SCOUT_SCAN_MODEL`: exporting settles it, `False` clears it, and silence reads it. The ambient spellings are cleared suite-wide (`no_ambient_channel`), so every case states its own environment.
+The resolution *into* the declared value — flag over file over `STEWARD_SCAN_MODEL` — is `_settings`' work and tested with it; what is only true here is the reflexive contract with `SCOUT_SCAN_MODEL`: exporting settles it, `False` clears it, and silence reads it. The ambient spellings are cleared suite-wide (`no_ambient_settings`), so every case states its own environment.
 """
 
 import os

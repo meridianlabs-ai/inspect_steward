@@ -96,7 +96,7 @@ def flaky_copy(monkeypatch: pytest.MonkeyPatch) -> None:
 def refuse_withdrawal(monkeypatch: pytest.MonkeyPatch) -> Callable[[], None]:
     """Make withdrawal fail, and hand back the way to let it succeed again.
 
-    **A toggle rather than `monkeypatch.undo()`**, which was the first shape of this and reached much further than it looked. The `monkeypatch` fixture is function-scoped and shared with everything autouse around the test, so undoing "the patch this test made" also undid `no_ambient_channel` — putting the developer's own `STEWARD_NOTIFICATION` back from `.env`, and posting a real Slack message from the signoff that came next.
+    **A toggle rather than `monkeypatch.undo()`**, which was the first shape of this and reached much further than it looked. The `monkeypatch` fixture is function-scoped and shared with everything autouse around the test, so undoing "the patch this test made" also undid `no_ambient_settings` — putting the developer's own `STEWARD_NOTIFICATION` back from `.env`, and posting a real Slack message from the signoff that came next.
 
     Returns:
         A callable that stops the refusal, for a test asserting the retry.

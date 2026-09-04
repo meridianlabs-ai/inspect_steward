@@ -47,7 +47,7 @@ def workspace_at(root: Path, text: str | None = None) -> Workspace:
     return workspace
 
 
-# the ambient channel is cleared by `conftest.no_ambient_channel`, which this
+# the ambient channel is cleared by `conftest.no_ambient_settings`, which this
 # file used to shadow with a local copy of the same idea. The copy was the
 # weaker of the two — it cleared the variables and nothing else — and shadowing
 # is silent, so the module about channels was the one module the suite's own
@@ -167,7 +167,7 @@ def test_a_dotenv_beside_a_command_cannot_restore_a_channel(
     Every `steward` invocation reads `.env` from the cwd upward — deliberately,
     because a scheduled tend runs under a stripped environment and needs to see
     what its workers see. In a test that put back exactly what `conftest`'s
-    `no_ambient_channel` had removed, so an in-process CLI test running inside
+    `no_ambient_settings` had removed, so an in-process CLI test running inside
     a repository with a channel in its `.env` had a live one underneath it and
     would have posted to it for real.
     """
@@ -256,7 +256,7 @@ def test_a_tests_own_undo_cannot_revoke_the_ambient_channel_guard(
 ) -> None:
     """The guard that keeps a developer's real channel out of the suite must not be revocable by the tests it guards.
 
-    `no_ambient_channel` and the `monkeypatch` a test asks for used to be the same object — the fixture is function-scoped and shared with everything autouse around it — so a test that called `undo()` to drop a stub of its own also dropped the guard, and the next thing it did that resolved a channel posted to a real Slack workspace. It holds its own `MonkeyPatch` now, which is what this asserts: the test's `undo()` reverts the test's patch and reaches nothing else.
+    `no_ambient_settings` and the `monkeypatch` a test asks for used to be the same object — the fixture is function-scoped and shared with everything autouse around it — so a test that called `undo()` to drop a stub of its own also dropped the guard, and the next thing it did that resolved a channel posted to a real Slack workspace. It holds its own `MonkeyPatch` now, which is what this asserts: the test's `undo()` reverts the test's patch and reaches nothing else.
     """
     guarded = cli.init_dotenv
     monkeypatch.setattr(cli, "init_dotenv", lambda: None)

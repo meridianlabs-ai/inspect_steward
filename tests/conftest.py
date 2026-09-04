@@ -13,6 +13,7 @@ import psutil
 import pytest
 from inspect_steward._cli import main as cli
 from inspect_steward._worker import scan_processes
+from inspect_steward._workspace import LOG_DIR, PREFIX, RESERVED
 
 
 @pytest.fixture(autouse=True)
@@ -41,10 +42,45 @@ CHANNELS = ("STEWARD_NOTIFICATION", "INSPECT_EVAL_NOTIFICATION")
 SCAN_MODELS = ("STEWARD_SCAN_MODEL", "SCOUT_SCAN_MODEL")
 """The two spellings of a scan-side model, kept out for the same reasons."""
 
+OVERRIDES = "INSPECT_EVAL_"
+"""Inspect's own override namespace, which shapes what an eval set *is*.
+
+Every name under it reaches a run — the model, the limit, the epochs, the slice
+— and a fixture that committed a manifest against one value while the developer's
+machine exported another is a fixture testing something nobody wrote down.
+"""
+
+
+def ambient(name: str) -> bool:
+    """Whether a variable configures Steward or a run, and so may not arrive from a developer's machine.
+
+    **The namespaces rather than a list of names**, which is what this guard
+    used to be and what let the leak through. `PREFIX` is the whole of Steward's
+    vocabulary by construction — `directives.PREFIX` says so, and refuses
+    anything under it that is not a setting — so asking whether a name is under
+    it is the same question as *does this change what Steward does*, and it
+    stays right as settings are added. A four-name tuple did not: `log_root` and
+    `log_store` arrived after it was written, went unguarded, and pointed the
+    whole suite's launches at a real S3 bucket.
+
+    `RESERVED` is excluded because those two are not settings — they are markers
+    Steward writes into a worker's environment and reads back off the process
+    table, so a test that spawns one wants them to survive.
+    """
+    return (
+        (name.startswith(PREFIX) and name not in RESERVED)
+        or name.startswith(OVERRIDES)
+        or name in SCAN_MODELS
+        # the one deployment name outside both namespaces: `launch` refuses it
+        # rather than ignoring it, so an ambient one is a refusal in every
+        # launch test rather than a wrong value in one
+        or name == LOG_DIR
+    )
+
 
 @pytest.fixture(autouse=True)
-def no_ambient_channel() -> Iterator[None]:
-    """Keep the developer's own notification channel out of the suite.
+def no_ambient_settings() -> Iterator[None]:
+    """Keep the developer's own machine out of the suite.
 
     `pytest-dotenv` loads the repository's `.env` into the session, so a developer who has configured a channel has one set in every test. Two things go wrong, and the second is the serious one.
 
@@ -54,26 +90,33 @@ def no_ambient_channel() -> Iterator[None]:
 
     The scan-model spellings are cleared on the same grounds: `establish_scan_model` is reflexive with `SCOUT_SCAN_MODEL` by design, so an ambient value would configure a real (billed) model into any test that scans.
 
+    **It guards the namespaces rather than a list of names, because the list was already wrong.** This was four names when the only settings worth fearing were a channel and a scan model. `log_root` and `log_store` arrived afterwards and nobody came back — so on a machine whose `.env` names an S3 bucket, which is the machine this feature exists for, every `launch` test resolved its log directory to that bucket and failed on credentials it was never given. That is the same defect as the channel one and worse in kind: the channel guard failed toward posting to a real Slack workspace, and this one failed toward *writing eval logs into a real bucket*. `ambient` asks whether a name is under Steward's prefix or inspect's override namespace, so a setting added next year is guarded on the day it is added.
+
     **Clearing them once is not enough, which is what the wrapper is for.** Every `steward` invocation calls `init_dotenv()` in its group callback — deliberately, because a scheduled tend runs under a stripped environment and needs to see what its workers see — and that reads `.env` again from the cwd upward and puts back exactly what this fixture removed. So any in-process CLI test running from inside the repository had a live channel restored underneath it, and the only thing standing between the suite and a real Slack workspace was which tests happened to resolve one.
 
-    The load still happens, because everything else in `.env` is wanted. What the wrapper does is **restore these four to whatever they were when it was called** — which is absent for most tests, and the test's own value for one that set a channel deliberately. Clearing them outright instead would take those away too, and *no test may have a channel* is a different rule from *no test may inherit one*.
+    The load still happens, because everything else in `.env` — the credentials above all — is wanted. What the wrapper does is **restore the guarded names to whatever they were when it was called**: absent for most tests, and the test's own value for one that set a channel or a log root deliberately. Clearing them outright instead would take those away too, and *no test may have a channel* is a different rule from *no test may inherit one*.
 
     **It holds its own `MonkeyPatch` rather than the test's, and that is not tidiness.** They are the same object otherwise — the `monkeypatch` fixture is function-scoped and shared between a test and everything autouse around it — so a test calling `monkeypatch.undo()` to drop a patch of its own reverted this fixture too, put the developer's channel back from `.env`, and posted to a real Slack workspace from whatever it did next. Observed, from three tests that undid a stubbed store failure and then signed off again. A guard against an ambient channel cannot be revocable by the code it is guarding.
     """
     with pytest.MonkeyPatch.context() as guard:
-        for name in CHANNELS + SCAN_MODELS:
+        for name in [name for name in os.environ if ambient(name)]:
             guard.delenv(name, raising=False)
 
         loaded = cli.init_dotenv
 
         def guarded() -> None:
-            held = {name: os.environ.get(name) for name in CHANNELS + SCAN_MODELS}
+            held = {
+                name: value for name, value in os.environ.items() if ambient(name)
+            }
             loaded()
-            for name, value in held.items():
-                if value is None:
+            # what the load put back that the caller did not have, rather than
+            # a fixed list of names: the `.env` decides which settings it
+            # carries, and a guard that only removed the ones it thought of is
+            # the guard this replaced
+            for name in [name for name in os.environ if ambient(name)]:
+                if name not in held:
                     os.environ.pop(name, None)
-                else:
-                    os.environ[name] = value
+            os.environ.update(held)
 
         guard.setattr(cli, "init_dotenv", guarded)
         yield

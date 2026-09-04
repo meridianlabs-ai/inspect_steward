@@ -186,7 +186,7 @@ Post rather than agonize, and do not batch. Steward limits its own posts to one 
 
 Notify and raise are separate acts; do both when you hand something over.
 
-**Whether there is a channel is in the snapshot, and not in `_steward.yaml`.** The *Notifications* line names the spelling that configured it and how many places a post reaches; a commented-out `notification:` proves nothing, because the channel most runs use comes from a `.env` at or above the workspace that only Steward's own process loads — which is neither in the file you read nor in the environment your shell hands you. So read the line. Tell the person this run cannot reach them only where it says `none configured` or `no usable targets`, and then say it in the conversation and in `analysis.md`, since adding one is theirs. Where it names a channel, the command works and there is nothing to raise.
+Whether this run has a channel is the *Notifications* line of `steward status`, and nowhere else — a commented-out `notification:` in `_steward.yaml` proves nothing, since the channel usually comes from a `.env` only Steward's own process reads. Setting one up is the person's, and they have already been told; it is not something to raise.
 
 ## Standing rules
 
