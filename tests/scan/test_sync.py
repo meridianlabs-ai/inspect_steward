@@ -15,6 +15,7 @@ from inspect_scout._recorder.buffer import RecorderBuffer
 from inspect_scout._recorder.file import FileRecorder
 from inspect_scout._scanner.result import ResultReport
 from inspect_scout._transcript.types import TranscriptInfo
+from inspect_steward._evalset.classify import scan_class
 from inspect_steward._evalset.instances import Instance
 from inspect_steward._evalset.manifest import ManifestScan
 from inspect_steward._scan import (
@@ -102,7 +103,12 @@ def test_a_buffered_row_is_invisible_until_the_tend_folds_it(log_dir: str) -> No
 
     found = findings(log_dir)
     assert len(found) == 1
-    assert found[0].class_key == "scan:scoring_integrity:reward_hacking"
+    assert found[0].class_key == scan_class(
+        "scoring_integrity",
+        "reward_hacking",
+        task="cybench",
+        identifier="cybench@openai/gpt-5",
+    )
 
 
 def test_the_fold_leaves_the_buffer_where_the_workers_are_still_writing(

@@ -15,6 +15,7 @@ import time
 from dataclasses import replace
 from typing import TYPE_CHECKING
 
+from .._anomaly.model import AnomalyState
 from .._notify import (
     GLYPH,
     NARROW,
@@ -83,7 +84,7 @@ Two, because one is the turn the item appeared on. An agent that collects on the
 """
 
 HOLD_TENDS = 6
-"""Tends a landed task's completion waits on an agent's scan investigation before it is posted anyway.
+"""Tends a landed task's completion waits on an agent's scan investigation before it is posted anyway — the cap, not the wait: the hold releases the moment every window of the task is proposed or ruled.
 
 **Why hold at all.** A task whose scan flagged something is not *finished* in the sense a reader takes from a completion post — it is finished and now needs a decision. Posting *finished cybench* and then, twenty minutes later, *a decision needs attention* is two messages about one moment, and the first one is misleading for as long as it stands alone. So where there is an agent to do the investigating, the finish waits for it and the run says one thing once.
 
@@ -320,7 +321,7 @@ def held_tasks(
 
     Four conditions, and each is doing distinct work. **An agent must be attached**, because a hold with nobody to release it is silence; with no agent the finish posts immediately and the finding escalates on `_unattended`'s own horizon two turns later, which is the right shape for that case. **A `scan:` window must still be open**, so a ruling releases the hold by itself and no separate signal is needed. **The completion must not already be spent**, because there is nothing left to defer once it has been announced. And **it must have been waiting for less than `HOLD_TENDS`**, so an agent that stopped answering cannot hold a completion all night.
 
-    **The clock is the task's own log, not the window's opening.** A `scan:` class is run-wide by design — one reward-hacking decision covers the sweep — so a window opened by the first task to be flagged goes on absorbing the tenth task's findings hours later without its `opened_ts` moving. Measured against that, a task that landed a minute ago is already past the horizon and posts unheld, which is the one case the hold exists for. The log's `mtime` is when the run's own observation says the file last changed, which for a landed attempt is when it landed; where the filesystem does not date it, the window's opening stands in, and for the first task in a class the two are the same instant anyway.
+    **The clock is the task's own log, not the window's opening.** A `scan:` window is per task, but it opens on the first flagged sample, which can be long before the task lands — and the hold is about the finish, so it counts from the log's last write.
 
     **Already-spent completions are excluded rather than re-held**, and it is the difference between deferring an announcement and retracting one. The set returned here is subtracted from the completion baseline the next turn diffs against, so holding a task whose finish was announced turns ago removes it from that baseline and the next turn announces it a second time. A late finding on an old completion is still a finding — it opens its window and reaches the agent as an item — but the finish it arrived after is not news twice.
 
@@ -337,7 +338,14 @@ def held_tasks(
     landed = _landed(result)
     held: set[str] = set()
     for anomaly in result.anomalies.open:
-        if anomaly.kind != "scan":
+        # released the moment the agent has proposed or the window is ruled:
+        # the finish then goes out carrying the proposals, which is what it
+        # was waiting for. The horizon below is for an agent that never gets
+        # there
+        if anomaly.kind != "scan" or anomaly.state not in (
+            AnomalyState.OPEN,
+            AnomalyState.INVESTIGATING,
+        ):
             continue
         opened = seconds_since(anomaly.opened_ts)
         for task in anomaly.evidence.tasks:

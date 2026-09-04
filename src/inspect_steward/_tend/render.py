@@ -19,7 +19,14 @@ from .._util.duration import format_duration
 from .._util.jsonl import utc_now
 from .anomalies_md import caveat_line, outcomes_table
 from .coverage import TaskCoverage
-from .items import HEADINGS, Owner, by_owner, verdict_line
+from .items import (
+    HEADINGS,
+    Owner,
+    by_owner,
+    precedent_line,
+    verdict_line,
+    waiting_to_land,
+)
 from .progress import LIVE_ONLY, TaskProgress, compact, short_keys
 from .table import resources_table
 
@@ -555,17 +562,16 @@ def _anomalies(result: "TendResult") -> list[str]:
     lines = ["### anomalies", ""]
     if line is not None:
         lines += [line, ""]
+    landed = _landed(result)
     for anomaly in anomalies.open:
-        lines.append(f"- `{anomaly.class_key}` — {_window_line(anomaly)}")
+        waiting = waiting_to_land(anomaly, landed)
+        lines.append(f"- `{anomaly.class_key}` — {_window_line(anomaly, waiting)}")
         if anomaly.evidence.exemplar:
             lines.append(f"  - `{anomaly.evidence.exemplar}`")
         for ruling in anomaly.precedent:
             # verbatim, attached where the anomaly surfaces rather than looked
             # up (workflow.md §12.8)
-            lines.append(
-                f"  - precedent: {ruling.disposition.value} by {ruling.by} "
-                f"at {ruling.ts}: {ruling.reason}"
-            )
+            lines.append(f"  - precedent: {precedent_line(ruling, anomaly.class_key)}")
     for identifier, proposal in anomalies.proposals.items():
         covered = len(proposal.classes)
         lines.append(
@@ -583,9 +589,23 @@ def _anomalies(result: "TendResult") -> list[str]:
     return lines + [""]
 
 
-def _window_line(anomaly: Anomaly) -> str:
+def _landed(result: "TendResult") -> frozenset[str]:
+    """The tasks whose current log is complete — what a scan window waits on."""
+    if result.observed is None:
+        return frozenset()
+    return frozenset(
+        task.identifier for task in result.observed.by_state(TaskState.COMPLETE)
+    )
+
+
+def _window_line(anomaly: Anomaly, waiting: bool = False) -> str:
     count = anomaly.evidence.count
     plural = "" if count == 1 else "s"
+    if waiting:
+        # said in words: the queue is silent about this window on purpose, and
+        # an agent reading "open" beside it would start the investigation the
+        # runbook tells it to wait on
+        return f"waiting for the task to land — {count} instance{plural}"
     if anomaly.state is AnomalyState.RULED and anomaly.ruling is not None:
         ruled = f"ruled {anomaly.ruling.disposition.value} by {anomaly.ruling.by}"
         if anomaly.failed_resolutions:

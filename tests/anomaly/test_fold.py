@@ -24,7 +24,9 @@ from inspect_steward._anomaly.model import (
     Disposition,
     Outcome,
 )
+from inspect_steward._evalset.classify import scan_class
 from inspect_steward._evalset.instances import Instance, InstanceBatch
+from inspect_steward._tend.items import precedent_line
 from inspect_steward._workspace import (
     INSTANCE,
     INVESTIGATING,
@@ -938,3 +940,46 @@ class TestWarmBoundaries:
         assert gen1.refs == frozenset({ref("s1"), ref("s2")})
         assert gen2.refs == frozenset({ref("s9")})
         assert state.absorbed_refs[CLASS] == gen1.refs | gen2.refs
+
+
+class TestFamilyPrecedent:
+    """A scan ruling on one task is precedent for the same finding on the next.
+
+    Scan windows are per task, so the sweep-wide reading the old run-wide key gave for free has to be carried explicitly: the second task to land with reward hacking sees what the first was ruled, named for the task it was ruled on, and a different label borrows nothing.
+    """
+
+    def test_the_same_finding_on_another_task_is_precedent(self) -> None:
+        first = scan_class(
+            "scoring_integrity", "reward_hacking", task="cybench", identifier="a"
+        )
+        second = scan_class(
+            "scoring_integrity", "reward_hacking", task="gaia", identifier="b"
+        )
+        other = scan_class("scoring_integrity", "refusal", task="gaia", identifier="b")
+
+        anomalies = read_anomalies(
+            [
+                opened(first, kind="scan"),
+                instance(first),
+                ruling(first, disposition="zero", reason="read the grader", ts=T1),
+                opened(second, kind="scan", ts=T2),
+                instance(second, ts=T2, refs=[ref("s1", eval_id="ev2")]),
+                opened(other, kind="scan", ts=T2),
+                instance(other, ts=T2, refs=[ref("s2", eval_id="ev2")]),
+            ]
+        )
+
+        (window,) = [one for one in anomalies.open if one.class_key == second]
+        assert [(one.class_key, one.disposition.value) for one in window.precedent] == [
+            (first, "zero")
+        ]
+        assert (
+            precedent_line(window.precedent[0], second)
+            == f"zero by kaia at {T1}: read the grader (for cybench)"
+        )
+        # the ruled window's own line carries no task, since it is its own
+        assert precedent_line(window.precedent[0], first) == (
+            f"zero by kaia at {T1}: read the grader"
+        )
+        (unrelated,) = [one for one in anomalies.open if one.class_key == other]
+        assert unrelated.precedent == ()

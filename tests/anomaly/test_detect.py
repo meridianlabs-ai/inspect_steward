@@ -358,9 +358,14 @@ class TestScanFindings:
     What `_scan.findings` produces is `tests/scan/test_findings.py`'s subject; the claims here are the composition's — that a finding batches like any other instance, that the census keeps recomposing it every turn, and that it does not disturb the five signatures around it.
     """
 
+    def key(self, task: SynthTask, label: str) -> str:
+        return scan_class(
+            "scoring_integrity", label, task=task.name, identifier=task.identifier
+        )
+
     def flagged(self, task: SynthTask, *, label: str, uuid: str = "u1") -> Instance:
         return Instance(
-            class_key=scan_class("scoring_integrity", label),
+            class_key=self.key(task, label),
             ref=f"eval-1:s1:1:{uuid}",
             task=task.identifier,
             message="it read the grader at [M12]",
@@ -382,7 +387,7 @@ class TestScanFindings:
         )
 
         assert [b.class_key for b in detection.batches] == [
-            "scan:scoring_integrity:reward_hacking"
+            self.key(task, "reward_hacking")
         ]
         batch = detection.batches[0]
         assert batch.kind == "scan"
@@ -405,8 +410,8 @@ class TestScanFindings:
         )
 
         assert [b.class_key for b in detection.batches] == [
-            "scan:scoring_integrity:refusal",
-            "scan:scoring_integrity:reward_hacking",
+            self.key(task, "refusal"),
+            self.key(task, "reward_hacking"),
         ]
 
     def test_findings_do_not_displace_the_signatures_around_them(
@@ -425,7 +430,7 @@ class TestScanFindings:
         )
 
         assert [b.class_key for b in detection.batches] == [
-            "scan:scoring_integrity:reward_hacking",
+            self.key(task, "reward_hacking"),
             "task:error:evals.scorer.ScorerError@evals/scorer.py:score",
         ]
 

@@ -22,6 +22,7 @@ from .._anomaly.model import (
     honest,
 )
 from .._evalset.classify import kind_of
+from .._tend.items import precedent_line
 from .._workspace import INSTANCE, OPENED, append_event
 
 DOCTRINE = (
@@ -118,10 +119,7 @@ def settled_ruling(anomalies: Anomalies, token: str) -> Ruling | None:
 
 def precedent_lines(anomaly: Anomaly) -> list[str]:
     """Prior rulings on this class, as the short lines a decision is shown beside."""
-    return [
-        f"{ruling.disposition.value} by {ruling.by} at {ruling.ts}: {ruling.reason}"
-        for ruling in anomaly.precedent
-    ]
+    return [precedent_line(ruling, anomaly.class_key) for ruling in anomaly.precedent]
 
 
 __all__ = [

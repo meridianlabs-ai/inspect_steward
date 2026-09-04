@@ -10,11 +10,14 @@ from pathlib import Path
 from typing import Any
 
 import pytest
+from click.testing import CliRunner
 from inspect_ai._util._async import run_coroutine
 from inspect_scout import Result
 from inspect_scout._recorder.file import FileRecorder
 from inspect_scout._scanner.result import Error, ResultReport
 from inspect_scout._transcript.types import TranscriptInfo
+from inspect_steward._cli.main import steward
+from inspect_steward._evalset.classify import scan_class
 from inspect_steward._evalset.manifest import ManifestScan, write_manifest
 from inspect_steward._scan import initialize_scan, scan_dir_location, sync_scan
 from inspect_steward._schedule import SpawnTask
@@ -37,6 +40,7 @@ from inspect_steward._workspace import (
     RULING,
     Workspace,
     append_event,
+    create_workspace,
 )
 
 from .._logs import SynthSample, SynthTask, write_log
@@ -44,7 +48,6 @@ from ..schedule.test_tend import observations, prepared, turn
 
 SCAN_ID = "run-1"
 SCANNER = "scoring_integrity"
-CLASS = "scan:scoring_integrity:reward_hacking"
 
 MATERIAL = ManifestScan(
     spec=None,
@@ -54,6 +57,9 @@ MATERIAL = ManifestScan(
 
 
 TASK = SynthTask("probe", samples=4)
+CLASS = scan_class(
+    SCANNER, "reward_hacking", task=TASK.name, identifier=TASK.identifier
+)
 
 
 def scanning(
@@ -739,6 +745,43 @@ class TestTheFoldsCadence:
         assert [anomaly.class_key for anomaly in result.anomalies.open] == [CLASS]
 
 
+class TestWaitingToLand:
+    """A scan window on a running task is nobody's work yet.
+
+    The finding is decided when the task is done — every window the task has, put to the operator at once — so until then the window is on the record and out of the queue, and the listing says so in words rather than showing it as open.
+    """
+
+    def running(self, tmp_path: Path) -> Workspace:
+        workspace = scanning(tmp_path, land=False)
+        log = write_log(workspace.logs, TASK, status="started", total=4, completed=2)
+        record(workspace, str(log), uuid="u0", value=True, label="reward_hacking")
+        sync_scan(log_dir=str(workspace.logs), scan_id=SCAN_ID)
+        return workspace
+
+    def test_the_window_opens_and_raises_nothing(self, tmp_path: Path) -> None:
+        workspace = self.running(tmp_path)
+
+        result = turn(workspace)
+
+        assert CLASS in [anomaly.class_key for anomaly in result.anomalies.open]
+        assert [item for item in result.items if item.subject == CLASS] == []
+        assert "waiting for the task to land — 1 instance" in collect_markdown(result)
+
+    def test_landing_puts_it_in_the_queue(self, tmp_path: Path) -> None:
+        workspace = self.running(tmp_path)
+        turn(workspace)
+        # the same attempt, now complete: the rows already recorded against
+        # its log are the task's findings
+        write_log(workspace.logs, TASK)
+
+        result = turn(workspace)
+
+        (item,) = [item for item in result.items if item.subject == CLASS]
+        assert item.owner is Owner.AGENT
+        assert item.action == f"steward investigate '{CLASS}'"
+        assert "waiting for the task to land" not in collect_markdown(result)
+
+
 class TestTheHold:
     """Decision 4/5/6: a landed task with a finding waits for the agent, briefly.
 
@@ -819,12 +862,37 @@ class TestTheHold:
         assert result.held == frozenset()
         assert result.finished == [TASK.identifier]
 
+    def test_a_proposal_releases_it(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        """The hold is for the agent's proposals, so it ends the moment they exist.
+
+        The finish then goes out carrying them, which is what it was waiting
+        for; making it wait the whole horizon would post the proposals on one
+        turn and the finish they belong to on another.
+        """
+        create_workspace(tmp_path, git=False)
+        workspace = self.landing(tmp_path)
+        collected(workspace)
+        turn(workspace)
+        monkeypatch.chdir(workspace.root)
+        proposed = CliRunner().invoke(
+            steward,
+            ["propose", CLASS, "--action", "zero", "--reason", "read the grader"],
+        )
+        assert proposed.exit_code == 0, proposed.output
+
+        result = turn(workspace)
+
+        assert result.held == frozenset()
+        assert result.finished == [TASK.identifier]
+
     def test_a_task_that_lands_late_into_an_old_class_is_held_too(
         self, tmp_path: Path
     ) -> None:
-        """A `scan:` class is run-wide, so its window's age says nothing about this task.
+        """A window opens on the first flagged sample, so its age says nothing about the finish.
 
-        One reward-hacking decision covers the sweep — that is the class key working as designed — so a window opened by the first task to be flagged goes on absorbing the tenth task's findings hours later without its `opened_ts` moving. Measured against that, a task that landed a minute ago is already past the horizon.
+        A task that flags its first sample early and lands hours later has a window older than the hold would ever wait, and a completion that arrived just now; the hold counts from the log, not the window.
         """
         workspace = self.landing(tmp_path)
         collected(workspace)

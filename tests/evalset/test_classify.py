@@ -18,6 +18,8 @@ from inspect_steward._evalset.classify import (
     no_log_class,
     parse_error,
     scan_class,
+    scan_family,
+    scan_task,
     substrate,
     task_error_class,
     zero_class,
@@ -166,42 +168,77 @@ class TestScoreAndKind:
         assert key == f"score:zero:swe-bench-hard:{digest8('identifier-a')}"
         assert zero_class("swe bench (hard)", "identifier-b") != key
 
-    def test_scan_class_groups_on_the_scanner_and_its_label(self) -> None:
-        assert (
-            scan_class("scoring_integrity", "reward_hacking")
-            == "scan:scoring_integrity:reward_hacking"
+    def test_scan_class_is_per_label_and_per_task(self) -> None:
+        key = scan_class(
+            "scoring_integrity",
+            "reward_hacking",
+            task="cybench",
+            identifier="cybench@openai/gpt-5",
+        )
+
+        assert key == (
+            "scan:scoring_integrity:reward_hacking:cybench:"
+            f"{digest8('cybench@openai/gpt-5')}"
         )
         # the same scanner reporting a different category is a different
         # decision, and a label is the only thing that says so
-        assert scan_class("scoring_integrity", "refusal") != scan_class(
-            "scoring_integrity", "reward_hacking"
+        assert key != scan_class(
+            "scoring_integrity",
+            "refusal",
+            task="cybench",
+            identifier="cybench@openai/gpt-5",
+        )
+        # and the same finding in another task, or in this task under another
+        # model, is decided on its own when that task lands
+        assert key != scan_class(
+            "scoring_integrity",
+            "reward_hacking",
+            task="gaia",
+            identifier="gaia@openai/gpt-5",
+        )
+        assert key != scan_class(
+            "scoring_integrity",
+            "reward_hacking",
+            task="cybench",
+            identifier="cybench@anthropic/claude-opus-5",
         )
 
-    def test_scan_class_is_not_per_task(self) -> None:
-        # deliberately unlike `zero_class`: a model that games a grader games
-        # it everywhere, so one ruling covers the sweep
-        assert scan_class("integrity", "reward_hacking") == scan_class(
-            "integrity", "reward_hacking"
+    def test_a_family_is_the_finding_without_its_task(self) -> None:
+        # what one task's ruling is precedent for in the next
+        first = scan_class(
+            "integrity", "reward_hacking", task="cybench", identifier="a"
         )
+        second = scan_class("integrity", "reward_hacking", task="gaia", identifier="b")
+
+        assert (
+            scan_family(first) == scan_family(second) == "scan:integrity:reward_hacking"
+        )
+        assert (scan_task(first), scan_task(second)) == ("cybench", "gaia")
+        bare = scan_class("integrity", None, task="cybench", identifier="a")
+        assert scan_family(bare) == "scan:integrity"
+        # other kinds, and a scan key too short to carry a task, are their own
+        assert scan_family(OPERATOR_LIMIT) == OPERATOR_LIMIT
+        assert scan_family("scan:integrity") == "scan:integrity"
+        assert scan_task("scan:integrity") == ""
 
     def test_a_scanner_with_no_label_classes_on_its_name_alone(self) -> None:
-        bare = scan_class("integrity", None)
+        bare = scan_class("integrity", None, task="cybench", identifier="a")
 
-        assert bare == "scan:integrity"
-        assert scan_class("integrity", "") == bare
+        assert bare == f"scan:integrity:cybench:{digest8('a')}"
+        assert scan_class("integrity", "", task="cybench", identifier="a") == bare
 
     def test_sanitizing_a_segment_does_not_merge_two_of_them(self) -> None:
         # `unsafe output` and `unsafe-output` are two labels a scanner can
         # plausibly emit, and one ruling settling both would close findings
         # the operator who ruled never saw
-        spaced = scan_class("integrity", "unsafe output")
-        hyphenated = scan_class("integrity", "unsafe-output")
+        spaced = scan_class("integrity", "unsafe output", task="t", identifier="a")
+        hyphenated = scan_class("integrity", "unsafe-output", task="t", identifier="a")
 
         assert spaced != hyphenated
         # the readable form still leads, so a prefix still selects it
         assert spaced.startswith("scan:integrity:unsafe-output")
-        # and the one that needed no repair carries no digest
-        assert hyphenated == "scan:integrity:unsafe-output"
+        # and the one that needed no repair carries no digest of its own
+        assert hyphenated == f"scan:integrity:unsafe-output:t:{digest8('a')}"
 
     @pytest.mark.parametrize(
         ("key", "kind"),

@@ -13,7 +13,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from typing import Any, cast
 
-from .._evalset.classify import kind_of
+from .._evalset.classify import kind_of, scan_family
 from .._evalset.instances import Instance, InstanceBatch
 from .._util.duration import is_after as _after
 from .._workspace.journal import (
@@ -382,8 +382,26 @@ def _build(
     open_windows: list[Anomaly] = []
     settled: list[Anomaly] = []
     live: set[str] = set()
-    for listed in windows.values():
+    # scan windows are per task, and the same finding ruled on another task is
+    # the precedent an agent reads first -- so a family's rulings are gathered
+    # once and printed beside every window in it that is not their own
+    family: dict[str, list[Ruling]] = {}
+    for class_key, listed in windows.items():
+        if kind_of(class_key) != "scan":
+            continue
+        for window in listed:
+            if window.ruling is not None:
+                family.setdefault(scan_family(class_key), []).append(window.ruling)
+    for class_key, listed in windows.items():
         precedent: list[Ruling] = []
+        related = sorted(
+            (
+                ruling
+                for ruling in family.get(scan_family(class_key), [])
+                if ruling.class_key != class_key
+            ),
+            key=lambda ruling: ruling.ts,
+        )
         for window in listed:
             if window.count == 0 and window.state is AnomalyState.OPEN:
                 # an `opened` whose instances never landed -- a torn write, or
@@ -391,7 +409,9 @@ def _build(
                 # than an empty question: if instances exist they were never
                 # absorbed, so a later turn re-emits them and the window fills
                 continue
-            anomaly = _anomaly(window, tuple([*precedent, *window.superseded]))
+            anomaly = _anomaly(
+                window, tuple([*precedent, *window.superseded, *related])
+            )
             (settled if window.state in TERMINAL else open_windows).append(anomaly)
             if window.state is AnomalyState.PROPOSED and window.proposal:
                 live.add(window.proposal)

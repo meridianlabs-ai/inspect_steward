@@ -14,6 +14,7 @@ from typing import Any
 import pyarrow as pa  # pyright: ignore[reportMissingTypeStubs]
 import pyarrow.parquet as pq  # pyright: ignore[reportMissingTypeStubs]
 import pytest
+from inspect_steward._evalset.classify import scan_class
 from inspect_steward._evalset.observe import LogAttempt
 from inspect_steward._scan import scan_findings
 from inspect_steward._scan.findings import log_key
@@ -181,14 +182,23 @@ def test_only_a_boolean_yes_is_a_finding(
 def test_a_finding_carries_the_class_the_label_names(tmp_path: Path) -> None:
     findings = found(tmp_path, [row(label="internet_egress")])
 
-    assert findings[0].class_key == "scan:scoring_integrity:internet_egress"
+    # keyed to the task the transcript belongs to, off the attempt the row
+    # named: the finding is decided when that task lands
+    assert findings[0].class_key == scan_class(
+        "scoring_integrity",
+        "internet_egress",
+        task="cybench",
+        identifier="cybench@openai/gpt-5",
+    )
     assert findings[0].kind == "scan"
 
 
 def test_a_scanner_that_sets_no_label_classes_on_its_own_name(tmp_path: Path) -> None:
     findings = found(tmp_path, [row(label=None)])
 
-    assert findings[0].class_key == "scan:scoring_integrity"
+    assert findings[0].class_key == scan_class(
+        "scoring_integrity", None, task="cybench", identifier="cybench@openai/gpt-5"
+    )
 
 
 def test_a_finding_carries_the_explanation_as_evidence(tmp_path: Path) -> None:

@@ -177,7 +177,12 @@ def _instances(
             class_key = scan_error_class(scanner, row["scan_error_traceback"])
             message = _text(row["scan_error"])
         else:
-            class_key = scan_class(scanner, _text(row["label"]) or None)
+            class_key = scan_class(
+                scanner,
+                _text(row["label"]) or None,
+                task=attempt.task,
+                identifier=attempt.identifier,
+            )
             message = _text(row["explanation"])
         instances.append(
             Instance(

@@ -155,23 +155,45 @@ def zero_class(name: str, identifier: str) -> str:
     return f"score:zero:{_readable(name) or 'task'}:{digest8(identifier)}"
 
 
-def scan_class(scanner: str, label: str | None) -> str:
-    """The class key for samples one scanner flagged.
+def scan_class(scanner: str, label: str | None, *, task: str, identifier: str) -> str:
+    """The class key for samples one scanner flagged, in one task.
 
-    **Scanner plus label, and deliberately not per task.** `zero_class` is per task because the finding is *about* one task's results; a scan finding is about a sample, and a model that games a grader games it everywhere — so one decision covering the sweep is the grouping layer working as intended, and a class scoped to a task would put the same judgement in front of somebody once per task.
+    **Scanner, label, and the task.** Per task like `zero_class`, because a scan finding is decided when its task lands: the agent reads that task's flagged transcripts against that task's scores and puts the task's findings to the operator as one conversation, and a ruling given there must touch no other task's samples. An earlier design keyed on scanner and label alone, on the argument that a model which games a grader games it everywhere — which is true of the phenomenon and false of the decision, since the decision is made task by task as each one finishes. What that design shared across tasks is carried instead as precedent: a ruling on the same scanner and label in another task is printed beside the window (`scan_family`).
 
-    The known cost is the mirror of this module's own doctrine: `error:{type}@{frame}` identifies a *mechanism*, where a label names a *category*, so one class can hold two findings that are not the same finding. Over-merging is the recoverable direction — a ruling reads the evidence, and `propose` exists to say that two classes are one decision or that one is really two.
+    The known cost is the mirror of this module's own doctrine: `error:{type}@{frame}` identifies a *mechanism*, where a label names a *category*, so one class can hold two findings that are not the same thing. The agent's investigation is what separates them, which is why the runbook has it read every flagged transcript rather than the exemplar.
 
     Args:
         scanner: The scanner's merge name, as the run committed it.
         label: The result's own label — `scoring_integrity`'s issue category — or `None` for a scanner that sets none.
+        task: The task's name, for a key a person can read.
+        identifier: The task identifier, which the digest separates two models of one task by.
 
     Returns:
-        `scan:{scanner}` or `scan:{scanner}:{label}`.
+        `scan:{scanner}:{label}:{task}:{digest}`, or `scan:{scanner}:{task}:{digest}` for a scanner that sets no label.
     """
     readable = _segment(scanner) or "scanner"
     tail = _segment(label or "")
-    return f"scan:{readable}:{tail}" if tail else f"scan:{readable}"
+    suffix = f"{_readable(task) or 'task'}:{digest8(identifier)}"
+    return f"scan:{readable}:{tail}:{suffix}" if tail else f"scan:{readable}:{suffix}"
+
+
+def scan_family(class_key: str) -> str:
+    """A scan class key without its task: the scanner and label every task's window of one finding shares.
+
+    What precedent is looked up across tasks by, so the second task to land with reward hacking sees what the first was ruled. Any other key, or a scan key too short to carry a task, is its own family.
+    """
+    segments = class_key.split(":")
+    if kind_of(class_key) != "scan" or len(segments) < 4:
+        return class_key
+    return ":".join(segments[:-2])
+
+
+def scan_task(class_key: str) -> str:
+    """The task segment of a scan class key, for a precedent line that says which task a ruling was on."""
+    segments = class_key.split(":")
+    if kind_of(class_key) != "scan" or len(segments) < 4:
+        return ""
+    return segments[-2]
 
 
 def scan_error_class(scanner: str, traceback: str | None) -> str:
@@ -291,6 +313,8 @@ __all__ = [
     "no_log_class",
     "parse_error",
     "scan_class",
+    "scan_family",
+    "scan_task",
     "scan_error_class",
     "substrate",
     "task_error_class",

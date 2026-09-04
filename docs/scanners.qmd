@@ -35,7 +35,9 @@ eval_set(
 
 ## Findings
 
-A flagged sample becomes an anomaly and is decided the same way an error is, as described in [Error Handling](errors.qmd). Samples flagged the same way are one class and one decision, and every disposition is available, including excluding or zeroing a score you establish is wrong.
+A flagged sample becomes an anomaly and is decided the same way an error is, as described in [Error Handling](errors.qmd). Samples flagged the same way in the same task are one class and one decision, and every disposition is available, including excluding or zeroing a score you establish is wrong.
+
+Nothing is put to you while the task is still running. When it lands, your agent investigates every finding the task has and brings them to you together, one row per class with a proposed disposition, and your answers are recorded row by row. A finding ruled on one task is shown as precedent when another task lands with the same one, and the task's finished notification goes out with the proposals.
 
 Dismissing is an answer too, and a run cannot be signed off while a finding has no ruling either way. You will dismiss most of them: a model that probed a grader it never reached earned nothing, and the score stands. At signoff Steward tells you how many findings were dismissed, and your agent is asked to name them.
 

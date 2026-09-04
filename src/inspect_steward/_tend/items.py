@@ -20,7 +20,8 @@ from enum import IntEnum, StrEnum
 from hashlib import sha256
 from typing import TYPE_CHECKING
 
-from .._anomaly.model import Anomalies, Anomaly, AnomalyState, Disposition
+from .._anomaly.model import Anomalies, Anomaly, AnomalyState, Disposition, Ruling
+from .._evalset.classify import scan_task
 from .._evalset.observe import ObservedTasks, TaskObservation, TaskState
 from .._schedule import InFlight, Summary, attempts_made
 from .._util.duration import format_duration, is_after, seconds_since
@@ -262,7 +263,14 @@ def tend_items(
         *_status_unwritable(result),
         *_sync_failed(result),
         *_kill_loop(result),
-        *_anomalies(result.anomalies),
+        *_anomalies(
+            result.anomalies,
+            landed=frozenset(
+                identifier
+                for identifier, task in lookup.items()
+                if task.state is TaskState.COMPLETE
+            ),
+        ),
         *_signoff(result),
     ]
     # **the filter is on acknowledgeable kinds, not on ids alone**, and the
@@ -1142,8 +1150,10 @@ def _kill_loop(result: "TendResult") -> list[Item]:
     ]
 
 
-def _anomalies(anomalies: Anomalies) -> list[Item]:
+def _anomalies(anomalies: Anomalies, *, landed: frozenset[str]) -> list[Item]:
     """Every open window's item, with owner following state.
+
+    **An OPEN `scan:` window produces no item until its task has landed.** A scan finding is decided when the task is done — the agent reads the task's flagged transcripts against the task's scores and puts every finding the task has to the operator at once — so a window on a running task is not yet anyone's work, and an item for it would start an investigation the runbook says to wait on. `landed` is the set of tasks in `TaskState.COMPLETE`; a rerun that reopens a task takes its windows back out of the queue until it lands again.
 
     The routing (workflow.md §12.5): an OPEN window is the agent's to investigate; an INVESTIGATING one is the agent's, informationally, so a fresh session does not re-open what the last one was mid-way through; a PROPOSED one is suppressed under **one consolidated item per live proposal** — the operator answers a decision, not a list; a RULED one produces nothing while the outcome is pending, because the tend applies the ruling itself and machinery in flight is not anyone's work; and a re-run that failed again is the operator's review, because it means the ruling's premise did not hold.
 
@@ -1158,6 +1168,8 @@ def _anomalies(anomalies: Anomalies) -> list[Item]:
             covered.setdefault(anomaly.proposal, []).append(anomaly)
             continue
         if anomaly.state is AnomalyState.OPEN and anomaly.kind == "limit":
+            continue
+        if anomaly.state is AnomalyState.OPEN and waiting_to_land(anomaly, landed):
             continue
         items.extend(_window_items(anomaly))
     for identifier, proposal in anomalies.proposals.items():
@@ -1185,6 +1197,26 @@ def _anomalies(anomalies: Anomalies) -> list[Item]:
             )
         )
     return items
+
+
+def waiting_to_land(anomaly: Anomaly, landed: frozenset[str]) -> bool:
+    """Whether a scan window's task is still running, which is what keeps the window out of the queue.
+
+    One test shared by the queue and the listings, so a window the queue is silent about is described as waiting rather than as open. A window with no task named is not waiting: nothing would ever land it.
+    """
+    return (
+        anomaly.kind == "scan"
+        and bool(anomaly.evidence.tasks)
+        and not set(anomaly.evidence.tasks) <= landed
+    )
+
+
+def precedent_line(ruling: Ruling, class_key: str) -> str:
+    """One prior ruling as the line a decision is shown beside, naming the task where the ruling was on another task's window of the same finding."""
+    line = f"{ruling.disposition.value} by {ruling.by} at {ruling.ts}: {ruling.reason}"
+    if ruling.class_key != class_key and (task := scan_task(ruling.class_key)):
+        line = f"{line} (for {task})"
+    return line
 
 
 def self_healing(item: Item) -> bool:
@@ -1288,7 +1320,10 @@ def _anomaly_name(class_key: str) -> str:
             name = segment.partition("@")[0]
             break
     else:
-        if segments[0] in ("score", "scan") and len(segments) >= 3:
+        if segments[0] == "scan":
+            # `scan:scanner:label:task:digest`, or four segments with no label
+            name = segments[2] if len(segments) == 5 else segments[1]
+        elif segments[0] == "score" and len(segments) >= 3:
             name = segments[2]
         else:
             name = segments[1] if len(segments) > 1 else segments[0]
