@@ -227,6 +227,30 @@ class IntegrityAnswer(BaseModel):
     )
 
 
+EXPLANATION_CHARS = 16_000
+"""How much of the scorer's explanation the reviewer is shown, in characters, split evenly between its head and its tail.
+
+**The question is scaffolding chunking never touches.** `llm_scanner` renders the template once with no messages, counts it, and subtracts that from the context window before it segments the transcript — so whatever the question carries is overhead every chunk pays, and an explanation long enough leaves no room for a single message: the scanner raises before it reads one. Observed on a SWE-bench-style set: a verifier that dumped its whole test log into four explanations of 0.8 to 5.2 million characters, against about a thousand for the other 110 scored samples, and four transcripts nobody reviewed. Sixteen thousand characters is a few thousand tokens, two percent of a 200k window, and no explanation seen short of a raw log dump has come near it.
+"""
+
+
+def _bounded(explanation: str) -> tuple[str, int]:
+    """The explanation as the reviewer is shown it, and how many characters were left out.
+
+    **Head and tail rather than head alone**, because where a grader dumps its log the verdict is at the end — pytest's short summary, a `RESULT: FAILED` and the tests it names missing — and the command that produced it at the start. A cut at the end would keep the log and drop the lines that settle the question, and the reviewer would fall back to *somebody should inspect the grader logs*, the finding the quote exists to prevent. The marker says what is missing, so a gap reads as a gap and not as the scorer having said nothing more.
+    """
+    if len(explanation) <= EXPLANATION_CHARS:
+        return explanation, 0
+    half = EXPLANATION_CHARS // 2
+    elided = len(explanation) - 2 * half
+    return (
+        f"{explanation[:half]}\n"
+        f"[... {elided:,} characters of scorer output elided ...]\n"
+        f"{explanation[-half:]}",
+        elided,
+    )
+
+
 def _outcome_line(transcript: Transcript) -> str:
     """Describe the sample's recorded score so the reviewer can audit it.
 
@@ -247,15 +271,29 @@ def _outcome_line(transcript: Transcript) -> str:
     line = f"RECORDED OUTCOME for this sample: {', '.join(parts)}."
     explanation = transcript.score_explanation
     if isinstance(explanation, str) and explanation.strip():
+        text = explanation.strip()
+        shown, elided = _bounded(text)
+        if elided:
+            opening = (
+                "WHAT THE SCORER SAID, in part — the grader's own output ran to "
+                f"{len(text):,} characters, so you are shown its first and last "
+                f"{EXPLANATION_CHARS // 2:,} with the middle elided at the marker "
+                "line; it is still the primary evidence about whether this score "
+                "is sound."
+            )
+        else:
+            opening = (
+                "WHAT THE SCORER SAID, verbatim — the grader's own output, and "
+                "the primary evidence about whether this score is sound."
+            )
         line += (
-            "\n\nWHAT THE SCORER SAID, verbatim — the grader's own output, and "
-            "the primary evidence about whether this score is sound. Read it "
+            f"\n\n{opening} Read it "
             "before judging the trajectory: where it names which tests were "
             "required, which passed and which are missing, that settles "
             "whether an apparently-complete solution genuinely failed. Do not "
             "tell a reviewer to go and read the grader logs — they are quoted "
             "here, so read them yourself and say what they show.\n"
-            f"{explanation.strip()}"
+            f"{shown}"
         )
     return line
 

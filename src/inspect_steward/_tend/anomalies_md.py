@@ -17,7 +17,7 @@ from .._evalset.instances import InstanceBatch, in_results
 from .._workspace.journal import Ack
 from .items import STALLED, UNREADABLE, anomaly_name
 from .progress import Progress, short_keys
-from .table import clip, markdown_table
+from .table import clip, plain_table
 
 HEADER = "<!-- Written by `steward tend`. Regenerated every turn; edits are lost. -->"
 """The same banner `status.md` carries, and this document needs it more.
@@ -451,14 +451,35 @@ def outcomes_cells(
 def outcomes_table(
     outcomes: Mapping[str, Mapping[str, int]], progress: Progress, *, width: int = 0
 ) -> list[str]:
-    """`outcomes_cells` as a padded markdown table, then the model every row shares named once beneath — or nothing at all where every sample took the normal course."""
+    """`outcomes_cells` as a padded plain table, then the model every row shares named once beneath — or nothing at all where every sample took the normal course.
+
+    Plain rather than a markdown table because every reader of it is monospaced: a post fences it, the terminal prints it, and a markdown document wraps it in a fence through `outcomes_block`. One layout for all three, so a phone and a terminal never disagree about a cell.
+    """
     cells = outcomes_cells(outcomes, progress, width=width)
     if not cells:
         return []
-    lines = markdown_table(OUTCOMES_HEADER, cells)
-    if (model := short_keys(progress.rows).model) is not None:
-        lines += ["", f"Every task runs `{model}`."]
-    return lines
+    return plain_table(OUTCOMES_HEADER, cells) + _shared_model(progress)
+
+
+def outcomes_block(
+    outcomes: Mapping[str, Mapping[str, int]], progress: Progress, *, width: int = 0
+) -> list[str]:
+    """`outcomes_table` for a markdown document: the rows inside a code fence, the shared model named beneath it.
+
+    Fenced rather than ruled for the reason the resources table is: the by-task counts are a glance, and a ruled table gives them the weight of the task table above. A fence renders lighter, survives an editor unchanged, and lands in Slack as a preformatted block when the page is relayed. `width` clips the display keys as every task column does, for a page whose task table is clipped too.
+    """
+    cells = outcomes_cells(outcomes, progress, width=width)
+    if not cells:
+        return []
+    return ["```", *plain_table(OUTCOMES_HEADER, cells), "```"] + _shared_model(
+        progress
+    )
+
+
+def _shared_model(progress: Progress) -> list[str]:
+    if (model := short_keys(progress.rows).model) is None:
+        return []
+    return ["", f"Every task runs `{model}`."]
 
 
 def anomalies_markdown(
@@ -531,5 +552,6 @@ __all__ = [
     "anomalies_markdown",
     "caveat_line",
     "caveats",
+    "outcomes_block",
     "outcomes_table",
 ]

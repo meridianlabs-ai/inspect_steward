@@ -17,7 +17,7 @@ from .._evalset.observe import TaskState
 from .._schedule import Summary
 from .._util.duration import format_duration
 from .._util.jsonl import utc_now
-from .anomalies_md import caveat_line, outcomes_table
+from .anomalies_md import caveat_line, outcomes_block
 from .coverage import TaskCoverage
 from .items import (
     HEADINGS,
@@ -31,7 +31,7 @@ from .items import (
     waiting_to_land,
 )
 from .progress import LIVE_ONLY, TaskProgress, compact, display_keys, short_keys
-from .table import resources_table
+from .table import clip, resources_table
 
 if TYPE_CHECKING:
     # the turn imports this module to write its file, so the type it passes can
@@ -39,6 +39,12 @@ if TYPE_CHECKING:
     from .turn import TendResult
 
 _HEADER = "<!-- Written by `steward tend`. Regenerated every turn; edits are lost. -->"
+
+KEY_WIDTH = 32
+"""Display-key width for the operator's page: the task table, and the fenced tables under it.
+
+The page is read rendered — `status.md` in a viewer, or `steward status --format md` relayed into a terminal that draws a pipe table as boxes — at a width Steward never learns, and a renderer squeezes the numeric columns before the task cell, so a key of benchmark length wraps `689/731` onto two lines. About forty columns is what a ninety-column terminal leaves the task cell once six numeric columns have theirs, and eight of those go to the connections figure while a task runs.
+"""
 
 
 def status_markdown(result: "TendResult", *, header: bool = True) -> str:
@@ -176,6 +182,8 @@ def _tasks(result: "TendResult") -> list[str]:
     """The operator's task table: where each task stands, and nothing it would have to ask about.
 
     Samples rather than task states, because *how is the run going* is a question about samples. No errored or scanned column: what errored is in the by-task table below, and coverage is the agent's to read aloud at signoff. Connections ride in the task cell, `(8/16)`, because they exist only while the task runs and a column for them is empty for most of a sweep. Every column is present or absent for the whole table rather than per row.
+
+    The key is clipped to `KEY_WIDTH` and the agent's table (`_progress`) is not: this one is read rendered, where a pipe table wraps its cells, and that one is read as text, where its keys are what the agent types back to `steward rule`.
     """
     rows = result.progress.rows
     if not rows:
@@ -201,7 +209,7 @@ def _tasks(result: "TendResult") -> list[str]:
     ]
     for row, key in zip(rows, short.keys, strict=True):
         cells = [
-            f"`{_named(row, key)}`",
+            f"`{_named(row, clip(key, KEY_WIDTH))}`",
             f"{row.completed}/{row.total}",
             f"{round(row.fraction * 100)}%",
         ]
@@ -246,14 +254,16 @@ def _operator(result: "TendResult") -> list[str]:
 
 
 def _outcomes(result: "TendResult") -> list[str]:
-    """By task, the samples that did not take the normal course — the table `anomalies.md` opens on, verbatim. Absent where every sample took it."""
-    table = outcomes_table(result.dispositions.outcomes, result.progress)
+    """By task, the samples that did not take the normal course — the table `anomalies.md` opens on, as a fenced plain table with its keys clipped like the task table's. Absent where every sample took it."""
+    table = outcomes_block(
+        result.dispositions.outcomes, result.progress, width=KEY_WIDTH
+    )
     return ["### anomalies", "", *table, ""] if table else []
 
 
 def _resources(result: "TendResult") -> list[str]:
-    """Per running task, what it has met and what it is costing, as a fenced plain table. Absent while no worker is answering."""
-    table = resources_table(result.progress)
+    """Per running task, what it has met and what it is costing, as a fenced plain table with its keys clipped like the task table's. Absent while no worker is answering."""
+    table = resources_table(result.progress, width=KEY_WIDTH)
     return ["### resources", "", *table, ""] if table else []
 
 
@@ -559,7 +569,7 @@ def _anomalies(result: "TendResult") -> list[str]:
     marks = result.caveats
     # the same by-task table `anomalies.md` opens on and the operator's page
     # carries, so the agent reads the numbers it will be asked about
-    table = outcomes_table(result.dispositions.outcomes, result.progress)
+    table = outcomes_block(result.dispositions.outcomes, result.progress)
     if line is None and not marks and not table:
         return []
     lines = ["### anomalies", ""]

@@ -77,8 +77,17 @@ def _cells(row: TaskProgress, key: str, width: int) -> tuple[str, ...]:
 
 
 def clip(key: str, width: int) -> str:
-    """A display key cut to `width` characters, or whole where `width` is 0 — the one rule every table with a task column applies, so a phone-width post and a terminal never disagree about how a name is shortened."""
-    return key[:width] if width and len(key) > width else key
+    """A display key cut to `width` characters with its middle elided, or whole where `width` is 0 or it already fits.
+
+    The one rule every table with a task column applies, so a phone-width post, a terminal and the operator's page never disagree about how a name is shortened.
+
+    **The middle goes, not the end.** A sweep's keys share their head and differ at the tail — `cais_swebenchpro@anthropic/claude-haiku-4-5-20251001` beside `cais_swebenchpro@openai/gpt-5.6-luna` — so a key cut at the end left two rows telling apart by nothing, and at phone width lost the model altogether. `cais_swebenchpr…iku-4-5-20251001` still hints both halves: which benchmark, and which model ran it.
+    """
+    if not width or len(key) <= width:
+        return key
+    head = (width - 1) // 2
+    tail = width - 1 - head
+    return f"{key[:head]}…{key[len(key) - tail :]}"
 
 
 def _outcome(row: TaskProgress) -> str:
@@ -131,31 +140,6 @@ def glyph(row: TaskProgress) -> str:
     return GLYPH.get(row.state, "?")
 
 
-def markdown_table(header: tuple[str, ...], rows: list[tuple[str, ...]]) -> list[str]:
-    """A markdown table padded in the source: the first column left-aligned, every other right-aligned under its heading.
-
-    Padded because these documents are read in an editor at least as often as they are rendered, and a column of numbers that lines up is a table before anything renders it.
-    """
-    widths = [max(len(row[n]) for row in (header, *rows)) for n in range(len(header))]
-    rule = "|".join(
-        ["", "-" * (widths[0] + 2), *("-" * (w + 1) + ":" for w in widths[1:]), ""]
-    )
-    return [
-        _markdown_row(header, widths),
-        rule,
-        *(_markdown_row(row, widths) for row in rows),
-    ]
-
-
-def _markdown_row(cells: tuple[str, ...], widths: list[int]) -> str:
-    name, *rest = cells
-    padded = [
-        name.ljust(widths[0]),
-        *(cell.rjust(width) for cell, width in zip(rest, widths[1:], strict=True)),
-    ]
-    return f"| {' | '.join(padded)} |"
-
-
 RESOURCES_HEADER = ("task", "refusals", "retries", "memory", "cpu")
 """The `### resources` table's columns, in reading order."""
 
@@ -205,9 +189,9 @@ def resources_table(progress: Progress, *, width: int = 0) -> list[str]:
 def plain_table(
     header: tuple[str, ...], rows: list[tuple[str, ...]], *, indent: str = ""
 ) -> list[str]:
-    """The same columns as `markdown_table`, for a terminal: padded, two spaces between columns, no pipes or rule.
+    """A padded plain table: the first column left-aligned, every other right-aligned under its heading, two spaces between columns.
 
-    One layout rule in two spellings, so the terminal and the document cannot disagree about a cell — only about what is drawn around it.
+    The one table layout, for a terminal, a post's fenced block, and a markdown document's — so no two surfaces disagree about a cell, only about what is drawn around it. Padded because these documents are read in an editor at least as often as they are rendered, and a column of numbers that lines up is a table before anything renders it.
     """
     widths = [max(len(row[n]) for row in (header, *rows)) for n in range(len(header))]
     return [_plain_row(row, widths, indent) for row in (header, *rows)]
