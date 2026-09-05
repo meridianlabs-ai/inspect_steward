@@ -190,7 +190,7 @@ See [Tend Loop](#tend-loop) and [Notifications](#notifications) for additional d
 
 | \_steward.yaml | Environment | Default | Description |
 |----|----|----|----|
-| `samples_ramp` | `STEWARD_SAMPLES_RAMP` | \[40, 200\] | Range to discover sample concurrency in; `false` for no automatic ramp. |
+| `samples_ramp` | `STEWARD_SAMPLES_RAMP` | \[50, 150\] | Range to discover sample concurrency in; `false` for no automatic ramp. |
 | `max_workers` | `STEWARD_MAX_WORKERS` | one per task | Pack the run into this many worker processes. |
 
 See [Automatic Ramp](./concurrency.html.md#automatic-ramp) and [Worker Processes](./concurrency.html.md#worker-processes) for additional details.
