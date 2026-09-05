@@ -1,8 +1,8 @@
 """A definition whose samples all park, which is what saturates the sample limiter.
 
-The ramp's up-gate requires demand — `in_use == limit` — and demand needs samples that occupy their slots rather than finishing. `mockllm` finishes instantly, so the hold is borrowed from `approval_evalset.py`: every sample calls a tool under `approver: human` and waits, indefinitely, holding its slot. Forty-five of them against the default floor of forty is a saturated limiter with a queue, no pushback, no errors, and an idle CPU — the exact clean window a step is bought with.
+The ramp's up-gate requires demand — `in_use == limit` — and demand needs samples that occupy their slots rather than finishing. `mockllm` finishes instantly, so the hold is borrowed from `approval_evalset.py`: every sample calls a tool under `approver: human` and waits, indefinitely, holding its slot. Fifty-five of them against the default floor of fifty is a saturated limiter with a queue, no pushback, no errors, and an idle CPU — the exact clean window a step is bought with.
 
-The first forty-five outputs are tool calls because only first generations happen while everything parks; the completions behind them are unreached, and exist so a sample would finish rather than error if an approval were ever answered.
+The first fifty-five outputs are tool calls because only first generations happen while everything parks; the completions behind them are unreached, and exist so a sample would finish rather than error if an approval were ever answered.
 """
 
 from inspect_ai import Task, eval_set, task
@@ -14,7 +14,7 @@ from inspect_ai.tool import Tool, tool
 
 MODEL = "mockllm/model"
 
-SAMPLES = 45
+SAMPLES = 55
 
 
 @tool

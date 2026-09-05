@@ -30,18 +30,18 @@ from .._evalset.observe import (
     TaskState,
 )
 
-DEFAULT_MAX_SAMPLES = 40
+DEFAULT_MAX_SAMPLES = 50
 """Starting sample concurrency per task.
 
 Deliberately modest, because the ratchet is asymmetric: raising a limit takes effect immediately, lowering one only stops new acquires and waits for in-flight samples to drain. Climbing from a low setpoint is cheap; descending from a high one is not (scheduling.md, *`max_samples` — set explicitly, so it can be steered*).
 
-Also the default ramp's floor, and the two agree by construction: a run that starts at 40 and never earns a step is exactly the run this constant always described.
+Also the default ramp's floor, and the two agree by construction: a run that starts at 50 and never earns a step is exactly the run this constant always described.
 """
 
-DEFAULT_SAMPLES_RAMP = (DEFAULT_MAX_SAMPLES, 200)
+DEFAULT_SAMPLES_RAMP = (DEFAULT_MAX_SAMPLES, 150)
 """The range the tuning loop explores when nobody pinned a setpoint or wrote a range.
 
-On by default, which withdraws an earlier position deliberately (scheduling.md, *The signal is mechanical*): a run left alone at 40 all night compounds its undershoot for exactly the hours Steward exists to cover, and every step up is gated on measured absence of pushback where staying low is gated on nothing. The ceiling is a bound on discovery, not a promise of load — a run that never earns a step never leaves the floor.
+On by default, which withdraws an earlier position deliberately (scheduling.md, *The signal is mechanical*): a run left alone at 50 all night compounds its undershoot for exactly the hours Steward exists to cover, and every step up is gated on measured absence of pushback where staying low is gated on nothing. The ceiling is a bound on discovery, not a promise of load — a run that never earns a step never leaves the floor.
 """
 
 DEFAULT_STALL_AFTER = 2

@@ -47,7 +47,7 @@ def test_creates_the_workspace(tmp_path: Path) -> None:
     assert all(
         not line.strip() or line.startswith("#") for line in placeholder.splitlines()
     )
-    assert "Leave log_dir out" in placeholder
+    assert "ending in a call to eval_set()" in placeholder
 
     # created on demand by the steps that own them, not here -- and git would
     # not carry an empty directory anyway

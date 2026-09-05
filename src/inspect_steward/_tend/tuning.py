@@ -339,7 +339,7 @@ def plan_tuning(
             # **This is the one move that goes below the ramp's floor**, and it
             # has to: the floor is where discovery starts, not a guarantee the
             # host can afford it, and a budget of 28 across ten tasks does not
-            # divide into a floor of 40. The ramp climbs back out through the
+            # divide into a floor of 50. The ramp climbs back out through the
             # gates as tasks finish and the sum falls.
             moves.append(
                 Move(

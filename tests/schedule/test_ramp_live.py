@@ -12,6 +12,10 @@ from typing import Any
 
 import pytest
 from inspect_steward._launch import Launch, launch
+from inspect_steward._schedule.reconcile import (
+    DEFAULT_MAX_SAMPLES,
+    DEFAULT_SAMPLES_RAMP,
+)
 from inspect_steward._tend import Refused, TendResult, tend
 from inspect_steward._workspace import (
     ACTION,
@@ -26,7 +30,7 @@ from ..timer._fake import clear_credentials, fake_cron
 FIXTURES = Path(__file__).parents[1] / "evalset" / "fixtures"
 DEFINITION = "ramp_evalset.py"
 
-FLOOR = 40
+FLOOR = DEFAULT_MAX_SAMPLES
 """The default ramp's floor, which is where the worker must start."""
 
 
@@ -59,8 +63,8 @@ def test_a_saturated_worker_with_no_pushback_earns_a_step(
     assert isinstance(started, Launch), f"refused by {started}"
     assert started.turn is not None and len(started.turn.spawned) == 1
 
-    # a state to wait for rather than a delay to outlast: forty-five samples
-    # park, so the limiter sits at 40/40 with a queue -- demand, held steady
+    # a state to wait for rather than a delay to outlast: fifty-five samples
+    # park, so the limiter sits at 50/50 with a queue -- demand, held steady
     def saturated() -> bool:
         row = next(iter(turn(workspace).progress.rows), None)
         return row is not None and row.running >= FLOOR
@@ -98,4 +102,4 @@ def test_a_saturated_worker_with_no_pushback_earns_a_step(
     # worker had adaptive controllers to patch; absent controllers, no move
     for payload in ramp_actions(workspace):
         if payload.get("knob") == "max_connections":
-            assert payload.get("to") == 200
+            assert payload.get("to") == DEFAULT_SAMPLES_RAMP[1]
