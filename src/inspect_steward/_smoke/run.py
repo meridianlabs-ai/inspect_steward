@@ -8,7 +8,7 @@
 """
 
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from pathlib import Path
 from shutil import rmtree
@@ -53,6 +53,7 @@ from .._scan import (
 )
 from .._scan.model import establish_scan_model
 from .._schedule import SpawnTask, SpawnWorker
+from .._store import StoreError, satisfied, store_location
 from .._tend.coverage import coverage
 from .._tend.detect import scan_attempts
 from .._tend.notify import notify_failure
@@ -67,11 +68,13 @@ from .._workspace import (
     acquire,
     append_event,
     read_directives,
+    resolve_log_store,
     steward_log,
 )
 from .checks import probe, scan_coverage
 from .digest import (
     Outcome,
+    Satisfied,
     Smoke,
     digest_markdown,
     findings,
@@ -116,6 +119,32 @@ class Plan:
     max_workers: int | None = None
     """Processes the rehearsal may divide its tasks into, or `None` for one apiece."""
 
+    satisfied: dict[str, str] = field(default_factory=dict[str, str])
+    """Task identifiers the log store already answers, and with what.
+
+    **Rung 2 of the convergence ladder, consulted by the rehearsal too.** A launch copies a store's answer in and never starts a worker for it (`_launch.launch._reuse`), so a rehearsal that ran the task anyway rehearsed work the run will not do — and a workspace whose every task the store holds spent a full smoke on nothing. Asked with the launch's own predicate (`_store.match`), so the two cannot disagree about what the store answers.
+
+    Carried beside the manifest rather than cut out of it: the record a smoke leaves has to name every task the launch will capture (`_launch.launch._unrehearsed`) and hash the same manifest, so `manifest` stays whole and `rehearsed` is what actually runs.
+    """
+
+    store: str | None = None
+    """The store consulted, or `None` where none was configured."""
+
+    @property
+    def rehearsed(self) -> Manifest:
+        """The manifest minus what the store satisfies: the tasks this rehearsal runs."""
+        if not self.satisfied:
+            return self.manifest
+        return self.manifest.model_copy(
+            update={
+                "tasks": [
+                    task
+                    for task in self.manifest.tasks
+                    if task.identifier not in self.satisfied
+                ]
+            }
+        )
+
 
 def prepare(
     workspace: Workspace,
@@ -125,6 +154,8 @@ def prepare(
     cap: int = DEFAULT_CAP,
     max_workers: int | None = None,
     scanners: dict[str, dict[str, Any]] | None = None,
+    satisfied: Mapping[str, str] | None = None,
+    store: str | None = None,
 ) -> Plan:
     """Clear the last rehearsal and bracket this one's scan.
 
@@ -191,6 +222,8 @@ def prepare(
         samples=samples,
         cap=cap,
         max_workers=max_workers,
+        satisfied=dict(satisfied or {}),
+        store=store,
     )
 
 
@@ -279,7 +312,7 @@ def divide(plan: Plan) -> list[tuple[SpawnTask, ...]]:
             registry_name=task.registry_name,
             args_hash=task.args_hash,
         )
-        for task in plan.manifest.tasks
+        for task in plan.rehearsed.tasks
     ]
     if not tasks:
         return []
@@ -382,7 +415,7 @@ def watch(plan: Plan, *, now: float) -> bool:
     """
     deadline = now + plan.cap * 60 if plan.cap else None
     while True:
-        if settled(observe_logs(plan.log_dir), plan.manifest):
+        if settled(observe_logs(plan.log_dir), plan.rehearsed):
             return False
         if deadline is not None and time.monotonic() >= deadline:
             return True
@@ -517,7 +550,7 @@ def fold(plan: Plan, logs: ObservedLogs) -> Folded:
     except Exception as ex:
         errors.append(f"the scan would not fold: {ex}")
     directory = scan_dir_location(log_dir=plan.log_dir, scan_id=scan_id, scans=scans)
-    observed = observe_tasks(plan.manifest, logs)
+    observed = observe_tasks(plan.rehearsed, logs)
     found = scan_findings(
         directory,
         scanners=plan.scanners,
@@ -640,9 +673,9 @@ def short_slices(
     """
     if capped:
         return []
-    records = current_records(plan.manifest, logs, read_logs)
+    records = current_records(plan.rehearsed, logs, read_logs)
     lines: list[str] = []
-    for task in plan.manifest.tasks:
+    for task in plan.rehearsed.tasks:
         landed = records.get(task.identifier)
         if landed is None:
             # a task with no log at all is `unfinished`'s to name, and naming it
@@ -737,6 +770,17 @@ def conclude(
         scan_model: The model the scanners reviewed with, as the fleet had it.
         lingering: Workers still running when the drain gave up. A rehearsal cannot report *ready* while one of its own processes is still generating against the account the run is about to use.
     """
+    rehearsed = plan.rehearsed
+    if plan.manifest.tasks and not rehearsed.tasks:
+        # **nothing ran, and that is the answer rather than a gap in one.**
+        # Every task the launch will capture is one the store answers, so the
+        # launch copies them in and starts nothing; there are no logs to read,
+        # no models under load to probe, and no scan path exercised. A probe
+        # over the scan model would be the one check with something to say,
+        # and it would be saying it about a model that will review nothing
+        return _nothing_to_rehearse(
+            plan, elapsed=elapsed, waived=waived, scan_model=scan_model
+        )
     read_logs, errors = read(logs)
     if not plan.manifest.tasks:
         # **an empty capture settles instantly and establishes nothing.** Every
@@ -751,14 +795,14 @@ def conclude(
         )
     scan = fold(plan, logs)
     errors.extend(scan.errors)
-    errors.extend(unfinished(plan.manifest, logs, capped=capped))
+    errors.extend(unfinished(rehearsed, logs, capped=capped))
     errors.extend(short_slices(plan, logs, read_logs, capped=capped))
     errors.extend(
         f"smoke worker {one} was still running after being cancelled"
         for one in lingering
     )
     sample_failures, errored = failures(logs)
-    result = probe(read_logs, models=models(plan.manifest, scan_model=scan_model))
+    result = probe(read_logs, models=models(rehearsed, scan_model=scan_model))
     # spliced rather than computed inside `probe`, which is about transcripts and
     # has no scan fold to ask -- what it buys is the whole of the check
     # machinery: a waiver by name, a mark in the digest, and a place in the verdict
@@ -774,7 +818,7 @@ def conclude(
     # the current attempts rather than every file in the directory, so this
     # number, the slice check and the coverage denominator are all over the
     # same population -- a retry's superseded log is history, not results
-    landed = sum(current_records(plan.manifest, logs, read_logs).values())
+    landed = sum(current_records(rehearsed, logs, read_logs).values())
     return Smoke(
         outcome=outcome(
             result,
@@ -797,7 +841,7 @@ def conclude(
         scan_model=scan_model or "",
         probe=result,
         waived=tuple(waived),
-        tasks=len(plan.manifest.tasks),
+        tasks=len(rehearsed.tasks),
         landed=landed,
         # `samples × epochs`, which is `observe`'s own `required_samples` and
         # has to be: the numerator counts sample *records* off the logs, and a
@@ -812,6 +856,47 @@ def conclude(
         samples=plan.samples,
         cap=plan.cap,
         log_dir=plan.log_dir,
+        satisfied=_satisfied_rows(plan),
+        store=plan.store,
+    )
+
+
+def _nothing_to_rehearse(
+    plan: Plan, *, elapsed: float, waived: Sequence[str], scan_model: str | None
+) -> Smoke:
+    """A passing rehearsal of nothing: every task is the store's.
+
+    The record is the one a full rehearsal would have left — every identifier, the manifest digest, the scan configuration — because that is what the launch gate compares, and the launch this precedes runs none of it. What makes the record honest is `satisfied`, which says why nothing ran.
+    """
+    return Smoke(
+        outcome=Outcome.PASSED,
+        identifiers=tuple(task.identifier for task in plan.manifest.tasks),
+        digest=manifest_digest(plan.manifest),
+        scanners=scan_digest(plan.manifest.scan),
+        scan_model=scan_model or "",
+        waived=tuple(waived),
+        tasks=0,
+        landed=0,
+        population=sum(task.samples * task.epochs for task in plan.manifest.tasks),
+        elapsed=elapsed,
+        samples=plan.samples,
+        cap=plan.cap,
+        log_dir=plan.log_dir,
+        satisfied=_satisfied_rows(plan),
+        store=plan.store,
+    )
+
+
+def _satisfied_rows(plan: Plan) -> tuple[Satisfied, ...]:
+    """What the store answered, in manifest order and with the source named."""
+    return tuple(
+        Satisfied(
+            identifier=task.identifier,
+            key=task.key,
+            source=plan.satisfied[task.identifier],
+        )
+        for task in plan.manifest.tasks
+        if task.identifier in plan.satisfied
     )
 
 
@@ -828,9 +913,12 @@ def smoke(
     max_workers: int | None = None,
     notification: str | bool | None = None,
     scan_model: str | bool | None = None,
+    log_store: str | bool | None = None,
     break_stale: bool = True,
 ) -> Smoke | Held:
     """Rehearse the definition, and say whether the run it precedes is ready.
+
+    **The log store is consulted, read-only, with the launch's own predicate** (`_store.match`). A task the store answers is one the launch will copy in and never start, so rehearsing it rehearses work the run does not do; it is left out, named in the digest and the record, and the launch gate still sees every identifier the capture enumerated. A store that will not open costs a rehearsal nothing but a line in the log — it never fails a launch, and it must not fail the smoke that precedes one.
 
     **No credentials pre-check, unlike a launch, and the difference is what that check is about.** `launch` refuses when a credential is set in this shell and absent from `.env`, because a *scheduled tend* inherits a stripped environment and would fail every fire at 02:00 with nobody watching. A smoke arms no timer and spawns its workers from this process, so they inherit exactly what the operator at the terminal has. A missing key is still caught — by the rehearsal failing, which is one of the things workflow.md §7.1 says it is for — rather than by a question about a scheduler that is not going to exist.
 
@@ -852,6 +940,7 @@ def smoke(
         max_workers: Processes to divide the tasks into, or `None` for what the workspace says and then one apiece.
         notification: Where to post, `False` for nowhere, or `None` for what the workspace says. Reaches the rehearsal's workers, whose own notifications are blocking prompts.
         scan_model: The model scanners use, `False` for none, or `None` for what the workspace says.
+        log_store: Where to look for logs the run does not have to produce, `False` for nowhere, or `None` for what the workspace says. Resolved exactly as `launch` resolves it.
         break_stale: Whether to break a claim whose holder is gone.
 
     Returns:
@@ -859,6 +948,10 @@ def smoke(
     """
     directives = read_directives(workspace.directives)
     inspect_overrides = run_overrides(overrides)
+    configured = resolve_log_store(directives, log_store=log_store)
+    store = (
+        store_location(configured, workspace.root) if configured is not None else None
+    )
 
     outcome = acquire(
         workspace.claim, command="launch --smoke", break_stale=break_stale
@@ -885,6 +978,8 @@ def smoke(
                 max_workers if max_workers is not None else directives.max_workers
             ),
             scanners=directives.scanners,
+            satisfied=_matches(workspace, manifest, store),
+            store=store,
         )
         establish_channel(
             workspace,
@@ -895,6 +990,23 @@ def smoke(
         reviewer = establish_scan_model(
             scan_model if scan_model is not None else directives.scan_model
         )
+        if plan.satisfied and not plan.rehearsed.tasks:
+            # prepared and recorded like any other, and nothing in between:
+            # the directory is cleared so the digest lands where it always
+            # does, and no fleet is built for a rehearsal with no tasks
+            steward_log(
+                workspace.log,
+                f"smoke: every task is satisfied from {store}, nothing to rehearse",
+            )
+            result = conclude(
+                plan,
+                logs=observe_logs(plan.log_dir),
+                capped=False,
+                elapsed=0.0,
+                waived=accept,
+                scan_model=reviewer,
+            )
+            return _record(workspace, result, notification=notification)
 
         started = time.monotonic()
         deadline = started + cap * 60 if cap else None
@@ -918,6 +1030,36 @@ def smoke(
             lingering=lingering,
         )
         return _record(workspace, result, notification=notification)
+
+
+def _matches(
+    workspace: Workspace, manifest: Manifest, store: str | None
+) -> dict[str, str]:
+    """What the store answers for this capture, or nothing where there is no store or it will not open.
+
+    A store's absence costs time and never correctness, and the launch treats every failure of it as one task that runs the ordinary way; a rehearsal that refused over the same failure would be stricter than the run it rehearses. One line in the log, and everything is rehearsed.
+    """
+    if store is None or not manifest.tasks:
+        return {}
+
+    def note(line: str) -> None:
+        steward_log(workspace.log, line)
+
+    try:
+        return satisfied(
+            manifest,
+            {task.identifier for task in manifest.tasks},
+            store,
+            root=workspace.root,
+            log=note,
+        )
+    except StoreError as ex:
+        steward_log(
+            workspace.log,
+            f"nothing could be reused from {store}, so everything is rehearsed: "
+            f"{type(ex).__name__}: {ex}",
+        )
+        return {}
 
 
 def _record(

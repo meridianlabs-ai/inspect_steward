@@ -216,9 +216,9 @@ class TestWhenThereIsNoStoreToRead:
         # **a store is an optimisation whose absence costs time and never
         # correctness**, so it cannot be allowed to cost a launch either: one
         # recorded line, and the task runs the ordinary way
-        # `importlib` rather than `import ... as module`, which binds the
-        # *function* `_launch/__init__.py` re-exports under the same name
-        module = importlib.import_module("inspect_steward._launch.launch")
+        # the store is asked through `_store.match`, which the launch and the
+        # rehearsal share, so that is where the opening is refused
+        module = importlib.import_module("inspect_steward._store.match")
 
         def refuse(location: str, *, root: Path) -> object:
             raise StoreError("the bucket is not there")
@@ -250,7 +250,7 @@ class TestFailuresFromSomebodyElsesHierarchy:
     def test_a_candidate_that_will_not_read_leaves_the_task_to_run(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
-        module = importlib.import_module("inspect_steward._launch.launch")
+        module = importlib.import_module("inspect_steward._store.match")
 
         def refuse(source: str) -> object:
             raise Provider("the credentials expired")

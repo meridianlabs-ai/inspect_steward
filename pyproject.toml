@@ -122,6 +122,7 @@ dev = [
     "openai>=3.1.0",
     "anthropic>=1.0.0",
     "inspect_harbor",
+    "inspect-sandboxes",
     {include-group = "doc"},
 ]
 doc = [

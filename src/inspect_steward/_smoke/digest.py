@@ -34,6 +34,17 @@ class Outcome(StrEnum):
 
 
 @dataclass(frozen=True)
+class Satisfied:
+    """A task the rehearsal left out because the log store already answers it."""
+
+    identifier: str
+    key: str
+    """The task as the operator knows it."""
+    source: str
+    """Where the store had it — named, because an identifier match says nothing about the environment the log ran in, and whose result this is has to stay answerable."""
+
+
+@dataclass(frozen=True)
 class Smoke:
     """What one rehearsal established.
 
@@ -96,6 +107,12 @@ class Smoke:
     """Whether the deadline fired before the tasks settled.
 
     **Carried, and deliberately never reported.** A smoke runs a couple of samples under a clock so that it can be stopped; a sample the deadline cut short is the tool working, not a fact about the definition, and there is nothing for a reader to do about it. So it reaches no verdict line, no digest section and no journal field — it exists because `_amended` re-derives the outcome after a failed write and has to know what the deadline already excused (`_smoke.run.unfinished`)."""
+
+    satisfied: tuple[Satisfied, ...] = ()
+    """Tasks the log store already answers, which the rehearsal did not run: the launch copies their logs in rather than starting them. Rung 2 of the convergence ladder, consulted read-only with the launch's own predicate (`_store.match`), so the two cannot disagree."""
+
+    store: str | None = None
+    """The store consulted, or `None` where none was configured."""
 
     @property
     def passed(self) -> bool:
@@ -185,6 +202,7 @@ def digest_markdown(smoke: Smoke) -> str:
         "",
     ]
     lines.extend(_ran(smoke))
+    lines.extend(_satisfied(smoke))
     lines.extend(_failures(smoke))
     lines.extend(_checks(smoke))
     lines.extend(_findings(smoke))
@@ -222,6 +240,11 @@ def _verdict(smoke: Smoke) -> str:
             reasons.append("the rehearsal did not complete")
         what = "; ".join(reasons) or "the rehearsal did not complete"
         return f"🛑 not ready to launch — {what}"
+    if not smoke.tasks and smoke.satisfied:
+        return (
+            f"✅ nothing to rehearse — every task is satisfied from the log "
+            f"store at {smoke.store}"
+        )
     away = smoke.waived_away
     waived = f" ({', '.join(away)} waived)" if away else ""
     return f"✅ rehearsed and ready{waived}"
@@ -232,15 +255,35 @@ def _ran(smoke: Smoke) -> list[str]:
 
     **Counts only, and no arithmetic on top of them.** A digest that said what the run would spend was extrapolating from a handful of samples taken off the front of each unshuffled dataset — not a random draw, and on a small enough sample that the answer carried a false precision nobody should have been deciding on. The population is a count the capture already made, so it stays; the rate that would have turned it into money does not (workflow.md §7.1).
     """
+    rehearsed = " rehearsed" if smoke.satisfied else ""
     lines = [
         "## what ran",
         "",
-        f"{smoke.tasks} task{'' if smoke.tasks == 1 else 's'} · "
+        f"{smoke.tasks} task{'' if smoke.tasks == 1 else 's'}{rehearsed} · "
         f"{smoke.landed} samples in {smoke.elapsed:.0f}s",
         "",
     ]
     if smoke.population:
         lines.extend([f"The run itself is {smoke.population:,} samples.", ""])
+    return lines
+
+
+def _satisfied(smoke: Smoke) -> list[str]:
+    """What the rehearsal left out, and where the launch will get it from.
+
+    Named one by one rather than counted, for the reason the launch names its reused rows: a reader deciding whether to accept somebody else's result needs to know it is somebody else's.
+    """
+    if not smoke.satisfied:
+        return []
+    lines = ["## satisfied from the log store", ""]
+    lines.extend(f"- {one.key} — {one.source}" for one in smoke.satisfied)
+    lines.extend(
+        [
+            "",
+            "Not rehearsed: the launch will copy these logs in rather than run them.",
+            "",
+        ]
+    )
     return lines
 
 
@@ -327,6 +370,13 @@ def echo_smoke(smoke: Smoke) -> list[str]:
     Shorter and never different: the verdict, the checks that decided it, and where to read the rest. A reader at the terminal has the file a keystroke away, and repeating the whole digest into a scrollback is how the file stops being read.
     """
     lines = [_verdict(smoke)]
+    if smoke.satisfied:
+        count = len(smoke.satisfied)
+        lines.append(
+            f"  ↩ {count} task{'' if count == 1 else 's'} satisfied from the "
+            f"log store — not rehearsed"
+        )
+        lines.extend(f"    {one.key} — {one.source}" for one in smoke.satisfied)
     for check in smoke.probe.checks:
         mark = _MARK[check.verdict]
         waived = " (waived)" if check.name in smoke.waived_away else ""
@@ -350,11 +400,14 @@ def journal_fields(smoke: Smoke) -> dict[str, Any]:
         "samples": smoke.samples,
         "cap": smoke.cap,
         "log_dir": smoke.log_dir,
+        "satisfied": [one.identifier for one in smoke.satisfied],
+        "log_store": smoke.store,
     }
 
 
 __all__ = [
     "Outcome",
+    "Satisfied",
     "Smoke",
     "digest_markdown",
     "echo_smoke",

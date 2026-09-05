@@ -13,12 +13,14 @@ from typing import Any
 import pytest
 from click.testing import CliRunner
 from inspect_ai._eval.eval_set_overrides import EvalSetOverrides
+from inspect_steward._cli import launch as cli_module
 from inspect_steward._cli.launch import _Given, _next_launch
 from inspect_steward._cli.main import steward
 from inspect_steward._evalset.manifest import Manifest, write_manifest
 from inspect_steward._notify import INSPECT_NOTIFICATION
 from inspect_steward._scan.model import SCOUT_SCAN_MODEL
 from inspect_steward._smoke import run as run_module
+from inspect_steward._smoke.digest import Smoke
 from inspect_steward._smoke.run import Plan, smoke
 from inspect_steward._workspace import (
     Held,
@@ -259,6 +261,8 @@ class TestTheCommandItPrintsBack:
             max_workers=None,
             scan_model=None,
             no_scan_model=False,
+            log_store=None,
+            no_log_store=False,
         )
 
     def printed(
@@ -314,6 +318,47 @@ class TestTheCommandItPrintsBack:
         assert self.printed(tmp_path) == "steward launch"
 
 
+class TestTheStoreFlagsShapeTheRehearsal:
+    """`--log-store` and `--no-log-store` were refused under `--smoke`, and now shape it: a rehearsal reads the store to leave out what it satisfies."""
+
+    def rehearsal(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch, *flags: str
+    ) -> tuple[Any, dict[str, Any]]:
+        create_workspace(tmp_path, git=False)
+        definition = tmp_path / "evalset.py"
+        definition.write_text("", encoding="utf-8")
+        seen: dict[str, Any] = {}
+
+        def fake(workspace: Workspace, path: Path, **kwargs: Any) -> Smoke:
+            seen.update(kwargs)
+            return Smoke()
+
+        monkeypatch.setattr(cli_module, "run_smoke", fake)
+        monkeypatch.chdir(tmp_path)
+        result = CliRunner().invoke(
+            steward, ["launch", str(definition), "--smoke", *flags]
+        )
+        return result, seen
+
+    def test_a_store_named_reaches_the_rehearsal_and_the_next_launch(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result, seen = self.rehearsal(tmp_path, monkeypatch, "--log-store", "s3://x")
+
+        assert result.exit_code == 0, result.output
+        assert seen["log_store"] == "s3://x"
+        assert "--log-store s3://x" in result.output
+
+    def test_declining_the_store_reaches_both_too(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        result, seen = self.rehearsal(tmp_path, monkeypatch, "--no-log-store")
+
+        assert result.exit_code == 0, result.output
+        assert seen["log_store"] is False
+        assert "--no-log-store" in result.output
+
+
 class TestFlagsARehearsalCannotHonour:
     """The mirror of `--samples` outside `--smoke`, and it closed a silent loss rather than a confusion.
 
@@ -336,7 +381,6 @@ class TestFlagsARehearsalCannotHonour:
             "--no-env-check",
             "--no-sync",
             "--no-log-root",
-            "--no-log-store",
         ],
     )
     def test_a_launch_only_flag_is_refused_rather_than_ignored(

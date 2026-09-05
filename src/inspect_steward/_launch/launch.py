@@ -33,16 +33,13 @@ from .._evalset.detect import DefinitionType
 from .._evalset.manifest import (
     Manifest,
     ManifestError,
-    ManifestTask,
     manifest_digest,
     read_manifest,
     write_manifest,
 )
 from .._evalset.observe import (
     ObservedLogs,
-    incomplete_reason,
     observe_logs,
-    read_attempt,
 )
 from .._evalset.read import ReadEvalSetError, read_eval_set
 from .._scan import (
@@ -55,7 +52,7 @@ from .._scan import (
 )
 from .._scan.model import establish_scan_model
 from .._schedule import RunningWorker
-from .._store import StoreError, copy_log, open_store, store_location
+from .._store import StoreError, copy_log, satisfied, store_location
 from .._tend import TendResult, tend
 from .._timer import (
     Armament,
@@ -408,8 +405,13 @@ def _launch(
     # rung 2 of the ladder, immediately after rung 1 and for the same reason
     # the restore is here: what a store read is *for* is the identifiers the
     # committed manifest asks for, and all `log_dir` mutation stays contiguous
-    reused = _reuse(
+    reused, wanted = _reuse(
         workspace, manifest, delta, logs, inflight.running, log_dir, log_store, failures
+    )
+    # a warning, deliberately the same one: the gate hoisted above answers for
+    # the tasks a smoke covered, and this answers for the ones it left out
+    unrehearsed = unrehearsed or _unsatisfied(
+        workspace, wanted - {one.identifier for one in reused}
     )
     stopped = _stop(workspace, delta, inflight.running, logs, failures)
 
@@ -794,7 +796,7 @@ def _reuse(
     log_dir: str,
     location: str | None,
     failures: list[str],
-) -> list[Reuse]:
+) -> tuple[list[Reuse], set[str]]:
     """Satisfy what is left from the store, rather than running it.
 
     **Rung 2 of the convergence ladder** (execution.md §5.6): the archive is free and local, the store is cheap and global, and a worker is neither. What reaches here is what rung 1 could not answer.
@@ -818,10 +820,8 @@ def _reuse(
         failures: Accumulated warnings, appended to in place.
 
     Returns:
-        One entry per task satisfied from the store.
+        One entry per task satisfied from the store, and the identifiers a worker would otherwise have to run — what the store was asked for, whether or not it answered. The second is what `_unsatisfied` compares a rehearsal's record against.
     """
-    if location is None:
-        return []
     # already here, already coming back out of the archive, or already being
     # worked on. A restore that failed is deliberately *not* retried from the
     # store: rung 1 declining is a task that runs, which is the answer
@@ -832,22 +832,23 @@ def _reuse(
         - {row.identifier for row in delta.of(Change.RESTORE)}
         - _held(delta, running)
     )
-    if not wanted:
-        return []
+    if location is None or not wanted:
+        return [], wanted
     rows = {task.identifier: task for task in manifest.tasks}
+
+    def note(line: str) -> None:
+        steward_log(workspace.log, line)
+
     try:
-        store = open_store(location, root=workspace.root)
-        found = store.search(wanted)
+        chosen = satisfied(manifest, wanted, location, root=workspace.root, log=note)
     except StoreError as ex:
         _failed(workspace, failures, f"nothing could be reused from {location}", ex)
-        return []
+        return [], wanted
     reused: list[Reuse] = []
-    for identifier, candidates in sorted(found.items()):
+    for identifier, source in sorted(chosen.items()):
         task = rows[identifier]
-        if (chosen := _chosen(workspace, manifest, task, candidates)) is None:
-            continue
         try:
-            landed = _copy_in(chosen, log_dir)
+            landed = _copy_in(source, log_dir)
         # **broadly, and only `open_store` used to be.** `StoreError` covers
         # the search because `_store` normalizes its own failures; it covers
         # nothing after it, and what happens after it is reading and copying
@@ -858,17 +859,47 @@ def _reuse(
         # every failure is one task that runs the ordinary way, and that has
         # to include the failures nothing here anticipated
         except Exception as ex:
-            _failed(workspace, failures, f"could not copy {chosen} in", ex)
+            _failed(workspace, failures, f"could not copy {source} in", ex)
             continue
         reused.append(
             Reuse(
                 identifier=identifier,
                 key=task.key,
-                source=chosen,
+                source=source,
                 location=landed,
             )
         )
-    return reused
+    return reused, wanted
+
+
+def _unsatisfied(workspace: Workspace, running: set[str]) -> str | None:
+    """Whether the last rehearsal skipped, as satisfied from the store, a task that is about to run.
+
+    The rehearsal asks the store the launch's own question (`_store.match`), so its record says which tasks it left out and why. A store that has since lost one of them — withdrawn, or a different store named this time — leaves that task running with nothing having rehearsed it, which is the gap `_unrehearsed` exists to name and cannot see: the record's identifiers cover the whole manifest.
+
+    Keyed on what a worker would otherwise run rather than on what was reused now, because a relaunch whose logs were copied in earlier reuses nothing and runs nothing, and warning about it would be warning about a run that is not happening.
+
+    Args:
+        workspace: The workspace being launched.
+        running: Identifiers the store was asked for and did not answer, so a worker runs them.
+
+    Returns:
+        A warning, or `None`. Never raises: an unreadable journal has already produced `_unrehearsed`'s own warning.
+    """
+    if not running:
+        return None
+    try:
+        skipped = read_smoked(read_journal(workspace.journal).events).satisfied
+    except OSError:
+        return None
+    if not (stale := skipped & running):
+        return None
+    count = len(stale)
+    return (
+        f"{count} {'task' if count == 1 else 'tasks'} the last smoke skipped as "
+        f"satisfied from the log store {'is' if count == 1 else 'are'} not "
+        f"satisfied now and will run unrehearsed"
+    )
 
 
 def _held(delta: Delta, running: Sequence[RunningWorker]) -> set[str]:
@@ -883,45 +914,6 @@ def _held(delta: Delta, running: Sequence[RunningWorker]) -> set[str]:
         if worker.worker not in wholesale
         for identifier in worker.identifiers
     }
-
-
-def _chosen(
-    workspace: Workspace,
-    manifest: Manifest,
-    task: ManifestTask,
-    candidates: Sequence[str],
-) -> str | None:
-    """The first of a store's candidates that answers what this run asks, or `None`.
-
-    **A task identifier is not a promise about the results, and the store searches on nothing else.** `task_identifier` hashes the solver plan, generate config, model args, roles, version and execution limits — and pointedly *not* the sample count, the epochs or the selection, so that raising any of them leaves existing logs resumable rather than orphaning them. A store is therefore free to hand back a log for the same identifier that ran a different slice or fewer samples, and copying one in would leave the task `INCOMPLETE`, the next tend queuing it, and the launch having already said in the delta and the journal that the work does not run here.
-
-    **Every candidate, because the store's own ranking cannot see the question.** It orders by size and recency, which is all a manifest-blind index can do — so the log it puts first may be the one that answers a different slice while the one behind it matches exactly. Checking only the front of the list turned this filter into a veto: it rejected the best-ranked log and never found out the store had what it was asked for.
-
-    **The predicate is `observe`'s own**, not a second one assembled from the same ingredients. `incomplete_reason` is what `observe_tasks` classifies a task with, so a log this accepts is a log the next tend calls complete — which is the whole claim being made. A near copy of it drifted the way near copies do: it compared `completed_samples` where observation compares `total_samples`, so a signed log carrying samples an operator accepted as errored was publishable by one rule and unreusable by the other.
-
-    A log that fails is not refused so much as not *claimed*. It stays in the store, where a run asking a different question will match it.
-    """
-    for source in candidates:
-        try:
-            candidate = read_attempt(source)
-        # the store's own rule, applied at the store's own boundary: this reads
-        # a file the store named and the store may be a remote one, so the
-        # failures available here are the backend's hierarchy rather than
-        # Python's. A candidate that will not read is one candidate skipped
-        except Exception as ex:
-            steward_log(workspace.log, f"{source} would not read from the store: {ex}")
-            continue
-        if (reason := incomplete_reason(manifest, task, candidate)) is None:
-            return source
-        # quietly, and to the log rather than to the launch: a store holding a
-        # near-miss is worth being able to find out about and is not something
-        # the operator did wrong
-        steward_log(
-            workspace.log,
-            f"{source} matches {task.key} by identifier and does not answer what "
-            f"this run asks of it ({reason.value}) — not reused",
-        )
-    return None
 
 
 def _copy_in(source: str, log_dir: str) -> str:

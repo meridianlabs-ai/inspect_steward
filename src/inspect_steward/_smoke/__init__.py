@@ -21,6 +21,7 @@ from .checks import (
 )
 from .digest import (
     Outcome,
+    Satisfied,
     Smoke,
     digest_markdown,
     echo_smoke,
@@ -37,6 +38,7 @@ __all__ = [
     "SCAN_COVERAGE",
     "Check",
     "Outcome",
+    "Satisfied",
     "Probe",
     "Smoke",
     "Verdict",

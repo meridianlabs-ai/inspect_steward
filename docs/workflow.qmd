@@ -55,7 +55,7 @@ Once you have defined your eval set, use a coding agent to launch the evaluation
 ─────────────────────────────────────────────────────────
 ```
 
-The agent reads the Steward [runbook](runbook.qmd) and follows it. It starts with a short smoke run to confirm that configuration, infrastructure and model access all work correctly. A failed smoke stops the launch until it is fixed or waived by the user.
+The agent reads the Steward [runbook](runbook.qmd) and follows it. It starts with a short smoke run, skipping any task a configured log store already satisfies, to confirm that configuration, infrastructure and model access all work correctly. A failed smoke stops the launch until it is fixed or waived by the user.
 
 After the smoke the agent launches the tasks and works the decisions the run raises as the [tend loop](#tend-loop) runs. Keeping the agent attached is recommended but not required. If you detach it, configure [notifications](#notifications) so you know when to reconnect to it.
 
@@ -138,7 +138,7 @@ The store can be a directory of `.eval` files, or a [Flow](flow.qmd) store (whic
 
 A result is only reused when everything about the task matches: the task and its arguments, the model, the solver, the plan, the generate config, and the limits.
 
-Reading from a store happens automatically once you configure one. Publishing your own results into it does not, that only happens if you ask for it at signoff:
+Reading from a store happens automatically once you configure one, at launch and in `launch --smoke`, which rehearses only the tasks the store does not satisfy. Publishing your own results into it does not, that only happens if you ask for it at signoff:
 
 ``` {.bash filename="Terminal"}
 steward signoff --by "norah" --publish

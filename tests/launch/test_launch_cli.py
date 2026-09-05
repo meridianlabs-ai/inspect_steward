@@ -119,6 +119,32 @@ def launched(workspace: Workspace) -> list[dict[str, object]]:
     ]
 
 
+def test_a_launch_the_store_satisfies_entirely_says_nothing_will_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Every task copied in on the launch's own turn, so nothing runs and the launch says so.
+
+    The unrehearsed warning is left out too: it is about work, and there is none.
+    """
+    create_workspace(tmp_path, git=False)
+    definition = tmp_path / "evalset.py"
+    definition.write_text("", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    fake_capture(monkeypatch, synth_manifest([ADDITION]))
+    store = tmp_path / "store"
+    write_log(store, ADDITION)
+
+    result = run(str(definition), "--log-store", str(store))
+
+    assert result.exit_code == 0, result.output
+    assert "satisfied 1 task from the log store" in result.output
+    assert "every task is satisfied from the log store; nothing will run" in (
+        result.output
+    )
+    assert "🏁" in result.output
+    assert "steward launch --smoke" not in result.output
+
+
 def test_a_launch_arms_a_timer_and_writes_itself_down(
     workspace: Workspace, capture: FakeCapture
 ) -> None:

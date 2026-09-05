@@ -13,7 +13,7 @@ from inspect_steward._launch import Launch, launch
 from inspect_steward._launch.launch import _unrehearsed
 from inspect_steward._scan import merged_scanners, scan_digest, scan_material
 from inspect_steward._smoke import Outcome
-from inspect_steward._smoke.digest import Smoke, journal_fields
+from inspect_steward._smoke.digest import Satisfied, Smoke, journal_fields
 from inspect_steward._workspace import (
     SMOKED,
     Workspace,
@@ -23,7 +23,7 @@ from inspect_steward._workspace import (
     read_smoked,
 )
 
-from .._logs import SynthTask, synth_manifest
+from .._logs import SynthTask, synth_manifest, write_log
 from ..launch._fake import fake_capture
 from ..timer._fake import clear_credentials, fake_cron
 
@@ -42,8 +42,9 @@ def rehearsed(
     manifest: Manifest | None = None,
     scanners: str = BUILT_IN,
     scan_model: str = "",
+    satisfied: tuple[SynthTask, ...] = (),
 ) -> None:
-    """Journal a smoke that covered exactly `tasks`."""
+    """Journal a smoke that covered exactly `tasks`, leaving `satisfied` to the store."""
     smoke = Smoke(
         outcome=verdict,
         identifiers=tuple(task.identifier for task in tasks),
@@ -51,6 +52,11 @@ def rehearsed(
         scanners=scanners,
         scan_model=scan_model,
         log_dir=str(workspace.smoke),
+        satisfied=tuple(
+            Satisfied(identifier=task.identifier, key=task.name, source="store")
+            for task in satisfied
+        ),
+        store="store" if satisfied else None,
     )
     append_event(workspace.journal, SMOKED, **journal_fields(smoke))
 
@@ -60,6 +66,7 @@ def launched(
     monkeypatch: pytest.MonkeyPatch,
     *tasks: SynthTask,
     manifest: Manifest | None = None,
+    store: Path | None = None,
 ) -> Launch:
     """Capture `tasks` and launch, without a timer and without a subprocess."""
     fake_cron(monkeypatch)
@@ -67,7 +74,12 @@ def launched(
     workspace = Workspace.at(tmp_path)
     definition = tmp_path / "evalset.py"
     fake_capture(monkeypatch, manifest or synth_manifest(list(tasks)))
-    result = launch(workspace, definition, timer=False)
+    result = launch(
+        workspace,
+        definition,
+        timer=False,
+        log_store=str(store) if store is not None else None,
+    )
     assert isinstance(result, Launch)
     return result
 
@@ -177,6 +189,53 @@ class TestWhatTheLaunchDoesAboutIt:
         assert result.unrehearsed is not None
         assert "does not cover 1 task" in result.unrehearsed
         assert result.committed is True
+
+    def test_a_task_the_smoke_left_to_the_store_is_not_a_gap(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # the record names every task the capture enumerated, so the subset
+        # rule holds; and the store still answers, so nothing runs unrehearsed
+        create_workspace(tmp_path, git=False)
+        rehearsed(Workspace.at(tmp_path), ADDITION, ECHO, satisfied=(ADDITION,))
+        store = tmp_path / "store"
+        write_log(store, ADDITION)
+
+        result = launched(tmp_path, monkeypatch, ADDITION, ECHO, store=store)
+
+        assert result.unrehearsed is None
+        assert [one.identifier for one in result.reused] == [ADDITION.identifier]
+
+    def test_a_task_the_store_no_longer_answers_is_named(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # the same record, and a launch against no store: the task the smoke
+        # skipped is about to run with nothing having rehearsed it
+        create_workspace(tmp_path, git=False)
+        rehearsed(Workspace.at(tmp_path), ADDITION, ECHO, satisfied=(ADDITION,))
+
+        result = launched(tmp_path, monkeypatch, ADDITION, ECHO)
+
+        assert result.unrehearsed is not None
+        assert "1 task the last smoke skipped as satisfied" in result.unrehearsed
+        assert result.committed is True
+
+    def test_a_record_that_predates_the_field_skipped_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        create_workspace(tmp_path, git=False)
+        workspace = Workspace.at(tmp_path)
+        append_event(
+            workspace.journal,
+            SMOKED,
+            identifiers=[ADDITION.identifier],
+            digest="d",
+            verdict="passed",
+        )
+
+        record = read_smoked(read_journal(workspace.journal).events)
+
+        assert record.identifiers == {ADDITION.identifier}
+        assert record.satisfied == frozenset()
 
     def test_a_task_dropped_since_the_smoke_is_not_a_gap(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

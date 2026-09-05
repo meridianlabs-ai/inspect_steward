@@ -28,6 +28,7 @@ from .._scan import merged_scanners
 from .._smoke import CHECKS, echo_smoke
 from .._smoke.run import DEFAULT_CAP, DEFAULT_SAMPLES
 from .._smoke.run import smoke as run_smoke
+from .._tend.items import Verdict
 from .._util.duration import format_duration
 from .._workspace import (
     ACTION,
@@ -159,7 +160,8 @@ _LABELS = {
     help=(
         "Where to look for logs this run does not have to produce — a flow "
         "store, or a plain directory of logs. Matches are copied in and "
-        f"reported. {overrides('log_store')}"
+        "reported, and a rehearsal leaves them out. "
+        f"{overrides('log_store')}"
     ),
 )
 @click.option(
@@ -341,8 +343,6 @@ def launch_command(
                 "--no-env-check": None if env_check else True,
                 "--log-root": log_root,
                 "--no-log-root": no_log_root or None,
-                "--log-store": log_store,
-                "--no-log-store": no_log_store or None,
                 "--stall-after": stall_after,
                 "--samples-ramp": samples_ramp,
                 "--stuck-after": stuck_after,
@@ -360,7 +360,8 @@ def launch_command(
         # the flags the rehearsal *used*, so `--smoke --no-timer` printed a bare
         # `steward launch` that arms one. Naming them is better than preserving
         # them: printing back a flag the rehearsal ignored would say it had been
-        # rehearsed under it
+        # rehearsed under it. The store is not among them: a rehearsal reads it
+        # to leave out what it satisfies, so `--log-store` shapes both
         raise click.UsageError(
             f"{', '.join(launch_only)} shape{'' if len(launch_only) == 1 else ''} "
             f"the launch rather than the rehearsal, and --smoke launches "
@@ -384,6 +385,7 @@ def launch_command(
             max_workers=max_workers,
             notification=False if no_notification else notification,
             scan_model=False if no_scan_model else scan_model,
+            log_store=False if no_log_store else log_store,
             break_stale=not no_break_claim,
             output_json=output_json,
             given=_Given(
@@ -396,6 +398,8 @@ def launch_command(
                 max_workers=max_workers,
                 scan_model=scan_model,
                 no_scan_model=no_scan_model,
+                log_store=log_store,
+                no_log_store=no_log_store,
             ),
         )
         return
@@ -470,6 +474,7 @@ def _run_smoke(
     max_workers: int | None,
     notification: str | bool | None,
     scan_model: str | bool | None,
+    log_store: str | bool | None,
     break_stale: bool,
     output_json: bool,
     given: "_Given",
@@ -495,6 +500,7 @@ def _run_smoke(
             max_workers=max_workers,
             notification=notification,
             scan_model=scan_model,
+            log_store=log_store,
             break_stale=break_stale,
         )
     except (LaunchError, *TURN_ERRORS) as ex:
@@ -533,6 +539,8 @@ class _Given:
     max_workers: int | None
     scan_model: str | bool | None
     no_scan_model: bool
+    log_store: str | bool | None
+    no_log_store: bool
 
 
 def _launch_only(given: dict[str, Any]) -> list[str]:
@@ -580,6 +588,12 @@ def _next_launch(workspace: Workspace, definition: Path, given: _Given) -> str:
         parts.append("--no-scan-model")
     elif isinstance(given.scan_model, str):
         parts.extend(["--scan-model", given.scan_model])
+    # printed back because the rehearsal read it: a bare `steward launch`
+    # after `--smoke --log-store X` would reuse from the file's store instead
+    if given.no_log_store:
+        parts.append("--no-log-store")
+    elif isinstance(given.log_store, str):
+        parts.extend(["--log-store", given.log_store])
     return shlex.join(parts)
 
 
@@ -748,10 +762,18 @@ def _echo_launch(result: Launch, root: Path) -> None:
     for line in delta_lines(result.delta, root=root):
         click.echo(line)
 
-    if result.unrehearsed is not None:
+    # every task landed on the launch's own turn, so nothing runs: the store
+    # answered whatever the archive and the directory did not
+    nothing_runs = (
+        result.committed
+        and result.turn is not None
+        and result.turn.verdict is Verdict.COMPLETE
+    )
+    if result.unrehearsed is not None and not nothing_runs:
         # **printed even where the launch then refuses at the archive gate**,
         # because both are things to fix before running this again and an operator
-        # who fixes one and rediscovers the other has been made to look twice
+        # who fixes one and rediscovers the other has been made to look twice.
+        # Not where nothing runs: a warning about rehearsal is about work
         click.echo("")
         click.echo(f"⚠️  {result.unrehearsed} — `steward launch --smoke` rehearses it")
 
@@ -793,6 +815,11 @@ def _echo_launch(result: Launch, root: Path) -> None:
         )
         for one in result.reused:
             click.echo(f"  {one.key} — {one.source}")
+        if nothing_runs:
+            click.echo(
+                "every task is satisfied from the log store; nothing will run — "
+                "the run is complete and waiting on signoff"
+            )
 
     # the startup-memory bound is not printed here: `echo_turn` below prints it
     # for every verb, and a launch always has a turn to echo, so a line of its

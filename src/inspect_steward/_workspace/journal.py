@@ -174,7 +174,7 @@ SMOKED = "smoked"
 
 **Task identifiers and the manifest digest, because they answer different halves.** Identifiers say *which tasks* were rehearsed and are the half that can be reported per task — three of twelve is a sentence, and a digest can only say yes or no. The digest says whether the run's *shape* is still the one that was rehearsed: `task_identifier` hashes a task's execution limits and pointedly not its sample count, epochs or selection (execution.md §12 item 8), so a dataset that grew or an `epochs` that doubled keeps every identifier and is a materially different run. Both are recordable here for one reason — **the slice rides the workers and never the capture**, so the manifest a smoke captures is shape-identical to the one the launch will capture, and the digests are comparable rather than always different.
 
-Carries `identifiers`, `digest`, `verdict`, `waived` (checks accepted rather than passed), `samples`, `cap`, and `log_dir`. Written whether the smoke passed or failed — a failure is the more useful of the two to find in a journal.
+Carries `identifiers`, `digest`, `scanners`, `scan_model`, `verdict`, `waived` (checks accepted rather than passed), `samples`, `cap`, `log_dir`, and `satisfied` with `log_store` — the identifiers the rehearsal left out because the store already answered them, and which store. Written whether the smoke passed or failed — a failure is the more useful of the two to find in a journal.
 """
 
 NOTED = "noted"
@@ -406,6 +406,12 @@ class Smoked:
     """`scan_digest` of the material it ran under, or `None` for a record that predates the field.
 
     A digest rather than the names, because names are not the configuration: a parameter changed, a different scan-side model, a filter narrowing which transcripts a scanner sees — each leaves the names identical and changes what the rows mean. Not covered by `digest`, which hashes the tasks and the run's shaping and not `Manifest.scan`.
+    """
+
+    satisfied: frozenset[str] = frozenset()
+    """Task identifiers the rehearsal skipped because the log store already answered them; empty where it skipped nothing, and for a record that predates the field.
+
+    Inside `identifiers` rather than beside them: the record covers every task the capture enumerated, and this is the part of it nothing ran. What a launch does with it is ask whether the store still answers (`_launch.launch._unsatisfied`).
     """
 
     scan_model: str | None = None
@@ -710,12 +716,10 @@ def read_smoked(events: list[JournalEvent]) -> Smoked:
         scanners = event.payload.get("scanners")
         scan_model = event.payload.get("scan_model")
         identifiers = event.payload.get("identifiers")
+        satisfied = event.payload.get("satisfied")
         return Smoked(
-            identifiers=frozenset(
-                one for one in cast(list[object], identifiers) if isinstance(one, str)
-            )
-            if isinstance(identifiers, list)
-            else frozenset(),
+            identifiers=_identifiers(identifiers),
+            satisfied=_identifiers(satisfied),
             digest=digest if isinstance(digest, str) and digest else None,
             scanners=scanners if isinstance(scanners, str) and scanners else None,
             # gated on `scanners` rather than on itself, because `""` is a real
@@ -726,6 +730,13 @@ def read_smoked(events: list[JournalEvent]) -> Smoked:
             else None,
         )
     return Smoked()
+
+
+def _identifiers(value: object) -> frozenset[str]:
+    """A list of task identifiers as recorded, and nothing for anything else."""
+    if not isinstance(value, list):
+        return frozenset()
+    return frozenset(one for one in cast(list[object], value) if isinstance(one, str))
 
 
 def read_notified(events: list[JournalEvent]) -> set[str]:

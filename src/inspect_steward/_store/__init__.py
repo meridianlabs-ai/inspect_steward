@@ -3,6 +3,7 @@
 from .copy import copy_log
 from .directory import DirectoryStore
 from .flow import FlowTableStore
+from .match import satisfied
 from .store import (
     AUTO,
     FLOW_PACKAGE,
@@ -27,5 +28,6 @@ __all__ = [
     "copy_log",
     "default_location",
     "open_store",
+    "satisfied",
     "store_location",
 ]

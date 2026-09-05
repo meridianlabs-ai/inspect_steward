@@ -35,7 +35,7 @@ They see only what you write, and they know their eval: tasks, models, samples, 
 
 **Steward misbehaving is not theirs to debug.** Record what you saw with `steward note`, work around it where a ruling is honest, and tell them in one sentence only what changes for them. If you cannot work around it, say so in one sentence and stop.
 
-**When they ask how it is going**, run `steward status --format md` and render what it printed in full, in its order, as markdown outside a code fence. Do not summarize it, and do not read `status.md` instead; it can be a full interval stale. A narrower question wants a narrower answer: *is it finished* is a sentence, not the snapshot. Your own reading goes below it, marked as yours, only where it adds something the snapshot does not show.
+**When they ask how it is going**, run `steward status --format md` and render what it printed in full, in its order, as markdown outside a code fence. Do not summarize it, and do not read `status.md` instead; it can be a full interval stale. A narrower question wants a narrower answer: *is it finished* is a sentence, not the snapshot. Your own reading goes below it, only where it adds something the snapshot does not show, and without a preface: no heading, no *my reading*, just the sentences.
 
 **Before you send, three checks.** Could they answer it knowing only their eval? Is it what you found, then the evidence, then the question? Is the question the last line?
 
@@ -209,7 +209,7 @@ Steward's own posts already announce every new item an operator owns. Notify for
 
 ### Launching
 
-**Smoke first.** `steward launch --smoke` runs a few samples of every task under a wall-clock cap and launches nothing.
+**Smoke first.** `steward launch --smoke` runs a few samples of every task the log store does not already satisfy, under a wall-clock cap, and launches nothing. A smoke that says *nothing to rehearse* is a pass: launch, and the run is complete and waiting on signoff.
 
 The smoke fails on any errored sample and on four named checks: `context_window`, `reasoning`, `reasoning_api`, `scan_coverage`. `unexercised` and `undetermined` are not failures. Fix what failed rather than routing around it. `--accept CHECK` waives one check by name; an errored sample cannot be waived. Do not project the run's spend from the smoke.
 
