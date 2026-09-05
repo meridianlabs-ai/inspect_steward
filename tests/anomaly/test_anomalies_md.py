@@ -566,6 +566,9 @@ def test_the_by_task_table_is_aligned_in_the_source_and_shortens_its_keys() -> N
         "cybench     2    ·      ·      ·     ·",
     ]
     assert block[-1] == "Every task runs `openai/gpt-5`."
+    # and the operator's page clips the keys the way its task table does
+    narrow = outcomes_block({"id-cybench": {"zeroed": 2}}, rows, width=5)
+    assert narrow[2].startswith("cy…ch ")
 
 
 def test_no_table_where_every_sample_took_the_normal_course() -> None:

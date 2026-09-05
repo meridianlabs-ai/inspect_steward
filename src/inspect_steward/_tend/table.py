@@ -77,8 +77,17 @@ def _cells(row: TaskProgress, key: str, width: int) -> tuple[str, ...]:
 
 
 def clip(key: str, width: int) -> str:
-    """A display key cut to `width` characters, or whole where `width` is 0 — the one rule every table with a task column applies, so a phone-width post and a terminal never disagree about how a name is shortened."""
-    return key[:width] if width and len(key) > width else key
+    """A display key cut to `width` characters with its middle elided, or whole where `width` is 0 or it already fits.
+
+    The one rule every table with a task column applies, so a phone-width post, a terminal and the operator's page never disagree about how a name is shortened.
+
+    **The middle goes, not the end.** A sweep's keys share their head and differ at the tail — `cais_swebenchpro@anthropic/claude-haiku-4-5-20251001` beside `cais_swebenchpro@openai/gpt-5.6-luna` — so a key cut at the end left two rows telling apart by nothing, and at phone width lost the model altogether. `cais_swebenchpr…iku-4-5-20251001` still hints both halves: which benchmark, and which model ran it.
+    """
+    if not width or len(key) <= width:
+        return key
+    head = (width - 1) // 2
+    tail = width - 1 - head
+    return f"{key[:head]}…{key[len(key) - tail :]}"
 
 
 def _outcome(row: TaskProgress) -> str:

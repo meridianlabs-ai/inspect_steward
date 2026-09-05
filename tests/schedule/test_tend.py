@@ -743,6 +743,29 @@ def test_status_md_says_how_old_it_is_and_what_needs_a_person(
     assert "| `done` |" in rendered and "100%" in rendered
 
 
+def test_status_md_clips_a_long_key_and_the_agent_s_page_keeps_it_whole(
+    tmp_path: Path,
+) -> None:
+    # the operator reads the page rendered, where a pipe table wraps its cells
+    # and squeezes the numbers first; the agent reads it as text and types the
+    # key back to `steward rule`, so only the operator's table clips
+    haiku = SynthTask("cais_swebenchpro", model="anthropic/claude-haiku-4-5-20251001")
+    luna = SynthTask("cais_swebenchpro", model="openai/gpt-5.6-luna")
+    workspace, _ = prepared(tmp_path, [haiku, luna])
+    write_log(workspace.logs, haiku)
+    write_log(workspace.logs, luna)
+
+    result = turn(workspace)
+    rendered = workspace.status.read_text(encoding="utf-8")
+
+    assert "| `cais_swebenchpr…iku-4-5-20251001` |" in rendered
+    assert "| `cais_swebenchpr…nai/gpt-5.6-luna` |" in rendered
+    assert (
+        "| `cais_swebenchpro@anthropic/claude-haiku-4-5-20251001` |"
+        in collect_markdown(result)
+    )
+
+
 def test_a_finished_run_asks_to_be_accepted_rather_than_reading_as_all_clear(
     tmp_path: Path,
 ) -> None:

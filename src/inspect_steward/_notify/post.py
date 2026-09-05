@@ -54,7 +54,7 @@ The characters are `Verdict.ATTENTION` and `Verdict.STOPPED` deliberately. A rea
 WIDTH = 76
 """Display-key width for the progress table.
 
-The width `status.md` and the terminal already use.
+What a wide terminal already gives the key. The operator's own task table is narrower (`render.KEY_WIDTH`): a pipe table wraps its cells where a code block side-scrolls.
 """
 
 NARROW = 28

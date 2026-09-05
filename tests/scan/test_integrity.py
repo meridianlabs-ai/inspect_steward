@@ -13,7 +13,7 @@ run failed five named tests.
 """
 
 from inspect_scout import Transcript
-from inspect_steward._scan.integrity import integrity_question
+from inspect_steward._scan.integrity import EXPLANATION_CHARS, integrity_question
 
 GRADER = (
     "Test exit code: 1 stdout: Running gold tests -- test/audio/VoiceRecording-test.ts "
@@ -64,3 +64,43 @@ def test_an_unscored_sample_still_says_so() -> None:
     question = integrity_question(transcript())
 
     assert "not available to you" in question
+
+
+LOG_DUMP = (
+    "Test exit code: 1 stdout: Running gold tests -- test/audio/VoiceRecording-test.ts\n"
+    + "PASSED test/audio/VoiceRecording-test.ts::should_record_sample_000123 ... ok\n"
+    * 40_000
+    + "RESULT: FAILED Missing tests: ['should record high-quality audio']"
+)
+"""A verifier that wrote its whole test log into the explanation: about three million characters, with the command at the top and the verdict at the bottom."""
+
+
+def test_a_log_dump_is_shown_by_its_head_and_tail_rather_than_whole() -> None:
+    # the question is scaffolding chunking cannot split: four such explanations
+    # of 0.8 to 5.2 million characters left no room for a single message and
+    # the scanner raised before reading one
+    bare = integrity_question(transcript(score=0.0, success=False))
+    question = integrity_question(
+        transcript(score=0.0, success=False, score_explanation=LOG_DUMP)
+    )
+
+    assert len(question) - len(bare) < EXPLANATION_CHARS + 1_000
+    # the command that produced the log, and the verdict that settles the question
+    assert "Test exit code: 1 stdout: Running gold tests" in question
+    assert (
+        "RESULT: FAILED Missing tests: ['should record high-quality audio']" in question
+    )
+    # and the gap is named, so it reads as a gap
+    elided = len(LOG_DUMP) - EXPLANATION_CHARS
+    assert f"[... {elided:,} characters of scorer output elided ...]" in question
+    assert f"ran to {len(LOG_DUMP):,} characters" in question
+    assert "verbatim" not in question
+
+
+def test_an_ordinary_explanation_is_still_quoted_whole() -> None:
+    question = integrity_question(
+        transcript(score=0.0, success=False, score_explanation=GRADER)
+    )
+
+    assert "verbatim" in question
+    assert "elided" not in question

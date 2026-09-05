@@ -462,13 +462,13 @@ def outcomes_table(
 
 
 def outcomes_block(
-    outcomes: Mapping[str, Mapping[str, int]], progress: Progress
+    outcomes: Mapping[str, Mapping[str, int]], progress: Progress, *, width: int = 0
 ) -> list[str]:
     """`outcomes_table` for a markdown document: the rows inside a code fence, the shared model named beneath it.
 
-    Fenced rather than ruled for the reason the resources table is: the by-task counts are a glance, and a ruled table gives them the weight of the task table above. A fence renders lighter, survives an editor unchanged, and lands in Slack as a preformatted block when the page is relayed.
+    Fenced rather than ruled for the reason the resources table is: the by-task counts are a glance, and a ruled table gives them the weight of the task table above. A fence renders lighter, survives an editor unchanged, and lands in Slack as a preformatted block when the page is relayed. `width` clips the display keys as every task column does, for a page whose task table is clipped too.
     """
-    cells = outcomes_cells(outcomes, progress)
+    cells = outcomes_cells(outcomes, progress, width=width)
     if not cells:
         return []
     return ["```", *plain_table(OUTCOMES_HEADER, cells), "```"] + _shared_model(

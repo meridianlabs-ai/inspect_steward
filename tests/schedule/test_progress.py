@@ -19,6 +19,7 @@ from inspect_ai.log import HeadlineMetric
 from inspect_steward._evalset.observe import TaskState, observe_logs, observe_tasks
 from inspect_steward._tend import Progress, progress_table, task_progress
 from inspect_steward._tend.progress import LIVE_ONLY, live_totals
+from inspect_steward._tend.table import clip
 from inspect_steward._worker import (
     LiveConnections,
     LiveFleet,
@@ -489,6 +490,38 @@ def test_a_shortened_key_uses_the_name_the_manifest_shows(tmp_path: Path) -> Non
 
     assert "Friendly Name" in line
     assert "internal_name" not in line
+
+
+HAIKU = "cais_swebenchpro@anthropic/claude-haiku-4-5-20251001"
+
+CLIPPED: list[tuple[str, str, int, str]] = [
+    ("whole where width is 0", HAIKU, 0, HAIKU),
+    ("whole where it fits", "gaia@openai/gpt-5", 32, "gaia@openai/gpt-5"),
+    (
+        "whole at exactly the width",
+        "cais_swebenchpro@openai/gpt-5.6-luna",
+        36,
+        "cais_swebenchpro@openai/gpt-5.6-luna",
+    ),
+    ("the middle goes, not the model", HAIKU, 32, "cais_swebenchpr…iku-4-5-20251001"),
+    ("phone width", HAIKU, 28, "cais_swebench…u-4-5-20251001"),
+]
+
+
+@pytest.mark.parametrize(
+    ("key", "width", "expected"),
+    [(key, width, expected) for _, key, width, expected in CLIPPED],
+    ids=[case for case, _, _, _ in CLIPPED],
+)
+def test_a_key_is_clipped_in_the_middle_to_its_width(
+    key: str, width: int, expected: str
+) -> None:
+    # both halves survive -- which benchmark, and which model ran it -- where a
+    # prefix cut left two rows of a sweep telling apart by nothing
+    clipped = clip(key, width)
+
+    assert clipped == expected
+    assert not width or len(clipped) <= width
 
 
 # --- the live block -----------------------------------------------------
