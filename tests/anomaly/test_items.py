@@ -253,7 +253,10 @@ def test_an_accepting_ruling_keeps_its_effect_on_the_record(tmp_path: Path) -> N
     # and the operator's page carries the same samples as a count, under `nan`
     page = status_markdown(result)
     assert "### anomalies" in page
-    assert "| nan |" in page
+    # the fenced plain table under the heading: a blank, the fence, the header, the row
+    table = page[page.index("### anomalies") :].splitlines()
+    assert table[3].split() == ["task", "zero", "nan", "error", "early", "term"]
+    assert table[4].split()[2] == "2"
 
 
 def test_an_operator_limit_window_waits_for_adjudication(tmp_path: Path) -> None:
@@ -282,7 +285,10 @@ def test_an_operator_limit_window_waits_for_adjudication(tmp_path: Path) -> None
 
     assert "limit:operator" in collect_markdown(result)
     # the operator's page has it as a terminated sample, not a class
-    assert "| term |" in status_markdown(result)
+    page = status_markdown(result)
+    table = page[page.index("### anomalies") :].splitlines()
+    assert table[3].split()[-1] == "term"
+    assert table[4].split()[-1] != "·"
 
 
 def test_a_task_window_does_not_escalate_to_an_unattended_channel(

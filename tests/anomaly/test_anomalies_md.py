@@ -23,6 +23,7 @@ from inspect_steward._tend.anomalies_md import (
     anomalies_markdown,
     caveat_line,
     caveats,
+    outcomes_block,
     outcomes_table,
 )
 from inspect_steward._tend.history import happened
@@ -526,8 +527,8 @@ def progress(*rows: tuple[str, str, int]) -> Progress:
 
 def cells(document: str, name: str) -> list[str]:
     """The row for this task, cell by cell, as a reader of the source sees it."""
-    row = next(line for line in document.splitlines() if line.startswith(f"| {name} "))
-    return [cell.strip() for cell in row.split("|")][1:-1]
+    row = next(line for line in document.splitlines() if line.startswith(f"{name} "))
+    return row.split()
 
 
 def test_the_by_task_table_is_aligned_in_the_source_and_shortens_its_keys() -> None:
@@ -546,17 +547,25 @@ def test_the_by_task_table_is_aligned_in_the_source_and_shortens_its_keys() -> N
         rows,
     )
 
-    # padded so that the markdown is a table before anything renders it, the
-    # model every row shares named once beneath rather than on every row, and
-    # a task with nothing to show given no row
+    # padded so that it is a table before anything renders it, plain because
+    # every surface that shows it is monospaced, the model every row shares
+    # named once beneath rather than on every row, and a task with nothing to
+    # show given no row
     assert lines == [
-        "| task    | zero | nan | error | early | term |",
-        "|---------|-----:|----:|------:|------:|-----:|",
-        "| cybench |    2 |   · |     1 |     · |    · |",
-        "| swe     |    · |   3 |     · |     2 |    · |",
+        "task     zero  nan  error  early  term",
+        "cybench     2    ·      1      ·     ·",
+        "swe         ·    3      ·      2     ·",
         "",
         "Every task runs `openai/gpt-5`.",
     ]
+    # a markdown document gets the same rows fenced, and the model outside the fence
+    block = outcomes_block({"id-cybench": {"zeroed": 2}}, rows)
+    assert block[0] == "```" and block[-3] == "```"
+    assert block[1:-3] == [
+        "task     zero  nan  error  early  term",
+        "cybench     2    ·      ·      ·     ·",
+    ]
+    assert block[-1] == "Every task runs `openai/gpt-5`."
 
 
 def test_no_table_where_every_sample_took_the_normal_course() -> None:

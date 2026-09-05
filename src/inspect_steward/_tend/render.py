@@ -17,7 +17,7 @@ from .._evalset.observe import TaskState
 from .._schedule import Summary
 from .._util.duration import format_duration
 from .._util.jsonl import utc_now
-from .anomalies_md import caveat_line, outcomes_table
+from .anomalies_md import caveat_line, outcomes_block
 from .coverage import TaskCoverage
 from .items import (
     HEADINGS,
@@ -246,8 +246,8 @@ def _operator(result: "TendResult") -> list[str]:
 
 
 def _outcomes(result: "TendResult") -> list[str]:
-    """By task, the samples that did not take the normal course — the table `anomalies.md` opens on, verbatim. Absent where every sample took it."""
-    table = outcomes_table(result.dispositions.outcomes, result.progress)
+    """By task, the samples that did not take the normal course — the table `anomalies.md` opens on, verbatim, as a fenced plain table. Absent where every sample took it."""
+    table = outcomes_block(result.dispositions.outcomes, result.progress)
     return ["### anomalies", "", *table, ""] if table else []
 
 
@@ -559,7 +559,7 @@ def _anomalies(result: "TendResult") -> list[str]:
     marks = result.caveats
     # the same by-task table `anomalies.md` opens on and the operator's page
     # carries, so the agent reads the numbers it will be asked about
-    table = outcomes_table(result.dispositions.outcomes, result.progress)
+    table = outcomes_block(result.dispositions.outcomes, result.progress)
     if line is None and not marks and not table:
         return []
     lines = ["### anomalies", ""]

@@ -1101,11 +1101,9 @@ def test_the_command_prints_the_by_task_table_it_is_signing_over(
     assert result.exit_code == 0, result.output
     assert "by task, the samples that did not take the normal course:" in result.output
     row = next(
-        line
-        for line in result.output.splitlines()
-        if line.strip().startswith("| probe")
+        line for line in result.output.splitlines() if line.strip().startswith("probe ")
     )
-    assert [cell.strip() for cell in row.split("|")][1:-1] == [
+    assert row.split() == [
         "probe",
         "·",
         "2",
