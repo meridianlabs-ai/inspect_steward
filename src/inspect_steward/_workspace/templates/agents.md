@@ -16,9 +16,11 @@ The timer runs `steward tend` on its own and never calls you back, so anything
 the run hands *you* waits until someone speaks to you, and after two intervals
 your queue is posted to the operator's channel as though no agent existed. Point
 whatever your harness has for recurring work — a scheduled prompt, a background
-watch — at `steward collect` on roughly the tend interval. Do it unasked, on
-any run that is not signed off, even while the operator is still typing at you;
-take it down at signoff. If your harness has nothing of the kind, say so once.
+watch — at `steward collect` on roughly the tend interval. Do it unasked, even
+while the operator is still typing at you, and keep it while the run has work.
+Take it down when the run is finished and nothing on the page is yours, and at
+signoff; arm it again after anything you record that gives the run work. If
+your harness has nothing of the kind, say so once.
 
 ## Then, in this order
 

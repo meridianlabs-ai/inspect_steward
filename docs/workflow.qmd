@@ -171,7 +171,7 @@ The [Concurrency](concurrency.qmd) and [Error Handling](errors.qmd) articles inc
 An agent does not need to stay attached: `steward tend` runs on its timer either way. An agent adds judgement, diagnosing errors, proposing what to do about them, and escalating what needs you. There are three ways to work:
 
 - Attached and reactive: the agent watches for new activity and responds immediately. Best for a run you are watching closely.
-- Attached and periodic: the agent wakes on its own schedule, and can run `steward tend` to take a turn early.
+- Attached and periodic: the agent wakes on its own schedule, can run `steward tend` to take a turn early, and stands down once the run is finished and nothing open is its own.
 - Disconnected: nobody is attached, and the next session picks up whatever accumulated. This is the common case.
 
 An agent attaching to a run it did not start begins here:

@@ -103,7 +103,7 @@ Then leave it. The rest of the queue is still yours; the question waits for an o
 
 ## Each session
 
-**Arm your own return first.** Nothing wakes you: the timer runs `steward tend` on its own and never calls you back. Before anything else, and unasked, point whatever your harness has for recurring work, a scheduled prompt or a background watch, at `steward collect` on roughly the tend interval, and handle what it returns. Do it on any run that is not signed off, and take it down at signoff. If your harness has nothing of the kind, say so once.
+**Arm your own return first.** Nothing wakes you: the timer runs `steward tend` on its own and never calls you back. Before anything else, and unasked, point whatever your harness has for recurring work, a scheduled prompt or a background watch, at `steward collect` on roughly the tend interval, and handle what it returns. Keep it while the run has work: a task running or queued, a re-run pending, a ruling not yet written into the log. Take it down when the verdict is 🏁 and the decisions section says nothing is for you, and at signoff; a finished run waiting on the operator has nothing for you to read every ten minutes. Arm it again after anything you record that gives the run work: a rerun, a zero, a resume, a launch. If your harness has nothing of the kind, say so once.
 
 Pick up cold, in this order:
 
@@ -116,7 +116,7 @@ Everything you need is in the workspace. Nothing depends on a conversation you w
 
 `steward collect` has three sections: what needs a decision, the run, and what happened. Its header carries two ages: tended is the last tend, collected is the last time you looked. The verdict line says the state in words. `status.md` is the operator's page, shorter and without item ids; everything you act on is in `collect`.
 
-**Collect regularly**, on the schedule you armed above. The timer runs the loop; nothing runs you. A tend never invokes an agent, so the items it hands you wait until you look, and after two intervals without a collect they go to the operator's channel as if there were no agent.
+**Collect regularly**, on the schedule you armed above. The timer runs the loop; nothing runs you. A tend never invokes an agent, so the items it hands you wait until you look, and after two intervals without a collect they go to the operator's channel as if there were no agent. That is also what happens once you stand down at 🏁, and it is right: what is left is theirs.
 
 ## Investigating
 
@@ -154,7 +154,7 @@ Reads are yours. Mutations go as far as a pre-authorization and no further: `sam
 
 ## Recording what was decided
 
-Record the answer with the verb the item names, then `steward tend` so it takes effect now. The mechanics are `steward` verbs and `inspect ctl`; reach for them before a script.
+Record the answer with the verb the item names, then `steward tend` so it takes effect now, and arm your return again if you had stood down. The mechanics are `steward` verbs and `inspect ctl`; reach for them before a script.
 
 ### What you may do
 

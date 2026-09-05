@@ -49,6 +49,8 @@ Because the floor is guaranteed, the agent's relationship to the run is a choice
 
 **Reactive beats periodic where the harness supports it.** A monitor watching for a new anomaly or a landed scan costs nothing while nothing happens, where a periodic check pays context on every quiet interval. Sixty tends a night read in full is a real cost; sixty tends a night that only wake an agent when something changed is not.
 
+**A periodic agent stands down on a finished run.** Once every task has landed and nothing open is the agent's, a wake-up every interval reads the same page for nothing, which is the quiet-interval cost with no run behind it. So the runbook has it take the schedule down at 🏁 when its page holds nothing of its own, and arm it again after anything it records that gives the run work. The absence rule covers the gap: a re-run an operator rules from a terminal proceeds without the agent, and its findings reach the channel two tends later, as on a run nobody attached to.
+
 ### 2.2 What the agent drains, and what it merely reads
 
 Two things accumulate between sessions, and they have **opposite shapes**. Getting that wrong is the mistake this section exists to prevent.
