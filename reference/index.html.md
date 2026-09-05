@@ -17,10 +17,11 @@ steward [OPTIONS] COMMAND [ARGS]...
 | [init](#steward-init) | Create a steward workspace. |
 | [investigate](#steward-investigate) | Mark an anomaly class as under investigation. |
 | [launch](#steward-launch) | Start a run: capture the definition, commit it, arm a timer, tend once. |
+| [note](#steward-note) | Write a note into the journal, for whoever reads this run next. |
 | [notify](#steward-notify) | Post MESSAGE to this run’s notification channel. |
 | [pause](#steward-pause) | Stop scheduling new work, leaving what is running to finish. |
 | [propose](#steward-propose) | Propose one disposition for one or more anomaly classes. |
-| [raise](#steward-raise) | Record that an item is now with the person who can decide it. |
+| [raise](#steward-raise) | Record that an item is now with the operator who can decide it. |
 | [ramp](#steward-ramp) | Hold or resume the tuning loop’s climb. |
 | [resume](#steward-resume) | Start scheduling again. |
 | [rule](#steward-rule) | Rule on anomaly classes: what the failures mean, and what happens to the data. |
@@ -50,7 +51,7 @@ steward ack [OPTIONS] ITEM
 | Name | Type | Description | Default |
 |----|----|----|----|
 | `--reason` | text | Why this is being accepted. Recorded in the journal, and the only account of the decision that survives. | \_required |
-| `--by` | choice (`human` \| `agent`) | Who decided. An agent relaying a person’s answer records `human`; one disposing of something on its own judgement records `agent`. | `human` |
+| `--by` | choice (`operator` \| `agent`) | Who decided. An agent relaying an operator’s answer records `operator`; one disposing of something on its own judgement records `agent`. | `operator` |
 | `--json` | boolean | Output the acknowledgment as JSON. | `False` |
 | `--help` | boolean | Show this message and exit. | `False` |
 
@@ -145,10 +146,10 @@ steward launch [OPTIONS] [DEFINITION]
 | `--no-env-check` | boolean | Arm even though a scheduled tend would not inherit this shell’s credentials. | `True` |
 | `--log-root` | value | Root this machine keeps eval logs under. Used only where the definition names no log_dir, in which case this run writes to /. Overrides `log_root` in `_steward.yaml` and `STEWARD_LOG_ROOT`. | None |
 | `--no-log-root` | boolean | Keep this run’s logs in the workspace, whatever root the machine configured. | `False` |
-| `--log-store` | value | Where to look for logs this run does not have to produce. Recorded now; read when signoff can publish to it. Overrides `log_store` in `_steward.yaml` and `STEWARD_LOG_STORE`. | None |
+| `--log-store` | value | Where to look for logs this run does not have to produce — a flow store, or a plain directory of logs. Matches are copied in and reported. Overrides `log_store` in `_steward.yaml` and `STEWARD_LOG_STORE`. | None |
 | `--no-log-store` | boolean | Run against no log store, whatever this project or machine configured. | `False` |
 | `--notification` | value | Where to post what this run cannot decide — an Apprise URL, several separated by commas, or an Apprise config file. Reaches every worker too. Overrides `notification` in `_steward.yaml` and `STEWARD_NOTIFICATION`. | None |
-| `--no-notification` | boolean | Post nothing about this run. Silences Steward only — a worker waiting on a person still asks. | `False` |
+| `--no-notification` | boolean | Post nothing about this run. Silences Steward only — a worker waiting on an operator still asks. | `False` |
 | `--scan-model` | value | Model scanners use, for this launch’s own turn. Reaches every worker too. Overrides `scan_model` in `_steward.yaml` and `STEWARD_SCAN_MODEL`. | None |
 | `--no-scan-model` | boolean | Configure no scan model — scanners use each sample’s own model under evaluation. | `False` |
 | `--max-workers` | integer range (`1` and above) | Worker processes, or unset for a process per task. Overrides `max_workers` in `_steward.yaml` and `STEWARD_MAX_WORKERS`. | None |
@@ -203,6 +204,25 @@ steward launch [OPTIONS] [DEFINITION]
 | `--trace` | value | Whether to trace message interactions to the console, overriding the definition’s. Also STEWARD_TRACE, INSPECT_EVAL_TRACE. | None |
 | `--help` | boolean | Show this message and exit. | `False` |
 
+## steward note
+
+Write a note into the journal, for whoever reads this run next.
+
+MESSAGE is free text: the state of something and what you think it means. It appears under *what happened* in `status` and `collect`, in order with everything else that was done to the run.
+
+#### Usage
+
+``` text
+steward note [OPTIONS] MESSAGE
+```
+
+#### Options
+
+| Name | Type | Description | Default |
+|----|----|----|----|
+| `--by` | choice (`operator` \| `agent`) | Whose note. Defaults to the agent, whose observations are what this verb exists to keep. | `agent` |
+| `--help` | boolean | Show this message and exit. | `False` |
+
 ## steward notify
 
 Post MESSAGE to this run’s notification channel.
@@ -221,7 +241,7 @@ steward notify [OPTIONS] MESSAGE
 
 | Name | Type | Description | Default |
 |----|----|----|----|
-| `--kind` | choice (`attention` \| `stopped`) | Why you are sending this. `attention` is worth knowing and work continues; `stopped` means nothing progresses until a person answers. | `attention` |
+| `--kind` | choice (`attention` \| `stopped`) | Why you are sending this. `attention` is worth knowing and work continues; `stopped` means nothing progresses until an operator answers. | `attention` |
 | `--detail` | text | A supporting line, under the message. Repeatable — one per thing you want the reader to see without opening anything. | None |
 | `--help` | boolean | Show this message and exit. | `False` |
 
@@ -244,14 +264,14 @@ steward pause [OPTIONS]
 | Name | Type | Description | Default |
 |----|----|----|----|
 | `--reason` | text | Why the run is being held. Recorded in the journal, and the only account of the decision that survives. | \_required |
-| `--by` | choice (`human` \| `agent`) | Who decided. An agent relaying a person’s instruction records `human`. | `human` |
+| `--by` | choice (`operator` \| `agent`) | Who decided. An agent relaying an operator’s instruction records `operator`. | `operator` |
 | `--help` | boolean | Show this message and exit. | `False` |
 
 ## steward propose
 
 Propose one disposition for one or more anomaly classes.
 
-`CLASSES` are open class keys, or unambiguous prefixes. The proposal becomes one consolidated item for its owner, answered whole or in part by `steward rule --proposal ID`.
+`CLASSES` name open classes — a finding’s label, `label:task`, an exception type, or a class key or prefix of one. Prints the sentence the operator is to be given and the `steward rule` that records their answer. The proposal becomes one consolidated item for its owner, answered whole or in part by naming its findings or its task to `steward rule`.
 
 #### Usage
 
@@ -271,9 +291,9 @@ steward propose [OPTIONS] CLASSES...
 
 ## steward raise
 
-Record that an item is now with the person who can decide it.
+Record that an item is now with the operator who can decide it.
 
-`ITEM` is a **human-owned** item’s id, or any unambiguous prefix of one — ids are printed beside each item by `steward status`, under the heading that says whose it is. An item the agent owns is its own to investigate and then `steward ack --by agent`; raising one would take it out of the agent’s queue with nobody else looking at it.
+`ITEM` is a **operator-owned** item’s id, or any unambiguous prefix of one — ids are printed beside each item by `steward status`, under the heading that says whose it is. An item the agent owns is its own to investigate and then `steward ack --by agent`; raising one would take it out of the agent’s queue with nobody else looking at it.
 
 The item stays open and stays in `status`: only a ruling closes it. What changes is that `steward collect` stops offering it as work, so the agent is not shown the same decision every time it looks. It returns if the condition changes in a way that matters, because an item’s id is chosen so that it does.
 
@@ -323,7 +343,7 @@ steward ramp hold [OPTIONS] [IDENTIFIER]
 | Name | Type | Description | Default |
 |----|----|----|----|
 | `--reason` | text | Why the climb is being held. Recorded in the journal, and what the next reader of the tuning block sees. | \_required |
-| `--by` | choice (`human` \| `agent`) | Who decided. Defaults to the agent, because holding on its own judgement is exactly what this verb exists for. | `agent` |
+| `--by` | choice (`operator` \| `agent`) | Who decided. Defaults to the agent, because holding on its own judgement is exactly what this verb exists for. | `agent` |
 | `--help` | boolean | Show this message and exit. | `False` |
 
 ### steward ramp resume
@@ -366,12 +386,12 @@ steward resume [OPTIONS]
 
 Rule on anomaly classes: what the failures mean, and what happens to the data.
 
-`CLASSES` are class keys as `steward status` prints them, or any unambiguous prefix. A ruling closes the class’s window — every open generation of it — and recurrence afterwards opens a new one carrying this decision as precedent.
+Each argument names a finding — its label (`internet_egress`), `label:task` where the same finding is open on two tasks, its exception type (`TimeoutError`), or the class key as `steward status` prints it or any prefix of one — or a task by its display key (`cybench`, `cybench@openai`), which answers every finding proposed for that task as proposed. A finding a proposal covers is answered with the proposal’s disposition unless `--disposition` says otherwise; one nothing proposes needs `--disposition`. A ruling closes the class’s window — every open generation of it — and recurrence afterwards opens a new one carrying this decision as precedent.
 
 #### Usage
 
 ``` text
-steward rule [OPTIONS] [CLASSES]...
+steward rule [OPTIONS] [FINDING|TASK]...
 ```
 
 #### Options
@@ -379,9 +399,9 @@ steward rule [OPTIONS] [CLASSES]...
 | Name | Type | Description | Default |
 |----|----|----|----|
 | `--proposal` | text | Answer a proposal by id. Alone, rules every class it covers that still awaits one; with CLASS arguments, rules just those — a partial answer, and the remainder stays proposed. | None |
-| `--disposition` | choice (`rerun` \| `exclude` \| `zero` \| `score` \| `accept` \| `dismiss`) | The answer. Required unless `--proposal` supplies it; given with one, it overrides for the named classes. | None |
+| `--disposition` | choice (`rerun` \| `exclude` \| `zero` \| `score` \| `accept` \| `dismiss`) | The answer. A finding a proposal covers takes the proposal’s answer by default; given, this one overrides it. Required for a finding nothing proposes. | None |
 | `--reason` | text | Why. Recorded in the journal, attached as precedent to any recurrence, and the only account of the decision that survives. | \_required |
-| `--by` | text | Who decided — a name, never a role. An agent relaying a person’s decision records the person. | \_required |
+| `--by` | text | Who decided — a name, never a role. Defaults to this workspace’s git `user.name`, or the login name; pass it when relaying someone else’s decision. | None |
 | `--effect` | text | The sentence the report carries for a disposition that marks the data. Composed automatically for exclude/zero/score, required for accept, refused for rerun and dismiss — which mark nothing. | None |
 | `--json` | boolean | Output the rulings as JSON. | `False` |
 | `--help` | boolean | Show this message and exit. | `False` |
@@ -410,7 +430,7 @@ Attest that these results are accepted, and end the run.
 
 Runs a final turn, refuses with every blocker at once if anything is still unnamed, moves superseded attempts into `logs-archive/`, records who signed and what they signed over, and takes the timer down. It does not commit the journal — that stays yours.
 
-A person decides this. An agent may prompt for it and may run it once they answer, recording their name, which is why the signer is recorded rather than the process.
+An operator decides this. An agent may prompt for it and may run it once they answer, recording their name, which is why the signer is recorded rather than the process. `--publish` is the same shape one step further out: exporting results into a shared store is the operator’s call too, so it is asked rather than configured.
 
 #### Usage
 
@@ -422,9 +442,10 @@ steward signoff [OPTIONS]
 
 | Name | Type | Description | Default |
 |----|----|----|----|
-| `--by` | text | Who is accepting these results — a name, never a role. An agent relaying a person’s decision records the person. | \_required |
+| `--by` | text | Who is accepting these results — a name, never a role. Defaults to this workspace’s git `user.name`, or the login name; pass it when relaying someone else’s decision. | None |
 | `--note` | text | What you want said about the acceptance. Optional: the account of every decision is already in the journal. | None |
 | `--again` | boolean | Record a second signature over a run whose first one still stands. | `False` |
+| `--publish` | boolean | Put the signed logs into the configured log store, so another project can reuse them instead of running the task. Never happens without this flag — there is no setting that turns it on. | `False` |
 | `--no-break-claim` | boolean | Refuse if another command is wedged, rather than killing it and taking the claim. | `False` |
 | `--json` | boolean | Output the signature, or the blockers, as JSON. | `False` |
 | `--help` | boolean | Show this message and exit. | `False` |

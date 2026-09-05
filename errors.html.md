@@ -32,9 +32,9 @@ Retries then happen at two levels:
 
 Samples that failed the same way are grouped into a class, so a provider outage is one question instead of two hundred. A stalled task is classed the same way, on the exception in its log or on the worker’s output if it died before writing one, so it arrives with its evidence attached.
 
-Classes appear under the anomalies heading in `steward status` and `status.md`, with instance counts, an example message, and any prior rulings. A class is raised once, and again only if it materially changes: the population crosses an order of magnitude, or a re-run fails.
+Classes appear under the anomalies heading in `steward collect`, with instance counts, an example message, and any prior rulings. A class is raised once, and again only if it materially changes: the population crosses an order of magnitude, or a re-run fails.
 
-Your agent works the queue from here. `steward investigate` marks a class as being worked, and `steward propose` bundles related classes into one question with the evidence attached.
+Your agent works the queue from here. `steward propose` bundles related classes into one question with the evidence attached and prints the sentence you will be asked; `steward rule` records your answer by the finding’s name or the task’s, taking the proposal’s disposition unless you change it.
 
 ## Decide
 
@@ -43,13 +43,15 @@ Agents will prompt you for a ruling with one of six answers:
 | Disposition | What it means | What happens to the data |
 |----|----|----|
 | `rerun` | The failure was transient and the samples should run again | Steward re-runs them and records whether they passed |
-| `exclude` | Leave the samples out of scoring | The report says how many were excluded |
-| `zero` | Count the samples as failures | Scored zero, with a visible mark |
+| `exclude` | Leave the samples out of scoring | Written into the log as unscored, with the reason; the headline is recomputed over the rest |
+| `zero` | Count the samples as failures | The task’s scorer scores an empty attempt and that score is written in |
 | `score` | The recorded results stand as they are | Scored as-is, marked |
 | `accept` | The data stands with a caveat | Requires a stated effect, which is the sentence the report carries. Not available for errored samples |
 | `dismiss` | Looked, nothing here | No mark; the record keeps who looked and why |
 
 The next tend carries out a `rerun`. Samples in a running task are requeued in place, and a landed log has the ruled samples invalidated so the task re-runs them and reuses everything else. Authorized re-runs are scheduled ahead of ordinary queued work.
+
+The next tend carries out an `exclude` and a `zero` too, by writing them into the log: each edited score keeps its history and records who decided and why, and the log’s metrics are recomputed over what remains. An exclusion lands within a turn. A zero needs the task’s scorer, since what a zero is depends on it, so Steward runs the task on just those samples in a scratch directory under `.steward/`, stops each sample as it starts, and copies the scorer’s verdict on that empty attempt into the log. Until a ruling is written the report’s entry for it says *not yet written into the log*, and `steward signoff` refuses with the same words.
 
 If the same failure comes back after a ruling, it opens as a new question and carries the old decision with it.
 
@@ -64,7 +66,7 @@ preauthorized:
   'error:ReadTimeout@*': rerun
 ```
 
-When a new class matches a pattern, the tend records a ruling with `by: policy` naming the pattern and applies it in the same turn. Nothing is pre-authorized by default, and if a pre-authorized re-run fails, the pattern stops matching that class until a person has looked.
+When a new class matches a pattern, the tend records a ruling with `by: policy` naming the pattern and applies it in the same turn. Nothing is pre-authorized by default, and if a pre-authorized re-run fails, the pattern stops matching that class until an operator has looked.
 
 Anything more nuanced than a pattern goes in `policies:` as prose, which your agent applies when one is in session:
 
@@ -85,7 +87,7 @@ Use a policy to stop a run on error rates. Pausing is reversible and stops the w
 
 The refusal tells you what to answer. It is not a quality bar: `accept` and `dismiss` are answers, and “2 samples accepted as errored, the provider was down all night” is a signed statement about the results.
 
-The classes you accepted become the entries in `anomalies.md`, each with its reason, who decided, when, and the effect on the numbers.
+The classes you accepted become the entries in `anomalies.md`, each with its reason, who decided, when, and the effect on the numbers. The file opens with a table, one row per task, of the samples that did not take the normal course: zeroed, excluded, errored, scored early by an operator, or terminated by one.
 
 ## Stuck Samples
 

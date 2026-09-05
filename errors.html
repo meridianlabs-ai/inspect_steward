@@ -397,8 +397,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <section id="surface" class="level2">
 <h2 class="anchored" data-anchor-id="surface">Surface</h2>
 <p>Samples that failed the same way are grouped into a class, so a provider outage is one question instead of two hundred. A stalled task is classed the same way, on the exception in its log or on the worker’s output if it died before writing one, so it arrives with its evidence attached.</p>
-<p>Classes appear under the anomalies heading in <code>steward status</code> and <code>status.md</code>, with instance counts, an example message, and any prior rulings. A class is raised once, and again only if it materially changes: the population crosses an order of magnitude, or a re-run fails.</p>
-<p>Your agent works the queue from here. <code>steward investigate</code> marks a class as being worked, and <code>steward propose</code> bundles related classes into one question with the evidence attached.</p>
+<p>Classes appear under the anomalies heading in <code>steward collect</code>, with instance counts, an example message, and any prior rulings. A class is raised once, and again only if it materially changes: the population crosses an order of magnitude, or a re-run fails.</p>
+<p>Your agent works the queue from here. <code>steward propose</code> bundles related classes into one question with the evidence attached and prints the sentence you will be asked; <code>steward rule</code> records your answer by the finding’s name or the task’s, taking the proposal’s disposition unless you change it.</p>
 </section>
 <section id="decide" class="level2">
 <h2 class="anchored" data-anchor-id="decide">Decide</h2>
@@ -425,12 +425,12 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <tr class="even">
 <td><code>exclude</code></td>
 <td>Leave the samples out of scoring</td>
-<td>The report says how many were excluded</td>
+<td>Written into the log as unscored, with the reason; the headline is recomputed over the rest</td>
 </tr>
 <tr class="odd">
 <td><code>zero</code></td>
 <td>Count the samples as failures</td>
-<td>Scored zero, with a visible mark</td>
+<td>The task’s scorer scores an empty attempt and that score is written in</td>
 </tr>
 <tr class="even">
 <td><code>score</code></td>
@@ -450,6 +450,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </tbody>
 </table>
 <p>The next tend carries out a <code>rerun</code>. Samples in a running task are requeued in place, and a landed log has the ruled samples invalidated so the task re-runs them and reuses everything else. Authorized re-runs are scheduled ahead of ordinary queued work.</p>
+<p>The next tend carries out an <code>exclude</code> and a <code>zero</code> too, by writing them into the log: each edited score keeps its history and records who decided and why, and the log’s metrics are recomputed over what remains. An exclusion lands within a turn. A zero needs the task’s scorer, since what a zero is depends on it, so Steward runs the task on just those samples in a scratch directory under <code>.steward/</code>, stops each sample as it starts, and copies the scorer’s verdict on that empty attempt into the log. Until a ruling is written the report’s entry for it says <em>not yet written into the log</em>, and <code>steward signoff</code> refuses with the same words.</p>
 <p>If the same failure comes back after a ruling, it opens as a new question and carries the old decision with it.</p>
 </section>
 <section id="codify" class="level2">
@@ -462,7 +463,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1" data-filename="_steward.yaml"><pre class="sourceCode yaml code-with-copy"><code class="sourceCode yaml"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">preauthorized</span><span class="kw">:</span></span>
 <span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="at">  </span><span class="fu">'error:ReadTimeout@*'</span><span class="kw">:</span><span class="at"> rerun</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
-<p>When a new class matches a pattern, the tend records a ruling with <code>by: policy</code> naming the pattern and applies it in the same turn. Nothing is pre-authorized by default, and if a pre-authorized re-run fails, the pattern stops matching that class until a person has looked.</p>
+<p>When a new class matches a pattern, the tend records a ruling with <code>by: policy</code> naming the pattern and applies it in the same turn. Nothing is pre-authorized by default, and if a pre-authorized re-run fails, the pattern stops matching that class until an operator has looked.</p>
 <p>Anything more nuanced than a pattern goes in <code>policies:</code> as prose, which your agent applies when one is in session:</p>
 <div class="code-with-filename">
 <div class="code-with-filename-file">
@@ -479,7 +480,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <h2 class="anchored" data-anchor-id="resolve">Resolve</h2>
 <p><code>steward signoff</code> refuses while any error is still undecided, and lists every reason at once so that fixing one and being refused for the next never happens.</p>
 <p>The refusal tells you what to answer. It is not a quality bar: <code>accept</code> and <code>dismiss</code> are answers, and “2 samples accepted as errored, the provider was down all night” is a signed statement about the results.</p>
-<p>The classes you accepted become the entries in <code>anomalies.md</code>, each with its reason, who decided, when, and the effect on the numbers.</p>
+<p>The classes you accepted become the entries in <code>anomalies.md</code>, each with its reason, who decided, when, and the effect on the numbers. The file opens with a table, one row per task, of the samples that did not take the normal course: zeroed, excluded, errored, scored early by an operator, or terminated by one.</p>
 </section>
 <section id="stuck-samples" class="level2">
 <h2 class="anchored" data-anchor-id="stuck-samples">Stuck Samples</h2>

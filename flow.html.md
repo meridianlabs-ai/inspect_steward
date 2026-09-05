@@ -6,7 +6,7 @@
 pip install "inspect-steward[flow]"
 ```
 
-[Inspect Flow](https://github.com/meridianlabs-ai/inspect_flow) specs are fully supported as Steward eval set definitions. Just use a `_flow.py` within your workspace directory and
+[Inspect Flow](https://github.com/meridianlabs-ai/inspect_flow) specs are fully supported as Steward eval set definitions. Name the spec `config.py` in your workspace directory and the rest of the documentation applies unchanged.
 
 ## Worker Overrides
 

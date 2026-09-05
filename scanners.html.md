@@ -12,10 +12,10 @@ Steward runs a scoring integrity scanner over every sample of every run. It requ
 
 By default a scanner reviews with the model already under evaluation, so an unconfigured run still scans. To use a different model, set `scan_model` in `_steward.yaml` or `STEWARD_SCAN_MODEL` in your `.env`:
 
-    _steward.yaml
+    .env
 
-``` yaml
-scan_model: anthropic/claude-opus-5
+``` ini
+STEWARD_SCAN_MODEL=anthropic/claude-opus-5
 ```
 
 A scanner that names its own model in the definition keeps it.
@@ -36,6 +36,8 @@ eval_set(
 
 ## Findings
 
-A flagged sample becomes an anomaly and is decided the same way an error is, as described in [Error Handling](./errors.html.md). Samples flagged the same way are one class and one decision, and every disposition is available, including excluding or zeroing a score you establish is wrong.
+A flagged sample becomes an anomaly and is decided the same way an error is, as described in [Error Handling](./errors.html.md). Samples flagged the same way in the same task are one class and one decision, and every disposition is available, including excluding or zeroing a score you establish is wrong.
 
-Dismissing is an answer too, and a run cannot be signed off while a finding has no ruling either way. You will dismiss most of them: a model that probed a grader it never reached earned nothing, and the score stands. At signoff Steward tells you how many findings were dismissed, and your agent is asked to name them.
+Nothing is put to you while the task is still running. When it lands, your agent investigates every finding the task has and brings them to you together, one row per class with a proposed disposition, and your answers are recorded row by row. A finding ruled on one task is shown as precedent when another task lands with the same one, and the task’s finished notification goes out with the proposals.
+
+What reaches you as a decision is what would change a number: score 0, drop from scoring, or run the samples again. Most findings change no score — a model that refused, one that probed a grader it never reached, a grader that could not grade its own samples — and those your agent records itself as scores kept as recorded, so the report carries them; the finished-task message mentions them under the decisions, and asks nothing. Dismissing is for a flag the transcript does not bear out. A run cannot be signed off while a finding has no ruling either way, and at signoff Steward tells you how many were dismissed and your agent is asked to name them.

@@ -2,7 +2,7 @@
 
 ## Overview
 
-Steward runs evaluations from a workspace directory that includes the eval-set definition, steward-specific options, a journal of the entire run, and human readable documents on run status. Evaluations are launched as background processes and monitored using a scheduled job, with coding agents and humans proactively notified when they are needed for a decision.
+Steward runs evaluations from a workspace directory that includes the eval-set definition, steward-specific options, a journal of the entire run, and human readable documents on run status. Evaluations are launched as background processes and monitored using a scheduled job, with coding agents and operators proactively notified when they are needed for a decision.
 
 We’ll walk through the various phases of the workflow below, then cover [options](#steward-options) you can use to customize Steward’s behavior and other [advanced](#advanced) topics like pausing runs and modifying runs in flight.
 
@@ -29,7 +29,7 @@ swe-evals/
   CLAUDE.md           # agent instructions for managing a run
   evalset.py          # eval-set definition (or config.py / hawk.yaml)
   journal.jsonl       # append-only journal of workspace actions
-  status.md           # human readable current status of run
+  status.md           # the operator's page: where the run stands, what waits on them
 ```
 
 Your eval set definition can be any script which ends with a call to [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) or a [Flow](./flow.html.md) or [Hawk](./hawk.html.md) configuration. For example:
@@ -46,6 +46,8 @@ eval_set(
 )
 ```
 
+Your task before launching is to provide the eval set definition and adjust any settings you need in `_steward.yaml`. The defaults are generally suitable, but be sure to review [Concurrency](./concurrency.html.md) against the specifics of your evals and infrastructure.
+
 ## Execution
 
 Once you have defined your eval set, use a coding agent to launch the evaluation (you should typically run from a [tmux](https://github.com/tmux/tmux/wiki) detached terminal so the agent is persistent):
@@ -58,13 +60,9 @@ Once you have defined your eval set, use a coding agent to launch the evaluation
 ─────────────────────────────────────────────────────────
 ```
 
-The agent is instructed to read the Steward [runbook](./runbook.html.md) which provides instructions for conducting the evaluation. By default the agent will start with a smoke run (2 samples for each task, under a 15 minute wall-clock cap) to make sure config, infrstructure, and model connectivity is all workign as expected.
+The agent reads the Steward [runbook](./runbook.html.md) and follows it. It starts with a short smoke run to confirm that configuration, infrastructure and model access all work correctly. A failed smoke stops the launch until it is fixed or waived by the user.
 
-The smoke reports what the *samples* did rather than whether the tasks finished, which matters because workers run with `continue_on_fail` on: a wrong key or a sandbox that will not start lands as errored samples inside a log that finished cleanly. Any errored sample fails the rehearsal, and so does a task that finished holding fewer samples than the rehearsal asked it for.
-
-It also checks four things that would not stop the run but would quietly spoil it: that the scanners work and what they flagged, that they reached every transcript rather than silently recording nothing, that every model resolved to a real context window rather than an assumed default, and that reasoning is being replayed to the model on later turns. It leaves a digest at `.steward/smoke/digest.md`, and a failing check stops the launch until you fix it or waive it by name.
-
-After the smoke, the agent will launch all of the tasks, set up a background monitoring process, and respond to alerts that require its intervention. Note that while it is recommended that you keep the agent attached during the evaluation it is not *required*. If you choose not to you should be sure to configure [notifications](#notifications) so you know when to reconnect the agent to handle issues that arise.
+After the smoke the agent launches the tasks and works the decisions the run raises as the [tend loop](#tend-loop) runs. Keeping the agent attached is recommended but not required. If you detach it, configure [notifications](#notifications) so you know when to reconnect to it.
 
 ### Tend Loop
 
@@ -125,41 +123,116 @@ Once all tasks are completed (with errors/anomalies decided on) and their transc
 steward signoff --by "norah"
 ```
 
-Signoff verifies that the run is eligible for signoff, ensures a clean final log directory, finalizes the journal and status, and disarms the tend loop timer. If you have a [Log Store](#log-store) configured it will also write your logs into the log store.
+Signoff verifies that the run is eligible for signoff, ensures a clean final log directory, finalizes the journal and status, and disarms the tend loop timer. If you have a [Log Store](#log-store) configured, the agent will also ask whether to publish your logs to it — add `--publish` if you want that.
 
 ## Eval Logs
 
-- where logs go
-- log store
+### Log Directory
+
+Logs are written to `logs/` inside the workspace. Two things can change this:
+
+- If your eval set passes a `log_dir` to [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set), Steward uses that.
+
+- The `log_root` option or `STEWARD_LOG_ROOT` environment variable, for a machine that keeps logs somewhere else (a bigger disk, or an S3 bucket). Steward makes one directory per workspace underneath it.
+
+If you want your logs to be durable then we recommend setting `STEWARD_LOG_ROOT` to an S3 bucket or other permanent storage and letting Steward create subdirectories within it for each workspace.
+
+### Log Store
+
+A log store lets several workspaces share results, so a task somebody has already run doesn’t run again. Point at one with the `log_store` option or the `STEWARD_LOG_STORE` environment variable:
+
+    .env
+
+``` ini
+STEWARD_LOG_STORE=s3://our-bucket/eval-logs
+```
+
+The store can be a directory of `.eval` files, or a [Flow](./flow.html.md) store (which requires the `flow` extra).
+
+A result is only reused when everything about the task matches: the task and its arguments, the model, the solver, the plan, the generate config, and the limits.
+
+Reading from a store happens automatically once you configure one. Publishing your own results into it does not, that only happens if you ask for it at signoff:
+
+    Terminal
+
+``` bash
+steward signoff --by "norah" --publish
+```
 
 ## Options
 
-Steward’s options can be specified in `_steward.yaml` in the root of the workspace or set with `STEWARD_*` environment variables in an `.env` file within the workspace or a parent directory.
+Steward’s options go in `_steward.yaml` at the root of the workspace, or in the environment as `STEWARD_<OPTION>` in an `.env` file within the workspace or a parent directory.
 
-| Option | Environment | Default | Description |
+### Logs
+
+Storage location for logs. These are typically specified at the machine level (`.env`). Use the `_steward.yaml` option to override for a given project.
+
+| \_steward.yaml | Environment | Default | Description |
 |----|----|----|----|
-| `notification` | `STEWARD_NOTIFICATION` | none | Where Steward posts what it cannot decide: an Apprise URL, several separated by commas, or an Apprise config file. `false` for nowhere. |
-| `log_root` | `STEWARD_LOG_ROOT` | none | Where this machine keeps logs, one directory per workspace. Read only where your definition names no `log_dir`. |
-| `log_store` | `STEWARD_LOG_STORE` | none | Where to look for logs this run does not have to produce. |
-| `tend_interval` | `STEWARD_TEND_INTERVAL` | `10m` | How often a scheduled tend runs. Always written with a unit. |
-| `samples_ramp` | `STEWARD_SAMPLES_RAMP` | `[40, 200]` | Range to discover sample concurrency in; `false` to fix it at the floor. |
-| `max_workers` | `STEWARD_MAX_WORKERS` | one per task | Pack the run into this many worker processes. |
-| `stall_after` | `STEWARD_STALL_AFTER` | `2` | Fruitless respawns before a task is given up on and reported. |
-| `stuck_after` | `STEWARD_STUCK_AFTER` | `5h` | Report a running sample that has gone this long without activity. A reporting threshold, never a limit. |
-| `stuck_cancel` | `STEWARD_STUCK_CANCEL` | none | Stuck tool calls the agent may cancel without asking (`true` for any, or a list of tool names). |
-| `sync` | `STEWARD_SYNC` | the log directory | Where the workspace’s own files are mirrored to; `false` for nowhere. |
-| `scan_model` | `STEWARD_SCAN_MODEL` | the sample’s own model | The model scanners use. `false` clears an ambient `SCOUT_SCAN_MODEL`. |
+| `log_root` | `STEWARD_LOG_ROOT` | none | Root for this machine’s logs. |
+| `log_store` | `STEWARD_LOG_STORE` | none | Logs to reuse rather than run: a directory of `.eval` files or a Flow store. |
+| `sync` | `STEWARD_SYNC` | log_dir | Where the workspace’s files are mirrored on each tend. |
 
-The [Concurrency](./concurrency.html.md) and [Error Handling](./errors.html.md) articles include additional details on how some of these options fit within the broader execution plan for a Steward run.
+See [Log Directory](#log-directory) and [Log Store](#log-store) for additional details.
+
+### Supervision
+
+Frequency of run tending and how to communicate notifications.
+
+| \_steward.yaml | Environment | Default | Description |
+|----|----|----|----|
+| `tend_interval` | `STEWARD_TEND_INTERVAL` | 10m | How often a scheduled tend runs, with a unit. |
+| `notification` | `STEWARD_NOTIFICATION` | none | Apprise URL(s) or an Apprise config file. |
+
+See [Tend Loop](#tend-loop) and [Notifications](#notifications) for additional details.
+
+### Concurrency
+
+| \_steward.yaml | Environment | Default | Description |
+|----|----|----|----|
+| `samples_ramp` | `STEWARD_SAMPLES_RAMP` | \[40, 200\] | Range to discover sample concurrency in; `false` for no automatic ramp. |
+| `max_workers` | `STEWARD_MAX_WORKERS` | one per task | Pack the run into this many worker processes. |
+
+See [Automatic Ramp](./concurrency.html.md#automatic-ramp) and [Worker Processes](./concurrency.html.md#worker-processes) for additional details.
+
+### Errors
+
+| \_steward.yaml | Environment | Default | Description |
+|----|----|----|----|
+| `stall_after` | `STEWARD_STALL_AFTER` | 2 | Fruitless respawns before a task is given up on and reported. |
+| `stuck_after` | `STEWARD_STUCK_AFTER` | 5h | Report a sample with no activity for this long. |
+
+See [Retry](./errors.html.md#retry) and [Stuck Samples](./errors.html.md#stuck-samples) for additional details.
+
+### Standing Rules
+
+Standing decision rules. These are typically written by the agent during a run as a result of operator decisions.
+
+| \_steward.yaml | Environment | Default | Description |
+|----|----|----|----|
+| `preauthorized` | `STEWARD_PREAUTHORIZED` | none | Anomaly-class patterns mapped to `rerun`, `exclude`, `zero` or `score`. |
+| `stuck_cancel` | `STEWARD_STUCK_CANCEL` | none | Stuck tool calls the agent may cancel unasked: `true` for any, or a list of tool names. |
+| `policies` | `STEWARD_POLICIES` | none | Rules an agent applies, as prose or a list. |
+
+See [Codify](./errors.html.md#codify) and [Stuck Samples](./errors.html.md#stuck-samples) for additional details.
+
+### Scanning
+
+| \_steward.yaml | Environment | Default | Description |
+|----|----|----|----|
+| `scan_model` | `STEWARD_SCAN_MODEL` | eval model | The model scanners use. `false` ignores a `SCOUT_SCAN_MODEL` in the environment and scans with the eval model. |
+| `scanners` | `STEWARD_SCANNERS` | none | Scanners run in addition to the definition’s. |
+
+See [Scan Model](./scanners.html.md#scan-model) and [Adding Scanners](./scanners.html.md#adding-scanners) for additional details.
 
 ## Advanced
 
 ### Agent Oversight
 
-An agent does not need to stay attached: `steward tend` runs on its timer either way. An agent adds judgement, diagnosing errors, proposing what to do about them, and escalating what needs you. There are three ways to work:
+An agent does not need to stay attached: `steward tend` runs on its timer either way. An agent adds judgment, diagnosing errors, proposing what to do about them, and escalating what needs you. There are three ways to work:
 
 - Attached and reactive: the agent watches for new activity and responds immediately. Best for a run you are watching closely.
-- Attached and periodic: the agent wakes on its own schedule, and can run `steward tend` to take a turn early.
+- Attached and periodic: the agent wakes on its own schedule, can run `steward tend` to take a turn early, and stands down once the run is finished and nothing open is its own.
 - Disconnected: nobody is attached, and the next session picks up whatever accumulated. This is the common case.
 
 An agent attaching to a run it did not start begins here:

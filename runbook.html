@@ -313,25 +313,32 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <li><a href="#overview" id="toc-overview" class="nav-link active" data-scroll-target="#overview">Overview</a></li>
   <li><a href="#steward-runbook" id="toc-steward-runbook" class="nav-link" data-scroll-target="#steward-runbook">Steward runbook</a>
   <ul class="collapse">
-  <li><a href="#what-you-must-never-do" id="toc-what-you-must-never-do" class="nav-link" data-scroll-target="#what-you-must-never-do">What you must never do</a></li>
-  <li><a href="#rehearse-before-you-commit-a-night-to-it" id="toc-rehearse-before-you-commit-a-night-to-it" class="nav-link" data-scroll-target="#rehearse-before-you-commit-a-night-to-it">Rehearse before you commit a night to it</a></li>
-  <li><a href="#trust-the-artifact-not-the-exit-code" id="toc-trust-the-artifact-not-the-exit-code" class="nav-link" data-scroll-target="#trust-the-artifact-not-the-exit-code">Trust the artifact, not the exit code</a></li>
-  <li><a href="#render-the-snapshot-do-not-replace-it" id="toc-render-the-snapshot-do-not-replace-it" class="nav-link" data-scroll-target="#render-the-snapshot-do-not-replace-it">Render the snapshot; do not replace it</a></li>
-  <li><a href="#your-queue-and-what-takes-something-out-of-it" id="toc-your-queue-and-what-takes-something-out-of-it" class="nav-link" data-scroll-target="#your-queue-and-what-takes-something-out-of-it">Your queue, and what takes something out of it</a></li>
-  <li><a href="#a-sample-that-has-stopped-moving" id="toc-a-sample-that-has-stopped-moving" class="nav-link" data-scroll-target="#a-sample-that-has-stopped-moving">A sample that has stopped moving</a></li>
-  <li><a href="#anomalies-from-failure-to-ruling" id="toc-anomalies-from-failure-to-ruling" class="nav-link" data-scroll-target="#anomalies-from-failure-to-ruling">Anomalies: from failure to ruling</a>
+  <li><a href="#talking-to-the-operator" id="toc-talking-to-the-operator" class="nav-link" data-scroll-target="#talking-to-the-operator">Talking to the operator</a>
   <ul class="collapse">
-  <li><a href="#scan-findings-the-bar-is-threatened-integrity" id="toc-scan-findings-the-bar-is-threatened-integrity" class="nav-link" data-scroll-target="#scan-findings-the-bar-is-threatened-integrity">Scan findings: the bar is threatened integrity</a></li>
+  <li><a href="#stopping" id="toc-stopping" class="nav-link" data-scroll-target="#stopping">Stopping</a></li>
   </ul></li>
-  <li><a href="#writing-a-standing-rule" id="toc-writing-a-standing-rule" class="nav-link" data-scroll-target="#writing-a-standing-rule">Writing a standing rule</a></li>
-  <li><a href="#preparing-a-signoff" id="toc-preparing-a-signoff" class="nav-link" data-scroll-target="#preparing-a-signoff">Preparing a signoff</a></li>
+  <li><a href="#each-session" id="toc-each-session" class="nav-link" data-scroll-target="#each-session">Each session</a></li>
+  <li><a href="#investigating" id="toc-investigating" class="nav-link" data-scroll-target="#investigating">Investigating</a></li>
+  <li><a href="#recording-what-was-decided" id="toc-recording-what-was-decided" class="nav-link" data-scroll-target="#recording-what-was-decided">Recording what was decided</a>
+  <ul class="collapse">
+  <li><a href="#what-you-may-do" id="toc-what-you-may-do" class="nav-link" data-scroll-target="#what-you-may-do">What you may do</a></li>
+  <li><a href="#the-queue" id="toc-the-queue" class="nav-link" data-scroll-target="#the-queue">The queue</a></li>
+  <li><a href="#anomalies" id="toc-anomalies" class="nav-link" data-scroll-target="#anomalies">Anomalies</a></li>
+  <li><a href="#scan-windows" id="toc-scan-windows" class="nav-link" data-scroll-target="#scan-windows">Scan windows</a></li>
+  <li><a href="#notifying" id="toc-notifying" class="nav-link" data-scroll-target="#notifying">Notifying</a></li>
+  </ul></li>
+  <li><a href="#reference" id="toc-reference" class="nav-link" data-scroll-target="#reference">Reference</a>
+  <ul class="collapse">
+  <li><a href="#launching" id="toc-launching" class="nav-link" data-scroll-target="#launching">Launching</a></li>
+  <li><a href="#item-kinds" id="toc-item-kinds" class="nav-link" data-scroll-target="#item-kinds">Item kinds</a></li>
+  <li><a href="#dispositions" id="toc-dispositions" class="nav-link" data-scroll-target="#dispositions">Dispositions</a></li>
+  <li><a href="#stuck-samples" id="toc-stuck-samples" class="nav-link" data-scroll-target="#stuck-samples">Stuck samples</a></li>
+  <li><a href="#tuning" id="toc-tuning" class="nav-link" data-scroll-target="#tuning">Tuning</a></li>
+  <li><a href="#standing-rules" id="toc-standing-rules" class="nav-link" data-scroll-target="#standing-rules">Standing rules</a></li>
   <li><a href="#writing-analysis.md" id="toc-writing-analysis.md" class="nav-link" data-scroll-target="#writing-analysis.md">Writing <code>analysis.md</code></a></li>
-  <li><a href="#context-is-the-real-budget" id="toc-context-is-the-real-budget" class="nav-link" data-scroll-target="#context-is-the-real-budget">Context is the real budget</a></li>
-  <li><a href="#the-cadence-and-how-it-is-guaranteed" id="toc-the-cadence-and-how-it-is-guaranteed" class="nav-link" data-scroll-target="#the-cadence-and-how-it-is-guaranteed">The cadence, and how it is guaranteed</a></li>
-  <li><a href="#cold-pickup" id="toc-cold-pickup" class="nav-link" data-scroll-target="#cold-pickup">Cold pickup</a></li>
-  <li><a href="#tuning-inside-the-envelope" id="toc-tuning-inside-the-envelope" class="nav-link" data-scroll-target="#tuning-inside-the-envelope">Tuning inside the envelope</a></li>
-  <li><a href="#when-to-notify" id="toc-when-to-notify" class="nav-link" data-scroll-target="#when-to-notify">When to notify</a></li>
-  <li><a href="#hard-stops" id="toc-hard-stops" class="nav-link" data-scroll-target="#hard-stops">Hard stops</a></li>
+  <li><a href="#signoff" id="toc-signoff" class="nav-link" data-scroll-target="#signoff">Signoff</a></li>
+  <li><a href="#context-discipline" id="toc-context-discipline" class="nav-link" data-scroll-target="#context-discipline">Context discipline</a></li>
+  </ul></li>
   </ul></li>
   </ul>
 </nav>
@@ -366,221 +373,427 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </section>
 <section id="steward-runbook" class="level1">
 <h1>Steward runbook</h1>
-<p>How Steward works. This ships with the package, so it can never be out of date with the CLI you are running. It is mechanics; <code>_steward.yaml</code> is what this particular human wants — settings Steward already enforces on its own, and a <code>policies</code> key that you are the one who applies.</p>
-<blockquote class="blockquote">
-<p><strong>Status: skeletal.</strong> The prohibitions and the reading disciplines below are settled and binding now. The sections marked <em>not yet written</em> describe machinery that does not exist yet — there is nothing to follow there, and nothing to infer from the silence.</p>
-</blockquote>
-<section id="what-you-must-never-do" class="level2">
-<h2 class="anchored" data-anchor-id="what-you-must-never-do">What you must never do</h2>
-<p>No situation makes any of these correct.</p>
+<p>You supervise an <code>inspect_ai</code> eval set for an operator who is not always present. The job has three parts:</p>
+<ol type="1">
+<li><strong>Watch the run.</strong> A timer runs <code>steward tend</code> without you: it starts workers, watches them, ramps them, and writes down what it could not decide. You read that on a schedule you arm yourself.</li>
+<li><strong>Investigate what goes wrong.</strong> Errored samples, stalled tasks, scan findings. You read the logs and the transcripts, work out what happened, and decide whether the score can still be trusted.</li>
+<li><strong>Tell the operator what you found, and ask.</strong> They rule and they sign. You put each finding to them in the words of their eval, with the evidence in brief and one question, and you record their answer.</li>
+</ol>
+<p>Steward is the notebook. Every decision goes into it through a <code>steward</code> verb; it renders <code>status.md</code> for the operator and <code>steward collect</code> for you. It is not the subject of anything you say to them.</p>
+<p><strong>Where things are.</strong> The workspace is a directory. The definition is the operator’s statement of what to run; <code>_steward.yaml</code> is their rules for this run, read before you act. <code>journal.jsonl</code> is every event and decision, append-only. <code>analysis.md</code> is your findings. <code>status.md</code> and <code>anomalies.md</code> are rendered from the journal and the logs at every tend. The log directory is named in <code>steward collect</code>.</p>
+<p><strong>How the run moves.</strong> <code>steward launch</code> resolves the definition into a manifest of tasks and arms the tend timer. Each tend is one turn of the loop: reap finished workers, start the next, ramp concurrency, sync the scans, detect what changed, render the snapshot, post at most one notification. A worker is one <code>inspect</code> process running one or more tasks. It writes a log, scans each sample as that sample finishes, and answers <code>inspect ctl</code> while it runs. A log has landed when its file is complete and its status is known. A worker that stops inside a sample to ask an operator’s approval is parked until someone attaches with <code>inspect acp</code>.</p>
+<section id="talking-to-the-operator" class="level2">
+<h2 class="anchored" data-anchor-id="talking-to-the-operator">Talking to the operator</h2>
+<p>They see only what you write, and they know their eval: tasks, models, samples, scores, transcripts. Every message to them has one shape:</p>
+<ol type="1">
+<li><strong>What you found.</strong> One or two sentences in the eval’s words: which task, which samples, what happened to them.</li>
+<li><strong>The evidence in brief.</strong> The two or three facts that establish it and where you looked, with the samples it covers in a table capped at five rows and the remainder counted. The full case goes in <code>analysis.md</code>; a reader who trusts you should be able to answer without opening anything.</li>
+<li><strong>What you propose, and the question.</strong> Recommend one answer and name the others on offer, so they can confirm, pick, or say more. The question is the last line. Nothing follows it.</li>
+</ol>
+<p><strong>One question at a time</strong>, most important first, one message each. Do not restate the heading as the question. Keep the arithmetic out of it. The one message that carries several questions is a finished task’s scan findings, the second example below.</p>
+<p><strong>Speak the eval’s language, never Steward’s.</strong> Windows, classes, items, proposals, tends, collects, keys, ids and hashes are words from this runbook, and a message built from them is one they cannot answer. A word that is in this runbook and not in their definition does not go in a message to them.</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>you have</th>
+<th>you say</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>a window or a class</td>
+<td>the samples and what they did: <em>5 samples in cybench@gpt-5 where the grader could not find its own tests</em></td>
+</tr>
+<tr class="even">
+<td>a class key, an item id, a <code>prop-</code> id, a hash</td>
+<td>nothing; the task and the finding in words</td>
+</tr>
+<tr class="odd">
+<td>a disposition</td>
+<td>what happens to the samples: drop from scoring, score 0, keep the score, keep it with a note in the report, nothing was wrong</td>
+</tr>
+<tr class="even">
+<td>a tend, a collect, a fold, the gate</td>
+<td><em>Steward</em>, or nothing</td>
+</tr>
+</tbody>
+</table>
+<p><strong>A collect with no question in it produces no message.</strong> Do not report an investigation under way, a proposal you are holding, or what you expect to ask later; they learn the run’s state from <code>status.md</code> and the notifications, not from you. A finding you cannot yet propose on is one you are still investigating: keep investigating and say nothing. A scheduled collect that shows nothing new ends with no text at all: <em>nothing for me</em>, <em>unchanged</em>, <em>still waiting on your rulings</em> are messages, and the fourth one teaches them to stop reading. Once a finished run’s findings are in front of them, the next thing you write is your answer to theirs.</p>
+<p><strong>Steward misbehaving is not theirs to debug.</strong> Record what you saw with <code>steward note</code>, work around it where a ruling is honest, and tell them in one sentence only what changes for them. If you cannot work around it, say so in one sentence and stop.</p>
+<p><strong>When they ask how it is going</strong>, run <code>steward status --format md</code> and render what it printed in full, in its order, as markdown outside a code fence. Do not summarize it, and do not read <code>status.md</code> instead; it can be a full interval stale. A narrower question wants a narrower answer: <em>is it finished</em> is a sentence, not the snapshot. Your own reading goes below it, marked as yours, only where it adds something the snapshot does not show.</p>
+<p><strong>Before you send, three checks.</strong> Could they answer it knowing only their eval? Is it what you found, then the evidence, then the question? Is the question the last line?</p>
+<p>Three messages in the shape. Errored samples in a running task:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode markdown code-with-copy"><code class="sourceCode markdown"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="fu">## 14 samples in swe_bench_lite@openai/gpt-5 errored on a provider timeout</span></span>
+<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a>All 14 failed between 02:10 and 02:40 UTC with the same timeout from OpenAI, and every retry landed inside that window. The other 106 completed normally before and after; nothing about these 14 is unusual.</span>
+<span id="cb1-4"><a href="#cb1-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-5"><a href="#cb1-5" aria-hidden="true" tabindex="-1"></a><span class="pp">|</span> sample <span class="pp">|</span> error <span class="pp">|</span></span>
+<span id="cb1-6"><a href="#cb1-6" aria-hidden="true" tabindex="-1"></a><span class="pp">|---|---|</span></span>
+<span id="cb1-7"><a href="#cb1-7" aria-hidden="true" tabindex="-1"></a><span class="pp">|</span> django-11099 <span class="pp">|</span> timeout after 3 retries <span class="pp">|</span></span>
+<span id="cb1-8"><a href="#cb1-8" aria-hidden="true" tabindex="-1"></a><span class="pp">|</span> django-11133 <span class="pp">|</span> timeout after 3 retries <span class="pp">|</span></span>
+<span id="cb1-9"><a href="#cb1-9" aria-hidden="true" tabindex="-1"></a><span class="pp">|</span> flask-4045 <span class="pp">|</span> timeout after 3 retries <span class="pp">|</span></span>
+<span id="cb1-10"><a href="#cb1-10" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-11"><a href="#cb1-11" aria-hidden="true" tabindex="-1"></a>…and 11 more, all the same.</span>
+<span id="cb1-12"><a href="#cb1-12" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb1-13"><a href="#cb1-13" aria-hidden="true" tabindex="-1"></a>I propose to run the 14 again: the outage is over and nothing in them failed. The alternative is to drop them from scoring, leaving the task at 106 of 120. Run them again?</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>A finished task’s scan findings, one row per finding:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb2"><pre class="sourceCode markdown code-with-copy"><code class="sourceCode markdown"><span id="cb2-1"><a href="#cb2-1" aria-hidden="true" tabindex="-1"></a><span class="fu">## cybench@openai/gpt-5 finished: 2 findings need your decision</span></span>
+<span id="cb2-2"><a href="#cb2-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-3"><a href="#cb2-3" aria-hidden="true" tabindex="-1"></a><span class="pp">|</span> finding <span class="pp">|</span> samples <span class="pp">|</span> proposed <span class="pp">|</span> why <span class="pp">|</span></span>
+<span id="cb2-4"><a href="#cb2-4" aria-hidden="true" tabindex="-1"></a><span class="pp">|---|---:|---|---|</span></span>
+<span id="cb2-5"><a href="#cb2-5" aria-hidden="true" tabindex="-1"></a><span class="pp">|</span> build tools unreachable in the image <span class="pp">|</span> 2 <span class="pp">|</span> run them again <span class="pp">|</span> cargo could not reach the registry for twenty minutes; baseline and new tests both exit 101, and the registry is back <span class="pp">|</span></span>
+<span id="cb2-6"><a href="#cb2-6" aria-hidden="true" tabindex="-1"></a><span class="pp">|</span> fetched the answer from the internet <span class="pp">|</span> 1 <span class="pp">|</span> score 0 <span class="pp">|</span> pulled the upstream fix and the gold test file from proxy.golang.org at <span class="co">[</span><span class="ot">M39</span><span class="co">]</span> <span class="pp">|</span></span>
+<span id="cb2-7"><a href="#cb2-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-8"><a href="#cb2-8" aria-hidden="true" tabindex="-1"></a>Also noted, nothing to do: 5 samples where the grader could not find its own tests scored 0.0 as the benchmark computes it, and 4 samples refused the task and scored 0. The report says so for both.</span>
+<span id="cb2-9"><a href="#cb2-9" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb2-10"><a href="#cb2-10" aria-hidden="true" tabindex="-1"></a>Go ahead as proposed?</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>A stop:</p>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3"><pre class="sourceCode markdown code-with-copy"><code class="sourceCode markdown"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="fu">## Stopped: the logs and the definition disagree about what gaia is</span></span>
+<span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-3"><a href="#cb3-3" aria-hidden="true" tabindex="-1"></a>The worker for gaia@anthropic/claude-opus-5 refused to resume: its log names 165 samples and the definition now names 200. I have paused new work so nothing runs on a premise I doubt; the tasks already running are finishing.</span>
+<span id="cb3-4"><a href="#cb3-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb3-5"><a href="#cb3-5" aria-hidden="true" tabindex="-1"></a>Was the dataset changed on purpose? If so I will relaunch it; if not, tell me which is right.</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<section id="stopping" class="level3">
+<h3 class="anchored" data-anchor-id="stopping">Stopping</h3>
+<p>Stop when a retry is not the answer:</p>
 <ul>
-<li><strong>Decide to sign off.</strong> <code>steward signoff</code> records that a <em>person</em> accepted these results. Telling the human the run is ready is your job, and running the command once they answer is too — with their name in <code>--by</code>, which is the same rule <code>steward rule</code> already applies to a decision you are relaying. What is never yours is the decision: a signature nobody asked for is the one thing that would make the whole record meaningless.</li>
-<li><strong>Edit the definition.</strong> It is the human’s statement of what is being measured, and afterwards your edit is indistinguishable from theirs. Read it, run it, and raise anything that looks wrong as a <em>question</em>. This includes adding a comment explaining what the eval set is for: you were never told why it exists, and a plausible-but-invented rationale is worse than none, because a later reader cannot tell it from the author’s.</li>
-<li><strong>Write <code>_steward.yaml</code> unasked.</strong> Propose the exact text, and write only what the human approved — the settings as much as the policies. Once they have answered, typing it is yours the same way <code>steward rule --by</code> and <code>steward signoff --by</code> are. What is never yours is the decision: promoting a one-off ruling into a standing rule widens what they have committed to, and the widening is theirs to authorize. See <em>Writing a standing rule</em>.</li>
-<li><strong>Move or delete a log.</strong> Not even an empty cancelled one, and not into a folder named for discards. Resume matches logs where they are.</li>
-<li><strong>Pass <code>steward launch --accept-archive</code> on your own judgement.</strong> A launch that would move results out of <code>logs/</code> prints what it would move and refuses. Adding work is different: if the delta is purely additive, <code>launch</code> commits it and you needed nobody’s permission — the human asked for the work, and checking whether they meant it is the interruption Steward exists to remove. But a one-character change to a task argument reads exactly like a deliberate removal, and only one of the two quietly buys a re-run of everything. So show the human the delta and let them answer. <strong>The refusal is the mechanism, not an obstacle to it</strong>: a flag reached for reflexively is the same as no gate.</li>
+<li>the smoke fails a second time</li>
+<li>a worker fails on identity or resume: the logs on disk and the definition disagree about what the eval is</li>
+<li>numbers fail sanity, such as a sample count that does not match the dataset</li>
+<li>the next step is destructive or irreversible</li>
+<li>a credential failure survives a retry</li>
+<li>you are about to relaunch the same task a third time</li>
+</ul>
+<p>A stop is not a teardown. Healthy work keeps running. What you do:</p>
+<ol type="1">
+<li><code>steward note</code> the state and your hypothesis.</li>
+<li><code>steward notify MESSAGE --kind stopped --detail ...</code> with the question you need answered.</li>
+<li><code>steward pause --by agent --reason ...</code> only if new work would be spent on a premise you now doubt. Pausing stops scheduling; work in flight finishes.</li>
+</ol>
+<p>Then leave it. The rest of the queue is still yours; the question waits for an operator. Do not work around the block.</p>
+</section>
+</section>
+<section id="each-session" class="level2">
+<h2 class="anchored" data-anchor-id="each-session">Each session</h2>
+<p><strong>Arm your own return first.</strong> Nothing wakes you: the timer runs <code>steward tend</code> on its own and never calls you back. Before anything else, and unasked, point whatever your harness has for recurring work, a scheduled prompt or a background watch, at <code>steward collect</code> on roughly the tend interval, and handle what it returns. Keep it while the run has work: a task running or queued, a re-run pending, a ruling not yet written into the log. Take it down when the verdict is 🏁 and the decisions section says nothing is for you, and at signoff; a finished run waiting on the operator has nothing for you to read every ten minutes. Arm it again after anything you record that gives the run work: a rerun, a zero, a resume, a launch. If your harness has nothing of the kind, say so once.</p>
+<p>Pick up cold, in this order:</p>
+<ol type="1">
+<li>This runbook, then <code>_steward.yaml</code>.</li>
+<li><code>steward collect</code>: what is true now, and what happened since you last looked. <code>--peek</code> reads without marking it read; <code>--since 0</code> reads the whole history.</li>
+<li>The anomalies it lists, with any precedent printed beside them.</li>
+<li><code>analysis.md</code>, for what has been found and what it meant.</li>
+</ol>
+<p>Everything you need is in the workspace. Nothing depends on a conversation you were not part of.</p>
+<p><code>steward collect</code> has three sections: what needs a decision, the run, and what happened. Its header carries two ages: tended is the last tend, collected is the last time you looked. The verdict line says the state in words. <code>status.md</code> is the operator’s page, shorter and without item ids; everything you act on is in <code>collect</code>.</p>
+<p><strong>Collect regularly</strong>, on the schedule you armed above. The timer runs the loop; nothing runs you. A tend never invokes an agent, so the items it hands you wait until you look, and after two intervals without a collect they go to the operator’s channel as if there were no agent. That is also what happens once you stand down at 🏁, and it is right: what is left is theirs.</p>
+</section>
+<section id="investigating" class="level2">
+<h2 class="anchored" data-anchor-id="investigating">Investigating</h2>
+<p><strong>Trust the artifact, not the exit code.</strong> A task whose every sample errored still exits zero. Read the smoke digest, the log’s status and the anomaly count. Completion is not success.</p>
+<p><strong>Read the precedent first.</strong> <code>steward collect</code> lists every open class with counts, an example, and any prior ruling as precedent; the 11pm decision usually answers the 2am question.</p>
+<p><strong>A finished task’s findings.</strong> Every scan window a task has arrives as your item at once when the task lands. Investigate them all before you write anything: read the scorer’s output and the flagged transcripts. Then three ways out. A flag the transcript does not bear out, dismiss yourself. A finding that changes no score — a refusal, an attempt that earned nothing, a grader that could not grade its samples — rule <code>score</code> yourself, so the report carries it, and mention it below the table in one line: they see it and are asked nothing. What is left would change a number — score 0, drop from scoring, run them again — and that is the decision: propose it, one proposal per disposition, and put it to them as rows. Only what they can act on is a row.</p>
+<p><strong>Judging a scan finding.</strong></p>
+<ul>
+<li><strong>Behaviour that disqualifies a sample is disqualifying whether or not the environment allowed it.</strong> An agent that fetched the reference solution did not solve the task, and whether the sandbox should have blocked it is a bug to report alongside your ruling, not the question to put in place of it. Do not turn a finding about the trajectory into a question about the machinery; the operator then has to answer the wrong question before anything can move.</li>
+<li>The bar is whether the score can still be trusted, not whether the behaviour was interesting. Escalate only where you can name the mechanism and cite the decisive messages. Otherwise rule <code>score</code> yourself, with what the model did in the reason. <code>dismiss</code> is for a flag the transcript does not bear out: the scanner was wrong, and there is nothing to note.</li>
+<li><strong>Read the scorer’s own output first.</strong> It is the explanation on the sample’s score in <code>read_eval_log_sample_summaries</code>, and for a test-suite grader it names which tests failed. An agent whose own tests passed while the graded ones did not has failed the task.</li>
+<li>A failed attempt earns nothing. The model tried to read the grader and could not; the sandbox refused the network. The score stands, and the attempt is still a finding: rule <code>score</code> yourself with the attempt in the reason, so the report carries it.</li>
+<li>A transient fault is not the model’s. An image pull that failed, a registry the sandbox could not reach for twenty minutes: the samples can run again, and a <code>rerun</code> ruling invalidates just those samples in the finished log and relaunches the task for them. Propose <em>run them again</em>, and say what the fault was.</li>
+<li>A benchmark broken by construction is not a fault a re-run heals. A grader that runs none of its required tests, a baseline that fails before any change, a sample the verifier never grades: dropping those samples makes a number nobody else’s run has, and there is nothing for the operator to decide. Rule <code>score</code> yourself with what the grader could not do in the reason, note it below the table, and leave the fault to them to report upstream.</li>
+<li>A successful escape or a returned egress response is a finding at n=1, and the answer is <code>zero</code>.</li>
+<li>Rarity is not the signal. A class covering most of a task is the one to read first, because an exploit that works gets used everywhere.</li>
+<li>Zero a confirmed finding rather than excluding it: dropping the samples where a model cheated raises its score.</li>
+<li>Only boolean scanners open windows. Numbers and strings are recorded and never escalated; read them through the results, not the queue.</li>
+</ul>
+<p><strong>A running worker.</strong> A log says what a sample did once it landed. <code>inspect ctl</code> says what a worker is doing now, and is how you diagnose a task that is still running. <code>inspect ctl task</code> lists the running tasks with the id every other command takes as <code>TASK</code>. Every command accepts <code>--json</code>.</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 50%">
+<col style="width: 50%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>to see</th>
+<th>run</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td>a task’s samples and their status</td>
+<td><code>inspect ctl sample list TASK</code></td>
+</tr>
+<tr class="even">
+<td>the samples that errored, with the message</td>
+<td><code>inspect ctl sample errors TASK --content</code></td>
+</tr>
+<tr class="odd">
+<td>one sample’s status, timing, tokens, score and error history</td>
+<td><code>inspect ctl sample show TASK SAMPLE_ID</code></td>
+</tr>
+<tr class="even">
+<td>its conversation right now</td>
+<td><code>inspect ctl sample messages TASK SAMPLE_ID --all</code></td>
+</tr>
+<tr class="odd">
+<td>its transcript, event by event</td>
+<td><code>inspect ctl sample events TASK SAMPLE_ID</code></td>
+</tr>
+<tr class="even">
+<td>the worker’s configuration in force</td>
+<td><code>inspect ctl config TASK</code></td>
+</tr>
+</tbody>
+</table>
+<p>Reads are yours. Mutations go as far as a pre-authorization and no further: <code>sample cancel-tool-call</code> when <code>stuck_cancel</code> admits it, and lowering a limit through <code>inspect ctl config</code> while containing an incident. <code>task pause</code>, <code>task cancel</code>, <code>sample cancel</code> and <code>sample requeue</code> are an operator’s. Record every mutation with <code>steward note</code>. It leaves no other trace in the workspace.</p>
+</section>
+<section id="recording-what-was-decided" class="level2">
+<h2 class="anchored" data-anchor-id="recording-what-was-decided">Recording what was decided</h2>
+<p>Record the answer with the verb the item names, then <code>steward tend</code> so it takes effect now, and arm your return again if you had stood down. The mechanics are <code>steward</code> verbs and <code>inspect ctl</code>; reach for them before a script.</p>
+<section id="what-you-may-do" class="level3">
+<h3 class="anchored" data-anchor-id="what-you-may-do">What you may do</h3>
+<p><strong>Without asking.</strong> <code>launch --smoke</code> and <code>launch</code>. <code>tend</code>, <code>status</code>, <code>collect</code>. <code>raise</code>, <code>investigate</code>, <code>propose</code>, <code>notify</code>, <code>note</code>. <code>ramp hold</code> and <code>ramp resume</code>. Every <code>inspect ctl</code> read, and lowering a worker’s concurrency through <code>inspect ctl config</code> while containing an incident. <code>ack --by agent</code> for an item you resolved yourself, when nobody else would need to know. Writing <code>analysis.md</code>.</p>
+<p><strong>Only with an operator’s answer, recorded in <code>--by</code>.</strong> <code>ack --by operator</code>. <code>rule</code>, except <code>dismiss</code> and a scan finding’s <code>score</code> (see Anomalies). <code>signoff</code>. <code>pause</code> and <code>resume</code>, except during a stop (see Stopping). <code>launch --accept CHECK</code> and <code>launch --accept-archive</code>. Writing <code>_steward.yaml</code>. Any <code>inspect ctl</code> mutation of a sample or task; a pre-authorization in <code>_steward.yaml</code> is an answer already given.</p>
+<p><strong>Never.</strong> Edit the definition; raise the change as a question instead. Move or delete a log, not even an empty one. Answer a parked approval or <code>ask_user</code>; name the worker, print the command that attaches to it, notify, and wait.</p>
+<p><code>--by</code> records who decided, never who typed. <code>rule</code> and <code>signoff</code> record the operator’s name on their own; pass <code>--by</code> only for someone else. <code>ack</code>, <code>pause</code> and <code>ramp</code> take <code>operator</code> or <code>agent</code>.</p>
+</section>
+<section id="the-queue" class="level3">
+<h3 class="anchored" data-anchor-id="the-queue">The queue</h3>
+<p>What a tend cannot decide becomes an item in the queue. Every item has a kind, an owner (an operator or you), and the command that resolves it. A class of failed samples or scan findings is an anomaly. Each occurrence of a class opens a window, and a ruling closes it.</p>
+<p><code>collect</code> prints your queue: every open item you have not handed off, with its owner and the command that resolves it. Any unambiguous prefix of an id works; a finding’s label or a task’s display key works for anomalies, and <code>ack stalled:&lt;task&gt;</code> for items. An id changes when its condition changes, so an acknowledgement covers the condition as it was. Every kind not in the table under Reference is the operator’s: raise it. The item’s summary says what it is, and its action says what resolves it.</p>
+<p><strong><code>steward ack ID --reason ... --by operator|agent</code></strong> disposes of an item: it leaves every surface and reappears under what happened with who decided. It refuses what has its own verb, and names the verb.</p>
+<p><strong><code>steward raise ID [--note ...]</code></strong> hands an item to the operator who can decide it and closes nothing; it stops appearing in your queue. It refuses your own items, since nobody else would close them.</p>
+</section>
+<section id="anomalies" class="level3">
+<h3 class="anchored" data-anchor-id="anomalies">Anomalies</h3>
+<p>Failures that mean the same thing share a class: an exception at a raising frame (<code>error:TimeoutError@openai/_client.py:post</code>), a task that died a particular way (<code>task:no-log-exit:...</code>), samples an operator killed (<code>limit:operator</code>), a task whose every score is zero (<code>score:zero:...</code>), samples a scanner flagged (<code>scan:SCANNER:LABEL:TASK:HASH</code>), a scanner that failed (<code>scanerror:SCANNER</code>).</p>
+<p>Your verbs, in order:</p>
+<ol type="1">
+<li><code>steward propose CLASS... --action DISPOSITION --reason ...</code> makes classes that want the same answer one question. Classes wanting different answers are different proposals. It prints the sentence the operator will read; put that to them, not the id.</li>
+<li><code>steward rule</code> records the operator’s answer, two ways. <code>steward rule TASK --reason ...</code> takes every proposed finding of that task as proposed, where <code>TASK</code> is its display key. <code>steward rule FINDING --disposition D --reason ...</code> changes one row, where <code>FINDING</code> is the finding’s label when it is unique and <code>label:task</code> when it is not. <code>steward rule --proposal ID --reason ...</code> still works.</li>
+</ol>
+<p><code>steward investigate CLASS --note ...</code> is for a class you have to leave mid-way: it marks the class as being worked, and the note is for the next session.</p>
+<p><strong>Two rulings are yours alone.</strong> A class you have disproved: <code>steward rule CLASS --disposition dismiss --by agent --reason ...</code>. A scan finding that changes no score: <code>--disposition score</code>, which keeps every score as recorded and puts one line in the report. Make them as soon as the investigation gets there, rather than proposing them; the verb refuses <code>--by agent</code> for every other disposition.</p>
+<p><code>rerun</code>, <code>exclude</code> and <code>zero</code> are carried out by the tend. Run nothing. A <code>rerun</code> requeues samples in a running task in place, and has a landed log’s samples invalidated for relaunch; the window stays open until the re-run lands, and the same samples failing again come back as a question for the operator. An <code>exclude</code> is written into the log within a turn: the samples become unscored, with the reason, and the metrics are recomputed over the rest. A <code>zero</code> takes minutes, since what a zero is depends on the task’s scorer: Steward starts the task on just those samples in a scratch directory, stops each as it begins, and writes the scorer’s verdict on that empty attempt into the log; the transcript stays. Until a mark is written the report says so, and signoff waits. A class flagged as substrate (credentials, disk, storage) gets no rerun proposal from you; re-running into broken machinery burns the work twice.</p>
+<p>Two classes are quiet on purpose. A <code>task:</code> window heals itself when the respawn brings the task home; if it does not, <code>stalled</code> is the real question. A <code>limit:operator</code> window raises no item, since the operator knows what they did; it waits for the signoff conversation.</p>
+</section>
+<section id="scan-windows" class="level3">
+<h3 class="anchored" data-anchor-id="scan-windows">Scan windows</h3>
+<p>Nothing starts a scan: the worker runs each scanner as a sample finishes, and a <code>scan:</code> window opens when its rows land. Windows are per task, and one raises no item until its task has landed. A flagged sample in a running task is not yours to look at yet; <code>collect</code> lists its window as waiting. A ruling on one task’s window touches no other task’s samples, and the same finding ruled on another task is printed beside the window as precedent. Record each answer with <code>steward rule</code>. The task’s finished notification waits for your proposals and goes out with them; it stops waiting after six tends.</p>
+</section>
+<section id="notifying" class="level3">
+<h3 class="anchored" data-anchor-id="notifying">Notifying</h3>
+<p><code>steward notify MESSAGE --kind attention|stopped --detail TEXT...</code> is how you reach the operator when nobody is reading the conversation. <code>attention</code> means worth knowing, and work continues. <code>stopped</code> means nothing progresses until an operator answers. A question you are blocked on is <code>stopped</code>, always.</p>
+<p>Post rather than agonize, and do not batch. Steward limits its own posts to one per turn, so the channel is not tight. A skipped <code>stopped</code> is a run that waits all night for an answer nobody knew was wanted.</p>
+<p>Steward’s own posts already announce every new item an operator owns. Notify for what you found that no item says.</p>
+</section>
+</section>
+<section id="reference" class="level2">
+<h2 class="anchored" data-anchor-id="reference">Reference</h2>
+<section id="launching" class="level3">
+<h3 class="anchored" data-anchor-id="launching">Launching</h3>
+<p><strong>Smoke first.</strong> <code>steward launch --smoke</code> runs a few samples of every task under a wall-clock cap and launches nothing.</p>
+<p>The smoke fails on any errored sample and on four named checks: <code>context_window</code>, <code>reasoning</code>, <code>reasoning_api</code>, <code>scan_coverage</code>. <code>unexercised</code> and <code>undetermined</code> are not failures. Fix what failed rather than routing around it. <code>--accept CHECK</code> waives one check by name; an errored sample cannot be waived. Do not project the run’s spend from the smoke.</p>
+<p>A smoke that fails twice is a stop. Notify it explicitly: nothing posts before the first worker starts.</p>
+<p><strong>Then launch.</strong> <code>steward launch</code> shows what will change and starts the run.</p>
+<p><strong>The tend timer.</strong> <code>launch</code> arms it. <code>steward timer status</code> is how you check it, not the system scheduler. A run launched <code>--no-timer</code> carries an <code>unsupervised</code> item until an operator acknowledges it, which says they are driving by hand.</p>
+</section>
+<section id="item-kinds" class="level3">
+<h3 class="anchored" data-anchor-id="item-kinds">Item kinds</h3>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>kind</th>
+<th>owner</th>
+<th>it means</th>
+<th>you</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>stalled</code></td>
+<td>operator</td>
+<td>a task stopped progressing after its attempts and will not respawn</td>
+<td>find out why, then raise</td>
+</tr>
+<tr class="even">
+<td><code>drift</code></td>
+<td>operator</td>
+<td>the definition changed since it was captured</td>
+<td>raise; never edit it back</td>
+</tr>
+<tr class="odd">
+<td><code>stuck</code></td>
+<td>operator, or you when pre-authorized</td>
+<td>a sample has been quiet longer than <code>stuck_after</code></td>
+<td>see Stuck samples</td>
+</tr>
+<tr class="even">
+<td><code>parked</code></td>
+<td>operator</td>
+<td>a worker is waiting on an operator inside a sample</td>
+<td>raise and notify; never answer it</td>
+</tr>
+<tr class="odd">
+<td><code>tuning_proposal</code></td>
+<td>operator</td>
+<td>a task could take more concurrency than its setting allows</td>
+<td>relay it; ack with the answer</td>
+</tr>
+<tr class="even">
+<td><code>signoff_ready</code></td>
+<td>operator</td>
+<td>every task finished and nothing is open</td>
+<td>see Signoff</td>
+</tr>
+<tr class="odd">
+<td><code>anomaly</code></td>
+<td>you while open; operator once proposed, or after a failed re-run</td>
+<td>a class of failures or findings</td>
+<td>see Anomalies</td>
+</tr>
+<tr class="even">
+<td><code>unreadable</code></td>
+<td>you</td>
+<td>a log file could not be read</td>
+<td>look at the file; ack with what it was, or ask</td>
+</tr>
+<tr class="odd">
+<td><code>action_failed</code></td>
+<td>you</td>
+<td>something a tend tried to do failed</td>
+<td>do it by hand, or find out why</td>
+</tr>
+<tr class="even">
+<td><code>unwritten</code></td>
+<td>you</td>
+<td>a task has no write-up in <code>analysis.md</code></td>
+<td>write the section</td>
+</tr>
+<tr class="odd">
+<td><code>journal_damage</code></td>
+<td>you</td>
+<td>journal lines could not be read</td>
+<td>read them; ack with what they held</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="dispositions" class="level3">
+<h3 class="anchored" data-anchor-id="dispositions">Dispositions</h3>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 33%">
+<col style="width: 33%">
+<col style="width: 33%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>disposition</th>
+<th>it says</th>
+<th>honest for</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>rerun</code></td>
+<td>run these samples again</td>
+<td>anything but <code>scanerror:</code></td>
+</tr>
+<tr class="even">
+<td><code>exclude</code></td>
+<td>drop these samples from scoring: written into the log as unscored, with the reason</td>
+<td><code>error:</code>, <code>limit:</code>, <code>scan:</code></td>
+</tr>
+<tr class="odd">
+<td><code>zero</code></td>
+<td>score these samples as the task’s scorer scores an empty attempt: Steward runs the scorer for them</td>
+<td><code>error:</code>, <code>limit:</code>, <code>scan:</code></td>
+</tr>
+<tr class="even">
+<td><code>score</code></td>
+<td>score these samples as recorded</td>
+<td><code>error:</code>, <code>limit:</code>, <code>scan:</code></td>
+</tr>
+<tr class="odd">
+<td><code>accept</code></td>
+<td>the data stands, with a caveat the report carries (<code>--effect</code>)</td>
+<td>anything but <code>error:</code></td>
+</tr>
+<tr class="even">
+<td><code>dismiss</code></td>
+<td>looked, nothing here</td>
+<td>anything</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="stuck-samples" class="level3">
+<h3 class="anchored" data-anchor-id="stuck-samples">Stuck samples</h3>
+<p>A <code>stuck</code> item names samples alive but idle past <code>stuck_after</code>. Nothing failed and nothing is waiting on an operator; the task’s clock keeps running. It is not an anomaly, and it clears itself when the sample moves.</p>
+<p>The remedy is a ladder, and the item carries the command for its rung:</p>
+<ol type="1">
+<li>Cancel the tool call: <code>inspect ctl sample cancel-tool-call ...</code>. The call fails inside the sample, which continues. Yours only when <code>stuck_cancel:</code> in <code>_steward.yaml</code> admits it; the item then arrives owned by you. Run the command it carries, then <code>steward ack ID --by agent --reason ...</code>.</li>
+<li>Cancel the sample. An operator’s: it records an outcome in the eval’s data.</li>
+<li>Requeue the sample. An operator’s: it discards everything the sample did.</li>
+</ol>
+<p>Ask once. If the cancel was delivered and the call has not stopped, the item comes back with <code>:asked</code> in its id, owned by the operator. That means climb a rung; never repeat the ask.</p>
+</section>
+<section id="tuning" class="level3">
+<h3 class="anchored" data-anchor-id="tuning">Tuning</h3>
+<p>Tend ramps sample concurrency on its own, one step per clean window, and steps back on pushback. Every move shows in your next collect. A Hawk run is pinned by its config: no ramp actions, no tuning block, nothing to retune.</p>
+<ul>
+<li><code>steward ramp hold --reason ...</code> stops the climb; levels stay where they are and the defensive cut stays active. Add a task identifier to hold one task. <code>steward ramp resume</code> re-arms it. Both are yours on your own judgement.</li>
+<li>A <code>tuning_proposal</code> is capacity tend may not take: a pinned <code>max_samples</code> that is saturated and clean, or a ramp at the top of its range with no pushback. Raise it, and when the operator answers, <code>steward ack</code> with their answer. A different level is a different item.</li>
+<li>Never lower a pinned setpoint and never edit <code>samples_ramp</code>; both are the operator’s numbers. The one downward retune that is yours is under A running worker.</li>
 </ul>
 </section>
-<section id="rehearse-before-you-commit-a-night-to-it" class="level2">
-<h2 class="anchored" data-anchor-id="rehearse-before-you-commit-a-night-to-it">Rehearse before you commit a night to it</h2>
-<p><code>steward launch --smoke</code> runs a couple of samples per task under a wall-clock cap, into <code>.steward/smoke/</code>, and tells you whether the run is ready. It is the default first step, and the artifact it leaves is <code>.steward/smoke/digest.md</code>.</p>
-<p>It launches nothing. Two invocations: <code>--smoke</code> answers <em>is this ready</em>, and a plain <code>steward launch</code> acts on the answer. A launch with no passing smoke for its tasks says so and proceeds anyway — that is a warning, not a gate, because re-launching after a fix and resuming are both legitimate.</p>
-<p>Give it the flags the launch will get. It rehearses what the launch will run, so <code>--scan-model</code>, <code>--notification</code> and <code>--max-workers</code> belong here too; arguments and overrides you do not repeat are taken from the committed manifest, exactly as a re-launch takes them. Flags that shape the <em>launch</em> rather than the run — <code>--no-timer</code>, <code>--sync</code>, <code>--log-root</code>, <code>--tend-interval</code>, <code>--samples-ramp</code> and the like — are refused here rather than ignored, because <code>--smoke</code> launches nothing. Pass them to <code>steward launch</code> when you run it. The launch also warns when the last smoke covered the same tasks at a different <em>shape</em> — a grown dataset or a raised <code>epochs</code> keeps every task identifier while changing what the night costs — and when it ran different scanners or scanned with a different model.</p>
-<p>The slice is taken inside whatever your run already selects, so a run limited to <code>(100, 200)</code> rehearses the front of that window rather than samples nobody will run.</p>
-<p><strong>What it catches that a run does not.</strong> Most of the list is things that stop a run: a definition that will not import, a wrong model name or key, a sandbox image that will not start, a scorer that throws.</p>
-<p>None of those actually stop a <em>task</em>, which is why the digest reports what the <strong>samples</strong> did rather than whether the tasks finished. Workers run with <code>continue_on_fail</code> on, so every one of them lands as errored samples inside a log that finished <code>success</code>. Any errored sample fails the rehearsal, and unlike the checks below it cannot be waived — read the class it names, because that is the failure you were rehearsing to find. So does a task that finished holding fewer samples than the slice asked it for: nothing errored, nothing is marked, and a sample went missing anyway.</p>
-<p>Four more are worse still, because they do not stop anything — they produce an eval that completes, scores, and is quietly wrong:</p>
-<ul>
-<li><strong>the scanners ran</strong>, and what they flagged in the rehearsal. Two flagged samples before the sweep are worth more than two hundred after.</li>
-<li><strong>the scanners reached every transcript.</strong> A scan that recorded nothing looks exactly like a scan that found nothing, so a clean findings list is only good news beside a full coverage. A definition that filters what its scanners see will leave a real gap here — that one is yours to waive by name.</li>
-<li><strong>every model resolved to a context window.</strong> A model that resolves to none runs at an assumed 128000 whatever its real window is, and stops shrinking oversized tool output entirely. A model with no database entry whose provider aliased it onto the current frontier is <em>fine</em> — the digest names which entry it landed on, so read that line rather than assuming.</li>
-<li><strong>reasoning is replayed to the model.</strong> Checked in the conversation and again in the raw request body, because a provider can drop on the wire what Inspect kept.</li>
-</ul>
-<p><strong>A failed check stops the launch.</strong> Say what failed when you tell the human, and fix it rather than routing around it. Three answers are not failures: <code>unexercised</code> means there was nothing to check — a non-reasoning model has no reasoning to replay — and <code>undetermined</code> means the check could not run here, usually a provider package this machine does not have. <code>--accept CHECK</code> waives one by name and records the waiver in the journal, so use it when you know why and never to make a red line go away.</p>
-<p><strong>Do not project the run’s spend from it, and do not ask the digest to.</strong> A rehearsal is a couple of samples off the front of each dataset, which is not a sample of the run in any sense that supports multiplying. The digest says how many samples the run will produce; that count is a fact and everything past it would be a guess wearing a number.</p>
-<p><strong>Stop and ask if a smoke fails twice.</strong> A rehearsal that keeps failing is a problem to understand, not to retry. And notify: before the first worker of the real run starts there is no tend, no <code>status.md</code> and nothing posting, so a launch blocked here is silent unless somebody says so.</p>
+<section id="standing-rules" class="level3">
+<h3 class="anchored" data-anchor-id="standing-rules">Standing rules</h3>
+<p>When you ask the same question twice, or the operator answers it the same way twice, the answer belongs in <code>_steward.yaml</code>. <code>policies:</code> is prose you apply in session; Steward carries it and never interprets it. <code>preauthorized:</code> maps a class pattern to the disposition it may receive, and tend applies it alone with nobody watching.</p>
+<p>Propose the wording, not the idea; the two lines you intend to add can be answered yes or no. A <code>preauthorized:</code> pattern needs a yes to the pattern as written: agreeing that timeouts are usually worth re-running is not agreeing to <code>error:*Timeout*</code> at 3am. Write it once they answer, and say what you wrote. The file carries no <code>--by</code>, so the diff is the provenance.</p>
 </section>
-<section id="trust-the-artifact-not-the-exit-code" class="level2">
-<h2 class="anchored" data-anchor-id="trust-the-artifact-not-the-exit-code">Trust the artifact, not the exit code</h2>
-<p>Every gate has an artifact that says what happened — the manifest delta, the smoke digest, the log itself, the anomaly count. A clean exit means a process ended, which is not the same as the work having succeeded. Steward runs evals with <code>fail_on_error=False</code>, so a task that completed with every sample errored exits zero. <strong>Completion is not success.</strong> Read the artifact.</p>
-</section>
-<section id="render-the-snapshot-do-not-replace-it" class="level2">
-<h2 class="anchored" data-anchor-id="render-the-snapshot-do-not-replace-it">Render the snapshot; do not replace it</h2>
-<p>“How is it going”, “what’s the latest”, “any update” are requests for the snapshot, not for your reading of it.</p>
-<blockquote class="blockquote">
-<p>Run <code>steward status --format md</code> and render what it printed — every section, in its order, in full, with nothing above it. As markdown, not inside a code fence, because it is a document with tables meant to be read rendered.</p>
-</blockquote>
-<p><code>--format md</code> rather than plain <code>status</code>: the default is aligned monospace columns for a terminal, which collapse into a line of words once rendered as markdown. Do not read <code>status.md</code> instead — <code>status</code> never writes that file, so it holds the last <em>tend</em>’s snapshot and can be a full interval stale while claiming to be current.</p>
-<p>Brevity is not the failure; substitution is. The detail <em>is</em> the answer, and a summary replaces the reader’s judgement with yours at the moment they were trying to form their own. Hold analysis by default, and put it <em>below</em> the snapshot, marked as yours, only when it is both important and not obvious from the snapshot: an arm that has stopped, a climbing retry count, a scan finding, anything in the anomaly list that is growing.</p>
-<p>This applies to a wake-up at 3am exactly as it applies to a question asked directly.</p>
-</section>
-<section id="your-queue-and-what-takes-something-out-of-it" class="level2">
-<h2 class="anchored" data-anchor-id="your-queue-and-what-takes-something-out-of-it">Your queue, and what takes something out of it</h2>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">steward</span> collect              <span class="co"># what is true now, and what happened since you last looked</span></span>
-<span id="cb1-2"><a href="#cb1-2" aria-hidden="true" tabindex="-1"></a><span class="ex">steward</span> collect <span class="at">--peek</span>       <span class="co"># the same, without marking it read</span></span>
-<span id="cb1-3"><a href="#cb1-3" aria-hidden="true" tabindex="-1"></a><span class="ex">steward</span> collect <span class="at">--since</span> 0    <span class="co"># the whole history, however far back</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p><code>collect</code> is the verb to start a session with. It prints the same three sections <code>status</code> does — what needs a decision, where the run stands, what happened — and adds the one thing a snapshot cannot give you: the stretch of history since your last collection. A snapshot says what is true now. It cannot say that a task died at 1am and was respawned, or that a class grew from three instances to forty, and that series is what most judgement calls need.</p>
-<p><strong>Reading consumes nothing.</strong> The cursor governs history alone, and an open decision leaves your queue only because you <em>acted</em> on it. So a session that dies mid-investigation finds its work waiting, and there is no ordering discipline for you to remember.</p>
-<p>Two acts take an item out of the queue, and which one is right is decided by who owns the item — <code>collect</code> prints that beside each one.</p>
-<ul>
-<li><p><strong><code>steward ack &lt;id&gt; --reason "..."</code></strong> closes it. Ask first: acking removes an item from every surface including the verdict, so an agent free to ack unasked can silence its own attention list. Record the human’s answer as <code>--by human</code>. The narrow exception is something you investigated and resolved yourself — a file that turned out to be a partial upload — which is <code>--by agent</code>. The test is whether anyone but you would need to know.</p></li>
-<li><p><strong><code>steward raise &lt;id&gt; [--note "..."]</code></strong> hands it to the person who can decide it, and <strong>closes nothing</strong>. Do this freely and without asking: putting a human-owned item in front of the human is you doing your job, not deciding anything. The item stays in the summary’s decisions and the verdict still counts it; what changes is that <code>collect</code> stops offering it back to you every time you look. The note is optional, and is for what you actually did to surface it — where you asked, and of whom.</p>
-<p><strong>Only a human-owned item can be raised</strong>, and the command refuses the rest. Raising takes something out of your queue without closing it, which is safe only because somebody else is going to close it — do that to your own item and it is stranded: open forever, and gone from the one list that would have brought it back to you. If you are stuck on an agent-owned item, that is a question to ask in the conversation, not a hand-off to record.</p></li>
-</ul>
-<p><strong>A parked worker refuses an ack.</strong> A sample stopped on a tool approval or an <code>ask_user</code> is waiting for authority over what the eval does, which is the human’s alone — and it holds its slot, its sandbox and its model connections the whole time. So <code>ack</code> refuses it whatever reason you give. Raise it, pass on the attach command the item carries (<code>inspect acp</code>, whose picker floats the samples waiting on a person to the top), and leave it open: it clears when somebody answers it, and nothing else clears it.</p>
-<p><strong>An anomaly refuses an ack too — it closes through a ruling.</strong> See the next section; the dismissal that says <em>looked, nothing here</em> is <code>steward rule &lt;class&gt; --disposition dismiss</code>, recorded with a reason, never a wave-past.</p>
-<p>An item comes back if the condition <strong>changes</strong>, because its id encodes the instance rather than the condition: a task that stalls again at attempt 3 has a different id from the one that stalled at attempt 2, so it arrives as new work, while an unchanged condition stays raised and stays quiet.</p>
-<p><strong>Nothing <code>collect</code> sets aside is dropped silently.</strong> A shortened section says how much it left out and how to see it. Take those counts literally: <code>1 raised, awaiting a person</code> under an otherwise empty decisions section means there <em>is</em> an open decision, and it is not yours.</p>
-</section>
-<section id="a-sample-that-has-stopped-moving" class="level2">
-<h2 class="anchored" data-anchor-id="a-sample-that-has-stopped-moving">A sample that has stopped moving</h2>
-<p>A <strong>stuck</strong> item names samples that are alive but idle past <code>stuck_after</code> — nothing failed, nothing is waiting on a person, the task’s clock just keeps running. One item per task, and it is not an anomaly: nothing is broken and there is nothing to rule on. It clears on its own the moment the sample moves.</p>
-<p>The remedy is a ladder, cheapest rung first, and the item carries the applicable command ready to run:</p>
-<ul>
-<li><strong>Cancel the pending tool call</strong> (<code>inspect ctl sample cancel-tool-call ...</code>) — the call fails inside the sample, which continues and works with the failure. This rung is yours <strong>only when</strong> the human granted it in advance (<code>stuck_cancel:</code> in <code>_steward.yaml</code>), and the item says so by arriving agent-owned. Run the command it carries, then record what you did: <code>steward ack &lt;id&gt; --by agent --reason "cancelled bash in &lt;task&gt;"</code>. This is the narrow <code>--by agent</code> exception — something you did yourself — and the recorded reason is what keeps the next session from asking again.</li>
-<li><strong>Everything above that is the human’s.</strong> Cancelling the sample records an outcome (<code>--action score|error|cancel</code> is a judgement about the eval’s data), and a requeue discards everything the sample did. Raise the item and pass on the command it carries.</li>
-</ul>
-<p><strong>Ask once.</strong> A cancel is a request, and the feedback is explicit: if it was asked and the call has not stopped, the item comes back with <code>:asked</code> in its id and human-owned — <em>a cancel was asked and it did not stop</em>. That is the signal to climb a rung, never to repeat the ask.</p>
-</section>
-<section id="anomalies-from-failure-to-ruling" class="level2">
-<h2 class="anchored" data-anchor-id="anomalies-from-failure-to-ruling">Anomalies: from failure to ruling</h2>
-<p>Failures that mean the same thing share a <strong>class</strong> — an exception type at a raising frame (<code>error:TimeoutError@openai/_client.py:post</code>), a task that died a particular way (<code>task:no-log-exit:...</code>), an operator kill (<code>limit:operator</code>), a task whose every score is zero. A class absorbs instances until somebody rules on it; <code>status</code> lists what is open with counts, an example message, and any prior rulings attached.</p>
-<p>Your verbs, in the order a night usually uses them:</p>
-<pre><code>steward investigate &lt;class&gt; --note "..."   # mark it worked, so the next session does not redo you
-steward propose &lt;class&gt;... --action &lt;d&gt; --reason "..."   # these classes are one decision
-steward rule &lt;class&gt; --disposition &lt;d&gt; --reason "..." --by &lt;person&gt;   # record the decision</code></pre>
-<ul>
-<li><strong>Investigate freely.</strong> The note is a hand-off to the next session, not a diary. Prefixes work everywhere a class key does.</li>
-<li><strong>Propose freely.</strong> One action per proposal; classes wanting different answers are different proposals. The proposal becomes one consolidated question for the human, answerable whole or in part (<code>steward rule --proposal &lt;id&gt; [&lt;class&gt;...]</code>).</li>
-<li><strong>A ruling is never yours.</strong> <code>--by</code> names the person who decided — you relaying their answer is the ordinary path, and the record still says whose decision it was. The dispositions: <code>rerun</code>, <code>exclude</code>, <code>zero</code>, <code>score</code> for errored samples; <code>accept</code> (with <code>--effect</code>, the sentence the report carries) and <code>dismiss</code> for anomaly-level closure. <code>accept</code> is refused for <code>error:</code> classes — accepting errored samples as-is is exclusion wearing a decision’s clothes.</li>
-<li><strong>A substrate-flagged class gets no re-run proposal.</strong> Credentials, disk, storage: re-running into broken machinery burns the work twice. Verify first; a person ruling <code>rerun</code> directly is that verification.</li>
-</ul>
-<p>After a <code>rerun</code> ruling the tend carries it out itself: samples in a still-running task are requeued in place, and a landed log has exactly the ruled samples invalidated so the next turn re-launches it, reusing everything else. <strong>There is nothing for you to run</strong> — the window stays open while the re-run is in flight (the status says so), resolves itself when its tasks come home clean, and the same samples failing again comes back to the human as <em>the ruling’s premise did not hold</em>. A ruling can also arrive from a standing <code>preauthorized:</code> pattern in <code>_steward.yaml</code>; the record then says <code>by: policy</code>, and it is the same decision made earlier, not yours to make. Recurrence after any ruling opens a new generation carrying every prior ruling as precedent — so read the precedent lines before proposing; the 11pm decision usually answers the 2am question.</p>
-<p>Two classes deliberately make less noise than the rest. A <code>task:</code> window resolves itself once Steward’s own respawn brings the task home — leave it alone unless it is not healing, in which case the <code>stalled</code> item is the real question. And a <code>limit:operator</code> window (samples an operator killed) asks nothing inline at all: the operator knows what they did, so it waits in the anomalies block for the signoff conversation. Both still take a ruling any time someone wants to give one.</p>
-<section id="scan-findings-the-bar-is-threatened-integrity" class="level3">
-<h3 class="anchored" data-anchor-id="scan-findings-the-bar-is-threatened-integrity">Scan findings: the bar is threatened integrity</h3>
-<p>A <code>scan:</code> class is samples a scanner flagged — <code>scan:scoring_integrity:reward_hacking</code>, <code>scan:scoring_integrity:internet_egress</code>, one class per scanner and label. The window opens when the rows land, not when you decide something is wrong, so <strong>every flag needs a ruling before the run can be signed</strong>. That is deliberate: a flag nobody looked at is a hole in the record, and it should read like one.</p>
-<p>Your judgement is the whole product here, because the scanner already did the only part that could be automated. It read one transcript; you can read the population, the score, and the rest of the run.</p>
-<ul>
-<li><strong>The bar is whether the score can still be trusted</strong>, not whether the behaviour was interesting. Escalate only where you can name the mechanism, cite the decisive messages, and say what the number would be if the concern is real. If you cannot do all three, the honest ruling is <code>dismiss</code>.</li>
-<li><strong>A failed attempt is not a finding.</strong> The model tried to read the grader and could not; it tried to reach the network and the sandbox refused it. Nothing was earned and nothing was contaminated, so the score stands. Dismiss it — with the reason written out, because the person signing is told at signoff that these happened and the reason is what they read.</li>
-<li><strong>A <em>successful</em> escape or a returned egress response is a finding at n=1.</strong> One sample that actually got data from outside the sandbox is worth raising immediately; forty that tried and failed are worth one dismissal.</li>
-<li><strong>Rarity is not the signal.</strong> 197 of 200 flagged is the alarming case, not the noisy one — an exploit that works gets used everywhere, so a class covering most of a task is the one to read first, not the one to write off as a chatty scanner.</li>
-<li><strong>A confirmed validity finding is sample-shaped</strong>, so <code>exclude</code>, <code>zero</code> and <code>score</code> are all available beside <code>accept</code> — unlike an <code>error:</code> class. Use them: a score you have established is wrong should not be silently averaged in.</li>
-<li><strong>Dismiss on the record, never by silence.</strong> <code>steward rule &lt;class&gt; --disposition dismiss --reason "..."</code>. The reason is the entire artifact; a window left open blocks the signature and tells the next session nothing.</li>
-</ul>
-<p>Only boolean scanners open windows. A scanner returning a number or a string is recorded and readable and never escalated on its own — reading one is your job, through the results rather than through the queue.</p>
-</section>
-</section>
-<section id="writing-a-standing-rule" class="level2">
-<h2 class="anchored" data-anchor-id="writing-a-standing-rule">Writing a standing rule</h2>
-<p>When you notice yourself asking the same question twice, or the human answering it the same way twice, the answer belongs in <code>_steward.yaml</code> rather than in a conversation nobody can read afterwards. Two keys take one:</p>
-<ul>
-<li><strong><code>policies:</code></strong> — free-form text you apply when you are in session. Steward carries it and never interprets it, so write what a person would need to hear.</li>
-<li><strong><code>preauthorized:</code></strong> — an anomaly class pattern mapped to the disposition it may receive. Steward acts on this one itself, on a timer, with nobody watching.</li>
-</ul>
-<p>Propose, get an answer, then write it. Three things go with that.</p>
-<p><strong>Propose the wording, not the idea.</strong> <em>Shall I add a policy about timeouts?</em> cannot be answered without the human writing it themselves, which is the work you were trying to save them. The two lines you intend to add can be answered yes or no.</p>
-<p><strong>A <code>preauthorized:</code> pattern needs a yes to the pattern.</strong> It is the one key that widens what happens unattended, and the gap between them is where the damage lives: a human who agrees that provider timeouts are usually worth re-running has not thereby agreed that everything matching <code>error:*Timeout*</code> may be re-run at 3am without them.</p>
-<p><strong>Leave the edit visible.</strong> The workspace is a git repository and this file is tracked, so say plainly what you wrote and let <code>git diff</code> show it. Unlike a ruling, a YAML edit carries no <code>--by</code> and the file cannot say afterwards whose decision it was.</p>
-<p>The rest of the file is unchanged by this: the definition is still never yours to edit, and a setting the human has not approved is still not yours to write.</p>
-</section>
-<section id="preparing-a-signoff" class="level2">
-<h2 class="anchored" data-anchor-id="preparing-a-signoff">Preparing a signoff</h2>
-<p>When the verdict turns 🏁, the run is finished and nobody has accepted the results. That is a <code>signoff_ready</code> item, and it is the one item you cannot acknowledge — the only thing that closes it is <code>steward signoff</code>.</p>
-<p><strong>Tell the human.</strong> Notify; do not only say it in the conversation. Then get the run into a state where the answer is one command, because everything the gate refuses over is something you can prepare in advance:</p>
-<ul>
-<li><strong>Every anomaly window closed by a ruling</strong>, <code>limit:operator</code> included. Those raise no inline item on purpose, so they are the ones most easily left open — read the anomalies block, not the item list.</li>
-<li><strong>Say out loud what the scanners flagged and you dismissed.</strong> The readiness item counts them; you name them. A dismissal leaves no caveat and appears in <code>anomalies.md</code> nowhere — correctly, since the whole content of it is <em>this does not change the numbers</em> — but “the model tried to read the grader on four samples and failed every time” is something the person signing wants to have heard from you rather than to find later. The reasons are in the journal and in <code>analysis.md</code>; put them in the message.</li>
-<li><strong>Every errored sample covered by a ruling.</strong> <code>status</code> splits the errored cell; anything reading <code>undecided</code> refuses the signature.</li>
-<li><strong>Every task settled</strong> — complete, short with the hole accepted by a ruling, or stalled and acknowledged. An accepted hole is what the signature is <em>for</em>; an unnamed one is what it refuses. Acknowledging a <code>stalled</code> item settles its task: the guard fires on attempt history rather than on an anomaly, so there is often no class to rule and the ack is the decision.</li>
-<li><strong>Every log in the directory readable, or its absence named.</strong> A file that will not read is the one hole nobody can size, so signoff refuses until <code>steward ack unreadable:NAME --by NAME --reason ...</code> records why the results stand without it — and the signature then carries it as a caveat.</li>
-<li><strong>Every transcript scanned, or the gap ruled.</strong> A scanner that threw leaves a sample with no verdict either way, and that is indistinguishable in the findings from a sample that came back clean — so a run whose scans errored would otherwise be signed as <em>nothing was flagged</em>. Those samples are their own anomaly class, <code>scanerror:SCANNER:TYPE@FRAME</code>, and it refuses the signature until it is ruled like any other. <code>accept</code> and <code>dismiss</code> are the answers; <code>rerun</code>, <code>exclude</code> and <code>zero</code> are refused, because the samples are fine and only the reading of them failed. The class already says how many and out of what: one grader timeout in five hundred is a class of one, and a scanner that threw on every transcript is a class of five hundred. A scanner that <strong>never ran at all</strong> raises no class — it wrote no rows for one to be built from — and what shows it is the <code>scanned</code> column below, which is why reading that column is its own bullet.</li>
-<li><strong>Read the <code>scanned</code> column, because nothing refuses over it.</strong> It counts transcripts <em>every</em> scanner answered for against samples landed, and a shortfall means transcripts nobody looked at — a worker that died between logging and scanning, or a scanner added at a re-launch that will never revisit what already landed. Signoff does <strong>not</strong> block on it, deliberately: nothing Steward can run closes that gap, so a refusal would wedge the run rather than route it. Say the number in the message when you tell them the run is ready. <code>48 of 50 scanned</code> is a different thing to sign than <code>50 of 50</code>. The signature carries the shortfall by name among its exceptions, so it is durable whether or not anybody said it out loud — but the point of saying it is that they hear it <em>before</em> they answer, not after.</li>
-<li><strong>No worker still running a task the definition no longer names.</strong></li>
-<li><strong>Something to sign for at all.</strong> A capture that enumerated no tasks, or tasks that finished and produced no samples, is refused: a signature over no results is not a caveated attestation, it is a statement about nothing. This is the one refusal with no act that answers it — go and find out why the capture is empty.</li>
-</ul>
-<p>One more refuses and is not something to prepare: an action the turn <strong>could not carry out</strong> — an acceptance whose log amendment hit a read-only mount, say. Run it again; the next turn retries what failed, and one that keeps failing is a defect to look at rather than to sign around.</p>
-<p>What the signature names as its exceptions is the caveat list, not the ruling list: an acknowledged <code>stalled</code> task or <code>unreadable</code> log left a mark on the results and is named there too. Acknowledging one is a decision about the data, so give it the reason you would give a ruling — it ends up quoted in <code>anomalies.md</code> under the numbers.</p>
-<p>Then run it when they answer:</p>
-<pre><code>steward signoff --by NAME [--note TEXT]</code></pre>
-<p><code>--by</code> is the name of whoever decided, never yours and never a role — the same rule as <code>steward rule --by</code>. The command runs a final turn, refuses with every blocker at once if anything is still unnamed, moves superseded attempts into <code>logs-archive/</code>, records who signed and what they signed over, and takes the timer down. After it returns, nothing tends this run.</p>
-<p><strong>It does not commit the journal</strong>, and that is deliberate — the workspace is the human’s repository. What it guarantees instead is that the record is complete and quiescent when it returns, so a commit taken any time afterwards captures the same thing. Say so; do not commit on their behalf.</p>
-</section>
-<section id="writing-analysis.md" class="level2">
-<h2 class="anchored" data-anchor-id="writing-analysis.md">Writing <code>analysis.md</code></h2>
-<p><code>status.md</code> and <code>anomalies.md</code> are Steward’s; <code>AGENTS.md</code> and <code>_steward.yaml</code> are the human’s. <code>analysis.md</code> is the one file you and Steward share, and the line between you is a pair of HTML comments:</p>
+<section id="writing-analysis.md" class="level3">
+<h3 class="anchored" data-anchor-id="writing-analysis.md">Writing <code>analysis.md</code></h3>
+<p><code>analysis.md</code> is the one file you and Steward share. Steward owns what sits between a marker pair, one pair per task, and rewrites it every turn:</p>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4"><pre class="sourceCode markdown code-with-copy"><code class="sourceCode markdown"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="fu">## cybench@openai/gpt-5</span></span>
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a></span>
 <span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="co">&lt;!-- steward:begin cybench_0a1b2c3d --&gt;</span></span>
-<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="ss">- </span>scanned 48 of 50 transcripts — the rest carry no verdict either way</span>
-<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="ss">- </span>2 samples flagged for scoring integrity — scan<span class="sc">:scoring_integrity:</span>reward_hacking; no ruling yet</span>
+<span id="cb4-4"><a href="#cb4-4" aria-hidden="true" tabindex="-1"></a><span class="ss">- </span>scanned 48 of 50 transcripts</span>
+<span id="cb4-5"><a href="#cb4-5" aria-hidden="true" tabindex="-1"></a><span class="ss">- </span>2 samples in cybench flagged for reward hacking; no ruling yet</span>
 <span id="cb4-6"><a href="#cb4-6" aria-hidden="true" tabindex="-1"></a><span class="co">&lt;!-- steward:end --&gt;</span></span>
 <span id="cb4-7"><a href="#cb4-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>Both flagged samples tried to read the grader file and failed. Dismissed:</span>
-<span id="cb4-9"><a href="#cb4-9" aria-hidden="true" tabindex="-1"></a>the attempt is in the transcript, the score is honest, and the same two</span>
-<span id="cb4-10"><a href="#cb4-10" aria-hidden="true" tabindex="-1"></a>samples pass on a re-run.</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Every turn rewrites what is <strong>between</strong> the markers and nothing else. Your prose outside them comes back byte-identical, turn after turn, so you can write into a section while the run is still going and it will still be there at signoff.</p>
+<span id="cb4-8"><a href="#cb4-8" aria-hidden="true" tabindex="-1"></a>Both flagged samples tried to read the grader file and failed. Scores kept as recorded: the attempt is in the transcript and nothing was earned.</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<p>Write anywhere outside the markers, and never move or delete them; a section whose markers do not pair is left alone and stops updating. A section with no prose of yours raises <code>unwritten</code>, and “looked, nothing here” is an entry. Quote the decision, not just the outcome: which samples you opened, what the transcript showed, what would change your mind. Leave a removed task’s section alone.</p>
+</section>
+<section id="signoff" class="level3">
+<h3 class="anchored" data-anchor-id="signoff">Signoff</h3>
+<p>At 🏁 every task has finished and nobody has accepted the results. Tell the operator by notification, then get the run to where their answer is one command. A refused <code>steward signoff</code> signs nothing and prints every blocker with its remedy, so run it early and work the list: windows to rule (<code>limit:operator</code> included, since it raises no item), errored samples to cover, tasks to settle, unreadable logs to acknowledge, <code>scanerror:</code> classes to rule. Acknowledging a stall or an unreadable log is a decision about the data, so give it a ruling’s reason.</p>
+<p>The gate does not refuse over these, so say them yourself. Render the by-task table from <code>steward status --format md</code>; it is the samples they are signing over. Read the <code>scanned</code> column of <code>steward collect</code> aloud: 48 of 50 scanned is a different thing to sign than 50 of 50. Name the scan findings you dismissed or noted and why; the operator hears that from you, not from the file. When the readiness item names a log store, ask whether to publish and never assume; a published log is a claim other projects reuse sight-unseen.</p>
+<p>Then, when they answer:</p>
+<p><code>steward signoff [--by NAME] [--note TEXT] [--publish]</code></p>
+<p>It runs a final turn, archives superseded attempts, records who signed and over what, and disarms the timer. It does not commit the journal; the workspace is the operator’s repository, so say so and do not commit for them.</p>
+</section>
+<section id="context-discipline" class="level3">
+<h3 class="anchored" data-anchor-id="context-discipline">Context discipline</h3>
 <ul>
-<li><strong>One section per task</strong>, appended with an empty placeholder the first time Steward sees the task. A section whose prose is empty raises an item — one per task, yours, not acknowledgeable. There is no way to wave it past, because <em>looked, nothing here</em> is the entry: a task whose numbers turned out to be unremarkable is a finding, and the person reading this in a month needs to know you looked.</li>
-<li><strong>Do not move or delete the markers.</strong> A section whose <code>steward:begin</code> and <code>steward:end</code> do not pair is left completely alone — Steward will not guess at a boundary in a file whose other half is your work — so its facts silently stop being updated and the damage goes to <code>.steward/steward.log</code>. If you have broken one, put it back.</li>
-<li><strong>Write outside them, anywhere</strong>: above the block, below it, in sub-headings of your own. The only reserved text in the file is the marker pair.</li>
-<li><strong>Quote the decision, not just the outcome.</strong> The facts block already carries the disposition and the ruling’s own words. What it cannot carry is why you believe them — which samples you opened, what the transcript actually showed, what would change your mind.</li>
-<li><strong>A section for a task the definition no longer names is left alone.</strong> The file is durable and a removed task’s investigation is still what happened.</li>
+<li>Take the log directory from <code>steward collect</code>; never assume <code>logs/</code>.</li>
+<li>Never read a full eval log. <code>read_eval_log(path, header_only=True)</code> gives status and counts; <code>read_eval_log_sample_summaries</code> or <code>samples_df</code> give per-sample data. The anomaly already carries the evidence detection read, so start there.</li>
+<li>Transcript analysis goes through a scan, never a raw log read.</li>
+<li>Narrow to the samples in question before opening anything.</li>
 </ul>
-<p>It reaches the log directory through the ordinary sync, so a remote reader gets it beside <code>status.md</code> with no step of your own.</p>
-</section>
-<section id="context-is-the-real-budget" class="level2">
-<h2 class="anchored" data-anchor-id="context-is-the-real-budget">Context is the real budget</h2>
-<ul>
-<li><strong>Take the log directory from the summary, never from the workspace.</strong> The <code>Logs</code> line in <code>status.md</code> is where this run’s results are, and it is often not <code>logs/</code> here — a definition can name its own, and a machine can put every run under a shared root. Anything you point at <code>logs/</code> on the assumption that it exists will find nothing rather than fail.</li>
-<li><strong>Never read a full eval log.</strong> Use <code>header_only=True</code> for status and counts; <code>read_eval_log_sample_summaries</code> or <code>samples_df</code> for per-sample data. A full read pulls the whole archive for what the header already has. Steward’s own detection already read each errored sample once and put the evidence in the anomaly — start an investigation from the evidence, not by re-reading logs.</li>
-<li><strong>Transcript analysis goes through a scan</strong>, never a raw log read.</li>
-<li><strong>Narrow an anomaly before opening it.</strong></li>
-</ul>
-</section>
-<section id="the-cadence-and-how-it-is-guaranteed" class="level2">
-<h2 class="anchored" data-anchor-id="the-cadence-and-how-it-is-guaranteed">The cadence, and how it is guaranteed</h2>
-<p><em>Not yet written.</em> A timer, not you, guarantees the mechanical tend.</p>
-</section>
-<section id="cold-pickup" class="level2">
-<h2 class="anchored" data-anchor-id="cold-pickup">Cold pickup</h2>
-<p>Attaching to a run you did not start: <code>steward runbook</code>, then <code>_steward.yaml</code> for this human’s standing rules, then <strong><code>steward collect</code></strong> for what is true and what you missed — the anomaly list arrives with it, investigation notes and precedent included, so a class the last session was working says so. Then read <strong><code>analysis.md</code></strong>, which is where the last session’s reading of the numbers is: the facts blocks are regenerated and tell you nothing you cannot get from <code>status</code>, and the prose around them is the part no command reproduces. Everything you need is in the workspace, and nothing depends on a conversation this session did not have.</p>
-<p>One caveat on the second of those: every setting, <code>policies</code> included, can also arrive from a <code>STEWARD_*</code> environment variable, which outranks the file and is not in the workspace at all. <code>steward status</code> reports the standing rules actually in force, so read the file for the reasoning behind them and <code>status</code> for what is set.</p>
-</section>
-<section id="tuning-inside-the-envelope" class="level2">
-<h2 class="anchored" data-anchor-id="tuning-inside-the-envelope">Tuning inside the envelope</h2>
-<p>Tend ramps sample concurrency on its own; your part is oversight, not the arithmetic. Unless a <code>max_samples</code> is pinned somewhere, every task starts at the ramp’s floor and climbs one step per clean window — limiter saturated, no rate-limit pushback, no new errors, retries not surging, CPU with headroom — and on sustained pushback tend cuts the connection ceiling at once and steps sample concurrency back down. Every move is a journal action, so your next collect shows it as history (<code>ramped &lt;task&gt; 60→80 — ...</code>), and the tuning block under the status table shows each task’s level and whatever gates its next step.</p>
-<p><strong>A Hawk config always pins it</strong>, because Hawk’s infra config sets <code>max_samples</code> itself. So a Hawk run shows no ramp actions and no tuning block, and that is the loop obeying the config rather than a loop that has stopped working. Do not retune around it: the number is the run owner’s to change, in the Hawk config.</p>
-<ul>
-<li><strong>When a ramp action coincides with something you dislike</strong> — errors or anomalies rising, pushback the cut is not containing, CPU climbing — run <code>steward ramp hold --reason "..."</code> (add a task identifier to hold one arm). Levels stay where they are and the defensive cut stays active; only the climb stops. <code>steward ramp resume</code> re-arms it. Holding is yours to do on your own judgement; explain it in the reason, because the reason is the record.</li>
-<li><strong>A <code>tuning_proposal</code> is capacity tend has no authority to take</strong> — a pinned <code>max_samples</code> showing a clean, saturated window, or a ramp at the top of its range with pushback still absent. Only the human can move that bound: raise it to them, and when they rule, record the ruling for them with <code>steward ack</code> (“seen, happy at 60”). The ack is narrow — a different level is a different item — so it never silences the next proposal.</li>
-<li><strong>Never lower a pinned setpoint and never edit <code>samples_ramp</code> yourself</strong> — both are the human’s numbers. What you may do freely is hold, resume, and retune <em>downward</em> through <code>inspect ctl config</code> when you are containing an incident; tend will not climb past your hold.</li>
-</ul>
-</section>
-<section id="when-to-notify" class="level2">
-<h2 class="anchored" data-anchor-id="when-to-notify">When to notify</h2>
-<p><strong><code>steward notify "..."</code> reaches the human when nobody is reading the conversation</strong>, which is most of the night. It is the single most valuable thing you do that no trigger could do for you: Steward’s own posts are arithmetic over what a turn saw, and yours carry an interpretation — <em>“the sonnet arm is failing systematically, I’ve paused it, here’s why”</em>.</p>
-<pre><code>steward notify "the grader is failing on every sample since 01:40" \
-  --kind stopped \
-  --detail "8 tasks affected, all against the same grader model" \
-  --detail "paused the run; nothing new is being scheduled"</code></pre>
-<p>Two kinds are yours:</p>
-<ul>
-<li><strong><code>--kind attention</code></strong> (the default) — worth knowing, and work continues.</li>
-<li><strong><code>--kind stopped</code></strong> — nothing progresses until a person answers.</li>
-</ul>
-<p><strong>A question you are blocked on is <code>stopped</code>, always.</strong> It is the most important thing you will send and the easiest to leave sitting in the conversation where nobody is reading it. That is the kind’s entire reason for existing.</p>
-<p>The other four kinds — <code>progress</code>, <code>clear</code>, <code>gate</code>, <code>signed_off</code> — are Steward’s and the command refuses them. Each is either latched, terminal, or read off state you do not own, and a hand-sent one is a claim about the run that nobody computed.</p>
-<p><strong>Post rather than agonise, and do not batch.</strong> Steward already batches its own posts to one per turn, so the noise budget you are spending from is not tight. The cost of an unnecessary <code>attention</code> is one line in a channel; the cost of a skipped <code>stopped</code> is a run that waits all night for an answer nobody knew was wanted.</p>
-<p><strong>Notifying is not raising, and one does not imply the other.</strong> <code>steward raise</code> records that an item is with the person who can decide it; <code>notify</code> is how you actually tell them. Do both when you hand something over — the item stays in the summary either way, and the post is what makes somebody look at it.</p>
-<p><strong>With no channel configured the command fails rather than succeeding quietly</strong>, so an escalation you thought you made is never one you did not. If that happens, say so in the conversation and put it in your writeup; the remedy is a <code>notification</code> setting and it is the human’s to add.</p>
-</section>
-<section id="hard-stops" class="level2">
-<h2 class="anchored" data-anchor-id="hard-stops">Hard stops</h2>
-<p><em>Not yet written.</em> Conditions to stop and ask on rather than work around. A stop is not a teardown: healthy work keeps running.</p>
 
 
+</section>
 </section>
 </section>
 

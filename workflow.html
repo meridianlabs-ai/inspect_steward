@@ -320,8 +320,20 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <li><a href="#notifications" id="toc-notifications" class="nav-link" data-scroll-target="#notifications">Notifications</a></li>
   </ul></li>
   <li><a href="#signoff" id="toc-signoff" class="nav-link" data-scroll-target="#signoff">Signoff</a></li>
-  <li><a href="#eval-logs" id="toc-eval-logs" class="nav-link" data-scroll-target="#eval-logs">Eval Logs</a></li>
-  <li><a href="#options" id="toc-options" class="nav-link" data-scroll-target="#options">Options</a></li>
+  <li><a href="#eval-logs" id="toc-eval-logs" class="nav-link" data-scroll-target="#eval-logs">Eval Logs</a>
+  <ul class="collapse">
+  <li><a href="#log-directory" id="toc-log-directory" class="nav-link" data-scroll-target="#log-directory">Log Directory</a></li>
+  <li><a href="#log-store" id="toc-log-store" class="nav-link" data-scroll-target="#log-store">Log Store</a></li>
+  </ul></li>
+  <li><a href="#options" id="toc-options" class="nav-link" data-scroll-target="#options">Options</a>
+  <ul class="collapse">
+  <li><a href="#logs" id="toc-logs" class="nav-link" data-scroll-target="#logs">Logs</a></li>
+  <li><a href="#supervision" id="toc-supervision" class="nav-link" data-scroll-target="#supervision">Supervision</a></li>
+  <li><a href="#concurrency" id="toc-concurrency" class="nav-link" data-scroll-target="#concurrency">Concurrency</a></li>
+  <li><a href="#errors" id="toc-errors" class="nav-link" data-scroll-target="#errors">Errors</a></li>
+  <li><a href="#standing-rules" id="toc-standing-rules" class="nav-link" data-scroll-target="#standing-rules">Standing Rules</a></li>
+  <li><a href="#scanning" id="toc-scanning" class="nav-link" data-scroll-target="#scanning">Scanning</a></li>
+  </ul></li>
   <li><a href="#advanced" id="toc-advanced" class="nav-link" data-scroll-target="#advanced">Advanced</a>
   <ul class="collapse">
   <li><a href="#agent-oversight" id="toc-agent-oversight" class="nav-link" data-scroll-target="#agent-oversight">Agent Oversight</a></li>
@@ -356,7 +368,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 
 <section id="overview" class="level2">
 <h2 class="anchored" data-anchor-id="overview">Overview</h2>
-<p>Steward runs evaluations from a workspace directory that includes the eval-set definition, steward-specific options, a journal of the entire run, and human readable documents on run status. Evaluations are launched as background processes and monitored using a scheduled job, with coding agents and humans proactively notified when they are needed for a decision.</p>
+<p>Steward runs evaluations from a workspace directory that includes the eval-set definition, steward-specific options, a journal of the entire run, and human readable documents on run status. Evaluations are launched as background processes and monitored using a scheduled job, with coding agents and operators proactively notified when they are needed for a decision.</p>
 <p>We’ll walk through the various phases of the workflow below, then cover <a href="#steward-options">options</a> you can use to customize Steward’s behavior and other <a href="#advanced">advanced</a> topics like pausing runs and modifying runs in flight.</p>
 </section>
 <section id="workspace" class="level2">
@@ -381,7 +393,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   CLAUDE.md           # agent instructions for managing a run
   evalset.py          # eval-set definition (or config.py / hawk.yaml)
   journal.jsonl       # append-only journal of workspace actions
-  status.md           # human readable current status of run</code></pre>
+  status.md           # the operator's page: where the run stands, what waits on them</code></pre>
 </div>
 <p>Your eval set definition can be any script which ends with a call to <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> or a <a href="./flow.html">Flow</a> or <a href="./hawk.html">Hawk</a> configuration. For example:</p>
 <div class="code-with-filename">
@@ -396,6 +408,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb3-6"><a href="#cb3-6" aria-hidden="true" tabindex="-1"></a>    model<span class="op">=</span>[<span class="st">"openai/gpt-5.6-sol"</span>, <span class="st">"anthropic/claude-opus-5"</span>],</span>
 <span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
+<p>Your task before launching is to provide the eval set definition and adjust any settings you need in <code>_steward.yaml</code>. The defaults are generally suitable, but be sure to review <a href="./concurrency.html">Concurrency</a> against the specifics of your evals and infrastructure.</p>
 </section>
 <section id="execution" class="level2">
 <h2 class="anchored" data-anchor-id="execution">Execution</h2>
@@ -408,10 +421,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="ex">❯</span> please run this evaluation.</span>
 <span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="ex">─────────────────────────────────────────────────────────</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
-<p>The agent is instructed to read the Steward <a href="./runbook.html">runbook</a> which provides instructions for conducting the evaluation. By default the agent will start with a smoke run (2 samples for each task, under a 15 minute wall-clock cap) to make sure config, infrstructure, and model connectivity is all workign as expected.</p>
-<p>The smoke reports what the <em>samples</em> did rather than whether the tasks finished, which matters because workers run with <code>continue_on_fail</code> on: a wrong key or a sandbox that will not start lands as errored samples inside a log that finished cleanly. Any errored sample fails the rehearsal, and so does a task that finished holding fewer samples than the rehearsal asked it for.</p>
-<p>It also checks four things that would not stop the run but would quietly spoil it: that the scanners work and what they flagged, that they reached every transcript rather than silently recording nothing, that every model resolved to a real context window rather than an assumed default, and that reasoning is being replayed to the model on later turns. It leaves a digest at <code>.steward/smoke/digest.md</code>, and a failing check stops the launch until you fix it or waive it by name.</p>
-<p>After the smoke, the agent will launch all of the tasks, set up a background monitoring process, and respond to alerts that require its intervention. Note that while it is recommended that you keep the agent attached during the evaluation it is not <em>required</em>. If you choose not to you should be sure to configure <a href="#notifications">notifications</a> so you know when to reconnect the agent to handle issues that arise.</p>
+<p>The agent reads the Steward <a href="./runbook.html">runbook</a> and follows it. It starts with a short smoke run to confirm that configuration, infrastructure and model access all work correctly. A failed smoke stops the launch until it is fixed or waived by the user.</p>
+<p>After the smoke the agent launches the tasks and works the decisions the run raises as the <a href="#tend-loop">tend loop</a> runs. Keeping the agent attached is recommended but not required. If you detach it, configure <a href="#notifications">notifications</a> so you know when to reconnect to it.</p>
 <section id="tend-loop" class="level3">
 <h3 class="anchored" data-anchor-id="tend-loop">Tend Loop</h3>
 <p>As the run proceeds, the <code>steward tend</code> command runs on a timer set up by <code>steward launch</code>. By default this timer runs every 10 minutes. The tend command performs the following actions automatically:</p>
@@ -472,18 +483,45 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </div>
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7" data-filename="Terminal"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">steward</span> signoff <span class="at">--by</span> <span class="st">"norah"</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
-<p>Signoff verifies that the run is eligible for signoff, ensures a clean final log directory, finalizes the journal and status, and disarms the tend loop timer. If you have a <a href="#log-store">Log Store</a> configured it will also write your logs into the log store.</p>
+<p>Signoff verifies that the run is eligible for signoff, ensures a clean final log directory, finalizes the journal and status, and disarms the tend loop timer. If you have a <a href="#log-store">Log Store</a> configured, the agent will also ask whether to publish your logs to it — add <code>--publish</code> if you want that.</p>
 </section>
 <section id="eval-logs" class="level2">
 <h2 class="anchored" data-anchor-id="eval-logs">Eval Logs</h2>
+<section id="log-directory" class="level3">
+<h3 class="anchored" data-anchor-id="log-directory">Log Directory</h3>
+<p>Logs are written to <code>logs/</code> inside the workspace. Two things can change this:</p>
 <ul>
-<li>where logs go</li>
-<li>log store</li>
+<li><p>If your eval set passes a <code>log_dir</code> to <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span>, Steward uses that.</p></li>
+<li><p>The <code>log_root</code> option or <code>STEWARD_LOG_ROOT</code> environment variable, for a machine that keeps logs somewhere else (a bigger disk, or an S3 bucket). Steward makes one directory per workspace underneath it.</p></li>
 </ul>
+<p>If you want your logs to be durable then we recommend setting <code>STEWARD_LOG_ROOT</code> to an S3 bucket or other permanent storage and letting Steward create subdirectories within it for each workspace.</p>
+</section>
+<section id="log-store" class="level3">
+<h3 class="anchored" data-anchor-id="log-store">Log Store</h3>
+<p>A log store lets several workspaces share results, so a task somebody has already run doesn’t run again. Point at one with the <code>log_store</code> option or the <code>STEWARD_LOG_STORE</code> environment variable:</p>
+<div class="code-with-filename">
+<div class="code-with-filename-file">
+<pre><strong>.env</strong></pre>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb8" data-filename=".env"><pre class="sourceCode ini code-with-copy"><code class="sourceCode ini"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="dt">STEWARD_LOG_STORE</span><span class="ot">=</span><span class="st">s3://our-bucket/eval-logs</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>The store can be a directory of <code>.eval</code> files, or a <a href="./flow.html">Flow</a> store (which requires the <code>flow</code> extra).</p>
+<p>A result is only reused when everything about the task matches: the task and its arguments, the model, the solver, the plan, the generate config, and the limits.</p>
+<p>Reading from a store happens automatically once you configure one. Publishing your own results into it does not, that only happens if you ask for it at signoff:</p>
+<div class="code-with-filename">
+<div class="code-with-filename-file">
+<pre><strong>Terminal</strong></pre>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb9" data-filename="Terminal"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb9-1"><a href="#cb9-1" aria-hidden="true" tabindex="-1"></a><span class="ex">steward</span> signoff <span class="at">--by</span> <span class="st">"norah"</span> <span class="at">--publish</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+</section>
 </section>
 <section id="options" class="level2">
 <h2 class="anchored" data-anchor-id="options">Options</h2>
-<p>Steward’s options can be specified in <code>_steward.yaml</code> in the root of the workspace or set with <code>STEWARD_*</code> environment variables in an <code>.env</code> file within the workspace or a parent directory.</p>
+<p>Steward’s options go in <code>_steward.yaml</code> at the root of the workspace, or in the environment as <code>STEWARD_&lt;OPTION&gt;</code> in an <code>.env</code> file within the workspace or a parent directory.</p>
+<section id="logs" class="level3">
+<h3 class="anchored" data-anchor-id="logs">Logs</h3>
+<p>Storage location for logs. These are typically specified at the machine level (<code>.env</code>). Use the <code>_steward.yaml</code> option to override for a given project.</p>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 25%">
@@ -493,7 +531,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </colgroup>
 <thead>
 <tr class="header">
-<th>Option</th>
+<th>_steward.yaml</th>
 <th>Environment</th>
 <th>Default</th>
 <th>Description</th>
@@ -501,34 +539,85 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </thead>
 <tbody>
 <tr class="odd">
-<td><code>notification</code></td>
-<td><code>STEWARD_NOTIFICATION</code></td>
-<td>none</td>
-<td>Where Steward posts what it cannot decide: an Apprise URL, several separated by commas, or an Apprise config file. <code>false</code> for nowhere.</td>
-</tr>
-<tr class="even">
 <td><code>log_root</code></td>
 <td><code>STEWARD_LOG_ROOT</code></td>
 <td>none</td>
-<td>Where this machine keeps logs, one directory per workspace. Read only where your definition names no <code>log_dir</code>.</td>
+<td>Root for this machine’s logs.</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>log_store</code></td>
 <td><code>STEWARD_LOG_STORE</code></td>
 <td>none</td>
-<td>Where to look for logs this run does not have to produce.</td>
+<td>Logs to reuse rather than run: a directory of <code>.eval</code> files or a Flow store.</td>
 </tr>
-<tr class="even">
+<tr class="odd">
+<td><code>sync</code></td>
+<td><code>STEWARD_SYNC</code></td>
+<td>log_dir</td>
+<td>Where the workspace’s files are mirrored on each tend.</td>
+</tr>
+</tbody>
+</table>
+<p>See <a href="#log-directory">Log Directory</a> and <a href="#log-store">Log Store</a> for additional details.</p>
+</section>
+<section id="supervision" class="level3">
+<h3 class="anchored" data-anchor-id="supervision">Supervision</h3>
+<p>Frequency of run tending and how to communicate notifications.</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>_steward.yaml</th>
+<th>Environment</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
 <td><code>tend_interval</code></td>
 <td><code>STEWARD_TEND_INTERVAL</code></td>
-<td><code>10m</code></td>
-<td>How often a scheduled tend runs. Always written with a unit.</td>
+<td>10m</td>
+<td>How often a scheduled tend runs, with a unit.</td>
 </tr>
+<tr class="even">
+<td><code>notification</code></td>
+<td><code>STEWARD_NOTIFICATION</code></td>
+<td>none</td>
+<td>Apprise URL(s) or an Apprise config file.</td>
+</tr>
+</tbody>
+</table>
+<p>See <a href="#tend-loop">Tend Loop</a> and <a href="#notifications">Notifications</a> for additional details.</p>
+</section>
+<section id="concurrency" class="level3">
+<h3 class="anchored" data-anchor-id="concurrency">Concurrency</h3>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>_steward.yaml</th>
+<th>Environment</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
 <tr class="odd">
 <td><code>samples_ramp</code></td>
 <td><code>STEWARD_SAMPLES_RAMP</code></td>
-<td><code>[40, 200]</code></td>
-<td>Range to discover sample concurrency in; <code>false</code> to fix it at the floor.</td>
+<td>[40, 200]</td>
+<td>Range to discover sample concurrency in; <code>false</code> for no automatic ramp.</td>
 </tr>
 <tr class="even">
 <td><code>max_workers</code></td>
@@ -536,48 +625,128 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <td>one per task</td>
 <td>Pack the run into this many worker processes.</td>
 </tr>
+</tbody>
+</table>
+<p>See <a href="./concurrency.html#automatic-ramp">Automatic Ramp</a> and <a href="./concurrency.html#worker-processes">Worker Processes</a> for additional details.</p>
+</section>
+<section id="errors" class="level3">
+<h3 class="anchored" data-anchor-id="errors">Errors</h3>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>_steward.yaml</th>
+<th>Environment</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
 <tr class="odd">
 <td><code>stall_after</code></td>
 <td><code>STEWARD_STALL_AFTER</code></td>
-<td><code>2</code></td>
+<td>2</td>
 <td>Fruitless respawns before a task is given up on and reported.</td>
 </tr>
 <tr class="even">
 <td><code>stuck_after</code></td>
 <td><code>STEWARD_STUCK_AFTER</code></td>
-<td><code>5h</code></td>
-<td>Report a running sample that has gone this long without activity. A reporting threshold, never a limit.</td>
-</tr>
-<tr class="odd">
-<td><code>stuck_cancel</code></td>
-<td><code>STEWARD_STUCK_CANCEL</code></td>
-<td>none</td>
-<td>Stuck tool calls the agent may cancel without asking (<code>true</code> for any, or a list of tool names).</td>
-</tr>
-<tr class="even">
-<td><code>sync</code></td>
-<td><code>STEWARD_SYNC</code></td>
-<td>the log directory</td>
-<td>Where the workspace’s own files are mirrored to; <code>false</code> for nowhere.</td>
-</tr>
-<tr class="odd">
-<td><code>scan_model</code></td>
-<td><code>STEWARD_SCAN_MODEL</code></td>
-<td>the sample’s own model</td>
-<td>The model scanners use. <code>false</code> clears an ambient <code>SCOUT_SCAN_MODEL</code>.</td>
+<td>5h</td>
+<td>Report a sample with no activity for this long.</td>
 </tr>
 </tbody>
 </table>
-<p>The <a href="./concurrency.html">Concurrency</a> and <a href="./errors.html">Error Handling</a> articles include additional details on how some of these options fit within the broader execution plan for a Steward run.</p>
+<p>See <a href="./errors.html#retry">Retry</a> and <a href="./errors.html#stuck-samples">Stuck Samples</a> for additional details.</p>
+</section>
+<section id="standing-rules" class="level3">
+<h3 class="anchored" data-anchor-id="standing-rules">Standing Rules</h3>
+<p>Standing decision rules. These are typically written by the agent during a run as a result of operator decisions.</p>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>_steward.yaml</th>
+<th>Environment</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>preauthorized</code></td>
+<td><code>STEWARD_PREAUTHORIZED</code></td>
+<td>none</td>
+<td>Anomaly-class patterns mapped to <code>rerun</code>, <code>exclude</code>, <code>zero</code> or <code>score</code>.</td>
+</tr>
+<tr class="even">
+<td><code>stuck_cancel</code></td>
+<td><code>STEWARD_STUCK_CANCEL</code></td>
+<td>none</td>
+<td>Stuck tool calls the agent may cancel unasked: <code>true</code> for any, or a list of tool names.</td>
+</tr>
+<tr class="odd">
+<td><code>policies</code></td>
+<td><code>STEWARD_POLICIES</code></td>
+<td>none</td>
+<td>Rules an agent applies, as prose or a list.</td>
+</tr>
+</tbody>
+</table>
+<p>See <a href="./errors.html#codify">Codify</a> and <a href="./errors.html#stuck-samples">Stuck Samples</a> for additional details.</p>
+</section>
+<section id="scanning" class="level3">
+<h3 class="anchored" data-anchor-id="scanning">Scanning</h3>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+<col style="width: 25%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>_steward.yaml</th>
+<th>Environment</th>
+<th>Default</th>
+<th>Description</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>scan_model</code></td>
+<td><code>STEWARD_SCAN_MODEL</code></td>
+<td>eval model</td>
+<td>The model scanners use. <code>false</code> ignores a <code>SCOUT_SCAN_MODEL</code> in the environment and scans with the eval model.</td>
+</tr>
+<tr class="even">
+<td><code>scanners</code></td>
+<td><code>STEWARD_SCANNERS</code></td>
+<td>none</td>
+<td>Scanners run in addition to the definition’s.</td>
+</tr>
+</tbody>
+</table>
+<p>See <a href="./scanners.html#scan-model">Scan Model</a> and <a href="./scanners.html#adding-scanners">Adding Scanners</a> for additional details.</p>
+</section>
 </section>
 <section id="advanced" class="level2">
 <h2 class="anchored" data-anchor-id="advanced">Advanced</h2>
 <section id="agent-oversight" class="level3">
 <h3 class="anchored" data-anchor-id="agent-oversight">Agent Oversight</h3>
-<p>An agent does not need to stay attached: <code>steward tend</code> runs on its timer either way. An agent adds judgement, diagnosing errors, proposing what to do about them, and escalating what needs you. There are three ways to work:</p>
+<p>An agent does not need to stay attached: <code>steward tend</code> runs on its timer either way. An agent adds judgment, diagnosing errors, proposing what to do about them, and escalating what needs you. There are three ways to work:</p>
 <ul>
 <li>Attached and reactive: the agent watches for new activity and responds immediately. Best for a run you are watching closely.</li>
-<li>Attached and periodic: the agent wakes on its own schedule, and can run <code>steward tend</code> to take a turn early.</li>
+<li>Attached and periodic: the agent wakes on its own schedule, can run <code>steward tend</code> to take a turn early, and stands down once the run is finished and nothing open is its own.</li>
 <li>Disconnected: nobody is attached, and the next session picks up whatever accumulated. This is the common case.</li>
 </ul>
 <p>An agent attaching to a run it did not start begins here:</p>
@@ -585,8 +754,8 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <div class="code-with-filename-file">
 <pre><strong>Terminal</strong></pre>
 </div>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb8" data-filename="Terminal"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="ex">steward</span> runbook             <span class="co"># the mechanics, which ship with the package</span></span>
-<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="ex">steward</span> collect <span class="at">--since</span> 0   <span class="co"># everything that has happened so far</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb10" data-filename="Terminal"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb10-1"><a href="#cb10-1" aria-hidden="true" tabindex="-1"></a><span class="ex">steward</span> runbook             <span class="co"># the mechanics, which ship with the package</span></span>
+<span id="cb10-2"><a href="#cb10-2" aria-hidden="true" tabindex="-1"></a><span class="ex">steward</span> collect <span class="at">--since</span> 0   <span class="co"># everything that has happened so far</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p>along with <code>_steward.yaml</code> for the project’s standing rules. Reading consumes nothing: an open decision leaves the queue only when somebody acts on it.</p>
 <p>While nothing is attached the run keeps converging, but anomalies accumulate without proposals and items sit unraised. If no agent has collected in the last two tends, Steward routes the agent’s items to you as well.</p>

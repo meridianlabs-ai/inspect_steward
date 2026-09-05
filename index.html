@@ -397,7 +397,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </div>
 <div class="overview-bullets">
 <ul>
-<li>Evaluation runs are fully unattended by design, but can escalate to humans when required.</li>
+<li>Evaluation runs are fully unattended by design, but can escalate to operators when required.</li>
 <li>Opinionated defaults for error handling keep tasks running, with an agent driven workflow for error resolution and retry.</li>
 <li>Slack, email, or webhook notifications to keep operators apprised of status and pending decisions.</li>
 <li>Works with <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> as well as with execution frameworks like <a href="https://meridianlabs-ai.github.io/inspect_flow/">Inspect Flow</a> and <a href="https://hawk.metr.org">Inspect Hawk</a>.</li>
@@ -434,6 +434,25 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb3-7"><a href="#cb3-7" aria-hidden="true" tabindex="-1"></a>)</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p>Steward can manage any evalution defined with a script that ends in a call to <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> or alternatively a <code>config.py</code> from <a href="https://meridianlabs-ai.github.io/inspect_flow/">Flow</a> or a <code>hawk.yaml</code> from <a href="https://hawk.metr.org">Hawk</a>.</p>
+<div class="callout callout-style-default callout-note callout-titled">
+<div class="callout-header d-flex align-content-center">
+<div class="callout-icon-container">
+<i class="callout-icon"></i>
+</div>
+<div class="callout-title-container flex-fill">
+<span class="screen-reader-only">Note</span>Log Directory
+</div>
+</div>
+<div class="callout-body-container callout-body">
+<p>One other thing you should typically define up front is a root directory for eval logs. If you define the <code>STEWARD_LOG_ROOT</code> environment variable then a <code>log_dir</code> matching the workspace directory name will be automatically created and used for your eval set. For example:</p>
+<div class="code-with-filename">
+<div class="code-with-filename-file">
+<pre><strong>.env</strong></pre>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4" data-filename=".env"><pre class="sourceCode ini code-with-copy"><code class="sourceCode ini"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="dt">STEWARD_LOG_ROOT</span><span class="ot">=</span><span class="st">s3://inspect-logs</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+</div>
+</div>
 </section>
 <section id="run-the-eval" class="level3">
 <h3 class="anchored" data-anchor-id="run-the-eval">Run the Eval</h3>
@@ -442,9 +461,9 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <div class="code-with-filename-file">
 <pre><strong>Coding Agent</strong></pre>
 </div>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb4" data-filename="Coding Agent"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb4-1"><a href="#cb4-1" aria-hidden="true" tabindex="-1"></a><span class="ex">─────────────────────────────────────────────</span> swe-evals ─</span>
-<span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="ex">❯</span> please run this evaluation.</span>
-<span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="ex">─────────────────────────────────────────────────────────</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5" data-filename="Coding Agent"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="ex">─────────────────────────────────────────────</span> swe-evals ─</span>
+<span id="cb5-2"><a href="#cb5-2" aria-hidden="true" tabindex="-1"></a><span class="ex">❯</span> please run this evaluation.</span>
+<span id="cb5-3"><a href="#cb5-3" aria-hidden="true" tabindex="-1"></a><span class="ex">─────────────────────────────────────────────────────────</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p>The agent will launch all of the tasks, setup a background monitoring process, and respond to alerts that require its intervention. From here you can detach and walk away.</p>
 <div class="callout callout-style-default callout-note callout-titled">
@@ -458,8 +477,13 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </div>
 <div class="callout-body-container callout-body">
 <p>To be notified when things require your attention, we strongly recommend you also configure a notification channel. Put it in <code>_steward.yaml</code>, or — to keep the token out of your repository — in your <code>.env</code> file:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb5"><pre class="sourceCode ini code-with-copy"><code class="sourceCode ini"><span id="cb5-1"><a href="#cb5-1" aria-hidden="true" tabindex="-1"></a><span class="dt">STEWARD_NOTIFICATION</span><span class="ot">=</span><span class="st">slack://{OAuthToken}/{ChannelID}</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
-<p>Anything <a href="https://github.com/caronc/apprise">Apprise</a> understands works: Slack, email, SMS, a webhook, or a config file naming several. It configures your workers too, so a sample waiting on your approval reaches the same place. See <a href="./workflow.html#notifications">Notifications</a>.</p>
+<div class="code-with-filename">
+<div class="code-with-filename-file">
+<pre><strong>.env</strong></pre>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6" data-filename=".env"><pre class="sourceCode ini code-with-copy"><code class="sourceCode ini"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="dt">STEWARD_NOTIFICATION</span><span class="ot">=</span><span class="st">slack://{OAuthToken}/{ChannelID}</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
+<p>See <a href="./workflow.html#notifications">Notifications</a> for more details on configuring notifications for various targets including Slack, Email, and others.</p>
 </div>
 </div>
 <p>The run depends on neither you nor the agent staying connected. When you come back, ask how it’s going:</p>
@@ -467,9 +491,9 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <div class="code-with-filename-file">
 <pre><strong>Coding Agent</strong></pre>
 </div>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb6" data-filename="Coding Agent"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb6-1"><a href="#cb6-1" aria-hidden="true" tabindex="-1"></a><span class="ex">─────────────────────────────────────────────</span> swe-evals ─</span>
-<span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="ex">❯</span> how is the eval going<span class="pp">?</span></span>
-<span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="ex">─────────────────────────────────────────────────────────</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7" data-filename="Coding Agent"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">─────────────────────────────────────────────</span> swe-evals ─</span>
+<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="ex">❯</span> how is the eval going<span class="pp">?</span></span>
+<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="ex">─────────────────────────────────────────────────────────</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 <p>The agent reports where the run stands: per-task progress, what it resolved on its own while you were gone, and anything that is waiting on a decision from you.</p>
 </section>
@@ -480,22 +504,22 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <div class="code-with-filename-file">
 <pre><strong>Coding Agent</strong></pre>
 </div>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb7" data-filename="Coding Agent"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb7-1"><a href="#cb7-1" aria-hidden="true" tabindex="-1"></a><span class="ex">89</span> samples in cais_swebenchpro failed with the same</span>
-<span id="cb7-2"><a href="#cb7-2" aria-hidden="true" tabindex="-1"></a><span class="ex">sandbox</span> timeout, all inside a 30-minute window last </span>
-<span id="cb7-3"><a href="#cb7-3" aria-hidden="true" tabindex="-1"></a><span class="ex">night.</span> Automatic retry has already spent its attempts.</span>
-<span id="cb7-4"><a href="#cb7-4" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb7-5"><a href="#cb7-5" aria-hidden="true" tabindex="-1"></a><span class="ex">re-run</span> them, score them as failed, or exclude them </span>
-<span id="cb7-6"><a href="#cb7-6" aria-hidden="true" tabindex="-1"></a><span class="ex">from</span> scoring<span class="pp">?</span></span>
-<span id="cb7-7"><a href="#cb7-7" aria-hidden="true" tabindex="-1"></a></span>
-<span id="cb7-8"><a href="#cb7-8" aria-hidden="true" tabindex="-1"></a><span class="ex">─────────────────────────────────────────────</span> swe-evals ─</span>
-<span id="cb7-9"><a href="#cb7-9" aria-hidden="true" tabindex="-1"></a><span class="ex">❯</span> re-run them, the disk issue is fixed</span>
-<span id="cb7-10"><a href="#cb7-10" aria-hidden="true" tabindex="-1"></a><span class="ex">─────────────────────────────────────────────────────────</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb8" data-filename="Coding Agent"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb8-1"><a href="#cb8-1" aria-hidden="true" tabindex="-1"></a><span class="ex">89</span> samples in cais_swebenchpro failed with the same</span>
+<span id="cb8-2"><a href="#cb8-2" aria-hidden="true" tabindex="-1"></a><span class="ex">sandbox</span> timeout, all inside a 30-minute window last </span>
+<span id="cb8-3"><a href="#cb8-3" aria-hidden="true" tabindex="-1"></a><span class="ex">night.</span> Automatic retry has already spent its attempts.</span>
+<span id="cb8-4"><a href="#cb8-4" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-5"><a href="#cb8-5" aria-hidden="true" tabindex="-1"></a><span class="ex">re-run</span> them, score them as failed, or exclude them </span>
+<span id="cb8-6"><a href="#cb8-6" aria-hidden="true" tabindex="-1"></a><span class="ex">from</span> scoring<span class="pp">?</span></span>
+<span id="cb8-7"><a href="#cb8-7" aria-hidden="true" tabindex="-1"></a></span>
+<span id="cb8-8"><a href="#cb8-8" aria-hidden="true" tabindex="-1"></a><span class="ex">─────────────────────────────────────────────</span> swe-evals ─</span>
+<span id="cb8-9"><a href="#cb8-9" aria-hidden="true" tabindex="-1"></a><span class="ex">❯</span> re-run them, the disk issue is fixed</span>
+<span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a><span class="ex">─────────────────────────────────────────────────────────</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 </section>
 </section>
 <section id="workflow" class="level2 page-columns page-full">
 <h2 class="anchored" data-anchor-id="workflow">Workflow</h2>
-<p>Steward provides a system that is fully unattended by default but which escalates for things that only the human operator can decide. The basic workflow is:</p>
+<p>Steward provides a system that is fully unattended by default but which escalates for things that only the operator operator can decide. The basic workflow is:</p>
 <ol type="1">
 <li><p>Define your eval set and policies that will govern the run.</p></li>
 <li><p>Launch the eval set for unattended execution. Let standing policies and agents handle tuning and errors whenever possible.</p></li>

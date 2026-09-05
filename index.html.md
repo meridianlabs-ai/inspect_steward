@@ -6,7 +6,7 @@
 
 Inspect Steward is a system for automated execution and supervision of long-running evaluations. Steward enables you to launch a large run and walk away while a coding agent monitors it and automatically intervenes when required.
 
-- Evaluation runs are fully unattended by design, but can escalate to humans when required.
+- Evaluation runs are fully unattended by design, but can escalate to operators when required.
 - Opinionated defaults for error handling keep tasks running, with an agent driven workflow for error resolution and retry.
 - Slack, email, or webhook notifications to keep operators apprised of status and pending decisions.
 - Works with [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) as well as with execution frameworks like [Inspect Flow](https://meridianlabs-ai.github.io/inspect_flow/) and [Inspect Hawk](https://hawk.metr.org).
@@ -47,6 +47,16 @@ eval_set(
 
 Steward can manage any evalution defined with a script that ends in a call to [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) or alternatively a `config.py` from [Flow](https://meridianlabs-ai.github.io/inspect_flow/) or a `hawk.yaml` from [Hawk](https://hawk.metr.org).
 
+> **NOTE: NoteLog Directory**
+>
+> One other thing you should typically define up front is a root directory for eval logs. If you define the `STEWARD_LOG_ROOT` environment variable then a `log_dir` matching the workspace directory name will be automatically created and used for your eval set. For example:
+>
+>     .env
+>
+> ``` ini
+> STEWARD_LOG_ROOT=s3://inspect-logs
+> ```
+
 ### Run the Eval
 
 Next, launch your coding agent from the workspace and tell it to run the evaluation (you should typically run from a [tmux](https://github.com/tmux/tmux/wiki) detached terminal so the agent is persistent):
@@ -65,11 +75,13 @@ The agent will launch all of the tasks, setup a background monitoring process, a
 >
 > To be notified when things require your attention, we strongly recommend you also configure a notification channel. Put it in `_steward.yaml`, or — to keep the token out of your repository — in your `.env` file:
 >
+>     .env
+>
 > ``` ini
 > STEWARD_NOTIFICATION=slack://{OAuthToken}/{ChannelID}
 > ```
 >
-> Anything [Apprise](https://github.com/caronc/apprise) understands works: Slack, email, SMS, a webhook, or a config file naming several. It configures your workers too, so a sample waiting on your approval reaches the same place. See [Notifications](./workflow.html.md#notifications).
+> See [Notifications](./workflow.html.md#notifications) for more details on configuring notifications for various targets including Slack, Email, and others.
 
 The run depends on neither you nor the agent staying connected. When you come back, ask how it’s going:
 
@@ -104,7 +116,7 @@ from scoring?
 
 ## Workflow
 
-Steward provides a system that is fully unattended by default but which escalates for things that only the human operator can decide. The basic workflow is:
+Steward provides a system that is fully unattended by default but which escalates for things that only the operator operator can decide. The basic workflow is:
 
 1.  Define your eval set and policies that will govern the run.
 

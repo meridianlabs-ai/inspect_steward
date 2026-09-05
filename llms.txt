@@ -9,16 +9,16 @@
 
 ## Using Steward
 
-- [Workflow](https://meridianlabs-ai.github.io/inspect_steward/workflow.html.md): Everything that happens in a Steward run: the workspace init creates, what launch captures and gates on, the tend loop, where the run stands, the decisions that reach a person, standing rules, pausing, cold pickup, and how a run ends.
-- [Concurrency](https://meridianlabs-ai.github.io/inspect_steward/concurrency.html.md): The two concurrency dimensions that matter when running agentic evaluations, how sandboxes, samples, tasks, and model connections are bounded, and how Steward's automatic ramp discovers sample concurrency.
-- [Error Handling](https://meridianlabs-ai.github.io/inspect_steward/errors.html.md): How Steward tunes inspect's error handling for unattended runs: what it retries automatically, what it surfaces as decisions, how a decision becomes standing policy, and how errors are resolved before signoff.
+- [Workflow](https://meridianlabs-ai.github.io/inspect_steward/workflow.html.md): A Steward run end to end: the workspace, launch and the tend loop, agent and human decisions, notifications, signoff, log directories and the log store, options, and advanced topics such as pausing and inflight changes.
+- [Concurrency](https://meridianlabs-ai.github.io/inspect_steward/concurrency.html.md): Matching sample concurrency to inference concurrency: how sandboxes, samples, tasks and model connections are bounded, how the automatic ramp finds the right level, worker processes, and Docker configuration.
+- [Error Handling](https://meridianlabs-ai.github.io/inspect_steward/errors.html.md): How Steward handles errors in unattended runs: automatic retry, what becomes a decision, codifying decisions as standing policy, resolving errors before signoff, and stuck samples.
 - [Scanners](https://meridianlabs-ai.github.io/inspect_steward/scanners.html.md): How Steward scans transcripts for scoring integrity problems: the built-in scanner, choosing a scan model, adding your own, and what a finding asks of you.
 - [Agent Runbook](https://meridianlabs-ai.github.io/inspect_steward/runbook.html.md): The operating instructions Steward ships to the coding agent supervising a run, reproduced verbatim.
 
 ## Integrations
 
-- [Inspect Flow](https://meridianlabs-ai.github.io/inspect_steward/flow.html.md): Running an Inspect Flow spec under Steward: installation, what Steward overrides in a worker, and the two declarations that do not survive.
-- [Inspect Hawk](https://meridianlabs-ai.github.io/inspect_steward/hawk.html.md): Running a Hawk eval set config under Steward: installation, how concurrency is set, what a local Hawk run cannot do, and what fan-out costs at startup.
+- [Inspect Flow](https://meridianlabs-ai.github.io/inspect_steward/flow.html.md): Running an Inspect Flow spec under Steward: what Steward overrides in a worker, the two declarations that do not survive, and scanners.
+- [Inspect Hawk](https://meridianlabs-ai.github.io/inspect_steward/hawk.html.md): Running a Hawk eval set config under Steward: how concurrency is set, what a local Hawk run cannot do, and what fan-out costs at startup.
 
 ## Reference
 
