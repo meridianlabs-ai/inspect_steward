@@ -97,7 +97,7 @@ Steward can manage any evalution defined with a script that ends in a call to `e
 #### Log Directory
 One other thing you should typically define up front is a root directory for eval logs. If you define the `STEWARD_LOG_ROOT` environment variable then a `log_dir` matching the workspace directory name will be automatically created and used for your eval set. For example:
 
-```{.bash filename=".env"}
+```{.ini filename=".env"}
 STEWARD_LOG_ROOT=s3://inspect-logs
 ```
 :::
@@ -119,7 +119,7 @@ The agent will launch all of the tasks, setup a background monitoring process, a
 
 To be notified when things require your attention, we strongly recommend you also configure a notification channel. Put it in `_steward.yaml`, or — to keep the token out of your repository — in your `.env` file:
 
-```{.ini}
+```{.ini filename=".env"}
 STEWARD_NOTIFICATION=slack://{OAuthToken}/{ChannelID}
 ```
 

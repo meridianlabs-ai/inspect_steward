@@ -15,8 +15,8 @@ Steward runs a scoring integrity scanner over every sample of every run. It requ
 
 By default a scanner reviews with the model already under evaluation, so an unconfigured run still scans. To use a different model, set `scan_model` in `_steward.yaml` or `STEWARD_SCAN_MODEL` in your `.env`:
 
-```{.yaml filename="_steward.yaml"}
-scan_model: anthropic/claude-opus-5
+```{.ini filename=".env"}
+STEWARD_SCAN_MODEL=anthropic/claude-opus-5
 ```
 
 A scanner that names its own model in the definition keeps it.
