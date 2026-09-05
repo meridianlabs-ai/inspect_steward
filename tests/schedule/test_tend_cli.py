@@ -402,15 +402,15 @@ def test_the_resources_table_replaces_the_startup_bound_and_both_renderings_agre
     echo_turn(running)
     text = capsys.readouterr().out
 
-    assert "### resources" in markdown
-    (cells,) = [line for line in markdown.splitlines() if line.startswith("| done")]
-    assert [cell.strip() for cell in cells.split("|")][1:-1] == [
-        "done",
-        "3",
-        "41",
-        "2.0 GiB",
-        "1.5",
-    ]
+    # a fenced plain table rather than a markdown one, so the page's quietest
+    # figures render lighter than the anomalies beside them and reach Slack as
+    # a preformatted block
+    lines = markdown.splitlines()
+    start = lines.index("### resources")
+    assert lines[start + 2] == "```"
+    assert lines[start + 3].split() == ["task", "refusals", "retries", "memory", "cpu"]
+    assert lines[start + 4].split() == ["done", "3", "41", "2.0", "GiB", "1.5"]
+    assert lines[start + 5] == "```"
     assert "resources:" in text
     (plain,) = [line for line in text.splitlines() if line.strip().startswith("done ")]
     assert plain.split() == ["done", "3", "41", "2.0", "GiB", "1.5"]

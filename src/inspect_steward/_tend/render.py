@@ -252,7 +252,7 @@ def _outcomes(result: "TendResult") -> list[str]:
 
 
 def _resources(result: "TendResult") -> list[str]:
-    """Per running task, what it has met and what it is costing. Absent while no worker is answering."""
+    """Per running task, what it has met and what it is costing, as a fenced plain table. Absent while no worker is answering."""
     table = resources_table(result.progress)
     return ["### resources", "", *table, ""] if table else []
 

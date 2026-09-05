@@ -194,9 +194,12 @@ def resources_cells(progress: Progress, *, width: int = 0) -> list[tuple[str, ..
 
 
 def resources_table(progress: Progress, *, width: int = 0) -> list[str]:
-    """`resources_cells` as a padded markdown table, or nothing while no worker is answering."""
+    """`resources_cells` as a plain table inside a code fence, or nothing while no worker is answering.
+
+    Fenced rather than a markdown table on purpose: the figures are the page's quietest, and a second ruled table beside the anomalies gives them the same weight. A fence renders lighter, and lands in Slack as a preformatted block with its columns still lined up.
+    """
     cells = resources_cells(progress, width=width)
-    return markdown_table(RESOURCES_HEADER, cells) if cells else []
+    return ["```", *plain_table(RESOURCES_HEADER, cells), "```"] if cells else []
 
 
 def plain_table(
