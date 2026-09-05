@@ -164,3 +164,29 @@ def test_a_workspace_scaffolded_before_python_specs_still_resolves(
 
     assert found is not None
     assert found.name == "flow.yaml"
+
+
+@pytest.mark.parametrize("name", ["campaign.py", "run.py"])
+def test_an_indirect_evalset_script_is_found_by_its_conventional_name(
+    tmp_path: Path, name: str
+) -> None:
+    """A wrapper script carries no eval_set token, so only the name can find it."""
+    definition = tmp_path / name
+    definition.write_text("from veevals.campaign import campaign\n\ncampaign()\n")
+
+    assert Workspace.at(tmp_path).find_definition() == definition
+
+
+def test_helper_scripts_beside_a_named_definition_stay_passed_over(
+    tmp_path: Path,
+) -> None:
+    """Lenient typing of a NAMED definition must not make the content fallback adopt helpers."""
+    definition = tmp_path / "campaign.py"
+    definition.write_text("from veevals.campaign import campaign\n\ncampaign()\n")
+    (tmp_path / "helpers.py").write_text("def score(x: int) -> int:\n    return x\n")
+
+    workspace = Workspace.at(tmp_path)
+
+    assert workspace.find_definition() == definition
+    # the content fallback still refuses signal-less files outright
+    assert workspace.definition_candidates() == []

@@ -16,10 +16,16 @@ DEFINITION_NAMES: dict[DefinitionType, str] = {
 
 Flow's own name, because a flow spec is a file the author names themselves and `config.py` is what flow's documentation calls it in every example. Discovery does not stop here — see `find_definition`, which reads any other Python file in the root."""
 
-DEFINITION_ALIASES: tuple[str, ...] = ("flow.yaml", "flow.yml", "flow.py")
+DEFINITION_ALIASES: tuple[str, ...] = (
+    "run.py",
+    "campaign.py",
+    "flow.yaml",
+    "flow.yml",
+    "flow.py",
+)
 """Other conventional names discovery answers to, after `DEFINITION_NAMES`.
 
-`flow.yaml` is what Steward scaffolded before flow specs were written in Python, so a workspace created then keeps working without being renamed."""
+`run.py` and `campaign.py` are the ordinary names for a script whose `eval_set()` call is indirect — a framework wrapper the file calls makes it (see `detect_definition_type`) — so a workspace built around one needs no rename and no explicit type. `flow.yaml` is what Steward scaffolded before flow specs were written in Python, so a workspace created then keeps working without being renamed."""
 
 AUTO_INCLUDE_NAME = "_flow.py"
 """Flow's own auto-include file, which is never the definition.
@@ -291,7 +297,7 @@ class Workspace:
     def definition_candidates(self) -> list[Path]:
         """Python files in the root that read as an eval set definition.
 
-        Sorted by name, so two callers looking at one directory report the same list. Excludes `AUTO_INCLUDE_NAME` and anything that does not classify.
+        Sorted by name, so two callers looking at one directory report the same list. Excludes `AUTO_INCLUDE_NAME` and anything that does not classify. `require_signal` because this is the one caller asking "is this file a definition at all?" — under the lenient default every helper script in the root would classify as an evalset definition, and a workspace holding one beside its real definition would read as ambiguous.
 
         Returns:
             The candidates, which may be empty.
@@ -301,7 +307,7 @@ class Workspace:
             if path.name == AUTO_INCLUDE_NAME:
                 continue
             try:
-                detect_definition_type(path)
+                detect_definition_type(path, require_signal=True)
             except (ValueError, OSError):
                 continue
             candidates.append(path)

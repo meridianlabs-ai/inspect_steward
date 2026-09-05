@@ -44,17 +44,20 @@ _EXTENSIONS: dict[str, list[DefinitionType]] = {
 
 
 def detect_definition_type(
-    path: Path, type: DefinitionType | None = None
+    path: Path, type: DefinitionType | None = None, *, require_signal: bool = False
 ) -> DefinitionType:
     """Determine the type of an eval set definition file.
 
     Detection is static — the definition is never executed. Python files are classified by their imports (`inspect_flow` => flow, `eval_set` from `inspect_ai` => evalset). YAML files are validated against an Inspect Flow spec and a Hawk eval set config, and must match exactly one.
+
+    A Python file with neither signal is an **evalset script whose `eval_set()` call is indirect** — a wrapper the file imports makes the call (a `campaign.py` or `run.py` ending in a framework's own entry point). The contract is "any program culminating in one `eval_set()` call", and nothing about that requires the call to be textually visible, so a signal-less script classifies as `evalset` and capture is the validator: a file that truly never reaches `eval_set()` fails the read with "never called eval_set()", which names the real problem where a detection error could only guess at it. `require_signal` restores the strict reading for the one caller that is *classifying arbitrary files* rather than typing a file already named as the definition — workspace discovery's content fallback, where a helper script must not be mistaken for a definition.
 
     A YAML format can only be tried when its package is installed, so the result is relative to the environment: "exactly one match" means one among the formats that could be checked. This is only observable for a document that declares no tasks, which is the sole shape both formats accept — with both packages present it is reported as ambiguous, with one present it resolves to that one. A document that is genuinely the other format still fails, naming the package that is missing.
 
     Args:
         path: Path to the definition file.
         type: Explicit definition type (skips detection, but still validated against the file extension).
+        require_signal: Refuse a Python file carrying no recognizable import rather than reading it as an indirect evalset script. For callers asking "is this file a definition at all?" rather than "what type is this definition?".
 
     Returns:
         The definition type.
@@ -78,12 +81,12 @@ def detect_definition_type(
         return type
 
     if path.suffix.lower() == ".py":
-        return _detect_python(path)
+        return _detect_python(path, require_signal=require_signal)
     else:
         return _detect_yaml(path)
 
 
-def _detect_python(path: Path) -> DefinitionType:
+def _detect_python(path: Path, *, require_signal: bool = False) -> DefinitionType:
     # bytes rather than `read_text()`, which decodes with the locale encoding:
     # `ast.parse` applies Python's own source encoding rules (utf-8, or a PEP
     # 263 coding declaration), which is what actually running the file will do
@@ -123,12 +126,17 @@ def _detect_python(path: Path) -> DefinitionType:
         return "flow"
     elif references_eval_set:
         return "evalset"
-    else:
+    elif require_signal:
         raise ValueError(
             f"Cannot determine the type of '{path}': found no eval_set() "
             "import or inspect_flow import. Pass an explicit type if the "
             "usage is indirect."
         )
+    else:
+        # no signal, but the file was named as the definition: read it as an
+        # evalset script whose eval_set() call is indirect. Capture validates —
+        # a script that never reaches eval_set() fails the read by name
+        return "evalset"
 
 
 # YAML definition formats, each validated by its own package's model. Any

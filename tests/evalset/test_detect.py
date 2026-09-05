@@ -75,7 +75,6 @@ def test_detect_yaml_reports_every_format_it_tried(tmp_path: Path) -> None:
     "filename,content,error_match",
     [
         ("ambiguous.py", AMBIGUOUS_PY, "explicit type"),
-        ("neither.py", NEITHER_PY, "no eval_set"),
         ("not_mapping.yaml", NOT_MAPPING_YAML, "YAML mapping"),
         ("malformed.yaml", "tasks: [unclosed\n", "not valid YAML"),
         ("neither.yaml", NEITHER_YAML, "Cannot determine the type"),
@@ -107,6 +106,44 @@ def test_detect_module_attribute_usage(tmp_path: Path) -> None:
     path = tmp_path / "attribute.py"
     path.write_text("import inspect_ai\n\ninspect_ai.eval_set(tasks=[], log_dir='x')\n")
     assert detect_definition_type(path) == "evalset"
+
+
+# the wrapper-call shape: eval_set() is called inside the imported framework,
+# not textually in the file -- the contract is "any program culminating in one
+# eval_set() call", so this is an evalset script and capture is the validator
+WRAPPER_PY = """
+from veevals.campaign import campaign
+
+campaign(arms=[], model="mockllm/model")
+"""
+
+
+@pytest.mark.parametrize("content", [WRAPPER_PY, NEITHER_PY])
+def test_detect_python_without_a_signal_reads_as_an_indirect_evalset(
+    tmp_path: Path, content: str
+) -> None:
+    """A named definition need not carry the eval_set token itself.
+
+    A script that truly never reaches eval_set() fails the READ with "never
+    called eval_set()", which names the real problem where a detection error
+    could only guess at it.
+    """
+    path = tmp_path / "campaign.py"
+    path.write_text(content)
+
+    assert detect_definition_type(path) == "evalset"
+
+
+@pytest.mark.parametrize("content", [WRAPPER_PY, NEITHER_PY])
+def test_require_signal_restores_the_strict_reading(
+    tmp_path: Path, content: str
+) -> None:
+    """The one caller classifying arbitrary files must not adopt helper scripts."""
+    path = tmp_path / "helpers.py"
+    path.write_text(content)
+
+    with pytest.raises(ValueError, match="no eval_set"):
+        detect_definition_type(path, require_signal=True)
 
 
 class _Version(NamedTuple):
