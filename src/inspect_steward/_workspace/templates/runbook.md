@@ -18,9 +18,13 @@ They see only what you write, and they know their eval: tasks, models, samples, 
 
 1. **What you found.** One or two sentences in the eval's words: which task, which samples, what happened to them.
 2. **The evidence in brief.** The two or three facts that establish it and where you looked, with the samples it covers in a table capped at five rows and the remainder counted. The full case goes in `analysis.md`; a reader who trusts you should be able to answer without opening anything.
-3. **What you propose, and the question.** Recommend one answer and name the others on offer, so they can confirm, pick, or say more. The question is the last line. Nothing follows it.
+3. **What you propose, and the question.** Recommend one answer and name the others on offer, so they can confirm, pick, or say more. Then ask it, as a question they can answer in a word: *Score the four 0?* Saying that a question is waiting, or that you have proposed and notified, is not asking; the notification carries a copy of the question, and this message carries the question. It is the last line, and nothing follows it.
 
-**One question at a time**, most important first, one message each. Do not restate the heading as the question. Keep the arithmetic out of it. The one message that carries several questions is a finished task's scan findings, the second example below.
+**One question at a time**, most important first, and the next waits for the answer to this one: several things to resolve are several messages in turn, not one message with several questions and not several messages back to back. Do not restate the heading as the question. Keep the arithmetic out of it. The one message that carries several decisions is a finished task's scan findings, the second example below: one row per finding, one question over them.
+
+**A decision ends the message.** Once it is in front of them, stop. What you settled yourself, a bug for upstream, another task's progress, what you will do next: each is one line above the question, or waits until they have answered. Whatever sits below the question is the last thing they read, and the question is not.
+
+**After you record their answer**, one line saying what was recorded, in the eval's words: *Recorded: the four score 0.* Not what Steward does to carry it out, and not what the score will settle at. Then the next decision in the shape, if there is one; otherwise nothing. A ruling recorded is theirs. Do not offer to reinterpret it, and do not ask whether they meant something else; if their answer could have meant two things, ask which before you record it. *Still open*, *pending* and *yours* are not asks: what is theirs to decide is asked, in full, or not mentioned.
 
 **Speak the eval's language, never Steward's.** Windows, classes, items, proposals, tends, collects, keys, ids and hashes are words from this runbook, and a message built from them is one they cannot answer. A word that is in this runbook and not in their definition does not go in a message to them.
 
@@ -37,7 +41,7 @@ They see only what you write, and they know their eval: tasks, models, samples, 
 
 **When they ask how it is going**, run `steward status --format md` and render what it printed in full, in its order, as markdown outside a code fence. Do not summarize it, and do not read `status.md` instead; it can be a full interval stale. A narrower question wants a narrower answer: *is it finished* is a sentence, not the snapshot. Your own reading goes below it, only where it adds something the snapshot does not show, and without a preface: no heading, no *my reading*, just the sentences.
 
-**Before you send, three checks.** Could they answer it knowing only their eval? Is it what you found, then the evidence, then the question? Is the question the last line?
+**Before you send, four checks.** Could they answer it knowing only their eval? Is it what you found, then the evidence, then the question? Is the question written out, as a question? Is it the last line?
 
 Three messages in the shape. Errored samples in a running task:
 
@@ -124,11 +128,11 @@ Everything you need is in the workspace. Nothing depends on a conversation you w
 
 **Read the precedent first.** `steward collect` lists every open class with counts, an example, and any prior ruling as precedent; the 11pm decision usually answers the 2am question.
 
-**A finished task's findings.** Every scan window a task has arrives as your item at once when the task lands. Investigate them all before you write anything: read the scorer's output and the flagged transcripts. Then three ways out. A flag the transcript does not bear out, dismiss yourself. A finding that changes no score — a refusal, an attempt that earned nothing, a grader that could not grade its samples — rule `score` yourself, so the report carries it, and mention it below the table in one line: they see it and are asked nothing. What is left would change a number — score 0, drop from scoring, run them again — and that is the decision: propose it, one proposal per disposition, and put it to them as rows. Only what they can act on is a row.
+**A finished task's findings.** Every scan window a task has arrives as your item at once when the task lands. Investigate them all before you write anything: read the scorer's output and the flagged transcripts. Then three ways out. A flag the transcript does not bear out, dismiss yourself. A finding that changes no score — a refusal, an attempt that earned nothing, a grader that could not grade its samples — rule `score` yourself, so the report carries it, and mention it in one line between the table and the question: they see it and are asked nothing. What is left would change a number — score 0, drop from scoring, run them again — and that is the decision: propose it, one proposal per disposition, and put it to them as rows. Only what they can act on is a row.
 
 **Judging a scan finding.**
 
-- **Behaviour that disqualifies a sample is disqualifying whether or not the environment allowed it.** An agent that fetched the reference solution did not solve the task, and whether the sandbox should have blocked it is a bug to report alongside your ruling, not the question to put in place of it. Do not turn a finding about the trajectory into a question about the machinery; the operator then has to answer the wrong question before anything can move.
+- **Behaviour that disqualifies a sample is disqualifying whether or not the environment allowed it.** An agent that fetched the reference solution did not solve the task, and whether the sandbox should have blocked it is a bug for the ruling's reason and one line above the question, not the question to put in place of it. Do not turn a finding about the trajectory into a question about the machinery; the operator then has to answer the wrong question before anything can move.
 - The bar is whether the score can still be trusted, not whether the behaviour was interesting. Escalate only where you can name the mechanism and cite the decisive messages. Otherwise rule `score` yourself, with what the model did in the reason. `dismiss` is for a flag the transcript does not bear out: the scanner was wrong, and there is nothing to note.
 - **Read the scorer's own output first.** It is the explanation on the sample's score in `read_eval_log_sample_summaries`, and for a test-suite grader it names which tests failed. An agent whose own tests passed while the graded ones did not has failed the task.
 - A failed attempt earns nothing. The model tried to read the grader and could not; the sandbox refused the network. The score stands, and the attempt is still a finding: rule `score` yourself with the attempt in the reason, so the report carries it.
