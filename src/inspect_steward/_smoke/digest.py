@@ -329,6 +329,8 @@ def _findings(smoke: Smoke) -> list[str]:
     **Silent is not an option here.** A scan that ran and flagged nothing and a scan that never ran produce the same empty list, and this document exists to tell a reader which of those happened before they commit a night to the run.
     """
     lines = ["## what the scanners found", ""]
+    if not smoke.tasks and smoke.satisfied:
+        return lines + ["Nothing scanned — nothing was rehearsed.", ""]
     if not smoke.findings:
         return lines + ["Nothing flagged.", ""]
     return lines + [f"- {line}" for line in smoke.findings] + [""]

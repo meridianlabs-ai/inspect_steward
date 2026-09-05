@@ -171,9 +171,11 @@ class TestWhatTheDigestSays:
         assert result.probe.checks == ()
         assert result.errors == ()
         assert set(result.identifiers) == {ADDITION.identifier, ECHO.identifier}
-        verdict = digest_markdown(result).splitlines()[2]
+        rendered = digest_markdown(result)
+        verdict = rendered.splitlines()[2]
         assert "nothing to rehearse" in verdict
         assert str(tmp_path / "store") in verdict
+        assert "Nothing scanned" in rendered and "Nothing flagged" not in rendered
         fields = journal_fields(result)
         assert set(fields["satisfied"]) == {ADDITION.identifier, ECHO.identifier}
         assert fields["log_store"] == str(tmp_path / "store")
