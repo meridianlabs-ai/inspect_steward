@@ -47,7 +47,8 @@ def run(*argv: str) -> tuple[int, str]:
 
 
 def test_status_says_what_the_next_tend_would_do(workspace: Workspace) -> None:
-    code, output = run("status")
+    # the terminal preview, which alone carries what the next tend would do
+    code, output = run("status", "--format", "text")
 
     assert code == 0, output
     assert "2 tasks: 1 complete, 1 missing" in output
@@ -83,7 +84,7 @@ def test_the_memory_projection_multiplies_the_measurement_by_the_width(
     write_manifest(measured, workspace.manifest)
     monkeypatch.chdir(workspace.root)
 
-    code, output = run("status")
+    code, output = run("status", "--format", "text")
 
     assert code == 0, output
     assert "at most 1.0 GiB per worker" in output
@@ -105,7 +106,7 @@ def test_the_memory_projection_follows_the_width_the_operator_asked_for(
     write_manifest(measured, workspace.manifest)
     monkeypatch.chdir(workspace.root)
 
-    code, output = run("status", "--max-workers", "1")
+    code, output = run("status", "--format", "text", "--max-workers", "1")
 
     assert code == 0, output
     assert "1.0 GiB across 1 worker," in output
@@ -218,9 +219,9 @@ def test_tend_is_still_the_thing_status_previewed(
     write_log(ws.logs, SynthTask("removed"))
     monkeypatch.chdir(ws.root)
 
-    _, preview = run("status")
+    _, preview = run("status", "--format", "text")
     result = turn(ws)
-    _, after = run("status")
+    _, after = run("status", "--format", "text")
 
     assert "next tend: 1 to archive" in preview
     assert len(result.archived) == 1
@@ -338,18 +339,17 @@ def test_ack_does_not_take_the_claim(workspace: Workspace) -> None:
 # --- rendering ----------------------------------------------------------
 
 
-def test_status_prints_markdown_on_request_and_not_otherwise(
+def test_status_prints_the_markdown_page(
     workspace: Workspace,
 ) -> None:
-    # the agent is told to relay this verbatim (agent.md, *Render the summary;
-    # do not replace it*), and aligned terminal columns do not survive that
-    _, markdown = run("status", "--format", "md")
-    _, text = run("status")
+    # markdown is the only shape: the agent relays this verbatim (agent.md,
+    # *Render the summary; do not replace it*), and its aligned columns read
+    # as plain text anyway, so there is no terminal-only variant to get wrong
+    _, markdown = run("status")
 
     assert "| task" in markdown and "samples" in markdown and "done" in markdown
     # ...and no warning about editing a file, since this one is not a file
     assert "Regenerated every turn" not in markdown
-    assert "| task |" not in text
 
 
 def test_every_rendering_leads_with_the_same_verdict(workspace: Workspace) -> None:
@@ -360,7 +360,7 @@ def test_every_rendering_leads_with_the_same_verdict(workspace: Workspace) -> No
     settle(workspace)
 
     _, text = run("status")
-    _, markdown = run("status", "--format", "md")
+    _, markdown = run("status")
     code, raw = run("status", "--json")
     document = json.loads(raw)
 
@@ -469,7 +469,7 @@ def test_markdown_says_when_a_tend_holds_the_claim(workspace: Workspace) -> None
     assert isinstance(outcome, Claim)
     with outcome:
         _, text = run("status")
-        _, markdown = run("status", "--format", "md")
+        _, markdown = run("status")
 
     assert "holds the claim" in text
     assert "holds the claim" in markdown

@@ -220,6 +220,11 @@ class TuningPlan:
     lines: list[str] = field(default_factory=list[str])
     """The tuning block, one source for both renderers."""
 
+    alert: str | None = None
+    """The operator's one-liner when the ramp is in an exceptional state — a fleet hold in force, sustained pushback, or both — and `None` when it is climbing or steady as designed.
+
+    The operator page (`status.md`) carries this and not the full `lines`, because a held or throttled ramp is a fact about how the night is going, where the routine step-by-step is the agent's to work. Derived from the same holds and storms `lines` is, so the two cannot disagree."""
+
 
 def plan_tuning(
     tasks: Sequence[TaskSignals],
@@ -487,11 +492,27 @@ def plan_tuning(
         lines.insert(0, f"samples ramp {floor}–{ceiling}")
         lines.append("`steward ramp hold` pauses climbing; safety cuts stay active")
 
+    # the operator's one-liner: a hold in force, a storm at the floor, or both.
+    # Only meaningful while a ramp exists; a pinned run has no state to alert on
+    alert: str | None = None
+    if ramp is not None:
+        held = holds.get("")
+        exceptional: list[str] = []
+        if held is not None:
+            who = held.by or "somebody"
+            exceptional.append(
+                f"held by {who}" + (f" — {held.reason}" if held.reason else "")
+            )
+        if storms:
+            exceptional.append("arms at the floor under pushback")
+        alert = "; ".join(exceptional) or None
+
     return TuningPlan(
         active=ramp is not None,
         range=ramp,
         moves=moves,
         proposals=proposals,
+        alert=alert,
         record={
             "levels": {
                 task.identifier: task.level for task in tasks if task.level is not None

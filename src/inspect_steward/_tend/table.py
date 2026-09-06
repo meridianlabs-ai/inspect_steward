@@ -13,7 +13,7 @@ Read left to right it is: what state the task is in, which task, how much of it 
 
 from .._evalset.observe import TaskState
 from .._util.size import format_bytes
-from .progress import Progress, TaskProgress, short_keys
+from .progress import Progress, TaskProgress, fleet_totals, short_keys
 
 GLYPH = {
     TaskState.COMPLETE: "✓",
@@ -121,18 +121,11 @@ def _footer(progress: Progress, model: str | None) -> str | None:
         # every row ran against it and no row shows it, so it is a fact about
         # the run rather than a column
         parts.append(model)
-    if len(progress.rows) < 2:
+    totals = fleet_totals(progress)
+    if totals is None:
+        # a single-task run: the totals would restate its one row
         return f"  {parts[0]}" if parts else None
-
-    parts.append(f"{progress.completed}/{progress.total} samples")
-    if progress.total:
-        parts.append(f"{round(progress.fraction * 100)}%")
-    if progress.running:
-        parts.append(f"{progress.running} running")
-    if progress.queued:
-        parts.append(f"{progress.queued} queued")
-    if progress.errored:
-        parts.append(f"{progress.errored} errored")
+    parts.append(totals)
     return "  " + " · ".join(parts)
 
 

@@ -519,6 +519,25 @@ class Progress:
         return self.completed / self.total if self.total else 0.0
 
 
+def fleet_totals(progress: Progress) -> str | None:
+    """The run's samples, done, running, queued and errored as one line.
+
+    One source for the terminal's task-table footer (`_tend.table`) and the operator page's fleet line (`_tend.render`), so the two surfaces cannot disagree about where the run stands. `None` for a single-task run, where the totals only restate that task's own row.
+    """
+    if len(progress.rows) < 2:
+        return None
+    parts = [f"{progress.completed}/{progress.total} samples"]
+    if progress.total:
+        parts.append(f"{round(progress.fraction * 100)}%")
+    if progress.running:
+        parts.append(f"{progress.running} running")
+    if progress.queued:
+        parts.append(f"{progress.queued} queued")
+    if progress.errored:
+        parts.append(f"{progress.errored} errored")
+    return " · ".join(parts)
+
+
 def display_keys(progress: Progress) -> dict[str, str]:
     """Task identifier to the key an operator reads — the table's own spelling, so a sentence about a task and the row about it agree.
 

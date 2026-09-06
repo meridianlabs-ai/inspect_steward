@@ -1,6 +1,6 @@
 """`status.md` and `steward collect` — one turn, two readers.
 
-**Two projections of one fold, not two renderers.** `status_markdown` is what an operator reads: the file the timer regenerates, and what `steward status --format md` prints for an agent to relay. `collect_markdown` is what the agent reads for itself. They are cut from the same `TendResult` and share every sentence they both carry — the verdict, the task table's cells, the by-task anomalies table — so they can differ in what they show and never in what they say.
+**Two projections of one fold, not two renderers.** `status_markdown` is what an operator reads: the file the timer regenerates, and what `steward status` prints for an agent to relay. `collect_markdown` is what the agent reads for itself. They are cut from the same `TendResult` and share every sentence they both carry — the verdict, the task table's cells, the by-task anomalies table — so they can differ in what they show and never in what they say.
 
 **The operator's page is short on purpose.** On a machine with no git and sometimes no internet, an object store is the only observability channel there is, and this is the file somebody reads from another system to find out whether the night is going well (workflow.md, *Syncing the workspace out*). It answers four questions in order: what state is the run in and how old is this, where does each task stand, what is waiting on me, and what did not take the normal course. Windows, proposals, precedent, standing rules and the history are the agent's to work, and an operator who wants them asks the agent. The item lines carry the summary alone — an id is the argument to a verb the operator is not running.
 
@@ -30,7 +30,14 @@ from .items import (
     verdict_line,
     waiting_to_land,
 )
-from .progress import LIVE_ONLY, TaskProgress, compact, display_keys, short_keys
+from .progress import (
+    LIVE_ONLY,
+    TaskProgress,
+    compact,
+    display_keys,
+    fleet_totals,
+    short_keys,
+)
 from .table import clip, pipe_table, resources_table, score_cell
 
 if TYPE_CHECKING:
@@ -43,16 +50,16 @@ _HEADER = "<!-- Written by `steward tend`. Regenerated every turn; edits are los
 KEY_WIDTH = 32
 """Display-key width for the operator's page: the task table, and the fenced tables under it.
 
-The page is read rendered — `status.md` in a viewer, or `steward status --format md` relayed into a terminal that draws a pipe table as boxes — at a width Steward never learns, and a renderer squeezes the numeric columns before the task cell, so a key of benchmark length wraps `689/731` onto two lines. About forty columns is what a ninety-column terminal leaves the task cell once six numeric columns have theirs, and eight of those go to the connections figure while a task runs.
+The page is read rendered — `status.md` in a viewer, or `steward status` relayed into a terminal that draws a pipe table as boxes — at a width Steward never learns, and a renderer squeezes the numeric columns before the task cell, so a key of benchmark length wraps `689/731` onto two lines. About forty columns is what a ninety-column terminal leaves the task cell once six numeric columns have theirs, and eight of those go to the connections figure while a task runs.
 """
 
 
 def status_markdown(result: "TendResult", *, header: bool = True) -> str:
-    """Render a turn for an operator: `status.md`, and `steward status --format md`.
+    """Render a turn for an operator: `status.md`, and `steward status`.
 
     Args:
         result: The turn that just ran.
-        header: Include the generated-file comment. `status.md` wants it; `steward status --format md` does not, since nothing there is a file anybody could edit by mistake.
+        header: Include the generated-file comment. `status.md` wants it; `steward status` does not, since nothing there is a file anybody could edit by mistake.
 
     Returns:
         The complete body.
@@ -60,7 +67,7 @@ def status_markdown(result: "TendResult", *, header: bool = True) -> str:
     lines: list[str] = []
     if header:
         lines += [_HEADER, ""]
-    lines += [status_headline(result), ""]
+    lines += [_pulse(result), ""]
     lines += _signature(result)
     lines += _tasks(result)
     lines += _operator(result)
@@ -129,6 +136,19 @@ def status_headline(result: "TendResult") -> str:
     theirs = [item for item in result.items if item.owner is Owner.OPERATOR]
     parts = [verdict_line(result.verdict, theirs), *_tended(result), _agent(result)]
     return " · ".join(parts) + _qualified(result)
+
+
+def _pulse(result: "TendResult") -> str:
+    """The page's opening block: the verdict headline, the fleet total, and the tuning alert while one stands — the run's pulse in three lines at most.
+
+    Joined with hard line breaks rather than blank lines so the three read as one tight block at single line-height, not three paragraphs each with its own vertical margin. The fleet total is absent for a single-task run (`fleet_totals`) and the tuning line only while the ramp is held or throttled (`TuningPlan.alert`), so a settled, unheld run is just the headline.
+    """
+    block = [status_headline(result)]
+    if (fleet := fleet_totals(result.progress)) is not None:
+        block.append(fleet)
+    if result.tuning.alert is not None:
+        block.append(f"**Tuning** {result.tuning.alert}")
+    return "  \n".join(block)
 
 
 def _tended(result: "TendResult") -> list[str]:
@@ -252,11 +272,27 @@ def _operator(result: "TendResult") -> list[str]:
 
 
 def _outcomes(result: "TendResult") -> list[str]:
-    """By task, the samples that did not take the normal course — the table `anomalies.md` opens on, as a fenced plain table with its keys clipped like the task table's. Absent where every sample took it."""
+    """By task, the samples that did not take the normal course — the table `anomalies.md` opens on, as a fenced plain table with its keys clipped like the task table's — then a note of what is re-running. Absent where every sample took the normal course and nothing is re-running."""
     table = outcomes_block(
         result.dispositions.outcomes, result.progress, width=KEY_WIDTH
     )
-    return ["### anomalies", "", *table, ""] if table else []
+    note = _rerunning(result.anomalies)
+    if not table and not note:
+        return []
+    body = list(table)
+    if note and table:
+        body.append("")
+    body += note
+    return ["### anomalies", "", *body, ""]
+
+
+def _rerunning(anomalies: Anomalies) -> list[str]:
+    """A one-line note that N windows are re-running, or nothing when none are.
+
+    A hole filling itself rather than a gap to act on, so a reader sees it is in hand. Counts the RULED windows `anomalies_line` calls *awaiting a re-run*, in the same words, so the operator's page and the terminal cannot disagree about how many.
+    """
+    count = sum(1 for anomaly in anomalies.open if anomaly.state is AnomalyState.RULED)
+    return [f"{count} awaiting a re-run."] if count else []
 
 
 def _resources(result: "TendResult") -> list[str]:

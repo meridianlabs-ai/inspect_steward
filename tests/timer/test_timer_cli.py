@@ -485,7 +485,8 @@ def test_a_paused_run_does_not_blame_the_ceiling(pending: Workspace) -> None:
     # points a reader at the one thing they might go and change
     run("pause", "--reason", "hold everything")
 
-    _, output = run("status")
+    # the terminal preview, which carries the per-slot waiting reason
+    _, output = run("status", "--format", "text")
 
     assert "1 waiting on a resume" in output
     assert "ceiling" not in output

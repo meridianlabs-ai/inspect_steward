@@ -160,7 +160,7 @@ def test_raising_takes_an_item_out_of_the_queue_and_leaves_it_open(
     run("raise", "drift", "--note", "asked in #evals")
 
     collected, _ = sections(run("collect"))
-    summary = run("status", "--format", "md")
+    summary = run("status")
 
     assert "the definition has changed" not in collected
     # still open, still the operator's, and still counted by the verdict: what
@@ -361,7 +361,7 @@ def test_an_agent_owned_item_cannot_be_raised(workspace: Workspace) -> None:
     # operator's
     collected, _ = sections(run("collect"))
     assert "broken.eval" in collected
-    assert re.search(r"agent: \d+ open item", run("status", "--format", "md"))
+    assert re.search(r"agent: \d+ open item", run("status"))
 
 
 # --- a park: raisable, never acknowledgeable ----------------------------
@@ -419,7 +419,7 @@ def test_a_park_can_be_raised_even_though_it_cannot_be_acknowledged(
     after, _ = sections(run("collect"))
     assert "waiting on an approval" not in after
     assert "1 raised" in after
-    assert "waiting on an approval" in run("status", "--format", "md")
+    assert "waiting on an approval" in run("status")
 
 
 def test_a_park_cannot_be_acknowledged_and_the_refusal_says_why(
