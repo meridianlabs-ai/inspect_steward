@@ -692,360 +692,354 @@ ul.task-list li input[type="checkbox"] {
 <td><code>True</code></td>
 </tr>
 <tr class="odd">
-<td><code>--no-env-check</code></td>
-<td>boolean</td>
-<td>Arm even though a scheduled tend would not inherit this shell’s credentials.</td>
-<td><code>True</code></td>
-</tr>
-<tr class="even">
 <td><code>--log-root</code></td>
 <td>value</td>
 <td>Root this machine keeps eval logs under. Used only where the definition names no log_dir, in which case this run writes to <root>/<workspace name="">. Overrides <code>log_root</code> in <code>_steward.yaml</code> and <code>STEWARD_LOG_ROOT</code>.</workspace></root></td>
 <td>None</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>--no-log-root</code></td>
 <td>boolean</td>
 <td>Keep this run’s logs in the workspace, whatever root the machine configured.</td>
 <td><code>False</code></td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>--log-store</code></td>
 <td>value</td>
 <td>Where to look for logs this run does not have to produce — a flow store, or a plain directory of logs. Matches are copied in and reported, and a rehearsal leaves them out. Overrides <code>log_store</code> in <code>_steward.yaml</code> and <code>STEWARD_LOG_STORE</code>.</td>
 <td>None</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>--no-log-store</code></td>
 <td>boolean</td>
 <td>Run against no log store, whatever this project or machine configured.</td>
 <td><code>False</code></td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>--notification</code></td>
 <td>value</td>
 <td>Where to post what this run cannot decide — an Apprise URL, several separated by commas, or an Apprise config file. Reaches every worker too. Overrides <code>notification</code> in <code>_steward.yaml</code> and <code>STEWARD_NOTIFICATION</code>.</td>
 <td>None</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>--no-notification</code></td>
 <td>boolean</td>
 <td>Post nothing about this run. Silences Steward only — a worker waiting on an operator still asks.</td>
 <td><code>False</code></td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>--scan-model</code></td>
 <td>value</td>
 <td>Model scanners use, for this launch’s own turn. Reaches every worker too. Overrides <code>scan_model</code> in <code>_steward.yaml</code> and <code>STEWARD_SCAN_MODEL</code>.</td>
 <td>None</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>--no-scan-model</code></td>
 <td>boolean</td>
 <td>Configure no scan model — scanners use each sample’s own model under evaluation.</td>
 <td><code>False</code></td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>--max-workers</code></td>
 <td>integer range (<code>1</code> and above)</td>
 <td>Worker processes, or unset for a process per task. Overrides <code>max_workers</code> in <code>_steward.yaml</code> and <code>STEWARD_MAX_WORKERS</code>.</td>
 <td>None</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>--stall-after</code></td>
 <td>integer range (<code>1</code> and above)</td>
 <td>Fruitless respawns before a task is given up on. Overrides <code>stall_after</code> in <code>_steward.yaml</code> and <code>STEWARD_STALL_AFTER</code>.</td>
 <td>None</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>--samples-ramp</code></td>
 <td>value</td>
 <td>Range to discover sample concurrency in, e.g.&nbsp;<code>[40, 300]</code>, or <code>false</code> to fix it. Overrides <code>samples_ramp</code> in <code>_steward.yaml</code> and <code>STEWARD_SAMPLES_RAMP</code>.</td>
 <td>None</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>--stuck-after</code></td>
 <td>value</td>
 <td>Quiet time before a running sample is reported stuck, with a unit, e.g.&nbsp;<code>5h</code>. Overrides <code>stuck_after</code> in <code>_steward.yaml</code> and <code>STEWARD_STUCK_AFTER</code>.</td>
 <td>None</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>--preauthorized</code></td>
 <td>value</td>
 <td>Rulings granted in advance: class patterns to dispositions, e.g.&nbsp;<code>{'error:ReadTimeout@*': rerun}</code>, or <code>false</code> to decline every standing grant for this turn. Overrides <code>preauthorized</code> in <code>_steward.yaml</code> and <code>STEWARD_PREAUTHORIZED</code>.</td>
 <td>None</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>--tend-interval</code></td>
 <td>value</td>
 <td>How often a scheduled tend runs, with a unit, e.g.&nbsp;<code>10m</code>. Overrides <code>tend_interval</code> in <code>_steward.yaml</code> and <code>STEWARD_TEND_INTERVAL</code>.</td>
 <td>None</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>--sync</code></td>
 <td>value</td>
 <td>Where to mirror this workspace’s own files. Defaults to the run’s log directory, so results and what explains them sit together. Overrides <code>sync</code> in <code>_steward.yaml</code> and <code>STEWARD_SYNC</code>.</td>
 <td>None</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>--no-sync</code></td>
 <td>boolean</td>
 <td>Leave the workspace on this machine, whatever this project configured.</td>
 <td><code>False</code></td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>--smoke</code></td>
 <td>boolean</td>
 <td>Rehearse first instead of launching: a few samples per task under a cap, into .steward/smoke/.</td>
 <td><code>False</code></td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>--samples</code></td>
 <td>integer range (<code>1</code> and above)</td>
 <td>Samples per task in a smoke (default 2).</td>
 <td>None</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>--cap</code></td>
 <td>integer range (<code>0</code> and above)</td>
 <td>Wall-clock minutes a smoke may take, 0 for none (default 15).</td>
 <td>None</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>--accept</code></td>
 <td>choice (<code>context_window</code> | <code>reasoning</code> | <code>reasoning_api</code> | <code>scan_coverage</code>)</td>
 <td>Record a smoke check as waived rather than failing on it. Repeatable.</td>
 <td>None</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>--no-break-claim</code></td>
 <td>boolean</td>
 <td>Refuse if another command is wedged, rather than killing it and taking the claim.</td>
 <td><code>False</code></td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>--json</code></td>
 <td>boolean</td>
 <td>Output the delta and the first turn as JSON.</td>
 <td><code>False</code></td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>--log-format</code></td>
 <td>value</td>
 <td>Log file format, overriding the definition’s. Also STEWARD_LOG_FORMAT, INSPECT_LOG_FORMAT, INSPECT_EVAL_LOG_FORMAT.</td>
 <td>None</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>--log-samples</code></td>
 <td>value</td>
 <td>Whether to log individual samples, overriding the definition’s. Also STEWARD_LOG_SAMPLES, INSPECT_EVAL_NO_LOG_SAMPLES.</td>
 <td>None</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>--log-realtime</code></td>
 <td>value</td>
 <td>Whether to log sample events in realtime, overriding the definition’s. Also STEWARD_LOG_REALTIME, INSPECT_EVAL_NO_LOG_REALTIME.</td>
 <td>None</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>--log-images</code></td>
 <td>value</td>
 <td>Whether to log base64-encoded images, overriding the definition’s. Also STEWARD_LOG_IMAGES.</td>
 <td>None</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>--log-model-api</code></td>
 <td>value</td>
 <td>Whether to log model API calls, overriding the definition’s. Also STEWARD_LOG_MODEL_API, INSPECT_EVAL_LOG_MODEL_API.</td>
 <td>None</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>--log-refusals</code></td>
 <td>value</td>
 <td>Whether to log model refusals, overriding the definition’s. Also STEWARD_LOG_REFUSALS, INSPECT_EVAL_LOG_REFUSALS.</td>
 <td>None</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>--log-buffer</code></td>
 <td>value</td>
 <td>Samples to buffer before writing, overriding the definition’s. Also STEWARD_LOG_BUFFER, INSPECT_EVAL_LOG_BUFFER.</td>
 <td>None</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>--log-shared</code></td>
 <td>value</td>
 <td>Whether (and how often) to sync logs to a shared filesystem, overriding the definition’s. Also STEWARD_LOG_SHARED, INSPECT_LOG_SHARED, INSPECT_EVAL_LOG_SHARED.</td>
 <td>None</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>--log-level</code></td>
 <td>value</td>
 <td>Console log level, overriding the definition’s. Also STEWARD_LOG_LEVEL, INSPECT_LOG_LEVEL.</td>
 <td>None</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>--log-level-transcript</code></td>
 <td>value</td>
 <td>Transcript log level, overriding the definition’s. Also STEWARD_LOG_LEVEL_TRANSCRIPT, INSPECT_LOG_LEVEL_TRANSCRIPT.</td>
 <td>None</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>--limit</code></td>
 <td>value</td>
 <td>Dataset slice, overriding the definition’s: a sample count, or a <code>(start, end)</code> range. Also STEWARD_LIMIT, INSPECT_EVAL_LIMIT.</td>
 <td>None</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>--sample-id</code></td>
 <td>value</td>
 <td>Specific sample id(s) to run, overriding the definition’s. Also STEWARD_SAMPLE_ID, INSPECT_EVAL_SAMPLE_ID.</td>
 <td>None</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>--sample-shuffle</code></td>
 <td>value</td>
 <td>Whether to shuffle the dataset (optionally with a seed), overriding the definition’s. Also STEWARD_SAMPLE_SHUFFLE, INSPECT_EVAL_SAMPLE_SHUFFLE.</td>
 <td>None</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>--epochs</code></td>
 <td>value</td>
 <td>Epochs to repeat samples over, overriding the definition’s. Also STEWARD_EPOCHS, INSPECT_EVAL_EPOCHS.</td>
 <td>None</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>--max-samples</code></td>
 <td>value</td>
 <td>Sample concurrency, overriding the definition’s. Also STEWARD_MAX_SAMPLES, INSPECT_EVAL_MAX_SAMPLES.</td>
 <td>None</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>--max-tasks</code></td>
 <td>value</td>
 <td>Task concurrency, overriding the definition’s. Also STEWARD_MAX_TASKS, INSPECT_EVAL_MAX_TASKS.</td>
 <td>None</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>--max-subprocesses</code></td>
 <td>value</td>
 <td>Subprocess concurrency, overriding the definition’s. Also STEWARD_MAX_SUBPROCESSES, INSPECT_EVAL_MAX_SUBPROCESSES.</td>
 <td>None</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>--max-sandboxes</code></td>
 <td>value</td>
 <td>Sandbox concurrency, overriding the definition’s. Also STEWARD_MAX_SANDBOXES, INSPECT_EVAL_MAX_SANDBOXES.</td>
 <td>None</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>--max-dataset-memory</code></td>
 <td>value</td>
 <td>Maximum MiB of dataset sample data to hold in memory per task, overriding the definition’s. Zero pages every sample to disk. Also STEWARD_MAX_DATASET_MEMORY, INSPECT_EVAL_MAX_DATASET_MEMORY.</td>
 <td>None</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>--generate-config</code></td>
 <td>value</td>
 <td>Model transport settings, overriding the definition’s. Also STEWARD_GENERATE_CONFIG.</td>
 <td>None</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>--model-base-url</code></td>
 <td>value</td>
 <td>Base URL for model API requests, overriding the definition’s. Also STEWARD_MODEL_BASE_URL.</td>
 <td>None</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>--model-cost-config</code></td>
 <td>value</td>
 <td>Model pricing table (or a path to one), overriding the definition’s. Also STEWARD_MODEL_COST_CONFIG, INSPECT_EVAL_MODEL_COST_CONFIG.</td>
 <td>None</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>--sandbox</code></td>
 <td>value</td>
 <td>Sandbox environment, overriding the definition’s. Also STEWARD_SANDBOX, INSPECT_EVAL_SANDBOX.</td>
 <td>None</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>--sandbox-cleanup</code></td>
 <td>value</td>
 <td>Whether to clean up sandboxes after a task, overriding the definition’s. Also STEWARD_SANDBOX_CLEANUP, INSPECT_EVAL_NO_SANDBOX_CLEANUP.</td>
 <td>None</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>--sandbox-prebuilt</code></td>
 <td>value</td>
 <td>Whether sandbox images are prebuilt, overriding the definition’s. Also STEWARD_SANDBOX_PREBUILT, INSPECT_EVAL_SANDBOX_PREBUILT.</td>
 <td>None</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>--checkpoint</code></td>
 <td>value</td>
 <td>Sample checkpointing, overriding the definition’s. Also STEWARD_CHECKPOINT, INSPECT_EVAL_CHECKPOINT.</td>
 <td>None</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>--approval</code></td>
 <td>value</td>
 <td>Approval policy (or a path to one), overriding the definition’s. Also STEWARD_APPROVAL, INSPECT_EVAL_APPROVAL.</td>
 <td>None</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>--retry-on-error</code></td>
 <td>value</td>
 <td>Sample-level retries before an error is recorded, overriding the definition’s. Also STEWARD_RETRY_ON_ERROR, INSPECT_EVAL_RETRY_ON_ERROR.</td>
 <td>None</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>--score-on-error</code></td>
 <td>value</td>
 <td>Whether to score samples that errored, overriding the definition’s. Also STEWARD_SCORE_ON_ERROR, INSPECT_EVAL_SCORE_ON_ERROR.</td>
 <td>None</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>--debug-errors</code></td>
 <td>value</td>
 <td>Whether to raise sample errors rather than recording them, overriding the definition’s. Also STEWARD_DEBUG_ERRORS, INSPECT_DEBUG_ERRORS.</td>
 <td>None</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>--score</code></td>
 <td>value</td>
 <td>Whether to score the run, overriding the definition’s. Also STEWARD_SCORE, INSPECT_EVAL_NO_SCORE.</td>
 <td>None</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>--score-display</code></td>
 <td>value</td>
 <td>Whether to display scoring metrics, overriding the definition’s. Also STEWARD_SCORE_DISPLAY, INSPECT_EVAL_SCORE_DISPLAY.</td>
 <td>None</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>--tags</code></td>
 <td>value</td>
 <td>Tags to stamp into the logs, overriding the definition’s. Also STEWARD_TAGS, INSPECT_EVAL_TAGS.</td>
 <td>None</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>--metadata</code></td>
 <td>value</td>
 <td>Metadata to stamp into the logs, overriding the definition’s. Also STEWARD_METADATA, INSPECT_EVAL_METADATA.</td>
 <td>None</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>--display</code></td>
 <td>value</td>
 <td>Display type, overriding the definition’s. Also STEWARD_DISPLAY, INSPECT_DISPLAY.</td>
 <td>None</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><code>--trace</code></td>
 <td>value</td>
 <td>Whether to trace message interactions to the console, overriding the definition’s. Also STEWARD_TRACE, INSPECT_EVAL_TRACE.</td>
 <td>None</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><code>--help</code></td>
 <td>boolean</td>
 <td>Show this message and exit.</td>
@@ -1913,12 +1907,6 @@ ul.task-list li input[type="checkbox"] {
 <td>None</td>
 </tr>
 <tr class="odd">
-<td><code>--no-env-check</code></td>
-<td>boolean</td>
-<td>Arm even though a scheduled tend would not inherit this shell’s credentials.</td>
-<td><code>True</code></td>
-</tr>
-<tr class="even">
 <td><code>--help</code></td>
 <td>boolean</td>
 <td>Show this message and exit.</td>

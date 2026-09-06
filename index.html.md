@@ -16,12 +16,12 @@ Welcome to Steward, a system for automated execution and supervision of long-run
 
 ### Setup
 
-First, install Steward from GitHub with:
+First, install Steward from PyPI with:
 
     Terminal
 
 ``` bash
-pip install git+https://github.com/meridianlabs-ai/inspect_steward
+pip install inspect_steward
 ```
 
 To use Steward, create a directory, switch to it, then call `steward init`:

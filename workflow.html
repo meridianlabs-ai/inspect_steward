@@ -472,6 +472,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb6-2"><a href="#cb6-2" aria-hidden="true" tabindex="-1"></a><span class="ex">❯</span> how is the eval going<span class="pp">?</span></span>
 <span id="cb6-3"><a href="#cb6-3" aria-hidden="true" tabindex="-1"></a><span class="ex">─────────────────────────────────────────────────────────</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
+<p>Steward notifies you when something needs a decision, when a run finishes, and when it cannot tend at all. In between, it also posts an hourly heartbeat so you know the latest status at a glance.</p>
 </section>
 </section>
 <section id="signoff" class="level2">
@@ -590,6 +591,12 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <td><code>STEWARD_NOTIFICATION</code></td>
 <td>none</td>
 <td>Apprise URL(s) or an Apprise config file.</td>
+</tr>
+<tr class="odd">
+<td><code>heartbeat</code></td>
+<td><code>STEWARD_HEARTBEAT</code></td>
+<td>1h</td>
+<td>How often a liveness heartbeat posts while a run is progressing, with a unit; <code>false</code> for none.</td>
 </tr>
 </tbody>
 </table>

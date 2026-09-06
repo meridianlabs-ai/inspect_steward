@@ -143,7 +143,6 @@ steward launch [OPTIONS] [DEFINITION]
 | `--type` | choice (`evalset` \| `flow` \| `hawk`) | Definition type (auto-detected, or taken from the committed manifest). | None |
 | `--accept-archive` | boolean | Commit even though results would leave logs/ — archived, or left behind by a log directory that moved. | `False` |
 | `--no-timer` | boolean | Launch without arming a timer. The run is then recorded as unsupervised until something arms one. | `True` |
-| `--no-env-check` | boolean | Arm even though a scheduled tend would not inherit this shell’s credentials. | `True` |
 | `--log-root` | value | Root this machine keeps eval logs under. Used only where the definition names no log_dir, in which case this run writes to /. Overrides `log_root` in `_steward.yaml` and `STEWARD_LOG_ROOT`. | None |
 | `--no-log-root` | boolean | Keep this run’s logs in the workspace, whatever root the machine configured. | `False` |
 | `--log-store` | value | Where to look for logs this run does not have to produce — a flow store, or a plain directory of logs. Matches are copied in and reported, and a rehearsal leaves them out. Overrides `log_store` in `_steward.yaml` and `STEWARD_LOG_STORE`. | None |
@@ -563,7 +562,6 @@ steward timer arm [OPTIONS]
 |----|----|----|----|
 | `--tend-interval` | value | How often a scheduled tend runs, with a unit, e.g. `10m`. Overrides `tend_interval` in `_steward.yaml` and `STEWARD_TEND_INTERVAL`. | None |
 | `--scheduler` | choice (`launchd` \| `systemd` \| `cron`) | Which scheduler to use. Detected when not given, preferring one that survives a reboot. | None |
-| `--no-env-check` | boolean | Arm even though a scheduled tend would not inherit this shell’s credentials. | `True` |
 | `--help` | boolean | Show this message and exit. | `False` |
 
 ### steward timer disarm
