@@ -74,17 +74,20 @@ def test_a_zero_is_the_scorers_verdict_on_an_empty_attempt(
     assert spawned.dispositions.pending == {window.class_key: 2}
     (run,) = read_runs(workspace.marks_runs)
 
+    # wait on the runner recording its own exit, not on the journal edit: the
+    # edit is written first and the exit last, so a test that stopped at the
+    # edit could read `exited` in the window between the two and lose the race
+    # on a loaded runner
     until(
-        "the side run to land and the runner to journal the zero",
-        lambda: bool(
-            read_applied(read_journal(workspace.journal).events).edited_uuids(
-                window.class_key, _ruled_at(workspace)
-            )
-        ),
+        "the side run to land and the runner to finish and record its exit",
+        lambda: read_runs(workspace.marks_runs)[run].exited,
         timeout=300,
     )
     ended = read_runs(workspace.marks_runs)[run]
-    assert ended.exited and ended.status == 0, ended.detail
+    assert ended.status == 0, ended.detail
+    assert read_applied(read_journal(workspace.journal).events).edited_uuids(
+        window.class_key, _ruled_at(workspace)
+    )
 
     # the side run left its logs in the run's own scratch directory
     (event,) = [

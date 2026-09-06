@@ -78,17 +78,19 @@ def test_an_exclusion_lands_in_the_log_from_a_detached_runner(
     assert UNWRITTEN in [blocker.kind for blocker in check(spawned, None)]
     (run,) = read_runs(workspace.marks_runs)
 
-    # ...and the runner, on its own, lands it
+    # ...and the runner, on its own, lands it. Wait on the runner recording its
+    # own exit, not on the journal edit: the edit is written first and the exit
+    # last, so stopping at the edit could read `exited` in the window between the
+    # two and lose the race on a loaded runner
     until(
-        "the runner to journal the exclusion",
-        lambda: bool(
-            read_applied(read_journal(workspace.journal).events).edited_uuids(
-                window.class_key, _ruled_at(workspace)
-            )
-        ),
+        "the runner to land the exclusion and record its exit",
+        lambda: read_runs(workspace.marks_runs)[run].exited,
     )
     ended = read_runs(workspace.marks_runs)[run]
-    assert ended.exited and ended.status == 0, ended.detail
+    assert ended.status == 0, ended.detail
+    assert read_applied(read_journal(workspace.journal).events).edited_uuids(
+        window.class_key, _ruled_at(workspace)
+    )
 
     after = read_eval_log(first.name)
     by_id = {str(sample.id): sample for sample in (after.samples or [])}
