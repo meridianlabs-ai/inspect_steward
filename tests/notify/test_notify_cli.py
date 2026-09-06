@@ -24,7 +24,9 @@ from inspect_steward._notify import (
 from inspect_steward._tend import notify_failure
 from inspect_steward._workspace import (
     NOTIFIED,
+    PAUSED,
     Workspace,
+    append_event,
     create_workspace,
     read_journal,
     read_notified,
@@ -357,3 +359,84 @@ def test_the_command_reports_the_failure_it_could_not_run(
 
     assert code != 0
     assert "not valid YAML" in output
+
+
+# --- the heartbeat and the pause notice ---------------------------------
+
+
+def silent(monkeypatch: pytest.MonkeyPatch, seconds: float = 1e6) -> None:
+    """Make the channel read as silent for `seconds`, so the heartbeat is due without a test waiting an hour."""
+
+    def elapsed(ts: str) -> float:
+        return seconds
+
+    monkeypatch.setattr("inspect_steward._tend.notify.seconds_since", elapsed)
+
+
+def progressing(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, text: str = ""
+) -> Workspace:
+    """A run with work still to do, entered as a shell would, with a channel set.
+
+    Two tasks and one worker, so one is queued this turn without a live worker to
+    answer for it — a progressing, quiet turn a heartbeat is about.
+    """
+    create_workspace(tmp_path, git=False)
+    ws, _ = prepared(tmp_path, [SynthTask("a"), SynthTask("b")])
+    if text:
+        ws.directives.write_text(text, encoding="utf-8")
+    monkeypatch.chdir(ws.root)
+    monkeypatch.setenv(INSPECT_NOTIFICATION, CHANNEL)
+    return ws
+
+
+def test_a_quiet_progressing_run_heartbeats_once_the_channel_has_been_silent(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ws = progressing(tmp_path, monkeypatch)
+    sent = recording(monkeypatch, "inspect_steward._tend.notify.send_post")
+    silent(monkeypatch)
+
+    turn(ws, max_workers=1)
+
+    assert Kind.HEARTBEAT in [post.kind for post in sent]
+
+
+def test_a_recently_heard_channel_does_not_heartbeat(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # the ordinary case: silence measured in seconds, well under the hour
+    ws = progressing(tmp_path, monkeypatch)
+    sent = recording(monkeypatch, "inspect_steward._tend.notify.send_post")
+
+    turn(ws, max_workers=1)
+
+    assert Kind.HEARTBEAT not in [post.kind for post in sent]
+
+
+def test_heartbeat_false_silences_it_however_long_the_quiet(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ws = progressing(tmp_path, monkeypatch, text="heartbeat: false\n")
+    sent = recording(monkeypatch, "inspect_steward._tend.notify.send_post")
+    silent(monkeypatch)
+
+    turn(ws, max_workers=1)
+
+    assert Kind.HEARTBEAT not in [post.kind for post in sent]
+
+
+def test_a_paused_run_is_announced_once_and_never_heartbeats(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    ws = progressing(tmp_path, monkeypatch)
+    append_event(ws.journal, PAUSED, by="operator", reason="holding")
+    sent = recording(monkeypatch, "inspect_steward._tend.notify.send_post")
+    silent(monkeypatch)
+
+    turn(ws)
+    turn(ws)
+
+    kinds = [post.kind for post in sent]
+    assert kinds.count(Kind.PAUSED) == 1
+    assert Kind.HEARTBEAT not in kinds

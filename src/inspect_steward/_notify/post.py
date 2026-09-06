@@ -24,6 +24,12 @@ class Kind(StrEnum):
     CLEAR = "clear"
     """The decision queue emptied and work continues. Steward's alone."""
 
+    PAUSED = "paused"
+    """The run was paused, so nothing new will be scheduled until it resumes. Steward's alone, and sent **once per pause**: a paused run does not heartbeat — the one thing a channel-glancer needs is to know it is paused rather than silent, and repeating it every interval is the noise the heartbeat is suppressed to avoid. A resume and a fresh pause is a new pause and a second notice."""
+
+    HEARTBEAT = "heartbeat"
+    """The run is alive and here is where it stands — sent on an otherwise-quiet turn once the channel has been silent for the heartbeat interval. Steward's alone, so an operator glancing at the channel at any hour sees data no older than that interval, rather than a silence that could equally be a healthy run or a dead one. Never sent for a paused run (that is `PAUSED`, once) or a settled one (the gate already spoke)."""
+
     GATE = "gate"
     """Every task finished; the run is waiting on `signoff`. Steward's alone and **latched** — posted by the first turn that finds the run settled, and re-armed by a later `launch`, which is the case a manual convention would get wrong.
 

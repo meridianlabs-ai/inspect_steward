@@ -51,6 +51,11 @@ from .options import (
 from .tasks import parse_args
 from .turn import TURN_ERRORS, echo_turn, find_workspace
 
+NOTIFICATIONS_DOCS = (
+    "https://meridianlabs-ai.github.io/inspect_steward/workflow.html#notifications"
+)
+"""Where the notification setup — Apprise URLs, the `_steward.yaml` and `.env` spellings — is written up, linked from the launch hint that fires when a run has no channel."""
+
 _LABELS = {
     Change.ADD: ("add", ""),
     Change.EXTEND: ("extend", ""),
@@ -639,13 +644,15 @@ def _echo_no_channel(*, one_launch: bool) -> None:
         click.echo(
             "\n--notification applies to this launch only — a scheduled tend "
             "inherits no environment, so later turns will reach nobody. Put it "
-            "in _steward.yaml or .env to make it stick."
+            "in _steward.yaml or .env to make it stick.\n"
+            f"  {NOTIFICATIONS_DOCS}"
         )
         return
     click.echo(
         "\nnothing will reach you if this run needs an operator — set "
         "notification in _steward.yaml, or STEWARD_NOTIFICATION in .env, "
-        "to an Apprise URL (slack://…, mailto://…)"
+        "to an Apprise URL (slack://…, mailto://…).\n"
+        f"  {NOTIFICATIONS_DOCS}"
     )
 
 
@@ -657,7 +664,8 @@ def _echo_unusable_channel() -> None:
     click.echo(
         "\nthe notification setting resolves to no usable targets, so nothing "
         "will reach you if this run needs an operator — check the URL, or the "
-        "Apprise config file it names"
+        "Apprise config file it names.\n"
+        f"  {NOTIFICATIONS_DOCS}"
     )
 
 

@@ -344,6 +344,36 @@ class Directives(BaseModel):
             )
         return value
 
+    heartbeat: int | bool | None = Field(default=None)
+    """How often to post a liveness heartbeat while the run is progressing, `false` to send none, or `None` for the default hour.
+
+    Written with a unit — `heartbeat: 30m` — and stored as seconds, like `tend_interval`. On by default so an operator glancing at the channel at any hour sees data no older than the interval, rather than a silence a healthy run and a dead one produce alike; `false` for a deployment that would rather hear only what is actionable. It fires only on an otherwise-quiet turn — an actionable post is already fresh data — and never on a paused run, which sends its one `paused` notice instead.
+
+    Admitted by the same test its siblings pass: how often a channel should be reassured is a property of the deployment, and no `eval_set()` argument reaches it.
+    """
+
+    @field_validator("heartbeat", mode="before")
+    @classmethod
+    def _heartbeat(cls, value: object) -> object:
+        """A duration written with its unit, or `false` to disable — a bare number and `true` refused the way the siblings refuse them.
+
+        `false` earns its place where `notification: false` does: switching the reassurance off is a real choice a noise-averse deployment makes. `true` is refused for the reason `notification`'s is — it says *on* where omitting the key already means on at the default, so it would only be a second spelling of the same thing.
+        """
+        if value is None or value is False:
+            return value
+        if value is True:
+            raise ValueError(
+                "is on by default, so `true` adds nothing — omit it for the "
+                "default hour, name an interval like '30m', or set `false` to "
+                "send none"
+            )
+        if not isinstance(value, str):
+            raise ValueError(
+                f"must be written with a unit, like '30m' — {value!r} could mean "
+                f"seconds, minutes, or hours, and Steward will not guess"
+            )
+        return parse_duration(value)
+
     scan_model: str | bool | None = Field(default=None)
     """The model scanners use, `false` for none configured, or `None` for no preference.
 

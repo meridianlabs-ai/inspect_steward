@@ -30,14 +30,20 @@ from .._util.duration import seconds_since
 from .._workspace import (
     DEFAULT_TEND_INTERVAL,
     NOTIFIED,
+    POSTED,
     UNDELIVERED,
     Directives,
     DirectivesError,
+    JournalEvent,
+    Paused,
     Workspace,
     append_event,
     read_directives,
     read_journal,
+    read_last_post,
     read_notified,
+    read_pause,
+    read_pause_posts,
 )
 from .anomalies_md import outcomes_table
 from .items import (
@@ -49,8 +55,13 @@ from .items import (
     self_healing,
     verdict_text,
 )
-from .progress import Progress, short_keys
+from .progress import Progress, fleet_totals, short_keys
 from .table import progress_table
+
+DEFAULT_HEARTBEAT = 60.0 * 60.0
+"""The heartbeat interval where `_steward.yaml` names none: one hour.
+
+Long enough that a healthy run posts a handful of times a night rather than filling the channel, short enough that *fresh within the hour* is a promise a glance can rely on."""
 
 if TYPE_CHECKING:
     # the turn imports this module to post its own result, so the type it
@@ -110,20 +121,137 @@ def notify_turn(
     """
     if channel is None:
         return
-    if (post := turn_post(result)) is None:
+    if (post := turn_post(result)) is not None:
+        # named here rather than inside `turn_post`, which is pure over a result
+        # and has no workspace to ask
+        named = replace(post, workspace=workspace.root.name)
+        if (instance := channel_apprise()) is None:
+            _owed(workspace, result)
+            return
+        # **owed only where nothing landed.** A channel is a list, and one
+        # target failing while another accepted is a reader who *was* told --
+        # retaining the edge for them would repost to the working target every
+        # ten minutes until the broken one is fixed, which is the mute this
+        # whole module is avoiding
+        if send_post(instance, named, workspace.log).reached_nobody:
+            _owed(workspace, result)
+        else:
+            _posted(workspace, post.kind)
         return
-    # named here rather than inside `turn_post`, which is pure over a result and
-    # has no workspace to ask
-    named = replace(post, workspace=workspace.root.name)
+    # a quiet turn still keeps the channel current: one notice when the run is
+    # paused, and otherwise a heartbeat once the channel has been silent for the
+    # interval, so a glance at it sees data no older than that. Both read the
+    # journal, which the turn just wrote its observation into, so a read that
+    # fails is a workspace already broken and not this path's to report
+    try:
+        events = read_journal(workspace.journal).events
+    except OSError:
+        return
+    if result.summary.paused:
+        _pause_notice(workspace, result, events)
+        return
+    _heartbeat(workspace, result, events)
+
+
+def _posted(workspace: Workspace, kind: Kind, *, subject: str = "") -> None:
+    """Record that the channel heard a post, so the heartbeat measures silence from here.
+
+    Never raises. A missed marker costs a heartbeat sooner than it was owed, which is cheaper than losing the turn to a journal write.
+    """
+    try:
+        append_event(workspace.journal, POSTED, kind=kind.value, subject=subject)
+    except OSError:
+        return
+
+
+def _pause_notice(
+    workspace: Workspace, result: "TendResult", events: list[JournalEvent]
+) -> None:
+    """Post that the run is paused, once per pause.
+
+    A paused run does not heartbeat, so without this the channel would go silent the moment it was paused and a reader could not tell a hold from a dead timer. Latched on the pause's own timestamp — a resume and a fresh pause is a new subject and a second notice.
+    """
+    paused = read_pause(events)
+    if paused is None or paused.ts in read_pause_posts(events):
+        return
     if (instance := channel_apprise()) is None:
-        _owed(workspace, result)
         return
-    # **owed only where nothing landed.** A channel is a list, and one target
-    # failing while another accepted is a reader who *was* told -- retaining the
-    # edge for them would repost to the working target every ten minutes until
-    # the broken one is fixed, which is the mute this whole module is avoiding
-    if send_post(instance, named, workspace.log).reached_nobody:
-        _owed(workspace, result)
+    post = replace(_pause_post(result, paused), workspace=workspace.root.name)
+    if not send_post(instance, post, workspace.log).reached_nobody:
+        _posted(workspace, Kind.PAUSED, subject=paused.ts)
+
+
+def _heartbeat(
+    workspace: Workspace, result: "TendResult", events: list[JournalEvent]
+) -> None:
+    """Post where the run stands, when the channel has been quiet for the interval.
+
+    Only while the run is progressing — a settled run's gate already spoke, and a run with nothing running or queued has nothing to be a heartbeat about. The clock runs from the last post of any kind (`read_last_post`), so an actionable post an hour ago counts as the channel having been heard from; where nothing has posted, it runs from the run's first journal event, so a run quiet since launch is heard from after one interval.
+    """
+    interval = _heartbeat_seconds(_directives(workspace))
+    if interval is None or not _progressing(result):
+        return
+    baseline = read_last_post(events) or (events[0].ts if events else None)
+    # an unreadable baseline is *unknown* silence, not *forever*: a heartbeat on
+    # a timestamp nobody could parse would be a guess, so it waits for one it can
+    silent = seconds_since(baseline) if baseline is not None else None
+    if silent is None or silent < interval:
+        return
+    if (instance := channel_apprise()) is None:
+        return
+    post = replace(_heartbeat_post(result), workspace=workspace.root.name)
+    if not send_post(instance, post, workspace.log).reached_nobody:
+        _posted(workspace, Kind.HEARTBEAT)
+
+
+def _heartbeat_seconds(directives: Directives | None) -> float | None:
+    """The configured heartbeat interval in seconds, or `None` where it is switched off.
+
+    `false` disables; an interval (already parsed to seconds) is itself; absence is the default hour — the same *on unless declined* posture the default takes.
+    """
+    setting = directives.heartbeat if directives is not None else None
+    if setting is False:
+        return None
+    if isinstance(setting, int) and not isinstance(setting, bool):
+        return float(setting)
+    return DEFAULT_HEARTBEAT
+
+
+def _progressing(result: "TendResult") -> bool:
+    """Whether the run has work left that a heartbeat would be about.
+
+    A task still to finish, and not a settled run whose gate has already been posted — a heartbeat over a run waiting on signoff is a pulse on something that is not moving. Counted from the task states rather than the live running/queued totals, which are momentarily zero on the turn a worker was just spawned but not yet observed — a real gap a heartbeat should still speak through.
+    """
+    if result.verdict in (Verdict.COMPLETE, Verdict.SIGNED_OFF):
+        return False
+    complete = result.summary.states.get("complete", 0)
+    return complete < result.summary.tasks
+
+
+def _pause_post(result: "TendResult", paused: Paused) -> Post:
+    """The one post a pause earns: who paused it and why, over the run's current standing."""
+    reason = f" — {paused.reason}" if paused.reason else ""
+    return Post(
+        kind=Kind.PAUSED,
+        glyph=result.verdict.value,
+        title=f"paused by {paused.by or 'somebody'}{reason}",
+        lines=[],
+        table=_table(result.progress, WIDTH),
+        narrow=_table(result.progress, NARROW),
+    )
+
+
+def _heartbeat_post(result: "TendResult") -> Post:
+    """The heartbeat's body: the run's standing, no items — nothing here is being decided."""
+    totals = fleet_totals(result.progress)
+    return Post(
+        kind=Kind.HEARTBEAT,
+        glyph=result.verdict.value,
+        title=f"still running · {totals}" if totals else "still running",
+        lines=[],
+        table=_table(result.progress, WIDTH),
+        narrow=_table(result.progress, NARROW),
+    )
 
 
 def _owed(workspace: Workspace, result: "TendResult") -> None:

@@ -104,6 +104,8 @@ It is strongly recommended that you configure notifications. If you don't, you s
 ─────────────────────────────────────────────────────────
 ```
 
+Steward notifies you when something needs a decision, when a run finishes, and when it cannot tend at all. In between, it also posts an hourly heartbeat so you know the latest status at a glance.
+
 ## Signoff
 
 Once all tasks are completed (with errors/anomalies decided on) and their transcripts scanned for scoring integrity issues, the run is eligible for signoff. If you have a coding agent managing the run then it will prompt you for signoff at the appropriate time. If not, you can manually run signoff with:
@@ -168,6 +170,7 @@ Frequency of run tending and how to communicate notifications.
 |------------------|------------------|------------------|------------------|
 | `tend_interval` | `STEWARD_TEND_INTERVAL` | 10m | How often a scheduled tend runs, with a unit. |
 | `notification` | `STEWARD_NOTIFICATION` | none | Apprise URL(s) or an Apprise config file. |
+| `heartbeat` | `STEWARD_HEARTBEAT` | 1h | How often a liveness heartbeat posts while a run is progressing, with a unit; `false` for none. |
 
 See [Tend Loop](#tend-loop) and [Notifications](#notifications) for additional details.
 

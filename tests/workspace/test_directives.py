@@ -95,6 +95,9 @@ REJECTED: list[tuple[str, str, str]] = [
     ("a channel that says nothing", "notification: true\n", "says nothing about"),
     ("a channel spelled as a word", "notification: none\n", "is `false` now"),
     ("an empty channel", 'notification: ""\n', "not an empty value"),
+    # `heartbeat` is on by default, so `true` adds nothing, and it is a duration
+    ("a heartbeat that says nothing", "heartbeat: true\n", "adds nothing"),
+    ("a bare heartbeat number", "heartbeat: 30\n", "unit"),
     # `scan_model` is shaped like `notification` and refused the same way
     ("a scan model that says nothing", "scan_model: true\n", "says nothing about"),
     ("a scan model spelled as a word", "scan_model: none\n", "is `false` now"),
@@ -128,6 +131,20 @@ def test_a_file_that_cannot_be_trusted_is_refused(
     # this file's whole rule exists to prevent
     with pytest.raises(DirectivesError, match=says):
         read_directives(written(tmp_path, text))
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        pytest.param("heartbeat: 30m\n", 1800, id="an_interval_stored_as_seconds"),
+        pytest.param("heartbeat: false\n", False, id="off"),
+        pytest.param("", None, id="absent_is_the_default"),
+    ],
+)
+def test_the_heartbeat_is_a_duration_false_or_absent(
+    text: str, expected: object, tmp_path: Path
+) -> None:
+    assert read_directives(written(tmp_path, text)).heartbeat == expected
 
 
 def test_a_file_in_the_wrong_encoding_is_refused_by_name(tmp_path: Path) -> None:

@@ -205,6 +205,14 @@ So a turn that could not deliver writes down what it was carrying, and the next 
 Carries `items` (the ids that appeared) and `complete` (the display keys that finished). Read only back to the most recent `OBSERVATION`, since a turn that delivered records a baseline that already accounts for everything before it.
 """
 
+POSTED = "posted"
+"""Journal event: a post was delivered to the channel, of whatever kind.
+
+Written on every successful send — the actionable posts a diff drives, the pause notice, and the heartbeat alike — so the channel's own history carries a timestamp the heartbeat can measure silence against. Distinct from `NOTIFIED`, which latches a failure so it is not repeated: this is not a latch on the ordinary posts (their edges already are), only a record that the channel heard *something* and when.
+
+Read across the whole file rather than back to the last observation, because the heartbeat asks how long the channel has been silent and a post an hour ago is the last thing it heard however many turns have run since. Carries `kind`, and for a pause notice the `subject` that keys it to the pause it announced — the pause's own timestamp — so a run paused, resumed and paused again is announced both times.
+"""
+
 OPENED = "opened"
 """Journal event: a class of failures has a window absorbing instances.
 
@@ -759,6 +767,31 @@ def read_notified(events: list[JournalEvent]) -> set[str]:
         ):
             subjects.add(subject)
     return subjects
+
+
+def read_last_post(events: list[JournalEvent]) -> str | None:
+    """The timestamp of the most recent delivered post, or `None` where the channel has heard nothing.
+
+    Across the whole file, not windowed to the last observation: the heartbeat measures how long the channel has been silent, so the last thing it heard is the last `POSTED` however many turns ago it was.
+    """
+    for event in reversed(events):
+        if event.type == POSTED:
+            return event.ts
+    return None
+
+
+def read_pause_posts(events: list[JournalEvent]) -> set[str]:
+    """The pause subjects a `POSTED` has already announced, so a pause is noticed once and a fresh pause again.
+
+    Keyed on the subject a pause notice carries — the pause's own timestamp — and only a pause notice carries one, so the presence of a subject is what marks a `POSTED` as a pause announcement without this reader having to know the notice's kind.
+    """
+    return {
+        subject
+        for event in events
+        if event.type == POSTED
+        and isinstance(subject := event.payload.get("subject"), str)
+        and subject
+    }
 
 
 def read_undelivered(
