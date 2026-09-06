@@ -408,7 +408,7 @@ def _page(result: "TendResult", *, width: int = NARROW) -> list[Block]:
 
     Built from the same cell builders the page is (`task_table_cells`, `outcomes_grid`, `resources_cells`), so a post and `status.md` cannot disagree about what a turn found. The tables are clipped to the phone width whatever the target: a post is read on a phone whether it arrives by Slack or mail, where the page is read on a laptop.
 
-    The order is the page's — fleet total, signature, task table, anomalies, resources, logs — so the two read alike. The task table keeps the `ROWS` cap and names what it dropped; the model every row shares rides beneath it, which the page's own table elides into its keys but a phone reader has lost once the keys are clipped.
+    The order is the page's — fleet total, signature, task table, anomalies, resources, logs — so the two read alike. The task table keeps the `ROWS` cap and names what it dropped, and names nothing else beneath it: the model every row shares is elided from the keys and left there, the way the operator's page leaves it.
     """
     blocks: list[Block] = []
     if (fleet := fleet_totals(result.progress)) is not None:
@@ -420,9 +420,8 @@ def _page(result: "TendResult", *, width: int = NARROW) -> list[Block]:
     if rows:
         kept, more = _cap_rows(rows)
         blocks.append(Table(tuple(plain_table(header, kept))))
-        tail = ([more] if more else []) + _shared_model_line(result)
-        if tail:
-            blocks.append(Text(tuple(tail)))
+        if more:
+            blocks.append(Text((more,)))
 
     outcomes = outcomes_grid(result.dispositions.outcomes, result.progress, width=width)
     note = rerunning_note(result.anomalies)
@@ -450,15 +449,6 @@ def _cap_rows(rows: list[tuple[str, ...]]) -> tuple[list[tuple[str, ...]], str |
     if len(rows) <= ROWS:
         return rows, None
     return rows[:ROWS], f"... {len(rows) - ROWS} more tasks"
-
-
-def _shared_model_line(result: "TendResult") -> list[str]:
-    """The model every row shares, for the reader whose clipped keys no longer show it, or nothing where the rows disagree.
-
-    The page elides a shared model into its keys and names it nowhere else; a post's keys are clipped to the phone width, which can take the model off the end, so it is said once beneath the table.
-    """
-    model = short_keys(result.progress.rows).model
-    return [model] if model is not None else []
 
 
 def _reaches(item: Item, arriving: set[str], *, unattended: bool, newly: bool) -> bool:

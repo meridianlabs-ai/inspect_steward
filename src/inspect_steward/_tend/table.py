@@ -15,7 +15,7 @@ from typing import TYPE_CHECKING
 
 from .._evalset.observe import TaskState
 from .._util.size import format_bytes
-from .progress import Progress, TaskProgress, compact, fleet_totals, short_keys
+from .progress import Progress, TaskProgress, fleet_totals, short_keys
 
 if TYPE_CHECKING:
     # `task_table_cells` reads a whole turn; the type it takes can only be named
@@ -175,10 +175,11 @@ def named_cell(row: TaskProgress, key: str) -> str:
 
 
 def budget_cell(row: TaskProgress) -> str:
-    budget = row.budget
-    if budget is None:
-        return ""
-    return f"{compact(budget.used)}/{compact(budget.limit)} {budget.name}"
+    """The budget column: usage against the per-sample limit, abbreviated — `45/100t`, `1.1M/10Mtk`.
+
+    `Budget.text` rather than a spelled-out `45/100 turns`, so the operator's page, a post and the terminal all name a budget the same short way (`Budget.text`). The suffix is flush against the number, which is one quantity rather than two.
+    """
+    return row.budget.text if row.budget is not None else ""
 
 
 def _line(cells: tuple[str, ...], widths: list[int]) -> str:

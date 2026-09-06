@@ -558,10 +558,10 @@ def test_a_post_says_which_workspace_it_is_about(
     assert sent[0].glyph is not None and sent[0].glyph not in sent[0].title
 
 
-def test_nothing_under_the_table_totals_the_table(tmp_path: Path) -> None:
-    # samples, running and queued are a column each in the rows directly above,
-    # so a line summing them restates the screen the reader has just read with
-    # numbers that are different every ten minutes
+def test_nothing_rides_under_the_task_table(tmp_path: Path) -> None:
+    # no totals line summing columns the rows already carry, and no model line:
+    # the operator's page names neither beneath its table, and a post carries the
+    # same content -- so an uncapped table is followed by nothing
     workspace, _ = prepared(tmp_path, [DONE, OTHER, PENDING])
     paused(workspace)
     turn(workspace)
@@ -571,18 +571,13 @@ def test_nothing_under_the_table_totals_the_table(tmp_path: Path) -> None:
     post = turn_post(turn(workspace))
 
     assert post is not None
-    under = after_table(post)[-1]
-    assert "samples" not in under and "%" not in under
-    assert "running" not in under and "queued" not in under
-    # what is left is the model the keys elided, which no row can say
-    assert under.strip() == "mockllm/model"
+    assert after_table(post) == []
 
 
 def test_a_task_is_named_as_shortly_as_the_table_names_it(tmp_path: Path) -> None:
-    # the part being elided is on screen either way: the table is directly
-    # beneath, and a model every row shares is said outright beneath it. So
-    # `@mockllm/model` after every task name costs a phone reader a line each
-    # time to repeat what the line below already said
+    # the run carries identifiers, which it diffs against a record an earlier
+    # turn wrote; the post is where they turn back into short names, the shared
+    # model elided from them and named nowhere -- the same as `status.md`
     workspace, _ = prepared(tmp_path, [DONE, OTHER, PENDING])
     paused(workspace)
     turn(workspace)
@@ -592,8 +587,6 @@ def test_a_task_is_named_as_shortly_as_the_table_names_it(tmp_path: Path) -> Non
     result = turn(workspace)
     post = turn_post(result)
 
-    # the run carries identifiers, which is what it diffs against a record an
-    # earlier turn wrote; the post is where they turn back into names
     assert result.finished == sorted(
         row.identifier
         for row in result.progress.rows
@@ -601,7 +594,8 @@ def test_a_task_is_named_as_shortly_as_the_table_names_it(tmp_path: Path) -> Non
     )
     assert post is not None
     assert sorted(bullets(post)) == ["finished done", "finished other"]
-    assert "mockllm/model" in after_table(post)[-1]
+    # the model is not restated anywhere in the post's task table
+    assert not any("mockllm/model" in line for line in task_table(post))
 
 
 def test_a_relaunch_that_renames_a_task_does_not_finish_it_twice(
