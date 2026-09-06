@@ -1041,16 +1041,22 @@ def dispositions(
 MARKS = ("excluded", "zeroed")
 """The two buckets that move the scoring population, strongest first."""
 
-OUTCOMES = ("excluded", "zeroed", "terminated", "scored_early", "errored")
+OUTCOMES = ("excluded", "zeroed", "approver", "terminated", "scored_early", "errored")
 """The cell one sample row lands in when it did not take the normal course, strongest first.
 
-`anomalies.md` opens on a table of these per task, and a row is counted once. A ruling that moved it out of the scoring population wins over whatever the sample did on its own, and exclusion over zeroing for the reason `_stronger` gives; an operator ending a sample wins over the error inspect recorded to end it. A scan finding contributes only through such a ruling — a flagged sample the ruling kept, or dismissed, changed nothing about the data. Limits the definition set never appear: a sample stopped at its own `time_limit` took the course the eval laid out for it.
+`anomalies.md` opens on a table of these per task, and a row is counted once. A ruling that moved it out of the scoring population wins over whatever the sample did on its own, and exclusion over zeroing for the reason `_stronger` gives; an operator ending a sample wins over the error inspect recorded to end it. A scan finding contributes only through such a ruling — a flagged sample the ruling kept, or dismissed, changed nothing about the data. Limits the definition set never appear: a sample stopped at its own `time_limit` took the course the eval laid out for it. `approver` is the operator-limit subset a tool-call approval guard ended — always scored, since the guard fires mid-run on work already under way — split out from the manual and bridge kills because it is expected machinery an operator settles wholesale, not case by case.
 """
 
 OPERATOR_INTERRUPT = "interrupted by operator"
 """What inspect writes into a sample an operator ended with `--action error`.
 
 That action records a `RuntimeError` rather than a limit, deliberately upstream, so that the sample counts as errored rather than cancelled; here it is an error instance whose message is the only trace of the operator, and the phrase is inspect's own.
+"""
+
+APPROVER_TERMINATION = "approver"
+"""The mark of a tool-call approval guard in an operator limit's reason.
+
+Inspect records such a termination as `limit:operator` with a reason beginning `Tool call approver requested termination` (`inspect_ai/model/_call_tools.py`), so this substring separates a guard termination from a manual or bridge one. A stable inspect-generated string rather than operator free text, which is why keying the by-task column on it does not put the reason into the class key.
 """
 
 
@@ -1061,6 +1067,8 @@ def _outcome(kind: str, bucket: str, instance: Instance) -> str | None:
     if kind == "error":
         return "terminated" if OPERATOR_INTERRUPT in instance.message else "errored"
     if kind == "limit" and instance.class_key == OPERATOR_LIMIT:
+        if APPROVER_TERMINATION in instance.message.lower():
+            return "approver"
         return "scored_early" if instance.scored else "terminated"
     return None
 

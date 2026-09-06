@@ -37,10 +37,11 @@ OUTCOME_COLUMNS = (
     ("zeroed", "zero"),
     ("excluded", "nan"),
     ("errored", "error"),
+    ("approver", "approver"),
     ("scored_early", "oper_scored"),
     ("terminated", "oper_unscored"),
 )
-"""The by-task table's columns in reading order: the `rulings.OUTCOMES` cell, and its heading. One set everywhere — the file, the terminal, and a phone-width Slack post — rather than a long form for one and a short one for another. `nan` is what an excluded sample's score becomes. `oper_scored` and `oper_unscored` are both samples an operator ended, split by whether a score survived (`_tend.rulings._outcome`); the shared prefix reads them as the pair they are, where `early`/`term` looked like unrelated columns. A column empty in every listed task is dropped rather than shown as a stripe of `·`, the way the progress table drops a column no row fills (`_tend.table.progress_table`) — so the two long operator headings cost width only on a run that has operator-ended samples to put under them."""
+"""The by-task table's columns in reading order: the `rulings.OUTCOMES` cell, and its heading. One set everywhere — the file, the terminal, and a phone-width Slack post — rather than a long form for one and a short one for another. `nan` is what an excluded sample's score becomes. `approver` is the samples a tool-call approval guard terminated; `oper_scored` and `oper_unscored` are the other operator-ended samples, split by whether a score survived (`_tend.rulings._outcome`). A column empty in every listed task is dropped rather than shown as a stripe of `·`, the way the progress table drops a column no row fills (`_tend.table.progress_table`) — so `approver` appears only on a run that had a guard termination, and the two long operator headings only when a manual or bridge kill put a sample under them."""
 
 EMPTY = "·"
 """An empty cell. A glyph rather than a blank, so that a column of nothing still reads as a column in a source file, and zero is never confused with unrendered."""

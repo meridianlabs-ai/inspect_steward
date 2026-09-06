@@ -1014,6 +1014,15 @@ def folded(windows: tuple[Anomaly, ...]) -> Anomalies:
         (OPERATOR, "", True, Disposition.ACCEPT, "scored_early"),
         (OPERATOR, "", False, None, "terminated"),
         (OPERATOR, "", True, Disposition.EXCLUDE, "excluded"),
+        # a tool-call approval guard termination, keyed off the reason
+        (OPERATOR, "Tool call approver requested termination.", True, None, "approver"),
+        (
+            OPERATOR,
+            "Tool call approver requested termination.",
+            True,
+            Disposition.EXCLUDE,
+            "excluded",
+        ),
         (SCAN, "", False, None, None),
         (SCAN, "", False, Disposition.DISMISS, None),
         (SCAN, "", False, Disposition.ACCEPT, None),

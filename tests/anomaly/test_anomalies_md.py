@@ -577,6 +577,19 @@ def test_no_table_where_every_sample_took_the_normal_course() -> None:
     assert "By task" not in anomalies_markdown([], table=[])
 
 
+def test_the_approver_column_appears_only_when_a_guard_terminated_a_sample() -> None:
+    rows = progress(("oss_fuzz", "openai/gpt-5", 25))
+
+    # a run with a guard termination gets the column, its own count
+    present = outcomes_table({"id-oss_fuzz": {"approver": 1, "errored": 5}}, rows)
+    assert present[0] == "task      error  approver"
+    assert present[1] == "oss_fuzz      5         1"
+
+    # a run without one never shows the column, empty in every task
+    absent = outcomes_table({"id-oss_fuzz": {"errored": 5}}, rows)
+    assert not any("approver" in line for line in absent)
+
+
 def test_the_document_opens_on_the_table_ahead_of_the_caveats() -> None:
     document = anomalies_markdown([], table=["| task |"])
 
