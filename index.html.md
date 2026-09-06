@@ -2,20 +2,23 @@
 
 ## Overview
 
-[![](diagrams/overview.excalidraw.svg)](diagrams/overview.excalidraw.svg)
+Welcome to Steward, a system for automated execution and supervision of long-running evaluations. Steward enables you to launch a large run and walk away while a coding agent monitors it. Here’s how it works:
 
-Inspect Steward is a system for automated execution and supervision of long-running evaluations. Steward enables you to launch a large run and walk away while a coding agent monitors it and automatically intervenes when required.
+1.  Define your eval set and policies that will govern the run (Steward works with [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) as well as with execution frameworks like [Inspect Flow](https://meridianlabs-ai.github.io/inspect_flow/) and [Inspect Hawk](https://hawk.metr.org))
 
-- Evaluation runs are fully unattended by design, but can escalate to operators when required.
-- Opinionated defaults for error handling keep tasks running, with an agent driven workflow for error resolution and retry.
-- Slack, email, or webhook notifications to keep operators apprised of status and pending decisions.
-- Works with [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) as well as with execution frameworks like [Inspect Flow](https://meridianlabs-ai.github.io/inspect_flow/) and [Inspect Hawk](https://hawk.metr.org).
+2.  Launch the eval set for unattended execution. Let standing policies and agents handle tuning and errors whenever possible. Receive notifications whenever something needs your attention and make whatever decisions are required.
+
+3.  At the end of the run, make final judgements about how to score anomolies and then signoff the completed run.
+
+[![](diagrams/workflow.excalidraw.svg)](diagrams/workflow.excalidraw.svg)
 
 ## Quick Tour
 
 ### Setup
 
 First, install Steward from GitHub with:
+
+    Terminal
 
 ``` bash
 pip install git+https://github.com/meridianlabs-ai/inspect_steward
@@ -113,20 +116,6 @@ from scoring?
 ❯ re-run them, the disk issue is fixed
 ─────────────────────────────────────────────────────────
 ```
-
-## Workflow
-
-Steward provides a system that is fully unattended by default but which escalates for things that only the operator operator can decide. The basic workflow is:
-
-1.  Define your eval set and policies that will govern the run.
-
-2.  Launch the eval set for unattended execution. Let standing policies and agents handle tuning and errors whenever possible.
-
-3.  Receive notifications whenever something needs your attention mid-run and make whatever decisions are required.
-
-4.  At the end of the run, make final judgements about how to score anomolies and then signoff the completed run.
-
-[![](diagrams/workflow.excalidraw.svg)](diagrams/workflow.excalidraw.svg)
 
 ## Learning More
 

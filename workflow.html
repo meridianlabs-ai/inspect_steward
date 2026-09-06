@@ -421,7 +421,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb4-2"><a href="#cb4-2" aria-hidden="true" tabindex="-1"></a><span class="ex">❯</span> please run this evaluation.</span>
 <span id="cb4-3"><a href="#cb4-3" aria-hidden="true" tabindex="-1"></a><span class="ex">─────────────────────────────────────────────────────────</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
-<p>The agent reads the Steward <a href="./runbook.html">runbook</a> and follows it. It starts with a short smoke run to confirm that configuration, infrastructure and model access all work correctly. A failed smoke stops the launch until it is fixed or waived by the user.</p>
+<p>The agent reads the Steward <a href="./runbook.html">runbook</a> and follows it. It starts with a short smoke run, skipping any task a configured log store already satisfies, to confirm that configuration, infrastructure and model access all work correctly. A failed smoke stops the launch until it is fixed or waived by the user.</p>
 <p>After the smoke the agent launches the tasks and works the decisions the run raises as the <a href="#tend-loop">tend loop</a> runs. Keeping the agent attached is recommended but not required. If you detach it, configure <a href="#notifications">notifications</a> so you know when to reconnect to it.</p>
 <section id="tend-loop" class="level3">
 <h3 class="anchored" data-anchor-id="tend-loop">Tend Loop</h3>
@@ -507,7 +507,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </div>
 <p>The store can be a directory of <code>.eval</code> files, or a <a href="./flow.html">Flow</a> store (which requires the <code>flow</code> extra).</p>
 <p>A result is only reused when everything about the task matches: the task and its arguments, the model, the solver, the plan, the generate config, and the limits.</p>
-<p>Reading from a store happens automatically once you configure one. Publishing your own results into it does not, that only happens if you ask for it at signoff:</p>
+<p>Reading from a store happens automatically once you configure one, at launch and in <code>launch --smoke</code>, which rehearses only the tasks the store does not satisfy. Publishing your own results into it does not, that only happens if you ask for it at signoff:</p>
 <div class="code-with-filename">
 <div class="code-with-filename-file">
 <pre><strong>Terminal</strong></pre>

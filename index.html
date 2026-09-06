@@ -120,11 +120,11 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 
 <meta property="og:title" content="Inspect Steward">
 <meta property="og:description" content="An agent that supervises evaluations, monitoring progress, diagnosing problems, and adjusting runtime state on your behalf.">
-<meta property="og:image" content="https://meridianlabs-ai.github.io/inspect_steward/diagrams/overview.excalidraw.svg">
+<meta property="og:image" content="https://meridianlabs-ai.github.io/inspect_steward/diagrams/workflow.excalidraw.svg">
 <meta property="og:site_name" content="Inspect Steward">
 <meta name="twitter:title" content="Inspect Steward">
 <meta name="twitter:description" content="An agent that supervises evaluations, monitoring progress, diagnosing problems, and adjusting runtime state on your behalf.">
-<meta name="twitter:image" content="https://meridianlabs-ai.github.io/inspect_steward/diagrams/overview.excalidraw.svg">
+<meta name="twitter:image" content="https://meridianlabs-ai.github.io/inspect_steward/diagrams/workflow.excalidraw.svg">
 <meta name="twitter:card" content="summary_large_image">
 </head>
 
@@ -322,13 +322,12 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
   <li><a href="#run-the-eval" id="toc-run-the-eval" class="nav-link" data-scroll-target="#run-the-eval">Run the Eval</a></li>
   <li><a href="#make-decisions" id="toc-make-decisions" class="nav-link" data-scroll-target="#make-decisions">Make Decisions</a></li>
   </ul></li>
-  <li><a href="#workflow" id="toc-workflow" class="nav-link" data-scroll-target="#workflow">Workflow</a></li>
   <li><a href="#learning-more" id="toc-learning-more" class="nav-link" data-scroll-target="#learning-more">Learning More</a></li>
   </ul>
 </nav>
     </div>
 <!-- main -->
-<main class="content page-columns page-full" id="quarto-document-content">
+<main class="content" id="quarto-document-content">
 
 <header id="title-block-header" class="quarto-title-block default">
 <div class="quarto-title">
@@ -356,61 +355,25 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 
 <section id="overview" class="level2">
 <h2 class="anchored" data-anchor-id="overview">Overview</h2>
-<style>
-/* The intro runs the full measure, then the bullets and the diagram sit side
-   by side beneath it -- the bullets are close to the diagram's height, so the
-   two columns come out even. Grid rather than float, so nothing wraps back
-   under the image. */
-.overview-hero {
-  display: grid;
-  grid-template-columns: minmax(0, 1fr) clamp(240px, 43%, 340px);
-  column-gap: clamp(1rem, 3%, 1.75rem);
-  align-items: start;
-}
-.overview-hero .overview-text    { grid-column: 1 / -1; grid-row: 1; }
-.overview-hero .overview-bullets { grid-column: 1; grid-row: 2; }
-.overview-hero .overview-diagram { grid-column: 2; grid-row: 2; margin: -5px 0 0; }
-.overview-hero .overview-diagram img { display: block; width: 100%; height: auto; }
-
-/* Percentage vertical margins resolve against the column's width, so the
-   bullets open up as the column widens -- which is exactly when they need the
-   extra height to reach the bottom of the diagram beside them. */
-.overview-hero .overview-bullets li + li { margin-top: clamp(0.25rem, 3%, 0.9rem); }
-
-/* phones: one column, diagram folded under the text at its own width */
-@media (max-width: 767.98px) {
-  .overview-hero { display: flex; flex-direction: column; }
-  .overview-hero .overview-diagram {
-    order: 99;
-    width: 100%;
-    max-width: 410px;
-    margin: 0.75rem auto 0;
-  }
-}
-</style>
-<div class="overview-hero">
-<div class="overview-diagram">
-<p><a href="diagrams/overview.excalidraw.svg" class="lightbox" data-gallery="quarto-lightbox-gallery-1"><img src="diagrams/overview.excalidraw.svg" class="img-fluid"></a></p>
-</div>
-<div class="overview-text">
-<p>Inspect Steward is a system for automated execution and supervision of long-running evaluations. Steward enables you to launch a large run and walk away while a coding agent monitors it and automatically intervenes when required.</p>
-</div>
-<div class="overview-bullets">
-<ul>
-<li>Evaluation runs are fully unattended by design, but can escalate to operators when required.</li>
-<li>Opinionated defaults for error handling keep tasks running, with an agent driven workflow for error resolution and retry.</li>
-<li>Slack, email, or webhook notifications to keep operators apprised of status and pending decisions.</li>
-<li>Works with <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> as well as with execution frameworks like <a href="https://meridianlabs-ai.github.io/inspect_flow/">Inspect Flow</a> and <a href="https://hawk.metr.org">Inspect Hawk</a>.</li>
-</ul>
-</div>
-</div>
+<p>Welcome to Steward, a system for automated execution and supervision of long-running evaluations. Steward enables you to launch a large run and walk away while a coding agent monitors it. Here’s how it works:</p>
+<ol type="1">
+<li><p>Define your eval set and policies that will govern the run (Steward works with <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span> as well as with execution frameworks like <a href="https://meridianlabs-ai.github.io/inspect_flow/">Inspect Flow</a> and <a href="https://hawk.metr.org">Inspect Hawk</a>)</p></li>
+<li><p>Launch the eval set for unattended execution. Let standing policies and agents handle tuning and errors whenever possible. Receive notifications whenever something needs your attention and make whatever decisions are required.</p></li>
+<li><p>At the end of the run, make final judgements about how to score anomolies and then signoff the completed run.</p></li>
+</ol>
+<p><a href="diagrams/workflow.excalidraw.svg" class="lightbox" data-gallery="quarto-lightbox-gallery-1"><img src="diagrams/workflow.excalidraw.svg" class="img-fluid"></a></p>
 </section>
 <section id="quick-tour" class="level2">
 <h2 class="anchored" data-anchor-id="quick-tour">Quick Tour</h2>
 <section id="setup" class="level3">
 <h3 class="anchored" data-anchor-id="setup">Setup</h3>
 <p>First, install Steward from GitHub with:</p>
-<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">pip</span> install git+https://github.com/meridianlabs-ai/inspect_steward</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+<div class="code-with-filename">
+<div class="code-with-filename-file">
+<pre><strong>Terminal</strong></pre>
+</div>
+<div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb1" data-filename="Terminal"><pre class="sourceCode bash code-with-copy"><code class="sourceCode bash"><span id="cb1-1"><a href="#cb1-1" aria-hidden="true" tabindex="-1"></a><span class="ex">pip</span> install git+https://github.com/meridianlabs-ai/inspect_steward</span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
+</div>
 <p>To use Steward, create a directory, switch to it, then call <code>steward init</code>:</p>
 <div class="code-with-filename">
 <div class="code-with-filename-file">
@@ -516,19 +479,6 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <span id="cb8-10"><a href="#cb8-10" aria-hidden="true" tabindex="-1"></a><span class="ex">─────────────────────────────────────────────────────────</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
 </section>
-</section>
-<section id="workflow" class="level2 page-columns page-full">
-<h2 class="anchored" data-anchor-id="workflow">Workflow</h2>
-<p>Steward provides a system that is fully unattended by default but which escalates for things that only the operator operator can decide. The basic workflow is:</p>
-<ol type="1">
-<li><p>Define your eval set and policies that will govern the run.</p></li>
-<li><p>Launch the eval set for unattended execution. Let standing policies and agents handle tuning and errors whenever possible.</p></li>
-<li><p>Receive notifications whenever something needs your attention mid-run and make whatever decisions are required.</p></li>
-<li><p>At the end of the run, make final judgements about how to score anomolies and then signoff the completed run.</p></li>
-</ol>
-<div class="column-body-outset-right">
-<p><a href="diagrams/workflow.excalidraw.svg" class="lightbox" data-gallery="quarto-lightbox-gallery-2"><img src="diagrams/workflow.excalidraw.svg" class="img-fluid"></a></p>
-</div>
 </section>
 <section id="learning-more" class="level2">
 <h2 class="anchored" data-anchor-id="learning-more">Learning More</h2>

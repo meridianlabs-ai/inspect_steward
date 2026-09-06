@@ -8,20 +8,23 @@
 
 ## Overview
 
-[![](diagrams/overview.excalidraw.svg)](diagrams/overview.excalidraw.svg)
+Welcome to Steward, a system for automated execution and supervision of long-running evaluations. Steward enables you to launch a large run and walk away while a coding agent monitors it. Here’s how it works:
 
-Inspect Steward is a system for automated execution and supervision of long-running evaluations. Steward enables you to launch a large run and walk away while a coding agent monitors it and automatically intervenes when required.
+1.  Define your eval set and policies that will govern the run (Steward works with [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) as well as with execution frameworks like [Inspect Flow](https://meridianlabs-ai.github.io/inspect_flow/) and [Inspect Hawk](https://hawk.metr.org))
 
-- Evaluation runs are fully unattended by design, but can escalate to operators when required.
-- Opinionated defaults for error handling keep tasks running, with an agent driven workflow for error resolution and retry.
-- Slack, email, or webhook notifications to keep operators apprised of status and pending decisions.
-- Works with [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set) as well as with execution frameworks like [Inspect Flow](https://meridianlabs-ai.github.io/inspect_flow/) and [Inspect Hawk](https://hawk.metr.org).
+2.  Launch the eval set for unattended execution. Let standing policies and agents handle tuning and errors whenever possible. Receive notifications whenever something needs your attention and make whatever decisions are required.
+
+3.  At the end of the run, make final judgements about how to score anomolies and then signoff the completed run.
+
+[![](diagrams/workflow.excalidraw.svg)](diagrams/workflow.excalidraw.svg)
 
 ## Quick Tour
 
 ### Setup
 
 First, install Steward from GitHub with:
+
+    Terminal
 
 ``` bash
 pip install git+https://github.com/meridianlabs-ai/inspect_steward
@@ -120,20 +123,6 @@ from scoring?
 ─────────────────────────────────────────────────────────
 ```
 
-## Workflow
-
-Steward provides a system that is fully unattended by default but which escalates for things that only the operator operator can decide. The basic workflow is:
-
-1.  Define your eval set and policies that will govern the run.
-
-2.  Launch the eval set for unattended execution. Let standing policies and agents handle tuning and errors whenever possible.
-
-3.  Receive notifications whenever something needs your attention mid-run and make whatever decisions are required.
-
-4.  At the end of the run, make final judgements about how to score anomolies and then signoff the completed run.
-
-[![](diagrams/workflow.excalidraw.svg)](diagrams/workflow.excalidraw.svg)
-
 ## Learning More
 
 - [Workflow](./workflow.html.md) is the comprehensive guide to a Steward run: the workspace directory, launching and tending runs, agent and human decisions, and how a run ends.
@@ -211,7 +200,7 @@ Once you have defined your eval set, use a coding agent to launch the evaluation
 ─────────────────────────────────────────────────────────
 ```
 
-The agent reads the Steward [runbook](./runbook.html.md) and follows it. It starts with a short smoke run to confirm that configuration, infrastructure and model access all work correctly. A failed smoke stops the launch until it is fixed or waived by the user.
+The agent reads the Steward [runbook](./runbook.html.md) and follows it. It starts with a short smoke run, skipping any task a configured log store already satisfies, to confirm that configuration, infrastructure and model access all work correctly. A failed smoke stops the launch until it is fixed or waived by the user.
 
 After the smoke the agent launches the tasks and works the decisions the run raises as the [tend loop](#tend-loop) runs. Keeping the agent attached is recommended but not required. If you detach it, configure [notifications](#notifications) so you know when to reconnect to it.
 
@@ -302,7 +291,7 @@ The store can be a directory of `.eval` files, or a [Flow](./flow.html.md) store
 
 A result is only reused when everything about the task matches: the task and its arguments, the model, the solver, the plan, the generate config, and the limits.
 
-Reading from a store happens automatically once you configure one. Publishing your own results into it does not, that only happens if you ask for it at signoff:
+Reading from a store happens automatically once you configure one, at launch and in `launch --smoke`, which rehearses only the tasks the store does not satisfy. Publishing your own results into it does not, that only happens if you ask for it at signoff:
 
     Terminal
 
@@ -749,9 +738,13 @@ They see only what you write, and they know their eval: tasks, models, samples, 
 
 1.  **What you found.** One or two sentences in the eval’s words: which task, which samples, what happened to them.
 2.  **The evidence in brief.** The two or three facts that establish it and where you looked, with the samples it covers in a table capped at five rows and the remainder counted. The full case goes in `analysis.md`; a reader who trusts you should be able to answer without opening anything.
-3.  **What you propose, and the question.** Recommend one answer and name the others on offer, so they can confirm, pick, or say more. The question is the last line. Nothing follows it.
+3.  **What you propose, and the question.** Recommend one answer and name the others on offer, so they can confirm, pick, or say more. Then ask it, as a question they can answer in a word: *Score the four 0?* Saying that a question is waiting, or that you have proposed and notified, is not asking; the notification carries a copy of the question, and this message carries the question. It is the last line, and nothing follows it.
 
-**One question at a time**, most important first, one message each. Do not restate the heading as the question. Keep the arithmetic out of it. The one message that carries several questions is a finished task’s scan findings, the second example below.
+**One question at a time**, most important first, and the next waits for the answer to this one: several things to resolve are several messages in turn, not one message with several questions and not several messages back to back. This holds however many a single `collect` hands you at once — a termination to rule, a re-run to approve, a ramp to decide are three messages in turn, not one numbered list of them. What a collect surfaces is a queue you work down, not a picture you lay out, and *here is the full picture, and what I did about each* is the report you never send: Steward’s posts and `status.md` already carry the items, so a digest of them puts a wall of text where a question should be and buries the one thing they need to answer first. Do not restate the heading as the question. Keep the arithmetic out of it. The one message that carries several decisions is a finished task’s scan findings, the second example below: **one task’s** findings, one row each, one question over them — and that is the whole of the exception. Decisions of different kinds, or across different tasks, never merge into it, however many land together.
+
+**A decision ends the message.** Once it is in front of them, stop. What you settled yourself, a bug for upstream, another task’s progress, what you will do next: each is one line above the question, or waits until they have answered. Whatever sits below the question is the last thing they read, and the question is not.
+
+**After you record their answer**, one line saying what was recorded, in the eval’s words: *Recorded: the four score 0.* Not what Steward does to carry it out, and not what the score will settle at. Then the next decision in the shape, if there is one; otherwise nothing. A ruling recorded is theirs. Do not offer to reinterpret it, and do not ask whether they meant something else; if their answer could have meant two things, ask which before you record it. *Still open*, *pending* and *yours* are not asks: what is theirs to decide is asked, in full, or not mentioned.
 
 **Speak the eval’s language, never Steward’s.** Windows, classes, items, proposals, tends, collects, keys, ids and hashes are words from this runbook, and a message built from them is one they cannot answer. A word that is in this runbook and not in their definition does not go in a message to them.
 
@@ -766,9 +759,9 @@ They see only what you write, and they know their eval: tasks, models, samples, 
 
 **Steward misbehaving is not theirs to debug.** Record what you saw with `steward note`, work around it where a ruling is honest, and tell them in one sentence only what changes for them. If you cannot work around it, say so in one sentence and stop.
 
-**When they ask how it is going**, run `steward status --format md` and render what it printed in full, in its order, as markdown outside a code fence. Do not summarize it, and do not read `status.md` instead; it can be a full interval stale. A narrower question wants a narrower answer: *is it finished* is a sentence, not the snapshot. Your own reading goes below it, marked as yours, only where it adds something the snapshot does not show.
+**When they ask how it is going**, run `steward status` and render what it printed in full, in its order, as markdown outside a code fence. Do not summarize it, and do not read `status.md` instead; it can be a full interval stale. A narrower question wants a narrower answer: *is it finished* is a sentence, not the snapshot. Your own reading goes below it, only where it adds something the snapshot does not show, and without a preface: no heading, no *my reading*, just the sentences. If the snapshot’s operator section carries a decision, the message ends with that decision in the shape, heading and all, as if it were the only thing you wrote: the operator bullet is Steward’s summary of your proposal, and what they answer is your message. Repeating the bullet is fine; a question with no finding above it is not. The question is the last line.
 
-**Before you send, three checks.** Could they answer it knowing only their eval? Is it what you found, then the evidence, then the question? Is the question the last line?
+**Before you send, five checks.** Could they answer it knowing only their eval? Is it what you found, then the evidence, then the question? Is it one decision, not a digest of several a collect handed you together? Is the question written out, as a question? Is it the last line?
 
 Three messages in the shape. Errored samples in a running task:
 
@@ -855,17 +848,17 @@ Everything you need is in the workspace. Nothing depends on a conversation you w
 
 **Read the precedent first.** `steward collect` lists every open class with counts, an example, and any prior ruling as precedent; the 11pm decision usually answers the 2am question.
 
-**A finished task’s findings.** Every scan window a task has arrives as your item at once when the task lands. Investigate them all before you write anything: read the scorer’s output and the flagged transcripts. Then three ways out. A flag the transcript does not bear out, dismiss yourself. A finding that changes no score — a refusal, an attempt that earned nothing, a grader that could not grade its samples — rule `score` yourself, so the report carries it, and mention it below the table in one line: they see it and are asked nothing. What is left would change a number — score 0, drop from scoring, run them again — and that is the decision: propose it, one proposal per disposition, and put it to them as rows. Only what they can act on is a row.
+**A finished task’s findings.** Every scan window a task has arrives as your item at once when the task lands. Investigate them all before you write anything: read the scorer’s output and the flagged transcripts. Then three ways out. A flag the transcript does not bear out, dismiss yourself. A finding that changes no score — a refusal, an attempt that earned nothing, a grader that could not grade its samples — rule `score` yourself, so the report carries it, and mention it in one line between the table and the question: they see it and are asked nothing. What is left would change a number — score 0, drop from scoring, run them again — and that is the decision: propose it, one proposal per disposition, and put it to them as rows. Only what they can act on is a row.
 
 **Judging a scan finding.**
 
-- **Behaviour that disqualifies a sample is disqualifying whether or not the environment allowed it.** An agent that fetched the reference solution did not solve the task, and whether the sandbox should have blocked it is a bug to report alongside your ruling, not the question to put in place of it. Do not turn a finding about the trajectory into a question about the machinery; the operator then has to answer the wrong question before anything can move.
+- **Behaviour that disqualifies a sample is disqualifying whether or not the environment allowed it.** An agent that fetched the reference solution did not solve the task, and whether the sandbox should have blocked it is a bug for the ruling’s reason and one line above the question, not the question to put in place of it. Do not turn a finding about the trajectory into a question about the machinery; the operator then has to answer the wrong question before anything can move.
 - The bar is whether the score can still be trusted, not whether the behaviour was interesting. Escalate only where you can name the mechanism and cite the decisive messages. Otherwise rule `score` yourself, with what the model did in the reason. `dismiss` is for a flag the transcript does not bear out: the scanner was wrong, and there is nothing to note.
 - **Read the scorer’s own output first.** It is the explanation on the sample’s score in `read_eval_log_sample_summaries`, and for a test-suite grader it names which tests failed. An agent whose own tests passed while the graded ones did not has failed the task.
 - A failed attempt earns nothing. The model tried to read the grader and could not; the sandbox refused the network. The score stands, and the attempt is still a finding: rule `score` yourself with the attempt in the reason, so the report carries it.
 - A transient fault is not the model’s. An image pull that failed, a registry the sandbox could not reach for twenty minutes: the samples can run again, and a `rerun` ruling invalidates just those samples in the finished log and relaunches the task for them. Propose *run them again*, and say what the fault was.
 - A benchmark broken by construction is not a fault a re-run heals. A grader that runs none of its required tests, a baseline that fails before any change, a sample the verifier never grades: dropping those samples makes a number nobody else’s run has, and there is nothing for the operator to decide. Rule `score` yourself with what the grader could not do in the reason, note it below the table, and leave the fault to them to report upstream.
-- A successful escape or a returned egress response is a finding at n=1, and the answer is `zero`.
+- A successful escape or a returned egress response is a finding at n=1, and the answer is `zero`. A *blocked* attempt — one a tool-call approval guard terminated before it ran — is not this: it is a quiet operator limit, enumerated and accepted at signoff (see *Anomalies*), never a mid-run escalation.
 - Rarity is not the signal. A class covering most of a task is the one to read first, because an exploit that works gets used everywhere.
 - Zero a confirmed finding rather than excluding it: dropping the samples where a model cheated raises its score.
 - Only boolean scanners open windows. Numbers and strings are recorded and never escalated; read them through the results, not the queue.
@@ -922,7 +915,7 @@ Your verbs, in order:
 
 `rerun`, `exclude` and `zero` are carried out by the tend. Run nothing. A `rerun` requeues samples in a running task in place, and has a landed log’s samples invalidated for relaunch; the window stays open until the re-run lands, and the same samples failing again come back as a question for the operator. An `exclude` is written into the log within a turn: the samples become unscored, with the reason, and the metrics are recomputed over the rest. A `zero` takes minutes, since what a zero is depends on the task’s scorer: Steward starts the task on just those samples in a scratch directory, stops each as it begins, and writes the scorer’s verdict on that empty attempt into the log; the transcript stays. Until a mark is written the report says so, and signoff waits. A class flagged as substrate (credentials, disk, storage) gets no rerun proposal from you; re-running into broken machinery burns the work twice.
 
-Two classes are quiet on purpose. A `task:` window heals itself when the respawn brings the task home; if it does not, `stalled` is the real question. A `limit:operator` window raises no item, since the operator knows what they did; it waits for the signoff conversation.
+Two classes are quiet on purpose. A `task:` window heals itself when the respawn brings the task home; if it does not, `stalled` is the real question. A `limit:operator` window raises no item and waits for the signoff conversation — an operator’s own kill and a **tool-call approval guard’s** termination (`limit_reason` begins `Tool call approver requested termination`) alike. A guard termination is expected and inherently accepted, not a finding to raise: enumerate it in the by-task table and `anomalies.md`, accept it with the rest at signoff, and mid-run say nothing about it — do not investigate, assess, or recommend on it, even when the terminated action reads like an escape attempt. Only a **successful** escape the guard did not stop escalates, and its answer is `zero` (see *Judging a scan finding*).
 
 ### Scan windows
 
@@ -940,7 +933,7 @@ Steward’s own posts already announce every new item an operator owns. Notify f
 
 ### Launching
 
-**Smoke first.** `steward launch --smoke` runs a few samples of every task under a wall-clock cap and launches nothing.
+**Smoke first.** `steward launch --smoke` runs a few samples of every task the log store does not already satisfy, under a wall-clock cap, and launches nothing. A smoke that says *nothing to rehearse* is a pass: launch, and the run is complete and waiting on signoff.
 
 The smoke fails on any errored sample and on four named checks: `context_window`, `reasoning`, `reasoning_api`, `scan_coverage`. `unexercised` and `undetermined` are not failures. Fix what failed rather than routing around it. `--accept CHECK` waives one check by name; an errored sample cannot be waived. Do not project the run’s spend from the smoke.
 
@@ -1024,7 +1017,7 @@ Write anywhere outside the markers, and never move or delete them; a section who
 
 At 🏁 every task has finished and nobody has accepted the results. Tell the operator by notification, then get the run to where their answer is one command. A refused `steward signoff` signs nothing and prints every blocker with its remedy, so run it early and work the list: windows to rule (`limit:operator` included, since it raises no item), errored samples to cover, tasks to settle, unreadable logs to acknowledge, `scanerror:` classes to rule. Acknowledging a stall or an unreadable log is a decision about the data, so give it a ruling’s reason.
 
-The gate does not refuse over these, so say them yourself. Render the by-task table from `steward status --format md`; it is the samples they are signing over. Read the `scanned` column of `steward collect` aloud: 48 of 50 scanned is a different thing to sign than 50 of 50. Name the scan findings you dismissed or noted and why; the operator hears that from you, not from the file. When the readiness item names a log store, ask whether to publish and never assume; a published log is a claim other projects reuse sight-unseen.
+The gate does not refuse over these, so say them yourself. Render the by-task table from `steward status`; it is the samples they are signing over. Read the `scanned` column of `steward collect` aloud: 48 of 50 scanned is a different thing to sign than 50 of 50. Name the scan findings you dismissed or noted and why; the operator hears that from you, not from the file. When the readiness item names a log store, ask whether to publish and never assume; a published log is a claim other projects reuse sight-unseen.
 
 Then, when they answer:
 
@@ -1260,7 +1253,7 @@ steward launch [OPTIONS] [DEFINITION]
 | `--no-env-check` | boolean | Arm even though a scheduled tend would not inherit this shell’s credentials. | `True` |
 | `--log-root` | value | Root this machine keeps eval logs under. Used only where the definition names no log_dir, in which case this run writes to /. Overrides `log_root` in `_steward.yaml` and `STEWARD_LOG_ROOT`. | None |
 | `--no-log-root` | boolean | Keep this run’s logs in the workspace, whatever root the machine configured. | `False` |
-| `--log-store` | value | Where to look for logs this run does not have to produce — a flow store, or a plain directory of logs. Matches are copied in and reported. Overrides `log_store` in `_steward.yaml` and `STEWARD_LOG_STORE`. | None |
+| `--log-store` | value | Where to look for logs this run does not have to produce — a flow store, or a plain directory of logs. Matches are copied in and reported, and a rehearsal leaves them out. Overrides `log_store` in `_steward.yaml` and `STEWARD_LOG_STORE`. | None |
 | `--no-log-store` | boolean | Run against no log store, whatever this project or machine configured. | `False` |
 | `--notification` | value | Where to post what this run cannot decide — an Apprise URL, several separated by commas, or an Apprise config file. Reaches every worker too. Overrides `notification` in `_steward.yaml` and `STEWARD_NOTIFICATION`. | None |
 | `--no-notification` | boolean | Post nothing about this run. Silences Steward only — a worker waiting on an operator still asks. | `False` |
@@ -1570,6 +1563,8 @@ Report where the run stands, and what the next turn would do.
 
 `tend --dry-run`: the same reads and the same decision, with the actions discarded. Read-only — it spawns nothing, moves nothing, writes nothing, and does not take the run claim, so it is safe to run as often as you like while a tend is in flight.
 
+Markdown by default, because that is the operator’s page and what an agent relays verbatim (runbook, *When the operator asks how it is going*), and its columns line up read as plain text either way. `--format text` is the terminal preview an operator reads before launch — the only read-only view of what the next tend would spawn and of the startup-memory projection width is chosen against. `--json` for the machine-readable state.
+
 #### Usage
 
 ``` text
@@ -1585,7 +1580,7 @@ steward status [OPTIONS]
 | `--samples-ramp` | value | Range to discover sample concurrency in, e.g. `[40, 300]`, or `false` to fix it. Overrides `samples_ramp` in `_steward.yaml` and `STEWARD_SAMPLES_RAMP`. | None |
 | `--stuck-after` | value | Quiet time before a running sample is reported stuck, with a unit, e.g. `5h`. Overrides `stuck_after` in `_steward.yaml` and `STEWARD_STUCK_AFTER`. | None |
 | `--preauthorized` | value | Rulings granted in advance: class patterns to dispositions, e.g. `{'error:ReadTimeout@*': rerun}`, or `false` to decline every standing grant for this turn. Overrides `preauthorized` in `_steward.yaml` and `STEWARD_PREAUTHORIZED`. | None |
-| `--format` | choice (`text` \| `md`) | `text` for a terminal; `md` for an agent relaying this to somebody, which is what agent.md asks it to do verbatim. | `text` |
+| `--format` | choice (`md` \| `text`) | `md` (the default) is the operator’s page, the same markdown `status.md` carries and what an agent relays verbatim; `text` is the fuller terminal preview, which alone carries what the next tend would spawn and the startup-memory projection. | `md` |
 | `--json` | boolean | Output the state as JSON. | `False` |
 | `--help` | boolean | Show this message and exit. | `False` |
 

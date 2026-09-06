@@ -712,7 +712,7 @@ ul.task-list li input[type="checkbox"] {
 <tr class="even">
 <td><code>--log-store</code></td>
 <td>value</td>
-<td>Where to look for logs this run does not have to produce — a flow store, or a plain directory of logs. Matches are copied in and reported. Overrides <code>log_store</code> in <code>_steward.yaml</code> and <code>STEWARD_LOG_STORE</code>.</td>
+<td>Where to look for logs this run does not have to produce — a flow store, or a plain directory of logs. Matches are copied in and reported, and a rehearsal leaves them out. Overrides <code>log_store</code> in <code>_steward.yaml</code> and <code>STEWARD_LOG_STORE</code>.</td>
 <td>None</td>
 </tr>
 <tr class="odd">
@@ -1624,6 +1624,7 @@ ul.task-list li input[type="checkbox"] {
 <h2 data-toc-label="status" class="anchored" data-anchor-id="steward-status">steward status</h2>
 <p>Report where the run stands, and what the next turn would do.</p>
 <p><code>tend --dry-run</code>: the same reads and the same decision, with the actions discarded. Read-only — it spawns nothing, moves nothing, writes nothing, and does not take the run claim, so it is safe to run as often as you like while a tend is in flight.</p>
+<p>Markdown by default, because that is the operator’s page and what an agent relays verbatim (runbook, <em>When the operator asks how it is going</em>), and its columns line up read as plain text either way. <code>--format text</code> is the terminal preview an operator reads before launch — the only read-only view of what the next tend would spawn and of the startup-memory projection width is chosen against. <code>--json</code> for the machine-readable state.</p>
 <section id="usage-18" class="level4">
 <h4 class="anchored" data-anchor-id="usage-18">Usage</h4>
 <pre class="text"><code>steward status [OPTIONS]</code></pre>
@@ -1678,9 +1679,9 @@ ul.task-list li input[type="checkbox"] {
 </tr>
 <tr class="even">
 <td><code>--format</code></td>
-<td>choice (<code>text</code> | <code>md</code>)</td>
-<td><code>text</code> for a terminal; <code>md</code> for an agent relaying this to somebody, which is what agent.md asks it to do verbatim.</td>
-<td><code>text</code></td>
+<td>choice (<code>md</code> | <code>text</code>)</td>
+<td><code>md</code> (the default) is the operator’s page, the same markdown <code>status.md</code> carries and what an agent relays verbatim; <code>text</code> is the fuller terminal preview, which alone carries what the next tend would spawn and the startup-memory projection.</td>
+<td><code>md</code></td>
 </tr>
 <tr class="odd">
 <td><code>--json</code></td>

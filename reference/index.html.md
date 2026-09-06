@@ -146,7 +146,7 @@ steward launch [OPTIONS] [DEFINITION]
 | `--no-env-check` | boolean | Arm even though a scheduled tend would not inherit this shell’s credentials. | `True` |
 | `--log-root` | value | Root this machine keeps eval logs under. Used only where the definition names no log_dir, in which case this run writes to /. Overrides `log_root` in `_steward.yaml` and `STEWARD_LOG_ROOT`. | None |
 | `--no-log-root` | boolean | Keep this run’s logs in the workspace, whatever root the machine configured. | `False` |
-| `--log-store` | value | Where to look for logs this run does not have to produce — a flow store, or a plain directory of logs. Matches are copied in and reported. Overrides `log_store` in `_steward.yaml` and `STEWARD_LOG_STORE`. | None |
+| `--log-store` | value | Where to look for logs this run does not have to produce — a flow store, or a plain directory of logs. Matches are copied in and reported, and a rehearsal leaves them out. Overrides `log_store` in `_steward.yaml` and `STEWARD_LOG_STORE`. | None |
 | `--no-log-store` | boolean | Run against no log store, whatever this project or machine configured. | `False` |
 | `--notification` | value | Where to post what this run cannot decide — an Apprise URL, several separated by commas, or an Apprise config file. Reaches every worker too. Overrides `notification` in `_steward.yaml` and `STEWARD_NOTIFICATION`. | None |
 | `--no-notification` | boolean | Post nothing about this run. Silences Steward only — a worker waiting on an operator still asks. | `False` |
@@ -456,6 +456,8 @@ Report where the run stands, and what the next turn would do.
 
 `tend --dry-run`: the same reads and the same decision, with the actions discarded. Read-only — it spawns nothing, moves nothing, writes nothing, and does not take the run claim, so it is safe to run as often as you like while a tend is in flight.
 
+Markdown by default, because that is the operator’s page and what an agent relays verbatim (runbook, *When the operator asks how it is going*), and its columns line up read as plain text either way. `--format text` is the terminal preview an operator reads before launch — the only read-only view of what the next tend would spawn and of the startup-memory projection width is chosen against. `--json` for the machine-readable state.
+
 #### Usage
 
 ``` text
@@ -471,7 +473,7 @@ steward status [OPTIONS]
 | `--samples-ramp` | value | Range to discover sample concurrency in, e.g. `[40, 300]`, or `false` to fix it. Overrides `samples_ramp` in `_steward.yaml` and `STEWARD_SAMPLES_RAMP`. | None |
 | `--stuck-after` | value | Quiet time before a running sample is reported stuck, with a unit, e.g. `5h`. Overrides `stuck_after` in `_steward.yaml` and `STEWARD_STUCK_AFTER`. | None |
 | `--preauthorized` | value | Rulings granted in advance: class patterns to dispositions, e.g. `{'error:ReadTimeout@*': rerun}`, or `false` to decline every standing grant for this turn. Overrides `preauthorized` in `_steward.yaml` and `STEWARD_PREAUTHORIZED`. | None |
-| `--format` | choice (`text` \| `md`) | `text` for a terminal; `md` for an agent relaying this to somebody, which is what agent.md asks it to do verbatim. | `text` |
+| `--format` | choice (`md` \| `text`) | `md` (the default) is the operator’s page, the same markdown `status.md` carries and what an agent relays verbatim; `text` is the fuller terminal preview, which alone carries what the next tend would spawn and the startup-memory projection. | `md` |
 | `--json` | boolean | Output the state as JSON. | `False` |
 | `--help` | boolean | Show this message and exit. | `False` |
 
