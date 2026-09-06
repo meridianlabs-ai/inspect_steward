@@ -346,7 +346,7 @@ def test_status_prints_markdown_on_request_and_not_otherwise(
     _, markdown = run("status", "--format", "md")
     _, text = run("status")
 
-    assert "| task | samples | done |" in markdown
+    assert "| task" in markdown and "samples" in markdown and "done" in markdown
     # ...and no warning about editing a file, since this one is not a file
     assert "Regenerated every turn" not in markdown
     assert "| task |" not in text
@@ -455,7 +455,8 @@ def test_the_tasks_table_says_what_is_still_to_run_with_nothing_running(
 
     (row,) = [line for line in markdown.splitlines() if "`waiting`" in line]
     assert "| queued |" in markdown
-    assert "| 10 |" in row
+    # the cells are padded for alignment, so match on the stripped cell
+    assert "10" in [cell.strip() for cell in row.split("|")]
     # and the two that do need one are still absent
     assert "| running |" not in markdown and "| connections |" not in markdown
 
@@ -534,8 +535,8 @@ def test_an_interim_score_renders_like_a_final_one(
     echo_turn(running)
     text = capsys.readouterr().out
 
-    assert "| 0.5 |" in markdown
-    assert "| 0.5 |" in collected
+    assert "0.5 |" in markdown
+    assert "0.5 |" in collected
     (line,) = [one for one in text.splitlines() if one.startswith("✓ done")]
     assert line.split()[-1] == "0.50"
     assert "0.5*" not in markdown and "0.50*" not in text

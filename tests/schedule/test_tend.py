@@ -740,7 +740,7 @@ def test_status_md_says_how_old_it_is_and_what_needs_a_person(
     # noticing it stopped changing
     assert "tended just now" in rendered
     assert "stopped making progress" in rendered
-    assert "| `done` |" in rendered and "100%" in rendered
+    assert "`done`" in rendered and "100%" in rendered
 
 
 def test_status_md_clips_a_long_key_and_the_agent_s_page_keeps_it_whole(
@@ -1331,7 +1331,8 @@ def test_the_agent_page_gains_an_errored_column_only_where_something_errored(
 
     written = collect_markdown(turn(workspace))
     assert "| errored |" in written
-    assert "| 3 |" in written
+    # right-aligned, so the count abuts the closing delimiter after its padding
+    assert "3 |" in written
     # the operator's page has no such column
     assert "| errored |" not in workspace.status.read_text(encoding="utf-8")
 

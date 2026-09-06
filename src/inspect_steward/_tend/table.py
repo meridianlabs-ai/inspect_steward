@@ -205,3 +205,35 @@ def _plain_row(cells: tuple[str, ...], widths: list[int], indent: str) -> str:
         *(cell.rjust(width) for cell, width in zip(rest, widths[1:], strict=True)),
     ]
     return (indent + "  ".join(padded)).rstrip()
+
+
+def pipe_table(header: tuple[str, ...], rows: list[tuple[str, ...]]) -> list[str]:
+    """A GitHub pipe table with its cells padded to their columns: the first column left-aligned, every other right-aligned, and the delimiter row carrying that alignment.
+
+    The same padding `plain_table` gives a fenced block, for the one table a reader meets rendered as often as raw. A pipe table wraps its cells when a renderer draws it and stacks its numbers when an editor shows the source, so a status.md read as plain text lines up its columns without a renderer to line them up.
+    """
+    widths = [
+        max(3, max(len(row[n]) for row in (header, *rows))) for n in range(len(header))
+    ]
+    return [
+        _pipe_row(header, widths),
+        _pipe_delimiter(widths),
+        *(_pipe_row(row, widths) for row in rows),
+    ]
+
+
+def _pipe_delimiter(widths: list[int]) -> str:
+    cells = (
+        "-" * widths[0],
+        *("-" * (width - 1) + ":" for width in widths[1:]),
+    )
+    return "| " + " | ".join(cells) + " |"
+
+
+def _pipe_row(cells: tuple[str, ...], widths: list[int]) -> str:
+    name, *rest = cells
+    padded = [
+        name.ljust(widths[0]),
+        *(cell.rjust(width) for cell, width in zip(rest, widths[1:], strict=True)),
+    ]
+    return "| " + " | ".join(padded) + " |"

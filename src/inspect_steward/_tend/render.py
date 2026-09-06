@@ -31,7 +31,7 @@ from .items import (
     waiting_to_land,
 )
 from .progress import LIVE_ONLY, TaskProgress, compact, display_keys, short_keys
-from .table import clip, resources_table, score_cell
+from .table import clip, pipe_table, resources_table, score_cell
 
 if TYPE_CHECKING:
     # the turn imports this module to write its file, so the type it passes can
@@ -97,11 +97,11 @@ def collect_markdown(result: "TendResult", *, since: int = 0) -> str:
         lines += [f"**Logs** `{result.log_dir}`", ""]
     lines += _notification(result)
     lines += _items(result)
-    lines += ["## the run", "", "| state | tasks |", "| --- | ---: |"]
-    lines += [
-        f"| {state.value} | {summary.states.get(state.value, 0)} |"
-        for state in TaskState
-    ]
+    lines += ["## the run", ""]
+    lines += pipe_table(
+        ("state", "tasks"),
+        [(state.value, str(summary.states.get(state.value, 0))) for state in TaskState],
+    )
     counts = [
         f"{summary.tasks} tasks",
         f"{summary.running} running{_shape(summary)}",
@@ -203,10 +203,7 @@ def _tasks(result: "TendResult") -> list[str]:
         header += ["limit"]
     if scored:
         header += ["score"]
-    lines = [
-        "| " + " | ".join(header) + " |",
-        "| --- | " + " | ".join("---:" for _ in header[1:]) + " |",
-    ]
+    body: list[tuple[str, ...]] = []
     for row, key in zip(rows, short.keys, strict=True):
         cells = [
             f"`{_named(row, clip(key, KEY_WIDTH))}`",
@@ -221,7 +218,8 @@ def _tasks(result: "TendResult") -> list[str]:
             cells += [_budget_cell(row)]
         if scored:
             cells += [score_cell(row, digits=0)]
-        lines.append("| " + " | ".join(cells) + " |")
+        body.append(tuple(cells))
+    lines = pipe_table(tuple(header), body)
     if short.model is not None:
         lines += ["", f"Every task runs `{short.model}`."]
     return lines + [""]
@@ -382,35 +380,20 @@ def _progress(result: "TendResult") -> list[str]:
     scanned = any(row.scanned is not None for row in rows)
 
     header = ["task", "samples", "done"]
-    align = ["---", "---:", "---:"]
     if live:
         header += ["running"]
-        align += ["---:"]
     if queued:
         header += ["queued"]
-        align += ["---:"]
     if errored:
         header += ["errored"]
-        align += ["---:"]
     if scanned:
         header += ["scanned"]
-        align += ["---:"]
     if budgeted:
         header += ["limit"]
-        align += ["---:"]
     if scored:
         header += ["score"]
-        align += ["---:"]
 
-    # a sub-heading rather than a section of its own, because the document has
-    # exactly three sections: a fourth `##` would read as a fourth thing to
-    # attend to
-    lines = [
-        "### tasks",
-        "",
-        "| " + " | ".join(header) + " |",
-        "| " + " | ".join(align) + " |",
-    ]
+    body: list[tuple[str, ...]] = []
     for row, key in zip(rows, short.keys, strict=True):
         cells = [
             f"`{_named(row, key)}`",
@@ -433,7 +416,12 @@ def _progress(result: "TendResult") -> list[str]:
             cells += [_budget_cell(row)]
         if scored:
             cells += [score_cell(row, digits=0)]
-        lines.append("| " + " | ".join(cells) + " |")
+        body.append(tuple(cells))
+
+    # a sub-heading rather than a section of its own, because the document has
+    # exactly three sections: a fourth `##` would read as a fourth thing to
+    # attend to
+    lines = ["### tasks", "", *pipe_table(tuple(header), body)]
 
     notes: list[str] = []
     if short.model is not None:

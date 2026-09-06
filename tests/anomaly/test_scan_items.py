@@ -553,7 +553,7 @@ class TestCoverage:
         note = coverage_note(result)
         assert note is not None
         assert "over 2 of 4 samples (2 not yet scanned)" in note
-        assert "| 2/4 |" in collect_markdown(result)
+        assert "2/4 |" in collect_markdown(result)
 
     def test_a_reused_sample_scanned_under_the_old_log_still_counts(
         self, tmp_path: Path
@@ -622,7 +622,7 @@ class TestCoverage:
         assert result.coverage.unverified == (TASK.identifier,)
         # and it is out of the run's totals, so the gap stays a counted number
         assert (result.coverage.scanned, result.coverage.landed) == (0, 0)
-        assert "| ?/4 |" in collect_markdown(result)
+        assert "?/4 |" in collect_markdown(result)
         note = coverage_note(result)
         assert note is not None
         assert "could not be checked for 1 task" in note
