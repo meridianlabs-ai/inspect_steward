@@ -24,7 +24,7 @@ from .._tend import (
     progress_table,
     status_headline,
 )
-from .._tend.anomalies_md import OUTCOMES_HEADER, outcomes_cells
+from .._tend.anomalies_md import outcomes_grid
 from .._tend.table import RESOURCES_HEADER, plain_table, resources_cells
 from .._workspace import DirectivesError, Held, Workspace, operator_name
 
@@ -168,14 +168,14 @@ def _anomalies(result: TendResult) -> list[str]:
     The line is `render.anomalies_line`, one source with the agent's page; the table is the one `status.md` carries, drawn without pipes. Under one label, since a reader who sees *anomalies: 5 open* and a table both named anomalies has been told one thing twice.
     """
     line = anomalies_line(result.anomalies)
-    cells = outcomes_cells(
+    header, rows = outcomes_grid(
         result.dispositions.outcomes, result.progress, width=_key_width()
     )
-    if line is None and not cells:
+    if line is None and not rows:
         return []
     lines = [line or "anomalies:"]
-    if cells:
-        lines += plain_table(OUTCOMES_HEADER, cells, indent="  ")
+    if rows:
+        lines += plain_table(header, rows, indent="  ")
     return lines
 
 

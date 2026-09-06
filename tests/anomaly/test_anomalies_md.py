@@ -550,20 +550,21 @@ def test_the_by_task_table_is_aligned_in_the_source_and_shortens_its_keys() -> N
     # padded so that it is a table before anything renders it, plain because
     # every surface that shows it is monospaced, the model every row shares
     # named once beneath rather than on every row, and a task with nothing to
-    # show given no row
+    # show given no row. `oper_unscored` is dropped entirely: no task has one
     assert lines == [
-        "task     zero  nan  error  early  term",
-        "cybench     2    ·      1      ·     ·",
-        "swe         ·    3      ·      2     ·",
+        "task     zero  nan  error  oper_scored",
+        "cybench     2    ·      1            ·",
+        "swe         ·    3      ·            2",
         "",
         "Every task runs `openai/gpt-5`.",
     ]
-    # a markdown document gets the same rows fenced, and the model outside the fence
+    # a markdown document gets the same rows fenced, and the model outside the
+    # fence; here only `zero` has a count, so it is the only outcome column
     block = outcomes_block({"id-cybench": {"zeroed": 2}}, rows)
     assert block[0] == "```" and block[-3] == "```"
     assert block[1:-3] == [
-        "task     zero  nan  error  early  term",
-        "cybench     2    ·      ·      ·     ·",
+        "task     zero",
+        "cybench     2",
     ]
     assert block[-1] == "Every task runs `openai/gpt-5`."
     # and the operator's page clips the keys the way its task table does
@@ -587,7 +588,8 @@ def test_a_tend_tabulates_what_did_not_take_the_normal_course(tmp_path: Path) ->
     result = turn(workspace)
 
     document = workspace.anomalies.read_text(encoding="utf-8")
-    row = ["probe", "·", "·", "3", "·", "·"]
+    # only `error` has a count, so the other outcome columns are dropped
+    row = ["probe", "3"]
     assert cells(document, "probe") == row
     # and the same row, from the same fold, on both of the operator's pages
     assert cells(status_markdown(result), "probe") == row
@@ -596,8 +598,9 @@ def test_a_tend_tabulates_what_did_not_take_the_normal_course(tmp_path: Path) ->
     ruling(workspace, "exclude", effect="3 of 10 samples excluded from scoring")
     turn(workspace)
 
+    # now the count sits under `nan` instead, and it is the only column
     document = workspace.anomalies.read_text(encoding="utf-8")
-    assert cells(document, "probe") == ["probe", "·", "3", "·", "·", "·"]
+    assert cells(document, "probe") == ["probe", "3"]
 
 
 # --- through real turns ----------------------------------------------------

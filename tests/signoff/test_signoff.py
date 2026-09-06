@@ -1103,11 +1103,5 @@ def test_the_command_prints_the_by_task_table_it_is_signing_over(
     row = next(
         line for line in result.output.splitlines() if line.strip().startswith("probe ")
     )
-    assert row.split() == [
-        "probe",
-        "·",
-        "2",
-        "·",
-        "·",
-        "·",
-    ]
+    # only `nan` (the excluded samples) has a count, so it is the only column
+    assert row.split() == ["probe", "2"]

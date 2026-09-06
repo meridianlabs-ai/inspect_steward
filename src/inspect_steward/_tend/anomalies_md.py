@@ -37,10 +37,10 @@ OUTCOME_COLUMNS = (
     ("zeroed", "zero"),
     ("excluded", "nan"),
     ("errored", "error"),
-    ("scored_early", "early"),
-    ("terminated", "term"),
+    ("scored_early", "oper_scored"),
+    ("terminated", "oper_unscored"),
 )
-"""The by-task table's columns in reading order: the `rulings.OUTCOMES` cell, and its heading. Short on purpose — the same table goes into a phone-width Slack post — and one set everywhere rather than a long form for the file and a short one for the channel. `nan` is what an excluded sample's score becomes. Every column is always shown, so the table has one shape across runs and a reader learns where to look."""
+"""The by-task table's columns in reading order: the `rulings.OUTCOMES` cell, and its heading. One set everywhere — the file, the terminal, and a phone-width Slack post — rather than a long form for one and a short one for another. `nan` is what an excluded sample's score becomes. `oper_scored` and `oper_unscored` are both samples an operator ended, split by whether a score survived (`_tend.rulings._outcome`); the shared prefix reads them as the pair they are, where `early`/`term` looked like unrelated columns. A column empty in every listed task is dropped rather than shown as a stripe of `·`, the way the progress table drops a column no row fills (`_tend.table.progress_table`) — so the two long operator headings cost width only on a run that has operator-ended samples to put under them."""
 
 EMPTY = "·"
 """An empty cell. A glyph rather than a blank, so that a column of nothing still reads as a column in a source file, and zero is never confused with unrendered."""
@@ -448,17 +448,40 @@ def outcomes_cells(
     ]
 
 
-def outcomes_table(
+def outcomes_grid(
     outcomes: Mapping[str, Mapping[str, int]], progress: Progress, *, width: int = 0
-) -> list[str]:
-    """`outcomes_cells` as a padded plain table, then the model every row shares named once beneath — or nothing at all where every sample took the normal course.
+) -> tuple[tuple[str, ...], list[tuple[str, ...]]]:
+    """The by-task table's header and rows, with any outcome column empty in every listed task dropped.
 
-    Plain rather than a markdown table because every reader of it is monospaced: a post fences it, the terminal prints it, and a markdown document wraps it in a fence through `outcomes_block`. One layout for all three, so a phone and a terminal never disagree about a cell.
+    Centralised so the three renderers that draw this table — `outcomes_table`, `outcomes_block`, and the terminal's own (`_cli.turn`) — agree on which columns a run has, header and cells decided together: a column dropped from the rows but kept in the header would misalign every value beneath it. The task column always stays, and a row is listed only where some cell holds a count, so at least one outcome column always survives. Empty is the `·` sentinel rather than a blank, so the test is `!= EMPTY`.
+
+    Returns:
+        The kept header and rows, or `((), [])` where every sample took the normal course.
     """
     cells = outcomes_cells(outcomes, progress, width=width)
     if not cells:
+        return (), []
+    keep = [0] + [
+        n
+        for n in range(1, len(OUTCOMES_HEADER))
+        if any(row[n] != EMPTY for row in cells)
+    ]
+    header = tuple(OUTCOMES_HEADER[n] for n in keep)
+    rows = [tuple(row[n] for n in keep) for row in cells]
+    return header, rows
+
+
+def outcomes_table(
+    outcomes: Mapping[str, Mapping[str, int]], progress: Progress, *, width: int = 0
+) -> list[str]:
+    """`outcomes_grid` as a padded plain table, then the model every row shares named once beneath — or nothing at all where every sample took the normal course.
+
+    Plain rather than a markdown table because every reader of it is monospaced: a post fences it, the terminal prints it, and a markdown document wraps it in a fence through `outcomes_block`. One layout for all three, so a phone and a terminal never disagree about a cell.
+    """
+    header, rows = outcomes_grid(outcomes, progress, width=width)
+    if not rows:
         return []
-    return plain_table(OUTCOMES_HEADER, cells) + _shared_model(progress)
+    return plain_table(header, rows) + _shared_model(progress)
 
 
 def outcomes_block(
@@ -468,12 +491,10 @@ def outcomes_block(
 
     Fenced rather than ruled for the reason the resources table is: the by-task counts are a glance, and a ruled table gives them the weight of the task table above. A fence renders lighter, survives an editor unchanged, and lands in Slack as a preformatted block when the page is relayed. `width` clips the display keys as every task column does, for a page whose task table is clipped too.
     """
-    cells = outcomes_cells(outcomes, progress, width=width)
-    if not cells:
+    header, rows = outcomes_grid(outcomes, progress, width=width)
+    if not rows:
         return []
-    return ["```", *plain_table(OUTCOMES_HEADER, cells), "```"] + _shared_model(
-        progress
-    )
+    return ["```", *plain_table(header, rows), "```"] + _shared_model(progress)
 
 
 def _shared_model(progress: Progress) -> list[str]:
@@ -553,5 +574,6 @@ __all__ = [
     "caveat_line",
     "caveats",
     "outcomes_block",
+    "outcomes_grid",
     "outcomes_table",
 ]
