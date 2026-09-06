@@ -41,7 +41,7 @@ from inspect_steward._workspace import (
     read_launched,
 )
 
-from ..timer._fake import clear_credentials, fake_cron
+from ..timer._fake import fake_cron
 from .test_tend import settle, turn
 
 FIXTURES = Path(__file__).parents[1] / "evalset" / "fixtures"
@@ -62,7 +62,6 @@ def test_a_packed_run_lands_every_log_from_one_process(
     is the whole argument for the feature.
     """
     fake_cron(monkeypatch)
-    clear_credentials(monkeypatch)
     create_workspace(tmp_path, git=False)
     workspace = Workspace.at(tmp_path)
     workspace.directives.write_text("max_workers: 1\n", encoding="utf-8")
@@ -102,9 +101,6 @@ def test_a_run_converges_and_then_stays_converged(
     # arming for real would load a launch agent — or a systemd timer — pointing
     # at a pytest temp directory into the session running the suite
     fake_cron(monkeypatch)
-    # and the credentials the arming shell holds, which a real launch checks
-    # against `.env` before it will arm anything
-    clear_credentials(monkeypatch)
 
     create_workspace(tmp_path, git=False)
     workspace = Workspace.at(tmp_path)
@@ -176,7 +172,6 @@ def test_scanning_rides_the_workers_and_a_relaunch_attaches(
     from inspect_steward._scan import finalize_scan, rebuild_summary
 
     fake_cron(monkeypatch)
-    clear_credentials(monkeypatch)
     create_workspace(tmp_path, git=False)
     workspace = Workspace.at(tmp_path)
     definition = workspace.root / "evalset.py"

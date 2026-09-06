@@ -37,7 +37,7 @@ from inspect_steward._workspace import Workspace, create_workspace
 from .._fault import FAULT_FIXTURE, arm
 from .._logs import SynthTask, synth_manifest, write_log
 from ..schedule.test_tend import settle, turn
-from ..timer._fake import clear_credentials, fake_cron
+from ..timer._fake import fake_cron
 from ._fake import fake_capture
 
 FIXTURES = Path(__file__).parents[1] / "evalset" / "fixtures"
@@ -55,7 +55,6 @@ def test_a_worker_whose_task_left_the_definition_is_cancelled_and_archived(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_cron(monkeypatch)
-    clear_credentials(monkeypatch)
     fault = arm(monkeypatch, tmp_path, "run:hang")
 
     create_workspace(tmp_path, git=False)

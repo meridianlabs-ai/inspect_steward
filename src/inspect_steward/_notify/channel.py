@@ -8,7 +8,7 @@
 
 **And the resolution has to be reportable, because every spelling of it is invisible from outside this process.** The channel that reaches an operator most often comes from a `.env` at or above the workspace, which inspect loads into Steward and into nothing else — so a reader who checks `_steward.yaml` and their own shell finds no channel and is wrong. `describe_channel` is the answer to that, and `Channel` is what it may say: a name, a count, and no value.
 
-**A scheduled tend inherits neither variable**, which is why the `_steward.yaml` key earns its place: it is the one spelling still there at 02:00. `_timer.env` refuses to arm when the arming shell holds a channel the workspace's `.env` does not, so the case is caught rather than discovered in the morning.
+**A scheduled tend inherits neither variable**, which is why the `_steward.yaml` key earns its place: it is the one spelling still there at 02:00. A channel named only in the arming shell is gone by then, so a run that wants to be reachable overnight puts it in `_steward.yaml` or the workspace's `.env`.
 """
 
 import os

@@ -378,7 +378,6 @@ class TestFlagsARehearsalCannotHonour:
         [
             "--no-timer",
             "--accept-archive",
-            "--no-env-check",
             "--no-sync",
             "--no-log-root",
         ],

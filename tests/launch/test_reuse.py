@@ -18,7 +18,7 @@ from inspect_steward._tend import TendResult
 from inspect_steward._workspace import Workspace, create_workspace, read_journal
 
 from .._logs import SynthTask, synth_manifest, write_log
-from ..timer._fake import clear_credentials, fake_cron
+from ..timer._fake import fake_cron
 from ._fake import fake_capture
 
 ADDITION = SynthTask("addition", samples=2)
@@ -41,7 +41,6 @@ def launched(
     """Capture `tasks` and launch against `store`, without a timer or a subprocess."""
     create_workspace(tmp_path, git=False)
     fake_cron(monkeypatch)
-    clear_credentials(monkeypatch)
     fake_capture(monkeypatch, synth_manifest(list(tasks)))
     result = launch(
         Workspace.at(tmp_path),

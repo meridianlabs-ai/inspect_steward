@@ -133,14 +133,6 @@ _LABELS = {
     ),
 )
 @click.option(
-    "--no-env-check",
-    "env_check",
-    is_flag=True,
-    default=True,
-    flag_value=False,
-    help="Arm even though a scheduled tend would not inherit this shell's credentials.",
-)
-@click.option(
     "--log-root",
     type=Setting("log_root"),
     default=None,
@@ -266,7 +258,6 @@ def launch_command(
     definition_type: DefinitionType | None,
     accept_archive: bool,
     timer: bool,
-    env_check: bool,
     log_root: str | bool | None,
     no_log_root: bool,
     log_store: str | bool | None,
@@ -345,7 +336,6 @@ def launch_command(
             {
                 "--accept-archive": accept_archive or None,
                 "--no-timer": None if timer else True,
-                "--no-env-check": None if env_check else True,
                 "--log-root": log_root,
                 "--no-log-root": no_log_root or None,
                 "--stall-after": stall_after,
@@ -426,7 +416,6 @@ def launch_command(
             type=definition_type,
             accept_archive=accept_archive,
             timer=timer,
-            env_check=env_check,
             log_root=False if no_log_root else log_root,
             log_store=False if no_log_store else log_store,
             notification=False if no_notification else notification,

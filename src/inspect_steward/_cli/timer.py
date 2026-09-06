@@ -4,11 +4,10 @@ An agent is turn-based, so an agent-scheduled run is silent the moment no agent 
 
 **A verb group rather than a flag**, because three different callers need it at three different times. `launch` arms as part of starting a run, `signoff` disarms as part of ending one, and an operator does either in the middle — and a `--timer` flag on `launch` would serve only the first of the three.
 
-**Arming refuses when the timer would not inherit this shell's credentials.** A scheduled tend runs under a stripped environment, and the failure that produces is the worst one available: every ten minutes all night, a worker starts, authenticates against nothing, and writes a log that says so. The check is a diff rather than a requirement — see `_timer.env` — and `--no-env-check` is there for the case where running without them is the point.
+A scheduled tend runs under a stripped environment that reads credentials from the `.env` inspect loads at or above the workspace, so an operator arming a timer puts them there (`_workspace.layout`); Steward does not vet that, since it cannot tell a credential the eval needs from one the harness that armed it happens to hold.
 """
 
 import json
-import os
 
 import click
 
@@ -17,10 +16,7 @@ from .._timer import (
     TimerError,
     arm,
     disarm,
-    explain_env,
     installed,
-    resolved_env,
-    unavailable_credentials,
 )
 from .._util.duration import format_duration
 from .._workspace import (
@@ -49,15 +45,7 @@ def timer_command() -> None:
     default=None,
     help="Which scheduler to use. Detected when not given, preferring one that survives a reboot.",
 )
-@click.option(
-    "--no-env-check",
-    "env_check",
-    is_flag=True,
-    default=True,
-    flag_value=False,
-    help="Arm even though a scheduled tend would not inherit this shell's credentials.",
-)
-def arm_command(tend_interval: int | None, name: str | None, env_check: bool) -> None:
+def arm_command(tend_interval: int | None, name: str | None) -> None:
     """Install a timer that tends this workspace on a schedule.
 
     Idempotent: an existing timer is removed first, so re-arming at a new interval or under a different scheduler leaves exactly one.
@@ -70,14 +58,6 @@ def arm_command(tend_interval: int | None, name: str | None, env_check: bool) ->
     # somebody to put their API keys in a path git would track is a hazard this
     # command introduced and has to close
     ignored = ensure_gitignore(workspace)
-
-    if env_check:
-        # the file a tend will actually load, which is not always this
-        # workspace's own -- see `_timer.env.resolved`
-        env_file = resolved_env(workspace.root)
-        missing = unavailable_credentials(env_file, os.environ)
-        if missing:
-            raise click.ClickException(explain_env(missing, env_file))
 
     try:
         armament = arm(workspace, seconds, name=name)

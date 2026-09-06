@@ -32,7 +32,7 @@ from inspect_steward._workspace import (
 
 from .._logs import SynthTask, write_log
 from ..schedule.test_tend import prepared
-from ._fake import FakeCrontab, clear_credentials, fake_cron
+from ._fake import FakeCrontab, fake_cron
 
 TASK = SynthTask("probe", samples=4)
 
@@ -45,12 +45,6 @@ def workspace(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Workspace:
     write_log(workspace.logs, TASK)
     monkeypatch.chdir(workspace.root)
     return workspace
-
-
-@pytest.fixture(autouse=True)
-def no_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Arm from a shell holding nothing worth losing (`_fake`)."""
-    clear_credentials(monkeypatch)
 
 
 @pytest.fixture(autouse=True)
@@ -162,76 +156,12 @@ def test_an_interval_without_a_unit_is_refused(workspace: Workspace) -> None:
     assert armed(workspace) is None
 
 
-# --- the environment check ----------------------------------------------
-
-
-def test_arming_refuses_a_timer_that_would_lose_this_shell_s_credentials(
-    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-secret")
-
-    code, output = run("timer", "arm", "--scheduler", "cron")
-
-    assert code == 1
-    assert "ANTHROPIC_API_KEY" in output
-    assert str(workspace.env) in output
-    # and the secret itself is nowhere in it
-    assert "sk-ant-secret" not in output
-    assert armed(workspace) is None
-
-
-def test_a_dotenv_holding_the_key_arms_normally(
-    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-secret")
-    workspace.env.write_text("ANTHROPIC_API_KEY=sk-ant-secret\n", encoding="utf-8")
-
-    code, output = run("timer", "arm", "--scheduler", "cron")
-
-    assert code == 0, output
-
-
-def test_a_dotenv_above_the_workspace_arms_normally(
-    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """One `.env` over a directory of runs is how an operator with several keeps keys.
-
-    A scheduled tend runs in the workspace root and inspect's `find_dotenv`
-    walks up from there, so that file is read at 02:00 exactly as it is now.
-    Reading only the workspace's own made this setup refuse to arm over
-    credentials that were never going to be missing.
-    """
-    root = tmp_path / "runs" / "ws"
-    root.mkdir(parents=True)
-    create_workspace(root, git=False)
-    workspace, _ = prepared(root, [TASK])
-    write_log(workspace.logs, TASK)
-    monkeypatch.chdir(workspace.root)
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-secret")
-    (tmp_path / ".env").write_text(
-        "ANTHROPIC_API_KEY=sk-ant-secret\n", encoding="utf-8"
-    )
-
-    code, output = run("timer", "arm", "--scheduler", "cron")
-
-    assert code == 0, output
-    assert armed(workspace) is not None
-
-
-def test_the_check_can_be_declined(
-    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    # a timer meant to run without them is a real thing to want
-    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-secret")
-
-    code, output = run("timer", "arm", "--scheduler", "cron", "--no-env-check")
-
-    assert code == 0, output
-    assert armed(workspace) is not None
+# --- the workspace .env is kept out of git -------------------------------
 
 
 def test_the_workspace_dotenv_is_ignored_by_git(workspace: Workspace) -> None:
-    # the check tells people to write one, so init has to have made that safe
+    # a scheduled tend reads credentials from .env, so init has to have made
+    # writing one there safe
     assert ".env" in (workspace.root / ".gitignore").read_text(encoding="utf-8")
 
 

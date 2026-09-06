@@ -44,19 +44,13 @@ from inspect_steward._workspace import (
 
 from .._logs import DEFINITION, SynthTask, synth_manifest, write_log
 from ..schedule.test_tend import prepared
-from ..timer._fake import FakeCrontab, clear_credentials, fake_cron
+from ..timer._fake import FakeCrontab, fake_cron
 from ._fake import FakeCapture, fake_capture
 
 ADDITION = SynthTask("addition", samples=4)
 ECHO = SynthTask("echo", samples=2)
 SCALED = SynthTask("addition", args={"scale": 2}, samples=4)
 """The same task with an edited argument: a new identifier under the same name and model, which is the shape the gate exists for."""
-
-
-@pytest.fixture(autouse=True)
-def no_credentials(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Arm from a shell holding nothing worth losing (`_fake`)."""
-    clear_credentials(monkeypatch)
 
 
 @pytest.fixture(autouse=True)
@@ -244,7 +238,8 @@ def test_the_log_directory_is_not_inspects_to_move(
     Honouring it would put a worker's logs where no tend reads, so every task
     would land and then read as never started; ignoring it would do the right
     thing while telling the operator nothing about why their variable did not
-    take. Refused before the capture, like the credentials check.
+    take. Refused before the capture, so a Hawk config does not spend five
+    minutes resolving packages on the way to the refusal.
     """
     monkeypatch.setenv("INSPECT_LOG_DIR", "s3://somewhere/else")
 
@@ -493,26 +488,6 @@ def test_a_relaunch_admits_added_scanners_and_refuses_changed_ones(
     result = run("--no-timer")
     assert result.exit_code == 1
     assert "mine" in result.output
-
-
-def test_the_credentials_check_refuses_before_the_capture(
-    workspace: Workspace, capture: FakeCapture, monkeypatch: pytest.MonkeyPatch
-) -> None:
-    """A five-minute Hawk capture that ends in *put your API key in .env* is a worse version of the same message.
-
-    That the capture never ran is the whole claim, and `calls` is what states it.
-    """
-    monkeypatch.setenv("OPENAI_API_KEY", "sk-not-a-real-key")
-
-    refused = run()
-
-    assert refused.exit_code == 1
-    assert "OPENAI_API_KEY" in refused.output
-    assert capture.calls == []
-
-    assert run("--no-env-check").exit_code == 0
-    # and `--no-timer` skips it too, there being no timer to lose it
-    assert run("--no-timer").exit_code == 0
 
 
 def test_the_capture_runs_in_the_workspace_even_from_a_subdirectory(

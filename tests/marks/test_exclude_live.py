@@ -25,7 +25,7 @@ from inspect_steward._workspace import (
 
 from .._fault import until
 from ..schedule.test_tend import settle, turn
-from ..timer._fake import clear_credentials, fake_cron
+from ..timer._fake import fake_cron
 
 FIXTURES = Path(__file__).parents[1] / "evalset" / "fixtures"
 
@@ -35,7 +35,6 @@ def test_an_exclusion_lands_in_the_log_from_a_detached_runner(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_cron(monkeypatch)
-    clear_credentials(monkeypatch)
     markers = tmp_path / "markers"
     markers.mkdir()
     monkeypatch.setenv("ERRORING_EVALSET_DIR", str(markers))

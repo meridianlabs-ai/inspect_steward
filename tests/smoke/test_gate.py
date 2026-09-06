@@ -25,7 +25,7 @@ from inspect_steward._workspace import (
 
 from .._logs import SynthTask, synth_manifest, write_log
 from ..launch._fake import fake_capture
-from ..timer._fake import clear_credentials, fake_cron
+from ..timer._fake import fake_cron
 
 ADDITION = SynthTask("addition", samples=2)
 ECHO = SynthTask("echo", samples=1)
@@ -70,7 +70,6 @@ def launched(
 ) -> Launch:
     """Capture `tasks` and launch, without a timer and without a subprocess."""
     fake_cron(monkeypatch)
-    clear_credentials(monkeypatch)
     workspace = Workspace.at(tmp_path)
     definition = tmp_path / "evalset.py"
     fake_capture(monkeypatch, manifest or synth_manifest(list(tasks)))

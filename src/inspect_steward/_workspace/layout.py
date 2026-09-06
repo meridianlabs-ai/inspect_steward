@@ -40,7 +40,7 @@ GITIGNORE_ENTRIES = (
 )
 """Paths a workspace never commits. `logs/` and `logs-archive/` hold `.eval` archives, which are large outputs shared through an object store rather than through git; `.steward/` is disposable by construction. Ignored is not the same category as disposable — only `.steward/` is safe to delete.
 
-`.env` is here because arming a timer tells people to write one: a scheduled tend runs under a stripped environment, and the answer Steward gives is *put the credentials in a file the workers already read* (`_timer.env`). Suggesting that without ignoring the file would be handing somebody a way to commit their API keys.
+`.env` is here because arming a timer tells people to write one: a scheduled tend runs under a stripped environment, and the answer Steward gives is *put the credentials in a file the workers already read*. Suggesting that without ignoring the file would be handing somebody a way to commit their API keys.
 
 **Four entries rather than six**, since `steward.log` and `timer.log` moved inside `.steward/` and are covered by the line that was already here. A workspace created before that keeps two stale entries, because `ensure_gitignore` only ever appends — harmless, and cheaper than a rule for removing lines out of a file Steward does not own."""
 
@@ -233,7 +233,7 @@ class Workspace:
 
         Not written by Steward and not required to exist. Named here because inspect loads it for free: `find_dotenv(usecwd=True)` searches up from a worker's cwd, which is this directory.
 
-        **The nearest candidate rather than the only one.** That search walks *up*, so a `.env` in a parent directory is loaded where this one is absent, and arming checks whichever the walk lands on (`_timer.env.resolved`) rather than this path alone. What this path remains is where a credential the walk did not find should go — nearest wins, so writing one here also shadows anything above it.
+        **The nearest candidate rather than the only one.** That search walks *up*, so a `.env` in a parent directory is loaded where this one is absent, and a scheduled tend reads whichever the walk lands on rather than this path alone. What this path remains is where a credential the walk did not find should go — nearest wins, so writing one here also shadows anything above it.
         """
         return self.root / ".env"
 

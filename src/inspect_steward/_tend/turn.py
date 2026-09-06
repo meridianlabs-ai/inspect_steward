@@ -2603,7 +2603,7 @@ def _drifted(workspace: Workspace, manifest: Manifest) -> _Drift:
 def _log_dir(workspace: Workspace, manifest: Manifest) -> str:
     """The run's log directory, as the launch that committed this manifest resolved it.
 
-    **Read back, never re-derived.** The resolution takes a `log_root` that arrives in the environment, and a scheduled tend inherits almost none of one — so a turn that resolved this for itself would read `logs/` at 02:00 while the fleet wrote to the root, and every task would land and then read as never started (`_timer.env`, *AMBIENT*).
+    **Read back, never re-derived.** The resolution takes a `log_root` that arrives in the environment, and a scheduled tend inherits almost none of one — so a turn that resolved this for itself would read `logs/` at 02:00 while the fleet wrote to the root, and every task would land and then read as never started.
 
     A manifest committed before the field existed carries none, and resolving it without a root reproduces exactly the answer it was committed under.
     """

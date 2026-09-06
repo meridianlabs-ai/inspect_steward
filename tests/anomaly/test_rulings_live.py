@@ -16,7 +16,7 @@ from inspect_steward._launch import Launch, launch
 from inspect_steward._workspace import RULING, Workspace, append_event, create_workspace
 
 from ..schedule.test_tend import settle, turn
-from ..timer._fake import clear_credentials, fake_cron
+from ..timer._fake import fake_cron
 
 FIXTURES = Path(__file__).parents[1] / "evalset" / "fixtures"
 
@@ -25,7 +25,6 @@ def test_a_rerun_ruling_reruns_the_ruled_samples_and_only_them(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_cron(monkeypatch)
-    clear_credentials(monkeypatch)
     markers = tmp_path / "markers"
     markers.mkdir()
     monkeypatch.setenv("ERRORING_EVALSET_DIR", str(markers))

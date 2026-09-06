@@ -174,7 +174,7 @@ def _message(ex: Exception) -> str:
 def _value(environ: Mapping[str, str], name: str) -> str | None:
     """A variable's text, treating exported-but-empty as unset.
 
-    The same reading `_timer.env` gives a credential and `directives._environment` gives a `STEWARD_*` setting: refusing a run because somebody's shell profile exports an empty variable would be refusing a correct setup.
+    The same reading `directives._environment` gives a `STEWARD_*` setting: refusing a run because somebody's shell profile exports an empty variable would be refusing a correct setup.
     """
     value = environ.get(name)
     return value if value is not None and value.strip() else None

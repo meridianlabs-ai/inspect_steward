@@ -37,7 +37,7 @@ from inspect_steward._worker import resolve_inflight
 from inspect_steward._workspace import Workspace, create_workspace
 
 from .._fault import until
-from ..timer._fake import clear_credentials, fake_cron
+from ..timer._fake import fake_cron
 
 FIXTURES = Path(__file__).parents[1] / "evalset" / "fixtures"
 DEFINITION = "approval_evalset.py"
@@ -51,7 +51,6 @@ def test_a_worker_waiting_on_an_approval_is_reported_with_the_way_to_answer_it(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
     fake_cron(monkeypatch)
-    clear_credentials(monkeypatch)
 
     create_workspace(tmp_path, git=False)
     workspace = Workspace.at(tmp_path)

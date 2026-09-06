@@ -59,9 +59,6 @@ from .._timer import (
     TimerError,
     arm,
     disarm,
-    explain_env,
-    resolved_env,
-    unavailable_credentials,
 )
 from .._worker import (
     Stop,
@@ -176,7 +173,6 @@ def launch(
     type: DefinitionType | None = None,
     accept_archive: bool = False,
     timer: bool = True,
-    env_check: bool = True,
     log_root: str | bool | None = None,
     log_store: str | bool | None = None,
     overrides: dict[str, Any] | None = None,
@@ -200,7 +196,6 @@ def launch(
         type: Explicit definition type. `None` reuses the committed manifest's, then falls back to detection.
         accept_archive: Commit even though tasks would leave `logs/`.
         timer: Arm a timer. `False` launches unsupervised and records that it did.
-        env_check: Refuse to arm when a scheduled tend would not inherit this shell's credentials. Checked **before** the capture, so a Hawk config does not spend five minutes resolving packages on the way to a refusal.
         log_root: The root this machine keeps eval logs under, overriding `_steward.yaml`. Used only where the definition names no `log_dir` of its own, in which case the run writes to `<root>/<workspace name>`. `False` keeps this run's logs in the workspace whatever the machine says; `None` defers to the file and the environment.
         log_store: Log store for this run — a path or `auto` — overriding `_steward.yaml`. `False` declines the one the file or the environment configured; `None` defers to them. **Configuring one is the whole opt-in for reading it**: there is nothing to protect against, since a match means the identifier is equal and what it points at was published by a signoff. Reads are still *reported*, which is visibility rather than consent.
         overrides: Inspect's own eval-set arguments for this run, already parsed, keyed as `EvalSetOverrides` spells them. Merged over what `STEWARD_*` and `INSPECT_EVAL_*` say and honoured by the capture, so the manifest describes the run that will happen (`_workspace.overrides`). `None` — nothing typed and nothing exported — reuses the committed manifest's, for the reason `args` does. **An empty mapping is not the same thing**: it asks for the definition's own shape, which is the only way back once a launch has passed one.
@@ -239,27 +234,15 @@ def launch(
     root = resolve_log_root(directives, log_root=log_root)
     inspect_overrides = run_overrides(overrides)
 
-    # before the capture and before the claim, because both of the things below
-    # are cheap and one of them is a refusal. A five-minute Hawk capture that
-    # ends in *put your API key in .env* is a worse version of the same message
-    #
-    # **This is the one write that precedes the archive gate**, and it is not a
-    # write about the run: no manifest, no journal entry, no log moved. It has
-    # to be here because the refusal on the next line names `.env` as the
-    # remedy, and advice that leaks credentials into a commit is worse than no
-    # advice (execution.md §8.3). Recorded at the moment it happens rather than
-    # after the launch returns, so that a launch which then refuses — or raises
-    # — still leaves the change accounted for
+    # **The one write that precedes the archive gate**, and not a write about the
+    # run: no manifest, no journal entry, no log moved. Arming installs a
+    # scheduled tend that reads credentials from `.env` (`_workspace.layout`), so
+    # `.env` has to be ignored by git before anyone is told to put keys there —
+    # advice that leaks credentials into a commit is worse than no advice
+    # (execution.md §8.3). Done here, before the capture and the claim, so a
+    # launch that then refuses or raises still leaves the change accounted for
     if ignored := ensure_gitignore(workspace):
         steward_log(workspace.log, f"added to .gitignore: {', '.join(ignored)}")
-
-    if timer and env_check:
-        # the file a tend will actually load, which is not always this
-        # workspace's own -- see `_timer.env.resolved`
-        env_file = resolved_env(workspace.root)
-        missing = unavailable_credentials(env_file, os.environ)
-        if missing:
-            raise LaunchError(explain_env(missing, env_file))
 
     outcome = acquire(workspace.claim, command="launch", break_stale=break_stale)
     if isinstance(outcome, Held):

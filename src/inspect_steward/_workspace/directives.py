@@ -652,9 +652,8 @@ def _environment(environ: Mapping[str, str]) -> dict[str, Any]:
             )
         if key not in Directives.model_fields:
             raise DirectivesError(f"{name} is not a setting Steward knows")
-        # an exported-but-empty variable is unset, the same reading `_timer.env`
-        # gives a credential: refusing a shell profile that exports an empty
-        # value would be refusing a correct setup
+        # an exported-but-empty variable is unset: refusing a shell profile that
+        # exports an empty value would be refusing a correct setup
         if not (value := environ[name]).strip():
             continue
         try:
