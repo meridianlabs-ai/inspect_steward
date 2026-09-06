@@ -5,8 +5,10 @@
 **Four of the six are Steward's alone**, because each is either latched, terminal, or read off state the agent does not own. `ATTENTION` and `STOPPED` carry judgement, which is what makes them the agent's — and `steward notify` is the command that carries it (workflow.md §11.1).
 """
 
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from enum import StrEnum
+
+from .block import Block
 
 
 class Kind(StrEnum):
@@ -57,16 +59,10 @@ The characters are `Verdict.ATTENTION` and `Verdict.STOPPED` deliberately. A rea
 """
 
 
-WIDTH = 76
-"""Display-key width for the progress table.
-
-What a wide terminal already gives the key. The operator's own task table is narrower (`render.KEY_WIDTH`): a pipe table wraps its cells where a code block side-scrolls.
-"""
-
 NARROW = 28
-"""Display-key width for the Slack family, chosen for a phone rather than a laptop.
+"""Display-key width for a post's tables, chosen for a phone rather than a laptop.
 
-A wide monospace block side-scrolls on the device where a 3am post is actually read, and a reader who has to drag a code block sideways to find the task name reads the title and nothing else.
+A wide monospace block side-scrolls on the device where a 3am post is actually read, and a reader who has to drag a code block sideways to find the task name reads the title and nothing else. Every dialect gets this one width: the post is the phone surface whatever the target, and the operator's page (`render.KEY_WIDTH`) is the one read on a laptop.
 """
 
 
@@ -80,16 +76,10 @@ class Post:
     title: str
     """The verdict line. Also the post's title, so the last message in a channel is true modulo what its reader has since answered."""
 
-    lines: list[str] = field(default_factory=list[str])
-    """What happened, one item or task per line, already in reading order and free of markup."""
+    blocks: tuple[Block, ...] = ()
+    """The body, as an ordered list of blocks rendered per dialect (`block`, `render`).
 
-    table: list[str] = field(default_factory=list[str])
-    """The progress table, pre-aligned to `WIDTH`, to be rendered as a monospace block. Empty where there is nothing to show."""
-
-    narrow: list[str] = field(default_factory=list[str])
-    """The same table at `NARROW`, for the Slack family. Empty to use `table` for every dialect.
-
-    **Two renderings carried rather than one narrowed on the way out**, because the rows arrive already padded to a common column width: trimming them afterwards cuts columns off the right-hand end rather than shortening the key on the left, which is the one part a reader is scanning for. Building both costs one more pass over rows a turn has already computed.
+    **The same content the operator's `status.md` carries**, built from the same cell builders so the two cannot disagree about what a turn found — only about how it is spelled (`_tend.notify._page`). Empty where a post is nothing but its title, which is what `steward notify` sends most often.
     """
 
     glyph: str | None = None
@@ -114,9 +104,5 @@ class Post:
         )
         return named if self.glyph is None else f"{self.glyph} {named}"
 
-    def monospace(self, narrow: bool) -> list[str]:
-        """The table to render, for a dialect that wants the narrow one or not."""
-        return self.narrow if narrow and self.narrow else self.table
 
-
-__all__ = ["AGENT_KINDS", "GLYPH", "NARROW", "WIDTH", "Kind", "Post"]
+__all__ = ["AGENT_KINDS", "GLYPH", "NARROW", "Kind", "Post"]

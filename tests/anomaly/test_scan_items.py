@@ -44,6 +44,7 @@ from inspect_steward._workspace import (
 )
 
 from .._logs import SynthSample, SynthTask, write_log
+from .._posts import bullets
 from ..schedule.test_tend import observations, prepared, turn
 
 SCAN_ID = "run-1"
@@ -950,7 +951,7 @@ class TestTheHold:
         post = turn_post(turn(workspace))
 
         assert post is not None
-        said = [line for line in post.lines if "scan findings" in line]
+        said = [line for line in bullets(post) if "scan findings" in line]
         assert said == ["1 with scan findings nobody has ruled on"]
 
 
@@ -968,7 +969,9 @@ def test_an_agent_that_goes_quiet_hands_its_investigation_to_the_person(
 
     # an agent is attached, so the investigation is theirs and the post is
     # silent about it — which is decision 4 working
-    assert attended is None or not any("integrity" in line for line in attended.lines)
+    assert attended is None or not any(
+        "integrity" in line for line in bullets(attended)
+    )
 
     # **and the silence outlasted more than one interval**, which is the case a
     # fixed-cadence window loses: the crossing happened three cadences before
@@ -980,7 +983,7 @@ def test_an_agent_that_goes_quiet_hands_its_investigation_to_the_person(
     post = turn_post(turn(workspace))
 
     assert post is not None
-    assert any("flagged for reward hacking" in line for line in post.lines)
+    assert any("flagged for reward hacking" in line for line in bullets(post))
 
 
 def _age_the_wait(workspace: Workspace, *, seconds: float) -> None:

@@ -20,11 +20,20 @@ from inspect_steward._evalset.manifest import write_manifest
 from inspect_steward._notify import (
     INSPECT_NOTIFICATION,
     Delivery,
+    Field,
     Kind,
     Post,
+    Text,
 )
-from inspect_steward._tend import Verdict, turn_post
-from inspect_steward._tend.notify import LINES, ROWS, SAID, UNATTENDED_INTERVALS
+from inspect_steward._tend import Verdict, status_headline, turn_post
+from inspect_steward._tend.notify import (
+    LINES,
+    NARROW,
+    ROWS,
+    SAID,
+    UNATTENDED_INTERVALS,
+)
+from inspect_steward._tend.table import plain_table, task_table_cells
 from inspect_steward._worker import LiveParked
 from inspect_steward._workspace import (
     ACKNOWLEDGED,
@@ -39,6 +48,7 @@ from inspect_steward._workspace import (
 
 from .._acp import Publish, publish
 from .._logs import DEFINITION, SynthTask, synth_manifest, write_log, write_unreadable
+from .._posts import after_table, bullets, task_table
 from ..schedule.test_items import parked_run
 from ..schedule.test_tend import prepared, turn
 
@@ -100,7 +110,7 @@ def test_a_first_turn_says_nothing_about_what_was_already_finished(
     # and that is an item appearing rather than a completion being diffed
     post = turn_post(result)
     assert post is not None and post.kind is Kind.GATE
-    assert not [line for line in post.lines if line.startswith("finished ")]
+    assert not [line for line in bullets(post) if line.startswith("finished ")]
 
 
 def test_tasks_finishing_produce_one_post_naming_all_of_them(tmp_path: Path) -> None:
@@ -118,7 +128,7 @@ def test_tasks_finishing_produce_one_post_naming_all_of_them(tmp_path: Path) -> 
     assert len(result.finished) == 3
     assert post is not None
     assert post.kind is Kind.PROGRESS
-    assert sum(1 for line in post.lines if line.startswith("finished ")) == 3
+    assert sum(1 for line in bullets(post) if line.startswith("finished ")) == 3
 
 
 def test_a_task_that_stays_finished_is_not_news_again(tmp_path: Path) -> None:
@@ -149,19 +159,65 @@ def test_the_gate_posts_once_when_the_run_settles(tmp_path: Path) -> None:
     assert turn_post(again) is None
 
 
-def test_the_post_leads_with_the_verdict_line(tmp_path: Path) -> None:
+def test_the_title_is_the_operator_headline(tmp_path: Path) -> None:
+    # every post now leads with the operator page's headline — the verdict and
+    # the two ages — carried as the title with the glyph in its own field, so a
+    # post and `status.md` open with the same words
     workspace, _ = prepared(tmp_path, [DONE])
     turn(workspace)
     write_log(workspace.logs, DONE)
 
-    post = turn_post(turn(workspace))
+    result = turn(workspace)
+    post = turn_post(result)
 
     assert post is not None
     assert post.glyph == Verdict.COMPLETE.value
-    assert post.title == "complete (the results are waiting to be accepted)"
+    assert post.title.startswith("complete (the results are waiting to be accepted)")
+    assert f"{post.glyph} {post.title}" == status_headline(result)
 
 
-def test_the_table_rides_at_two_widths(tmp_path: Path) -> None:
+def test_a_post_carries_the_whole_operator_page(tmp_path: Path) -> None:
+    # not just the items and the task table any more: a post carries the same
+    # page `status.md` does, so the fleet total leads and the logs line trails
+    workspace, _ = prepared(tmp_path, [DONE, OTHER, PENDING])
+    paused(workspace)
+    turn(workspace)
+    write_log(workspace.logs, DONE)
+    write_log(workspace.logs, OTHER)
+
+    post = turn_post(turn(workspace))
+
+    assert post is not None
+    assert any(
+        isinstance(block, Field) and block.label == "Logs" for block in post.blocks
+    )
+    assert any(
+        isinstance(block, Text) and any("samples" in line for line in block.lines)
+        for block in post.blocks
+    )
+
+
+def test_the_post_table_is_the_operator_pages_cells(tmp_path: Path) -> None:
+    # the divergence guard: the post's task table is the same cells `status.md`
+    # builds (`task_table_cells`), rendered as a fenced plain table at the phone
+    # width -- so the two surfaces cannot come to disagree about a cell
+    workspace, _ = prepared(tmp_path, [DONE, OTHER, PENDING])
+    paused(workspace)
+    turn(workspace)
+    write_log(workspace.logs, DONE)
+    write_log(workspace.logs, OTHER)
+
+    result = turn(workspace)
+    post = turn_post(result)
+
+    assert post is not None
+    header, rows = task_table_cells(result, width=NARROW)
+    assert task_table(post) == plain_table(header, rows)
+
+
+def test_the_task_table_rides_in_the_post(tmp_path: Path) -> None:
+    # one fenced task table at the phone width, the same content `status.md`
+    # carries as a pipe table
     workspace, _ = prepared(tmp_path, [DONE])
     turn(workspace)
     write_log(workspace.logs, DONE)
@@ -169,9 +225,9 @@ def test_the_table_rides_at_two_widths(tmp_path: Path) -> None:
     post = turn_post(turn(workspace))
 
     assert post is not None
-    assert post.table and post.narrow
-    assert post.monospace(narrow=True) == post.narrow
-    assert post.monospace(narrow=False) == post.table
+    table = task_table(post)
+    assert table and table[0].startswith("task")
+    assert any("done" in line for line in table)
 
 
 def test_a_long_list_says_what_it_left_out(tmp_path: Path) -> None:
@@ -187,15 +243,15 @@ def test_a_long_list_says_what_it_left_out(tmp_path: Path) -> None:
     post = turn_post(turn(workspace))
 
     assert post is not None
-    assert sum(1 for line in post.lines if line.startswith("finished ")) == LINES
+    assert sum(1 for line in bullets(post) if line.startswith("finished ")) == LINES
     assert any(
-        line.startswith(f"and {len(many) - LINES} more tasks") for line in post.lines
+        line.startswith(f"and {len(many) - LINES} more tasks") for line in bullets(post)
     )
-    # ROWS rows, the count of what was dropped, and the shared model the table
-    # ends with -- the model describes every task, row or no row
+    # the table is a header and ROWS rows; the count of what it dropped and the
+    # shared model follow it in a paragraph, not inside the fence
     tasks = len(many) + 1
-    assert len(post.table) == ROWS + 2
-    assert post.table[ROWS] == f"... {tasks - ROWS} more tasks"
+    assert len(task_table(post)) == ROWS + 1
+    assert f"... {tasks - ROWS} more tasks" in after_table(post)
 
 
 def test_a_quiet_turn_posts_nothing(tmp_path: Path) -> None:
@@ -223,7 +279,7 @@ def test_an_item_appearing_posts_and_the_same_item_persisting_does_not(
     post = turn_post(appeared)
     assert post is not None and post.kind is Kind.ATTENTION
     assert len(appeared.appeared) == 1
-    assert any("definition" in line for line in post.lines)
+    assert any("definition" in line for line in bullets(post))
     assert turn_post(again) is None
 
 
@@ -253,7 +309,7 @@ def test_the_queue_emptying_posts_once(tmp_path: Path) -> None:
     # and says nothing about what closed: the title is the whole message, and
     # "1 item closed" is a number with no content -- it names nothing, and the
     # reader already knows what they answered
-    assert post.lines == []
+    assert bullets(post) == []
     assert turn_post(again) is None
 
 
@@ -343,10 +399,10 @@ def test_an_agents_item_reaches_a_person_where_no_agent_ever_attached(
     post = turn_post(turn(workspace))
 
     assert post is not None and post.kind is Kind.ATTENTION
-    assert any("could not be read as a log" in line for line in post.lines)
+    assert any("could not be read as a log" in line for line in bullets(post))
     # and the post says the item, not why the item is here: the escalation
     # decides whether to show it, and once shown the routing is not actionable
-    assert not any("agent" in line for line in post.lines)
+    assert not any("agent" in line for line in bullets(post))
 
 
 STALENESS = [
@@ -377,24 +433,24 @@ def test_an_agent_that_stopped_collecting_hands_its_items_back(
     assert (turn_post(turn(workspace)) is not None) is reaches
 
 
-def test_the_title_counts_what_the_reader_has_to_act_on(tmp_path: Path) -> None:
-    # `verdict_line` splits *needs an operator* from *for the agent* because its
-    # readers include the agent. Here there is one reader and everything in
-    # front of them is theirs, so the split would be Steward's bookkeeping
-    #
-    # A settled run rather than a paused one: the pause has a verdict line of
-    # its own, and what is being read here is the counting clause
+def test_an_escalated_item_leaves_the_title_the_operator_headline(
+    tmp_path: Path,
+) -> None:
+    # the title is the operator page's headline whatever reached the post, so an
+    # agent item escalated for want of an agent still opens the post the way
+    # `status.md` opens — the glyph and the verdict, not a count of the escalated
+    # items
     workspace, _ = prepared(tmp_path, [DONE])
     write_log(workspace.logs, DONE)
     turn(workspace)
     unreadable(workspace)
 
-    post = turn_post(turn(workspace))
+    result = turn(workspace)
+    post = turn_post(result)
 
     assert post is not None
     assert post.glyph == Verdict.ATTENTION.value
-    assert post.title == "1 decision needs attention"
-    assert "for the agent" not in post.title
+    assert f"{post.glyph} {post.title}" == status_headline(result)
 
 
 def test_a_persons_item_is_never_marked_by_owner(tmp_path: Path) -> None:
@@ -405,7 +461,7 @@ def test_a_persons_item_is_never_marked_by_owner(tmp_path: Path) -> None:
     post = turn_post(turn(workspace))
 
     assert post is not None
-    assert not any("for the agent" in line for line in post.lines)
+    assert not any("for the agent" in line for line in bullets(post))
 
 
 def test_the_gate_does_not_restate_its_own_title(tmp_path: Path) -> None:
@@ -420,9 +476,9 @@ def test_the_gate_does_not_restate_its_own_title(tmp_path: Path) -> None:
     post = turn_post(turn(workspace))
 
     assert post is not None and post.kind is Kind.GATE
-    assert not any("waiting to be accepted" in line for line in post.lines)
+    assert not any("waiting to be accepted" in line for line in bullets(post))
     # what changed to produce it is still said
-    assert post.lines == ["finished done"]
+    assert bullets(post) == ["finished done"]
 
 
 def test_an_item_carrying_somebody_elses_exception_is_trimmed(
@@ -442,7 +498,7 @@ def test_an_item_carrying_somebody_elses_exception_is_trimmed(
 
     assert len(item.summary) > SAID, "the premise: this one runs long"
     assert post is not None
-    trimmed = post.lines[0]
+    trimmed = bullets(post)[0]
     assert trimmed.endswith("…") and len(trimmed) <= SAID + 1
 
 
@@ -462,7 +518,7 @@ def test_a_summary_short_enough_to_read_is_left_alone(tmp_path: Path) -> None:
         "steward launch"
     )
     assert post is not None
-    assert post.lines[0] == "the definition has changed since it was captured"
+    assert bullets(post)[0] == "the definition has changed since it was captured"
 
 
 def test_the_one_command_a_person_runs_does_travel(
@@ -477,7 +533,7 @@ def test_the_one_command_a_person_runs_does_travel(
     post = turn_post(turn(workspace))
 
     assert post is not None
-    assert post.lines[0].endswith(" (inspect acp)")
+    assert bullets(post)[0].endswith(" (inspect acp)")
 
 
 def test_a_post_says_which_workspace_it_is_about(
@@ -515,7 +571,7 @@ def test_nothing_under_the_table_totals_the_table(tmp_path: Path) -> None:
     post = turn_post(turn(workspace))
 
     assert post is not None
-    under = post.table[-1]
+    under = after_table(post)[-1]
     assert "samples" not in under and "%" not in under
     assert "running" not in under and "queued" not in under
     # what is left is the model the keys elided, which no row can say
@@ -544,8 +600,8 @@ def test_a_task_is_named_as_shortly_as_the_table_names_it(tmp_path: Path) -> Non
         if row.key.startswith(("done", "other"))
     )
     assert post is not None
-    assert sorted(post.lines) == ["finished done", "finished other"]
-    assert "mockllm/model" in post.table[-1]
+    assert sorted(bullets(post)) == ["finished done", "finished other"]
+    assert "mockllm/model" in after_table(post)[-1]
 
 
 def test_a_relaunch_that_renames_a_task_does_not_finish_it_twice(
@@ -576,7 +632,7 @@ def test_a_relaunch_that_renames_a_task_does_not_finish_it_twice(
     assert result.finished == []
     post = turn_post(result)
     assert post is None or not [
-        line for line in post.lines if line.startswith("finished ")
+        line for line in bullets(post) if line.startswith("finished ")
     ]
 
 

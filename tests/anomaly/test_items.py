@@ -22,6 +22,7 @@ from inspect_steward._workspace import (
 )
 
 from .._logs import SynthSample, SynthTask, write_log
+from .._posts import bullets
 from ..schedule.test_tend import observations, prepared, turn
 
 TIMEOUT_TRACEBACK = """Traceback (most recent call last):
@@ -328,7 +329,8 @@ def test_an_error_window_does_escalate_when_nobody_collects(tmp_path: Path) -> N
 
     assert post is not None
     assert any(
-        "errored the same way (openai.APITimeoutError)" in line for line in post.lines
+        "errored the same way (openai.APITimeoutError)" in line
+        for line in bullets(post)
     )
 
 

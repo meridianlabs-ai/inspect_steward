@@ -12,6 +12,7 @@ import click
 from .._notify import (
     AGENT_KINDS,
     GLYPH,
+    Bullets,
     Kind,
     Post,
     channel_apprise,
@@ -81,7 +82,7 @@ def notify_command(message: str, kind: str, detail: tuple[str, ...]) -> None:
         workspace=workspace.root.name,
         glyph=GLYPH[Kind(kind)],
         title=message,
-        lines=list(detail),
+        blocks=(Bullets(tuple(detail)),) if detail else (),
     )
     # **`send_post` reports rather than raises**, because its ordinary caller is
     # a turn that must not fail. Here the caller *is* the message, so a failure

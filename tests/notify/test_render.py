@@ -1,25 +1,45 @@
 """One post, four dialects, and the constructs that do not survive the trip.
 
-The whole reason `status_markdown` is not reused is that Slack's `mrkdwn` is a
-different dialect rather than a subset: headings, pipe tables, `**bold**` and
-`[text](url)` all arrive as literal characters. So the assertions are about
-absence as much as presence — what must *not* reach a Slack body — plus the one
-construct that has to survive everywhere, which is the fenced progress table
-carrying the columns.
+A post carries its body as blocks (`_notify.block`) and the dialect is chosen when
+it is rendered. Slack's `mrkdwn` is a different dialect rather than a subset:
+headings, pipe tables, `**bold**` and `[text](url)` all arrive as literal
+characters. So the assertions are about absence as much as presence — what must
+*not* reach a Slack body — plus the constructs that have to survive everywhere: a
+fenced table carrying its columns, and a bulleted list of what changed.
 """
 
 import pytest
-from inspect_steward._notify import Dialect, Kind, Post, body_format, render
+from inspect_steward._notify import (
+    Bullets,
+    Dialect,
+    Field,
+    Kind,
+    Post,
+    Table,
+    Text,
+    body_format,
+    render,
+)
+
+ITEMS = (
+    "a sample is waiting on an approval — inspect acp",
+    "the definition has changed since it was captured — steward launch",
+)
 
 POST = Post(
     kind=Kind.ATTENTION,
     title="⚠️ 2 need an operator",
-    lines=[
-        "a sample is waiting on an approval — inspect acp",
-        "the definition has changed since it was captured — steward launch",
-    ],
-    table=["✓ addition@mockllm/model  4/4  100%", "  4/4 samples · 100%"],
-    narrow=["✓ addition  4/4  100%", "  4/4 samples · 100%"],
+    blocks=(
+        Bullets(ITEMS),
+        Text(("4/4 samples · 100%",)),
+        Table(
+            (
+                "task      samples  done  score",
+                "addition      4/4  100%   1.00",
+            )
+        ),
+        Field("Logs", "`s3://bucket/run`"),
+    ),
 )
 
 
@@ -27,8 +47,8 @@ POST = Post(
 def test_every_dialect_carries_the_whole_post(dialect: Dialect) -> None:
     body = render(POST, dialect)
 
-    for line in POST.lines:
-        assert line in body
+    for item in ITEMS:
+        assert item in body
     assert "4/4  100%" in body
 
 
@@ -51,13 +71,34 @@ def test_the_table_arrives_as_a_block(dialect: Dialect) -> None:
         assert body.count("```") == 2
 
 
-def test_slack_gets_the_narrow_table_and_nobody_else_does() -> None:
-    # a wide monospace block side-scrolls on a phone, which is where a 3am post
-    # is read -- and the rows arrive already padded, so the width is chosen when
-    # the table is built rather than trimmed on the way out
-    assert "addition@mockllm/model" in render(POST, Dialect.MARKDOWN)
-    assert "addition@mockllm/model" not in render(POST, Dialect.MRKDWN)
-    assert "✓ addition  4/4" in render(POST, Dialect.MRKDWN)
+def test_the_table_is_the_same_width_for_everyone() -> None:
+    # the post is the phone surface whatever the target, so its table arrives at
+    # one width for every dialect -- the rows are padded once when the post is
+    # built, not trimmed per dialect on the way out
+    row = "addition      4/4  100%   1.00"
+    assert row in render(POST, Dialect.MARKDOWN)
+    assert row in render(POST, Dialect.MRKDWN)
+    assert row in render(POST, Dialect.TEXT)
+
+
+def test_a_heading_takes_the_dialect_it_can_show() -> None:
+    # no headings in Slack -- `### h` arrives as those characters -- so it takes
+    # the one emphasis the dialect has instead
+    post = Post(
+        kind=Kind.HEARTBEAT, title="x", blocks=(Text(("up",), heading="resources"),)
+    )
+
+    assert "### resources" in render(post, Dialect.MARKDOWN)
+    assert "*resources*" in render(post, Dialect.MRKDWN)
+    assert "###" not in render(post, Dialect.MRKDWN)
+
+
+def test_a_field_takes_the_bold_the_dialect_has() -> None:
+    post = Post(kind=Kind.HEARTBEAT, title="x", blocks=(Field("Logs", "`/tmp/run`"),))
+
+    assert "**Logs** `/tmp/run`" in render(post, Dialect.MARKDOWN)
+    assert "*Logs* `/tmp/run`" in render(post, Dialect.MRKDWN)
+    assert "**" not in render(post, Dialect.MRKDWN)
 
 
 ABSENT = [
@@ -94,7 +135,7 @@ def test_html_is_the_text_rendering_wrapped() -> None:
 
 
 def test_html_escapes_what_a_task_name_might_contain() -> None:
-    post = Post(kind=Kind.PROGRESS, title="finished", lines=["<script>&"])
+    post = Post(kind=Kind.PROGRESS, title="finished", blocks=(Bullets(("<script>&",)),))
 
     assert "&lt;script&gt;&amp;" in render(post, Dialect.HTML)
 
@@ -128,12 +169,11 @@ def test_a_post_with_nothing_but_a_title_renders_as_one() -> None:
 
 
 @pytest.mark.parametrize("dialect", [Dialect.MARKDOWN, Dialect.MRKDWN])
-def test_a_post_ends_on_the_table_rather_than_a_path(dialect: Dialect) -> None:
-    # a post carried a `logs:` line for a reader who could not look the
-    # location up. It is the one line nobody reads on a phone, it is long
-    # enough to wrap on every one of them, and the location is in `status.md`
-    # for the reader who actually wants it
+def test_a_post_ends_on_the_logs_field(dialect: Dialect) -> None:
+    # the operator's page ends on where the logs are, and a post carries the same
+    # content -- so the reader who wants the location has it, and it lands last
+    # because it is the one line that never changes
     body = render(POST, dialect)
 
-    assert "logs:" not in body
-    assert body.rstrip().endswith("```")
+    assert "Logs" in body
+    assert body.rstrip().endswith("`s3://bucket/run`")

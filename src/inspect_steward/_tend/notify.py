@@ -19,9 +19,13 @@ from .._anomaly.model import AnomalyState
 from .._notify import (
     GLYPH,
     NARROW,
-    WIDTH,
+    Block,
+    Bullets,
+    Field,
     Kind,
     Post,
+    Table,
+    Text,
     channel_apprise,
     establish_channel,
     send_post,
@@ -45,7 +49,7 @@ from .._workspace import (
     read_pause,
     read_pause_posts,
 )
-from .anomalies_md import outcomes_table
+from .anomalies_md import outcomes_grid
 from .items import (
     FIXED_OWNER,
     UNWRITTEN,
@@ -53,10 +57,15 @@ from .items import (
     Owner,
     Verdict,
     self_healing,
-    verdict_text,
 )
 from .progress import Progress, fleet_totals, short_keys
-from .table import progress_table
+from .render import (
+    log_field,
+    rerunning_note,
+    signature_field,
+    status_headline_text,
+)
+from .table import RESOURCES_HEADER, plain_table, resources_cells, task_table_cells
 
 DEFAULT_HEARTBEAT = 60.0 * 60.0
 """The heartbeat interval where `_steward.yaml` names none: one hour.
@@ -229,28 +238,27 @@ def _progressing(result: "TendResult") -> bool:
 
 
 def _pause_post(result: "TendResult", paused: Paused) -> Post:
-    """The one post a pause earns: who paused it and why, over the run's current standing."""
+    """The one post a pause earns: who paused it and why, over the run's current standing.
+
+    The who-and-why leads as a paragraph rather than the title, because the title is now the verdict headline every post carries — a paused run's headline already says it is paused, and this says who and for what reason, over the same page.
+    """
     reason = f" — {paused.reason}" if paused.reason else ""
+    lead = Text((f"paused by {paused.by or 'somebody'}{reason}",))
     return Post(
         kind=Kind.PAUSED,
         glyph=result.verdict.value,
-        title=f"paused by {paused.by or 'somebody'}{reason}",
-        lines=[],
-        table=_table(result.progress, WIDTH),
-        narrow=_table(result.progress, NARROW),
+        title=status_headline_text(result),
+        blocks=(lead, *_page(result)),
     )
 
 
 def _heartbeat_post(result: "TendResult") -> Post:
     """The heartbeat's body: the run's standing, no items — nothing here is being decided."""
-    totals = fleet_totals(result.progress)
     return Post(
         kind=Kind.HEARTBEAT,
         glyph=result.verdict.value,
-        title=f"still running · {totals}" if totals else "still running",
-        lines=[],
-        table=_table(result.progress, WIDTH),
-        narrow=_table(result.progress, NARROW),
+        title=status_headline_text(result),
+        blocks=tuple(_page(result)),
     )
 
 
@@ -317,7 +325,10 @@ def notify_failure(
                 glyph=GLYPH[Kind.STOPPED],
                 workspace=workspace.root.name,
                 title="the tend could not run (nothing is being scheduled)",
-                lines=[reason],
+                # the one post with no full turn behind it: a tend that could not
+                # run has no `TendResult` to build a page from, so it stays a
+                # title and the reason it failed
+                blocks=(Text((reason,)),),
             ),
             workspace.log,
         )
@@ -378,26 +389,76 @@ def turn_post(result: "TendResult") -> Post | None:
 
     if (kind := _kind(result, shown, cleared=cleared)) is None:
         return None
-    # the gate is the moment somebody is asked to accept results, so its post
-    # carries the by-task table beside the progress table; a progress post
-    # does not, since nothing there is being decided
-    gated = kind is Kind.GATE
+    # what a person is being woken for leads, then the same page every post
+    # carries — the by-task anomalies table rides in `_page` for every kind now,
+    # so a gate no longer special-cases it
+    items = _lines(result, _named(kind, shown))
+    blocks: list[Block] = [Bullets(tuple(items))] if items else []
+    blocks += _page(result)
     return Post(
         kind=kind,
         glyph=result.verdict.value,
-        title=_title(result, shown),
-        lines=_lines(result, _named(kind, shown)),
-        table=_table(result.progress, WIDTH)
-        + (_outcomes(result, WIDTH) if gated else []),
-        narrow=_table(result.progress, NARROW)
-        + (_outcomes(result, NARROW) if gated else []),
+        title=status_headline_text(result),
+        blocks=tuple(blocks),
     )
 
 
-def _outcomes(result: "TendResult", width: int) -> list[str]:
-    """The by-task anomalies table for a post, blank-separated from the progress table above it, or nothing where every sample took the normal course."""
-    table = outcomes_table(result.dispositions.outcomes, result.progress, width=width)
-    return ["", *table] if table else []
+def _page(result: "TendResult", *, width: int = NARROW) -> list[Block]:
+    """The snapshot every post carries: the same content as the operator's `status.md` page, spelled as blocks a channel renders.
+
+    Built from the same cell builders the page is (`task_table_cells`, `outcomes_grid`, `resources_cells`), so a post and `status.md` cannot disagree about what a turn found. The tables are clipped to the phone width whatever the target: a post is read on a phone whether it arrives by Slack or mail, where the page is read on a laptop.
+
+    The order is the page's — fleet total, signature, task table, anomalies, resources, logs — so the two read alike. The task table keeps the `ROWS` cap and names what it dropped; the model every row shares rides beneath it, which the page's own table elides into its keys but a phone reader has lost once the keys are clipped.
+    """
+    blocks: list[Block] = []
+    if (fleet := fleet_totals(result.progress)) is not None:
+        blocks.append(Text((fleet,)))
+    if (sig := signature_field(result)) is not None:
+        blocks.append(Field(*sig))
+
+    header, rows = task_table_cells(result, width=width)
+    if rows:
+        kept, more = _cap_rows(rows)
+        blocks.append(Table(tuple(plain_table(header, kept))))
+        tail = ([more] if more else []) + _shared_model_line(result)
+        if tail:
+            blocks.append(Text(tuple(tail)))
+
+    outcomes = outcomes_grid(result.dispositions.outcomes, result.progress, width=width)
+    note = rerunning_note(result.anomalies)
+    if outcomes[1]:
+        blocks.append(Table(tuple(plain_table(*outcomes)), heading="anomalies"))
+    if note:
+        # under the anomalies heading only where the table did not already carry
+        # it, exactly as the page joins the two
+        blocks.append(Text(tuple(note), heading=None if outcomes[1] else "anomalies"))
+
+    if cells := resources_cells(result.progress, width=width):
+        table = plain_table(RESOURCES_HEADER, cells)
+        blocks.append(Table(tuple(table), heading="resources"))
+
+    if (log := log_field(result)) is not None:
+        blocks.append(Field(*log))
+    return blocks
+
+
+def _cap_rows(rows: list[tuple[str, ...]]) -> tuple[list[tuple[str, ...]], str | None]:
+    """The task rows a post's table carries, and a note of what it left out.
+
+    A two-hundred-row block is a wall on a phone, and `status.md` is one command away with all of them — so the table stops at `ROWS` and says how many more there are rather than dropping them silently.
+    """
+    if len(rows) <= ROWS:
+        return rows, None
+    return rows[:ROWS], f"... {len(rows) - ROWS} more tasks"
+
+
+def _shared_model_line(result: "TendResult") -> list[str]:
+    """The model every row shares, for the reader whose clipped keys no longer show it, or nothing where the rows disagree.
+
+    The page elides a shared model into its keys and names it nowhere else; a post's keys are clipped to the phone width, which can take the model off the end, so it is said once beneath the table.
+    """
+    model = short_keys(result.progress.rows).model
+    return [model] if model is not None else []
 
 
 def _reaches(item: Item, arriving: set[str], *, unattended: bool, newly: bool) -> bool:
@@ -559,31 +620,6 @@ def _kind(result: "TendResult", shown: list[Item], *, cleared: bool) -> Kind | N
     return None
 
 
-def _title(result: "TendResult", shown: list[Item]) -> str:
-    """The verdict as one line, counting only what this reader has to act on.
-
-    **One undifferentiated count, and the one place the wording leaves `verdict_line` behind.** That function splits *needs an operator* from *for the agent* because its readers — `status.md`, the terminal — include the agent, for whom the split is the routing. Here there is one reader and everything in front of them is theirs by construction: an item that is only here because nobody collected is an operator's job in exactly the way a `stalled` task is, and asking them to sort the two would be exporting Steward's bookkeeping to the operator it is supposed to spare.
-
-    **Counted in decisions, which is the one noun that is true of all of them.** *Tasks* would be wrong about half the vocabulary — `drift`, `degraded`, `unsupervised`, `timer_drift` and `signoff_ready` are facts about the run with no task behind them — and a bare count is a sentence with a hole in it. `decisions` is also what the body already calls them where it runs out of room (`_capped`), so the title and the line under it are not two words for one thing.
-
-    Delegates every other case, so the pause, the gate and *nothing needs you* cannot come to be spelled two ways. No glyph: it is `Post.glyph`, which the heading puts in front of the workspace name rather than in front of the sentence.
-    """
-    if not shown or result.verdict in (
-        Verdict.PAUSED,
-        Verdict.CLEAR,
-        Verdict.COMPLETE,
-        Verdict.SIGNED_OFF,
-    ):
-        return verdict_text(result.verdict, shown)
-    one = len(shown) == 1
-    needs = (
-        f"{len(shown)} decision{'' if one else 's'} need{'s' if one else ''} attention"
-    )
-    if result.verdict is Verdict.STOPPED:
-        return f"nothing is progressing, {needs}"
-    return needs
-
-
 def _lines(result: "TendResult", shown: list[Item]) -> list[str]:
     """Everything that changed, in reading order and free of markup.
 
@@ -691,29 +727,6 @@ def _capped(lines: list[str], noun: str) -> list[str]:
     if len(lines) <= LINES:
         return lines
     return [*lines[:LINES], f"and {len(lines) - LINES} more {noun}"]
-
-
-def _table(progress: Progress, width: int) -> list[str]:
-    """The progress table, shortened to something a phone can hold.
-
-    The middle of a long run is replaced by its own count while the shared model stays, because the model describes every task whether or not its row is here.
-    """
-    rows = progress_table(progress, width=width)[: len(progress.rows)]
-    tail = [] if (shared := _shared(progress)) is None else [shared]
-    if len(rows) <= ROWS:
-        return rows + tail
-    return [*rows[:ROWS], f"... {len(rows) - ROWS} more tasks", *tail]
-
-
-def _shared(progress: Progress) -> str | None:
-    """The line under the table, carrying the one thing the keys dropped.
-
-    **No totals.** `progress_table`'s own footer sums every live column, and in a post that is a line of churn: samples, running and queued are columns in the rows above, so totalling them restates the screen with a number that is different every ten minutes, under a table the reader has just read. A post is read once, by somebody deciding whether to get up.
-
-    What is left is the model where the keys elided it, for the reason the terminal keeps it: a table that shows the model nowhere has lost it.
-    """
-    model = short_keys(progress.rows).model
-    return None if model is None else f"  {model}"
 
 
 __all__ = [

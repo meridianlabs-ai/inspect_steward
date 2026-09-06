@@ -19,9 +19,11 @@ from inspect_scout import Summary as ScanSummary
 from .._evalset.manifest import ManifestError, read_manifest
 from .._notify import (
     NARROW,
-    WIDTH,
+    Block,
     Kind,
     Post,
+    Table,
+    Text,
     channel_apprise,
     establish_channel,
     send_post,
@@ -29,7 +31,8 @@ from .._notify import (
 from .._scan import finalize_scan, scan_dir_location
 from .._store import Published, StoreError, open_store, store_location
 from .._tend import TendError, TendResult, tend
-from .._tend.anomalies_md import outcomes_table
+from .._tend.anomalies_md import outcomes_grid
+from .._tend.table import plain_table
 from .._tend.turn import SCAN_FOLD_RESTORED
 from .._timer import TimerError, disarm
 from .._workspace import (
@@ -782,6 +785,16 @@ def _post(workspace: Workspace, result: TendResult, signature: Signature) -> Non
             if signature.exceptions
             else "no exceptions"
         )
+        # the note, then what was signed over by task — at the one phone width
+        # every post now reads at
+        blocks: list[Block] = []
+        if signature.note:
+            blocks.append(Text((signature.note,)))
+        header, rows = outcomes_grid(
+            result.dispositions.outcomes, result.progress, width=NARROW
+        )
+        if rows:
+            blocks.append(Table(tuple(plain_table(header, rows)), heading="anomalies"))
         send_post(
             instance,
             Post(
@@ -789,14 +802,7 @@ def _post(workspace: Workspace, result: TendResult, signature: Signature) -> Non
                 glyph=result.verdict.value,
                 workspace=workspace.root.name,
                 title=f"signed off by {signature.by} ({exceptions})",
-                lines=[signature.note] if signature.note else [],
-                # what was signed over, by task, at the width each channel reads
-                table=outcomes_table(
-                    result.dispositions.outcomes, result.progress, width=WIDTH
-                ),
-                narrow=outcomes_table(
-                    result.dispositions.outcomes, result.progress, width=NARROW
-                ),
+                blocks=tuple(blocks),
             ),
             workspace.log,
         )

@@ -11,9 +11,16 @@ Read left to right it is: what state the task is in, which task, how much of it 
 **Widths are computed per render rather than fixed.** Display keys vary from `addition` to a sweep entry with three arguments and a model, and a column padded for the worst case wastes the terminal on every other line.
 """
 
+from typing import TYPE_CHECKING
+
 from .._evalset.observe import TaskState
 from .._util.size import format_bytes
-from .progress import Progress, TaskProgress, fleet_totals, short_keys
+from .progress import Progress, TaskProgress, compact, fleet_totals, short_keys
+
+if TYPE_CHECKING:
+    # `task_table_cells` reads a whole turn; the type it takes can only be named
+    # here at type-check time, since `turn` imports this module to render itself
+    from .turn import TendResult
 
 GLYPH = {
     TaskState.COMPLETE: "✓",
@@ -103,6 +110,75 @@ def score_cell(row: TaskProgress) -> str:
     if row.headline is None:
         return ""
     return f"{row.headline:.2f}"
+
+
+def task_table_cells(
+    result: "TendResult", *, width: int
+) -> tuple[tuple[str, ...], list[tuple[str, ...]]]:
+    """The operator task table's header and plain rows: where each task stands, and nothing a reader would have to ask about.
+
+    **One builder for two surfaces**, so the operator's `status.md` and a notification cannot disagree about what a turn found — only about how the cells are drawn. `status.md` wraps column zero in backticks and lays the rows out as a pipe table; a post fences them as a plain table. Both start here.
+
+    Samples rather than task states, because *how is the run going* is a question about samples. No errored or scanned column: what errored is in the by-task table, and coverage is the agent's to read aloud at signoff. Connections ride in the task cell, `(8/16)`, because they exist only while the task runs. Every column is present or absent for the whole table rather than per row.
+
+    Args:
+        result: The turn that just ran.
+        width: Clip display keys to this many characters, or 0 for whole. The operator's page passes `KEY_WIDTH`; a post passes the narrower phone width.
+
+    Returns:
+        The header and one plain row per task — column zero unadorned, for the caller to decorate in its own dialect — or `((), [])` where the run has no tasks.
+    """
+    rows = result.progress.rows
+    if not rows:
+        return (), []
+    short = short_keys(rows)
+    live = any(row.live for row in rows)
+    queued = any(row.queued for row in rows)
+    budgeted = any(row.budget is not None for row in rows)
+    scored = any(row.headline is not None for row in rows)
+
+    header = ["task", "samples", "done"]
+    if live:
+        header += ["running"]
+    if queued:
+        header += ["queued"]
+    if budgeted:
+        header += ["limit"]
+    if scored:
+        header += ["score"]
+
+    body: list[tuple[str, ...]] = []
+    for row, key in zip(rows, short.keys, strict=True):
+        cells = [
+            named_cell(row, clip(key, width)),
+            f"{row.completed}/{row.total}",
+            f"{round(row.fraction * 100)}%",
+        ]
+        if live:
+            cells += [str(row.running) if row.running else ""]
+        if queued:
+            cells += [str(row.queued) if row.queued else ""]
+        if budgeted:
+            cells += [budget_cell(row)]
+        if scored:
+            cells += [score_cell(row)]
+        body.append(tuple(cells))
+    return tuple(header), body
+
+
+def named_cell(row: TaskProgress, key: str) -> str:
+    """The task cell: the display key, and its connections in use while it runs — `swe_bench@gpt-5 (8/16)`."""
+    if row.connections is None:
+        return key
+    in_use, limit = row.connections
+    return f"{key} ({in_use}/{limit})" if limit is not None else f"{key} ({in_use})"
+
+
+def budget_cell(row: TaskProgress) -> str:
+    budget = row.budget
+    if budget is None:
+        return ""
+    return f"{compact(budget.used)}/{compact(budget.limit)} {budget.name}"
 
 
 def _line(cells: tuple[str, ...], widths: list[int]) -> str:

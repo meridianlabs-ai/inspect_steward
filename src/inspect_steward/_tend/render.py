@@ -28,17 +28,23 @@ from .items import (
     precedent_line,
     proposal_summary,
     verdict_line,
+    verdict_text,
     waiting_to_land,
 )
 from .progress import (
     LIVE_ONLY,
-    TaskProgress,
-    compact,
     display_keys,
     fleet_totals,
     short_keys,
 )
-from .table import clip, pipe_table, resources_table, score_cell
+from .table import (
+    budget_cell,
+    named_cell,
+    pipe_table,
+    resources_table,
+    score_cell,
+    task_table_cells,
+)
 
 if TYPE_CHECKING:
     # the turn imports this module to write its file, so the type it passes can
@@ -73,13 +79,9 @@ def status_markdown(result: "TendResult", *, header: bool = True) -> str:
     lines += _operator(result)
     lines += _outcomes(result)
     lines += _resources(result)
-    if result.log_dir is not None:
-        # in full rather than shortened, because the audience for this line is
-        # somebody about to paste it into `samples_df` or `inspect view` -- and
-        # because it is frequently not under the workspace at all, which is the
-        # case that made it worth a line (`TendResult.log_dir`). Last, because
-        # it is the one line that never changes
-        lines += [f"**Logs** `{result.log_dir}`", ""]
+    # last, because it is the one line that never changes
+    if (field := log_field(result)) is not None:
+        lines += [f"**{field[0]}** {field[1]}", ""]
     return "\n".join(lines)
 
 
@@ -133,8 +135,16 @@ def status_headline(result: "TendResult") -> str:
 
     `⚠️ 1 needs an operator · tended 4m ago · agent: 4 open items, collected 12m ago`. The verdict counts the operator's own items, and the agent's queue is a count on the right — what an operator wants to know about the agent is that it is working and how long since it looked, not what it is working on. Shared by the terminal, so the two cannot open differently.
     """
+    return f"{result.verdict.value} {status_headline_text(result)}"
+
+
+def status_headline_text(result: "TendResult") -> str:
+    """The headline without its leading glyph — the verdict text and the two ages.
+
+    What a notification's title needs: a post carries the glyph as its own field, in front of the workspace name rather than the sentence (`_notify.post.Post`), so spelling it here too would put it twice. Everything else is the operator's first line verbatim, which is what keeps a post's title and `status.md`'s opening the same words.
+    """
     theirs = [item for item in result.items if item.owner is Owner.OPERATOR]
-    parts = [verdict_line(result.verdict, theirs), *_tended(result), _agent(result)]
+    parts = [verdict_text(result.verdict, theirs), *_tended(result), _agent(result)]
     return " · ".join(parts) + _qualified(result)
 
 
@@ -189,71 +199,46 @@ def _signature(result: "TendResult") -> list[str]:
 
     On the page rather than only in the journal, because the run never tends again after this turn: the snapshot a remote reader has is the last one written, and *signed off* without a name is a state, not a record.
     """
+    field = signature_field(result)
+    if field is None:
+        return []
+    return [f"**{field[0]}** {field[1]}", ""]
+
+
+def signature_field(result: "TendResult") -> tuple[str, str] | None:
+    """The signature as a labelled value, or `None` while none stands.
+
+    Shared with the notification so the page and a post name a signature the same way. The label is `Signed off`; the value is who, when, and their note.
+    """
     signature = result.signature
     if signature is None or not result.signed:
-        return []
+        return None
     note = f" — {signature.note}" if signature.note else ""
-    return [f"**Signed off** by {signature.by} at `{signature.ts}`{note}", ""]
+    return "Signed off", f"by {signature.by} at `{signature.ts}`{note}"
+
+
+def log_field(result: "TendResult") -> tuple[str, str] | None:
+    """Where this run's logs are, as a labelled value, or `None` where the turn recorded no directory.
+
+    In full rather than shortened, because the audience is somebody about to paste it into `samples_df` or `inspect view` — and it is frequently not under the workspace at all, which is the case that made it worth a line (`TendResult.log_dir`). Shared with the notification.
+    """
+    if result.log_dir is None:
+        return None
+    return "Logs", f"`{result.log_dir}`"
 
 
 def _tasks(result: "TendResult") -> list[str]:
     """The operator's task table: where each task stands, and nothing it would have to ask about.
 
-    Samples rather than task states, because *how is the run going* is a question about samples. No errored or scanned column: what errored is in the by-task table below, and coverage is the agent's to read aloud at signoff. Connections ride in the task cell, `(8/16)`, because they exist only while the task runs and a column for them is empty for most of a sweep. Every column is present or absent for the whole table rather than per row.
+    The cells come from `task_table_cells`, shared with the notification so the page and a post cannot disagree about what a turn found. Here they are wrapped in backticks and laid out as a pipe table; a post fences the same cells as a plain table (`_tend.notify._page`).
 
     The key is clipped to `KEY_WIDTH` and the agent's table (`_progress`) is not: this one is read rendered, where a pipe table wraps its cells, and that one is read as text, where its keys are what the agent types back to `steward rule`.
     """
-    rows = result.progress.rows
+    header, rows = task_table_cells(result, width=KEY_WIDTH)
     if not rows:
         return []
-    short = short_keys(rows)
-    live = any(row.live for row in rows)
-    queued = any(row.queued for row in rows)
-    budgeted = any(row.budget is not None for row in rows)
-    scored = any(row.headline is not None for row in rows)
-
-    header = ["task", "samples", "done"]
-    if live:
-        header += ["running"]
-    if queued:
-        header += ["queued"]
-    if budgeted:
-        header += ["limit"]
-    if scored:
-        header += ["score"]
-    body: list[tuple[str, ...]] = []
-    for row, key in zip(rows, short.keys, strict=True):
-        cells = [
-            f"`{_named(row, clip(key, KEY_WIDTH))}`",
-            f"{row.completed}/{row.total}",
-            f"{round(row.fraction * 100)}%",
-        ]
-        if live:
-            cells += [str(row.running) if row.running else ""]
-        if queued:
-            cells += [str(row.queued) if row.queued else ""]
-        if budgeted:
-            cells += [_budget_cell(row)]
-        if scored:
-            cells += [score_cell(row)]
-        body.append(tuple(cells))
-    lines = pipe_table(tuple(header), body)
-    return lines + [""]
-
-
-def _named(row: TaskProgress, key: str) -> str:
-    """The task cell: the display key, and its connections in use while it runs — `swe_bench@gpt-5 (8/16)`."""
-    if row.connections is None:
-        return key
-    in_use, limit = row.connections
-    return f"{key} ({in_use}/{limit})" if limit is not None else f"{key} ({in_use})"
-
-
-def _budget_cell(row: TaskProgress) -> str:
-    budget = row.budget
-    if budget is None:
-        return ""
-    return f"{compact(budget.used)}/{compact(budget.limit)} {budget.name}"
+    backticked = [(f"`{row[0]}`", *row[1:]) for row in rows]
+    return pipe_table(header, backticked) + [""]
 
 
 def _operator(result: "TendResult") -> list[str]:
@@ -275,7 +260,7 @@ def _outcomes(result: "TendResult") -> list[str]:
     table = outcomes_block(
         result.dispositions.outcomes, result.progress, width=KEY_WIDTH, model=False
     )
-    note = _rerunning(result.anomalies)
+    note = rerunning_note(result.anomalies)
     if not table and not note:
         return []
     body = list(table)
@@ -285,7 +270,7 @@ def _outcomes(result: "TendResult") -> list[str]:
     return ["### anomalies", "", *body, ""]
 
 
-def _rerunning(anomalies: Anomalies) -> list[str]:
+def rerunning_note(anomalies: Anomalies) -> list[str]:
     """A one-line note that N windows are re-running, or nothing when none are.
 
     A hole filling itself rather than a gap to act on, so a reader sees it is in hand. Counts the RULED windows `anomalies_line` calls *awaiting a re-run*, in the same words, so the operator's page and the terminal cannot disagree about how many.
@@ -431,7 +416,7 @@ def _progress(result: "TendResult") -> list[str]:
     body: list[tuple[str, ...]] = []
     for row, key in zip(rows, short.keys, strict=True):
         cells = [
-            f"`{_named(row, key)}`",
+            f"`{named_cell(row, key)}`",
             f"{row.completed}/{row.total}",
             f"{round(row.fraction * 100)}%",
         ]
@@ -448,7 +433,7 @@ def _progress(result: "TendResult") -> list[str]:
         if scanned:
             cells += [_scanned_cell(row.scanned)]
         if budgeted:
-            cells += [_budget_cell(row)]
+            cells += [budget_cell(row)]
         if scored:
             cells += [score_cell(row)]
         body.append(tuple(cells))

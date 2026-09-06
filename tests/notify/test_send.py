@@ -14,9 +14,11 @@ from typing import Any
 import apprise
 import pytest
 from inspect_steward._notify import (
+    Bullets,
     Dialect,
     Kind,
     Post,
+    Table,
     by_dialect,
     dialect_of,
     send_post,
@@ -27,12 +29,15 @@ SLACK = "slack://xoxb-1234567890-1234567890-abcdefghij/#general"
 MAIL = "mailtos://user:pass@gmail.com"
 JSON = "json://localhost/steward"
 
+TABLE = ("task      samples  done", "addition      4/4  100%")
+
 POST = Post(
     kind=Kind.PROGRESS,
     title="✅ nothing needs you",
-    lines=["finished addition@mockllm/model"],
-    table=["✓ addition@mockllm/model  4/4  100%"],
-    narrow=["✓ addition  4/4  100%"],
+    blocks=(
+        Bullets(("finished addition@mockllm/model",)),
+        Table(TABLE),
+    ),
 )
 
 
@@ -99,9 +104,9 @@ def test_targets_that_disagree_are_partitioned_rather_than_reduced(
     # the title went as a title, and Slack renders that itself
     assert "nothing needs you" not in sent.bodies["NotifySlack"]
     assert sent.bodies["NotifySlack"].startswith("• finished addition@mockllm/model")
-    # the narrowing is the table's, not the whole post's: a phone side-scrolls a
-    # monospace block and reads a bullet fine
-    assert "```\n✓ addition  4/4  100%\n```" in sent.bodies["NotifySlack"]
+    # the table rides in a fence, the one rich construct Slack renders, and at
+    # the one phone width every dialect gets
+    assert "```\n" + "\n".join(TABLE) + "\n```" in sent.bodies["NotifySlack"]
     assert sent.bodies["NotifyEmail"].startswith("<pre>")
     assert "```" not in sent.bodies["NotifyJSON"]
 
