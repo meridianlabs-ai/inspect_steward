@@ -1222,7 +1222,7 @@ def _turn(
         # but the record survives, so the window is continuous across a pause
         # rather than the first turn after a resume measuring against a
         # baseline from before it
-        plan = replace(plan, moves=[], proposals=[], lines=[], alert=None)
+        plan = replace(plan, moves=[], proposals=[], lines=[])
 
     # the dispositions fold once, for the table, the gate and the caveats: the
     # marks not yet written are read off the applied fold, and the caveat that

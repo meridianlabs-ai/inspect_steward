@@ -139,15 +139,13 @@ def status_headline(result: "TendResult") -> str:
 
 
 def _pulse(result: "TendResult") -> str:
-    """The page's opening block: the verdict headline, the fleet total, and the tuning alert while one stands — the run's pulse in three lines at most.
+    """The page's opening block: the verdict headline and the fleet total — the run's pulse in two lines at most.
 
-    Joined with hard line breaks rather than blank lines so the three read as one tight block at single line-height, not three paragraphs each with its own vertical margin. The fleet total is absent for a single-task run (`fleet_totals`) and the tuning line only while the ramp is held or throttled (`TuningPlan.alert`), so a settled, unheld run is just the headline.
+    Joined with a hard line break rather than a blank line so the two read as one tight block at single line-height, not two paragraphs each with its own vertical margin. The fleet total is absent for a single-task run (`fleet_totals`), so a settled or single-task run is just the headline.
     """
     block = [status_headline(result)]
     if (fleet := fleet_totals(result.progress)) is not None:
         block.append(fleet)
-    if result.tuning.alert is not None:
-        block.append(f"**Tuning** {result.tuning.alert}")
     return "  \n".join(block)
 
 
