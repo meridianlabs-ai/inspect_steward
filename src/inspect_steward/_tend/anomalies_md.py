@@ -473,29 +473,38 @@ def outcomes_grid(
 
 
 def outcomes_table(
-    outcomes: Mapping[str, Mapping[str, int]], progress: Progress, *, width: int = 0
+    outcomes: Mapping[str, Mapping[str, int]],
+    progress: Progress,
+    *,
+    width: int = 0,
+    model: bool = True,
 ) -> list[str]:
     """`outcomes_grid` as a padded plain table, then the model every row shares named once beneath — or nothing at all where every sample took the normal course.
 
-    Plain rather than a markdown table because every reader of it is monospaced: a post fences it, the terminal prints it, and a markdown document wraps it in a fence through `outcomes_block`. One layout for all three, so a phone and a terminal never disagree about a cell.
+    Plain rather than a markdown table because every reader of it is monospaced: a post fences it, the terminal prints it, and a markdown document wraps it in a fence through `outcomes_block`. One layout for all three, so a phone and a terminal never disagree about a cell. `model` names the shared model beneath the table; a caller that already names it above passes `False`, since a single-model run needs it said once at most.
     """
     header, rows = outcomes_grid(outcomes, progress, width=width)
     if not rows:
         return []
-    return plain_table(header, rows) + _shared_model(progress)
+    return plain_table(header, rows) + (_shared_model(progress) if model else [])
 
 
 def outcomes_block(
-    outcomes: Mapping[str, Mapping[str, int]], progress: Progress, *, width: int = 0
+    outcomes: Mapping[str, Mapping[str, int]],
+    progress: Progress,
+    *,
+    width: int = 0,
+    model: bool = True,
 ) -> list[str]:
     """`outcomes_table` for a markdown document: the rows inside a code fence, the shared model named beneath it.
 
-    Fenced rather than ruled for the reason the resources table is: the by-task counts are a glance, and a ruled table gives them the weight of the task table above. A fence renders lighter, survives an editor unchanged, and lands in Slack as a preformatted block when the page is relayed. `width` clips the display keys as every task column does, for a page whose task table is clipped too.
+    Fenced rather than ruled for the reason the resources table is: the by-task counts are a glance, and a ruled table gives them the weight of the task table above. A fence renders lighter, survives an editor unchanged, and lands in Slack as a preformatted block when the page is relayed. `width` clips the display keys as every task column does, for a page whose task table is clipped too. `model` is passed through to `outcomes_table`'s shared-model line.
     """
     header, rows = outcomes_grid(outcomes, progress, width=width)
     if not rows:
         return []
-    return ["```", *plain_table(header, rows), "```"] + _shared_model(progress)
+    fenced = ["```", *plain_table(header, rows), "```"]
+    return fenced + (_shared_model(progress) if model else [])
 
 
 def _shared_model(progress: Progress) -> list[str]:

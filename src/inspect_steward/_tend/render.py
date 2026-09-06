@@ -238,8 +238,6 @@ def _tasks(result: "TendResult") -> list[str]:
             cells += [score_cell(row, digits=0)]
         body.append(tuple(cells))
     lines = pipe_table(tuple(header), body)
-    if short.model is not None:
-        lines += ["", f"Every task runs `{short.model}`."]
     return lines + [""]
 
 
@@ -271,8 +269,11 @@ def _operator(result: "TendResult") -> list[str]:
 
 def _outcomes(result: "TendResult") -> list[str]:
     """By task, the samples that did not take the normal course — the table `anomalies.md` opens on, as a fenced plain table with its keys clipped like the task table's — then a note of what is re-running. Absent where every sample took the normal course and nothing is re-running."""
+    # `model=False`: the operator names the model themselves when a run has one,
+    # and the task table above no longer restates it either, so the page says it
+    # nowhere rather than twice
     table = outcomes_block(
-        result.dispositions.outcomes, result.progress, width=KEY_WIDTH
+        result.dispositions.outcomes, result.progress, width=KEY_WIDTH, model=False
     )
     note = _rerunning(result.anomalies)
     if not table and not note:
