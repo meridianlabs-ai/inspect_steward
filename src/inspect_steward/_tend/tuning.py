@@ -82,6 +82,11 @@ class TaskSignals:
     http_retries: int
     """HTTP retries so far this attempt, cumulative and live-only."""
 
+    samples: int = 0
+    """How many samples this task runs in all, `0` where the worker has not reported a count yet.
+
+    The ceiling above which sample concurrency buys nothing: a task of twenty-five samples runs every one of them at a setpoint of twenty-five, and a limiter raised past that can never saturate, so a proposal to climb further is offering capacity no sample exists to use. `0` reads as *unknown*, which leaves the ramp uncapped — the same posture every other missing reading takes."""
+
     scale_downs: tuple[float, ...] = ()
     """When this task's controllers cut, as unix timestamps."""
 
@@ -115,6 +120,7 @@ def signals(key: str, live: LiveTask) -> TaskSignals:
         in_use=in_use,
         errored=live.samples.errored,
         http_retries=live.http_retries,
+        samples=live.samples.total,
         scale_downs=live.scale_downs,
         sandboxes=live.sandboxes,
         connections_ceiling=live.connections_ceiling,
@@ -287,7 +293,7 @@ def plan_tuning(
 
         if ramp is None:
             # pinned mode: the signal still runs, the authority does not
-            if blocked is None and not held:
+            if blocked is None and not held and not _at_every_sample(task, task.level):
                 capacity.add(task.identifier)
                 if task.identifier in baseline.capacity and task.level is not None:
                     proposals.append(
@@ -301,6 +307,14 @@ def plan_tuning(
             continue
 
         floor, ceiling = ramp
+        # a limiter cannot admit more samples than the task has, so a setpoint
+        # past the task's own sample count never saturates and buys nothing.
+        # That count is the effective ceiling wherever it binds below the
+        # authorized one -- and a proposal to raise the envelope is real capacity
+        # declined only when the envelope, not the sample count, is what caps the
+        # run. `0` samples is a reading not yet taken, which leaves both alone
+        reach = min(ceiling, task.samples) if task.samples else ceiling
+        sample_bound = bool(task.samples) and task.samples <= ceiling
         if storm and task.level is not None and task.level > floor:
             to = max(floor, task.level - RAMP_STEP)
             moves.append(
@@ -387,7 +401,16 @@ def plan_tuning(
             )
             continue
 
-        if task.level is not None and task.level >= ceiling:
+        if task.level is not None and task.level >= reach:
+            if sample_bound:
+                # the sample count binds, not the ramp: every sample the task
+                # has is already running, and no envelope the operator could
+                # raise would admit one that does not exist -- so this is not
+                # capacity being declined, and there is nothing to propose
+                lines.append(
+                    f"{task.key}: {task.level} — running all {task.samples} samples"
+                )
+                continue
             if blocked is None and not held:
                 capacity.add(task.identifier)
                 if task.identifier in baseline.capacity:
@@ -416,7 +439,10 @@ def plan_tuning(
                 f"{task.key}: {task.level} — stepped recently, letting it settle"
             )
             continue
-        to = min(ceiling, task.level + RAMP_STEP)
+        # `reach`, not `ceiling`: a step past the task's sample count climbs to
+        # a setpoint that can never saturate, then stalls there next turn
+        # reporting itself unsaturated -- a wasted move the reader has to read
+        to = min(reach, task.level + RAMP_STEP)
         if task.sandboxes is not None and sandboxed is not None:
             # what this step actually costs, which is short of a whole one for
             # a task finishing its climb -- charging the full step there would
@@ -523,6 +549,14 @@ def _window(
     if utilization >= CPU_GATE:
         return f"CPU at {utilization:.0%} of a core"
     return None
+
+
+def _at_every_sample(task: TaskSignals, level: int | None) -> bool:
+    """Whether the setpoint already admits every sample the task has.
+
+    The count that refuses a proposal offering concurrency no sample exists to use: a task of twenty-five samples, pinned or ramped at twenty-five, runs all of them at once and a limiter raised past that never saturates. `0` samples is a reading not yet taken, read here as *unknown* rather than *every sample*, so an uncounted task keeps whatever proposal its window earned.
+    """
+    return level is not None and bool(task.samples) and level >= task.samples
 
 
 def _ceilings(

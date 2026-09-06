@@ -63,7 +63,7 @@ def test_a_saturated_worker_with_no_pushback_earns_a_step(
     assert isinstance(started, Launch), f"refused by {started}"
     assert started.turn is not None and len(started.turn.spawned) == 1
 
-    # a state to wait for rather than a delay to outlast: fifty-five samples
+    # a state to wait for rather than a delay to outlast: seventy-five samples
     # park, so the limiter sits at 50/50 with a queue -- demand, held steady
     def saturated() -> bool:
         row = next(iter(turn(workspace).progress.rows), None)

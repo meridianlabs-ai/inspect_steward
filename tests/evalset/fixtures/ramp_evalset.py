@@ -1,8 +1,8 @@
 """A definition whose samples all park, which is what saturates the sample limiter.
 
-The ramp's up-gate requires demand — `in_use == limit` — and demand needs samples that occupy their slots rather than finishing. `mockllm` finishes instantly, so the hold is borrowed from `approval_evalset.py`: every sample calls a tool under `approver: human` and waits, indefinitely, holding its slot. Fifty-five of them against the default floor of fifty is a saturated limiter with a queue, no pushback, no errors, and an idle CPU — the exact clean window a step is bought with.
+The ramp's up-gate requires demand — `in_use == limit` — and demand needs samples that occupy their slots rather than finishing. `mockllm` finishes instantly, so the hold is borrowed from `approval_evalset.py`: every sample calls a tool under `approver: human` and waits, indefinitely, holding its slot. Seventy-five of them against the default floor of fifty is a saturated limiter with a queue, no pushback, no errors, and an idle CPU — the exact clean window a step is bought with. The count clears the floor by more than one step on purpose: sample concurrency is capped at the number of samples a task has, so a fixture at fifty-five would cap the first step at fifty-five rather than let it climb a whole twenty.
 
-The first fifty-five outputs are tool calls because only first generations happen while everything parks; the completions behind them are unreached, and exist so a sample would finish rather than error if an approval were ever answered.
+The first seventy-five outputs are tool calls because only first generations happen while everything parks; the completions behind them are unreached, and exist so a sample would finish rather than error if an approval were ever answered.
 """
 
 from inspect_ai import Task, eval_set, task
@@ -14,7 +14,7 @@ from inspect_ai.tool import Tool, tool
 
 MODEL = "mockllm/model"
 
-SAMPLES = 55
+SAMPLES = 75
 
 
 @tool

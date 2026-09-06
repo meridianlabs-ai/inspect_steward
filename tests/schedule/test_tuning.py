@@ -60,6 +60,7 @@ def sig(
     pid: int = 1,
     errored: int = 0,
     retries: int = 0,
+    samples: int = 0,
     scale_downs: tuple[float, ...] = (),
     sandboxes: tuple[int, int] | None = None,
     ceiling: int | None = None,
@@ -75,6 +76,7 @@ def sig(
         in_use=in_use,
         errored=errored,
         http_retries=retries,
+        samples=samples,
         scale_downs=scale_downs,
         sandboxes=sandboxes,
         connections_ceiling=ceiling,
@@ -562,6 +564,46 @@ def test_a_ramp_at_its_ceiling_proposes_raising_the_envelope() -> None:
     assert first.proposals == []
     (proposal,) = second.proposals
     assert not proposal.pinned and proposal.ceiling == 200
+
+
+def test_a_ramp_holding_every_sample_the_task_has_does_not_propose() -> None:
+    # the sample count, not the envelope, is what caps the run: a twenty-five
+    # sample task at a ceiling of twenty-five runs all of them at once, and a
+    # ceiling raised past that admits no sample that does not exist
+    at_top = sig(level=25, in_use=25, samples=25)
+
+    result = plan(at_top, ramp=(20, 25), baseline=base(level=25, capacity=("t1",)))
+
+    assert result.proposals == []
+    assert result.record["capacity"] == []
+    assert any("running all 25 samples" in line for line in result.lines)
+
+
+def test_more_samples_than_the_ceiling_still_proposes() -> None:
+    # the envelope genuinely binds when the task has more samples than it admits
+    at_top = sig(level=200, in_use=200, samples=500)
+
+    result = plan(at_top, baseline=base(level=200, capacity=("t1",)))
+
+    (proposal,) = result.proposals
+    assert not proposal.pinned and proposal.ceiling == 200
+
+
+def test_a_step_never_climbs_past_the_sample_count() -> None:
+    # a step to 40 would sit unsaturated at once, since only thirty samples
+    # exist to fill it; the climb stops where the samples do
+    (move,) = steps(plan(sig(level=20, in_use=20, samples=30), baseline=base(level=20)))
+
+    assert move.to == 30
+
+
+def test_a_pinned_setpoint_holding_every_sample_does_not_propose() -> None:
+    at_top = sig(level=25, in_use=25, samples=25)
+
+    result = plan(at_top, ramp=None, baseline=base(level=25, capacity=("t1",)))
+
+    assert result.proposals == []
+    assert result.record["capacity"] == []
 
 
 def test_narrowing_the_range_brings_a_running_task_back_inside_it() -> None:
