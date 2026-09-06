@@ -79,6 +79,14 @@ A scoped alias of an `INSPECT_EVAL_*` variable, resolved by `overrides.py` and n
 SUPERSEDED = "_steward.md"
 """The name this file used to have, refused by name so a rename is reported rather than silently ignoring a workspace's standing rules."""
 
+LOG_DIR = "INSPECT_LOG_DIR"
+"""Inspect's own log directory variable, read as the lowest-precedence `log_root`.
+
+Inspect's variable is a *default* — a value `eval()` falls back to and any explicit `log_dir=` argument displaces — and a root is a default in exactly the same sense, so this reads as one more spelling of the root, below `--log-root` and `STEWARD_LOG_ROOT` and the file's `log_root`. A machine already running inspect has set this, and adopting it means a Steward run on that machine lands where the machine keeps logs with nothing extra to configure (`resolve_log_root`).
+
+Adopted as a *root* and never honoured as a directory: the run writes to `<INSPECT_LOG_DIR>/<workspace name>`, one directory per workspace, and that resolved directory is recorded and forced on every worker through the selection — so the variable never becomes the one directory a fleet writes straight into, which is the failure the launch once refused it to avoid (`_launch.launch.run_overrides`).
+"""
+
 _DEFINITION = "your definition's `eval_set()` call"
 
 REFUSED: dict[str, str] = {
@@ -436,7 +444,7 @@ class Directives(BaseModel):
 
     A workspace whose definition names no `log_dir` writes to `<root>/<workspace directory name>` instead of to its own `logs/` — one export, and every workspace on the machine lands in the bucket, each in a directory of its own (`_workspace.layout.resolve_log_dir`).
 
-    **A default, never an override, which is what admits it at all.** `log_dir` is the one inspect word Steward keeps, and Steward refuses every way of overriding a definition's stated one — there is no `--log-dir`, and `INSPECT_LOG_DIR` is refused at launch. This contradicts none of that: a definition that names a directory is untouched, and what the root answers is the case where the definition names none. What it expresses is *where this machine keeps logs*, which no definition can portably say, since a definition knows neither the machine's root nor the workspace's name.
+    **A default, never an override, which is what admits it at all.** `log_dir` is the one inspect word Steward keeps, and Steward refuses every way of *overriding* a definition's stated one — there is no `--log-dir`. This contradicts none of that: a definition that names a directory is untouched, and what the root answers is the case where the definition names none. What it expresses is *where this machine keeps logs*, which no definition can portably say, since a definition knows neither the machine's root nor the workspace's name. `INSPECT_LOG_DIR` is the same default in inspect's own vocabulary, so it is read here as the lowest-precedence root rather than refused (`resolve_log_root`).
 
     `auto` is refused rather than accepted, unlike `log_store`: there is no default root to name, and *unset* already spells "the workspace's own `logs/`".
     """
@@ -780,25 +788,41 @@ def declared_scan_model(environ: Mapping[str, str]) -> str | bool | None:
 
 
 def resolve_log_root(
-    directives: Directives, *, log_root: str | bool | None = None
+    directives: Directives,
+    *,
+    log_root: str | bool | None = None,
+    environ: Mapping[str, str] | None = None,
 ) -> str | None:
     """Resolve the root this machine keeps eval logs under.
 
-    The same chain as every other setting — the command line, then `_steward.yaml` or its variable, then none — and none is the default, which is what leaves a workspace that has never heard of a root writing to its own `logs/`.
+    The same chain as every other setting, one rung longer — the command line, then `_steward.yaml` or its `STEWARD_LOG_ROOT` variable, then inspect's own `INSPECT_LOG_DIR`, then none — and none is the default, which is what leaves a workspace that has never heard of a root writing to its own `logs/`.
 
     **The variable beating the file is the shipped ordering, and it is the right one here too.** `log_root: false` in a committed `_steward.yaml` does not survive a machine that exports `STEWARD_LOG_ROOT`, exactly as `log_store: false` does not: the file is the project's preference and the variable is the machine's, and a machine that has said where its logs go is answering a question the project cannot. `--no-log-root` is how one launch overrules both.
+
+    **`INSPECT_LOG_DIR` is the last rung and the weakest, adopted rather than refused.** It sits below every Steward spelling because it is the broadest — inspect's own variable, said to every `inspect eval` on the machine — and above nothing, because it is still the machine speaking. It is read only where the Steward spellings said nothing: a stated root wins as a value, and an explicit decline (`--no-log-root`, or `log_root: false`) wins as an assertion, because a default never displaces one. What admits it at all is that a root *is* a default in inspect's own sense — `<root>/<workspace name>`, never the directory itself — so it carries none of the hazard the launch once refused it for (`LOG_DIR`, `_launch.launch.run_overrides`).
 
     Resolved at launch and nowhere else. The answer goes into the committed manifest as a *directory* rather than as a root, so nothing downstream reads this again (`Manifest.log_dir`).
 
     Args:
         directives: What the workspace's `_steward.yaml` and environment said.
         log_root: A location from the command line, `False` to use none, or `None`.
+        environ: The environment to read `INSPECT_LOG_DIR` from, defaulting to the process's. Explicit so a launch resolves it from the shell it was typed in and a test can hand it one.
 
     Returns:
         A location, or `None` for none. Unresolved — `resolve_log_dir` is what turns it into a directory, and the directory is created by the run that writes into it.
     """
     resolved = log_root if log_root is not None else directives.log_root
-    return resolved if isinstance(resolved, str) else None
+    if isinstance(resolved, str):
+        return resolved
+    if resolved is False:
+        # an explicit decline is an assertion -- `--no-log-root`, or
+        # `log_root: false` -- and a default never displaces one, so this run
+        # stays in the workspace's own logs/ whatever the machine exports
+        return None
+    # nothing said at any Steward spelling: inspect's own variable is the
+    # machine's last word, read as a root rather than honoured as a directory
+    inspect = ((os.environ if environ is None else environ).get(LOG_DIR) or "").strip()
+    return inspect or None
 
 
 def resolve_log_store(

@@ -357,7 +357,7 @@ def resolve_log_dir(
 ) -> str:
     """Where this run's logs go: the definition's own directory, a machine's root, or the workspace's.
 
-    Three rungs, in order, and **the root supplies a default rather than modifying an answer**. A definition that names a `log_dir` is the single source of truth for where its results go, so the root does not rebase it, prefix it, or otherwise touch it — silence is the only thing the root answers. That is what keeps this consistent with the rule one level out: Steward refuses every *override* of a stated `log_dir` (`INSPECT_LOG_DIR` among them, at launch) and supplies a *default* where the definition states none.
+    Three rungs, in order, and **the root supplies a default rather than modifying an answer**. A definition that names a `log_dir` is the single source of truth for where its results go, so the root does not rebase it, prefix it, or otherwise touch it — silence is the only thing the root answers. That is what keeps this consistent with the rule one level out: Steward refuses every *override* of a stated `log_dir` and supplies a *default* where the definition states none — and `INSPECT_LOG_DIR`, being inspect's own default rather than an override, is read as the lowest-precedence root here (`directives.resolve_log_root`) rather than refused.
 
     Called once, by `launch`, whose answer is committed to the manifest and read back by every later tend. Deriving it per turn would mean a scheduled tend — which inherits almost no environment — resolving a different directory from the one its fleet is writing to (`Manifest.log_dir`).
 

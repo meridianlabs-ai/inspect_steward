@@ -8,7 +8,7 @@
 
 **Steward's half is the `STEWARD_*` alias, and the difference is scope rather than taste.** Inspect's variable is broad by construction: exported in a shell it reaches every `inspect eval` there, and written into a workspace `.env` it reaches every direct inspect run in that directory. `STEWARD_MAX_SAMPLES` is the same knob said quietly — narrowed to this tool — which is the narrowness the removed flag had and the variable alone would lose. It wins where both are set, because a narrower instruction is the more specific one. Aliases go through Steward's own parser, the one `_steward.yaml` and every flag use, so a value refused in one Steward spelling is refused in all of them.
 
-**`log_dir` is Steward's alone.** It has no alias and no flag, because a run's log directory is where the fleet is watched from — a worker writing somewhere else is a worker whose logs no tend reads. `INSPECT_LOG_DIR` is refused at launch rather than ignored, for the reason every unread setting is; upstream declines to read it too, for its own version of the same reason.
+**`log_dir` is Steward's alone.** It has no alias and no flag, because a run's log directory is where the fleet is watched from — a worker writing somewhere else is a worker whose logs no tend reads. `INSPECT_LOG_DIR` is not read here at all: upstream declines to read it into an overrides document, and so does Steward. Where it *does* have a say is one vocabulary over, as the lowest-precedence `log_root` (`directives.resolve_log_root`) — a default that names a machine's root rather than an override that moves a stated directory.
 """
 
 from collections.abc import Mapping
@@ -28,13 +28,7 @@ from inspect_ai._eval.eval_set_overrides import (
 from inspect_ai._util.error import PrerequisiteError
 from pydantic import ValidationError
 
-from .directives import PREFIX, STEWARDS, DirectivesError, explain
-
-LOG_DIR = "INSPECT_LOG_DIR"
-"""Inspect's log directory variable, refused rather than read.
-
-Every other variable is honoured because Steward is standing in for the CLI that documents it. This one is not, because Steward has already answered the question it asks: the run's logs go where the fleet is watched from, and a variable that quietly moved them would leave every tend reading an empty directory and respawning work that is running.
-"""
+from .directives import LOG_DIR, PREFIX, STEWARDS, DirectivesError, explain
 
 ALIASED: tuple[str, ...] = tuple(
     field for field in EvalSetOverrides.model_fields if field not in STEWARDS

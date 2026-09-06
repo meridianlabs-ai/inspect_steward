@@ -230,24 +230,48 @@ def test_a_meaningless_override_is_refused_at_the_door(
     assert capture.calls == []
 
 
-def test_the_log_directory_is_not_inspects_to_move(
-    workspace: Workspace, capture: FakeCapture, monkeypatch: pytest.MonkeyPatch
+def test_inspects_own_variable_is_adopted_as_the_weakest_root(
+    workspace: Workspace,
+    capture: FakeCapture,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
 ) -> None:
-    """`INSPECT_LOG_DIR` is refused rather than honoured or ignored.
+    """`INSPECT_LOG_DIR` names a root rather than a directory, and is not refused.
 
-    Honouring it would put a worker's logs where no tend reads, so every task
-    would land and then read as never started; ignoring it would do the right
-    thing while telling the operator nothing about why their variable did not
-    take. Refused before the capture, so a Hawk config does not spend five
-    minutes resolving packages on the way to the refusal.
+    A machine already running inspect has set it, so a Steward run there lands
+    under the machine's log root with nothing extra configured — as its own
+    directory, `<root>/<workspace name>`, never the shared directory a fleet
+    would write straight into. A relocation from the committed run's logs, so
+    `--accept-archive` is what lets it converge.
     """
-    monkeypatch.setenv("INSPECT_LOG_DIR", "s3://somewhere/else")
+    root = tmp_path / "inspect-logs"
+    monkeypatch.setenv("INSPECT_LOG_DIR", str(root))
 
-    result = run("--no-timer")
+    result = run("--no-timer", "--accept-archive")
 
-    assert result.exit_code == 1
-    assert "INSPECT_LOG_DIR" in result.output
-    assert capture.calls == []
+    assert result.exit_code == 0, result.output
+    assert capture.calls != []
+    assert committed(workspace).log_dir == str(root / workspace.root.name)
+
+
+def test_an_explicit_root_beats_inspects_own_variable(
+    workspace: Workspace,
+    capture: FakeCapture,
+    monkeypatch: pytest.MonkeyPatch,
+    tmp_path: Path,
+) -> None:
+    """`--log-root` is a Steward spelling, and every Steward spelling is narrower.
+
+    `INSPECT_LOG_DIR` is inspect's broadest word; a root named on this launch is
+    the most specific one there is, so it wins.
+    """
+    monkeypatch.setenv("INSPECT_LOG_DIR", str(tmp_path / "inspect-logs"))
+    root = tmp_path / "runs"
+
+    result = run("--no-timer", "--log-root", str(root), "--accept-archive")
+
+    assert result.exit_code == 0, result.output
+    assert committed(workspace).log_dir == str(root / workspace.root.name)
 
 
 def test_the_passthrough_flags_are_generated_and_belong_to_launch_alone() -> None:

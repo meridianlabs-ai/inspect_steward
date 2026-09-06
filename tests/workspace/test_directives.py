@@ -506,7 +506,9 @@ def test_the_log_root_resolves_most_specific_first(
 ) -> None:
     directives = read_directives(written(tmp_path, text))
 
-    assert resolve_log_root(directives, log_root=cli) == expected
+    # an empty environment, so a machine that exports INSPECT_LOG_DIR does not
+    # turn "nobody named one" into a root -- that rung has its own cases below
+    assert resolve_log_root(directives, log_root=cli, environ={}) == expected
 
 
 def test_the_machine_beats_the_project_on_where_logs_go(
@@ -520,6 +522,50 @@ def test_the_machine_beats_the_project_on_where_logs_go(
 
     assert resolve_log_root(directives) == "/data/runs"
     assert resolve_log_root(directives, log_root=False) is None
+
+
+# inspect's own variable is the last rung: read as a root where every Steward
+# spelling said nothing, and ignored where any of them did
+INSPECT_ROOT: list[tuple[str, str | bool | None, str, str | None]] = [
+    ("nothing else said", None, "", "/inspect/logs"),
+    ("the workspace named one", None, "log_root: /data/runs\n", "/data/runs"),
+    ("the command line named one", "/mine", "", "/mine"),
+    ("the workspace declined", None, "log_root: false\n", None),
+    ("the launch declined", False, "", None),
+]
+
+
+@pytest.mark.parametrize(
+    ("cli", "text", "expected"),
+    [(cli, text, expected) for _, cli, text, expected in INSPECT_ROOT],
+    ids=[case for case, _, _, _ in INSPECT_ROOT],
+)
+def test_inspects_own_variable_is_the_last_rung(
+    cli: str | bool | None, text: str, expected: str | None, tmp_path: Path
+) -> None:
+    # adopted as a root, never refused -- but only where the silence reaches it,
+    # since a stated root wins as a value and a decline wins as an assertion
+    directives = read_directives(written(tmp_path, text))
+
+    resolved = resolve_log_root(
+        directives, log_root=cli, environ={"INSPECT_LOG_DIR": "/inspect/logs"}
+    )
+
+    assert resolved == expected
+
+
+def test_the_steward_variable_beats_inspects_own(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # STEWARD_LOG_ROOT is the narrower word for the same knob, so it wins over
+    # inspect's broad one exactly as it wins over the file
+    monkeypatch.setenv("STEWARD_LOG_ROOT", "/data/runs")
+    directives = read_directives(written(tmp_path, ""))
+
+    assert (
+        resolve_log_root(directives, environ={"INSPECT_LOG_DIR": "/inspect/logs"})
+        == "/data/runs"
+    )
 
 
 # --- the log store ---------------------------------------------------------

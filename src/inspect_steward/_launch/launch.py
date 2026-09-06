@@ -70,7 +70,6 @@ from .._worker import (
 from .._workspace import (
     ACTION,
     LAUNCHED,
-    LOG_DIR,
     Claim,
     DirectivesError,
     Held,
@@ -1035,15 +1034,8 @@ def run_overrides(given: dict[str, Any] | None) -> EvalSetOverrides | None:
 
     **Silence is not the same as nothing.** `None` here means no flag and, once the environment has been read, no variable either — which leaves the committed manifest's overrides in force (`_prior_overrides`). An empty mapping is `--no-overrides`, and displaces both.
 
-    **`INSPECT_LOG_DIR` is refused rather than ignored.** Every other variable here is honoured because Steward is standing in for the CLI that documents it, and this one contradicts the answer Steward has already given: the run's logs go where the fleet is watched from. Honouring it would move a worker's output somewhere no tend reads, so every task would land and then read as never started; ignoring it would do the right thing while telling the operator nothing.
+    **`INSPECT_LOG_DIR` is not read here, and no longer refused either.** It names no overrides field — upstream declines to read it into an overrides document and so does `read_overrides` below — so it passes through this path untouched. Where it has a say is one vocabulary over, as the lowest-precedence `log_root`: the launch resolves it to `<root>/<workspace name>` (`resolve_log_root`), records that directory, and forces it on every worker through the selection, which is what keeps the variable from ever becoming the one directory a fleet writes straight into.
     """
-    if os.environ.get(LOG_DIR, "").strip():
-        raise LaunchError(
-            f"{LOG_DIR} is set, and Steward decides where a run's logs go — the "
-            f"fleet is watched from that directory, so a worker writing "
-            f"elsewhere is a worker no tend can see. Set `log_dir` in your "
-            f"definition instead, and unset {LOG_DIR} for this shell."
-        )
     # an empty mapping is `--no-overrides`, which asks for the definition's own
     # shape -- so it displaces the environment as well as the committed
     # manifest, or it could not do what it says on a machine that exports one

@@ -39,8 +39,9 @@ def test_stewards_own_words_get_no_alias(field: str) -> None:
 
 
 def test_the_log_directory_is_stewards_alone() -> None:
-    # the one whose inspect variable a launch refuses rather than reads: logs
-    # going where the fleet is not watched from is invisible until morning
+    # inspect's own variable names no overrides field, so this document never
+    # reads it -- its say is one vocabulary over, as the weakest `log_root`
+    # (test_directives), not as a directory that moves a stated one
     assert LOG_DIR == "INSPECT_LOG_DIR"
     assert read_overrides({LOG_DIR: "s3://elsewhere"}) is None
 
