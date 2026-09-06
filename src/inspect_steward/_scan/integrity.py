@@ -256,7 +256,7 @@ def _outcome_line(transcript: Transcript) -> str:
 
     **The scorer's own account goes in, not only its verdict.** Asked whether a score can be trusted while shown nothing but the number, the reviewer can do no better than report that the number looks inconsistent with the trajectory and recommend an operator go and read the grader logs — a finding nobody can act on, raised against evidence that was sitting on the same sample. Observed on a SWE-bench-style set: five samples flagged, every explanation ending in *a reviewer should inspect the grader logs*, four of them resolvable from the explanation alone. A test-suite scorer records its required/passed/missing counts here, and that is exactly what separates a task the agent failed from one the grading got wrong.
 
-    **The field is upstream in inspect_scout**, which this project tracks at `main` (`tool.uv.sources`), so it is read as a plain attribute rather than defensively.
+    **The field is upstream in inspect_scout**, which this project requires at 0.5.0 or later, so it is read as a plain attribute rather than defensively.
     """
     parts: list[str] = []
     if transcript.score is not None:

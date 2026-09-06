@@ -19,10 +19,13 @@ classifiers = [
     "Operating System :: MacOS",
 ]
 dependencies = [
-    # floors, not the pin: what actually resolves is `[tool.uv.sources]` below,
-    # and these become the whole story the day that block is deleted.
-    "inspect-ai>=0.3.259",
-    "inspect-scout>=0.4.46",
+    # the released wheels carry what this project needs since 2026-09-04 --
+    # record-only selection scanning, the ambient scan-model default, the
+    # `log_dir` default for `eval_set()`, scout's unique summary tmp names --
+    # so these floors are the whole story; only `inspect-harbor` still resolves
+    # through `[tool.uv.sources]` below, for the reason given there
+    "inspect-ai>=0.3.263",
+    "inspect-scout>=0.5.0",
     "click>=8.0",
     "pyyaml>=6.0",
     # the process table is how Steward finds a worker that has not yet reached
@@ -156,10 +159,6 @@ allow-direct-references = true
 
 [tool.uv]
 managed = true
-# scout's own dependencies pin `inspect-ai @ git+...@main`, which uv reads as
-# a distinct (and thus conflicting) URL requirement even when the source below
-# names the same branch — the override lets the source answer alone
-#
 # openai, for a conflict that has no satisfying resolution: harbor depends on
 # litellm, which caps `openai>=2.20.0,<3.0.0`, while inspect-ai's OpenAI
 # provider gates on `openai>=3.1.0`. Left alone uv resolves it the only way it
@@ -171,28 +170,9 @@ managed = true
 # because nothing on the inspect path calls litellm — harbor's use of it is in
 # its own orchestrators, which Steward's runs never enter. Revisit when litellm
 # widens the cap; the pin can go the day `litellm` accepts openai 3.x.
-override-dependencies = ["inspect-ai", "openai"]
+override-dependencies = ["openai"]
 
-# TEMPORARY: both pinned to main until releases carry what this branch needs —
-# inspect_ai's record-only selection scanning (selection v7 / capture v3, the
-# ambient scan-model default) and inspect_scout's unique summary tmp names
-# (the released wheel's fixed name lets concurrent workers error each other's
-# samples). A launch against an older inspect refuses loudly rather than
-# misbehaving: an unknown selection version fails its gate.
-#
-# **The one-line check that says whether this block can go**, since the
-# features are private and no version number announces them:
-#
-#     python -c "from inspect_ai._eval.task.scan import scan_init_from_spec"
-#
-# against the latest released wheel. Last checked 2026-09-01 — inspect-ai
-# 0.3.261 does not carry it (the branch runs 0.3.262.dev), so the pin stands.
-# When it does: raise the two floors above to that release, delete this block
-# and the `override-dependencies` line that exists only to let it win, relock,
-# and run the suite against the wheels.
 [tool.uv.sources]
-inspect-ai = { git = "https://github.com/UKGovernmentBEIS/inspect_ai", branch = "main" }
-inspect-scout = { git = "https://github.com/meridianlabs-ai/inspect_scout", branch = "main" }
 
 # inspect-harbor from git rather than PyPI, because the registry tasks the
 # runs/ definitions name (cais/swebenchpro, datacurve/deep-swe) reach the

@@ -14,10 +14,7 @@ resolution-markers = [
 ]
 
 [manifest]
-overrides = [
-    { name = "inspect-ai", git = "https://github.com/UKGovernmentBEIS/inspect_ai?branch=main" },
-    { name = "openai" },
-]
+overrides = [{ name = "openai" }]
 
 [[package]]
 name = "agent-client-protocol"
@@ -1821,7 +1818,7 @@ wheels = [
 [[package]]
 name = "inspect-ai"
 version = "0.3.263"
-source = { git = "https://github.com/UKGovernmentBEIS/inspect_ai?branch=main#7aa7343e4a14fa7be07e5a09c7431df5e88c17ee" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "agent-client-protocol" },
     { name = "aioboto3" },
@@ -1863,6 +1860,10 @@ dependencies = [
     { name = "zipfile-zstd", marker = "python_full_version < '3.14'" },
     { name = "zipp" },
     { name = "zstandard" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/92/03/3bd61990e197e6e0a68ebd7f1496d0b80af6c1966eea0e48fcfc1ed3b793/inspect_ai-0.3.263.tar.gz", hash = "sha256:54553ca8bfe711853414b49d962e492a60fd4cac8df935be47287a4b719f92b1", size = 35796833, upload-time = "2026-09-04T01:38:04.104Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/5a/c0/c12e505462462d5cc2b3fa98b6b2142c9589ebc0308144498f6e9de0c70c/inspect_ai-0.3.263-py3-none-any.whl", hash = "sha256:503e7ff509d77fcdf65989027a19fea966fb668deb88a234468c3290964fd86a", size = 34294681, upload-time = "2026-09-04T01:37:58.013Z" },
 ]
 
 [[package]]
@@ -1931,7 +1932,7 @@ wheels = [
 [[package]]
 name = "inspect-scout"
 version = "0.5.0"
-source = { git = "https://github.com/meridianlabs-ai/inspect_scout?branch=main#90a0060dcce3a852d85960ead638f96ab4fd2cf0" }
+source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "anyio" },
     { name = "click" },
@@ -1963,6 +1964,10 @@ dependencies = [
     { name = "uvicorn" },
     { name = "wrapt" },
     { name = "zstandard" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/d0/16/ebee1fc05300899ef044b2a4ea1e48ec1251eb5a9b3b071c40e10aeb5d24/inspect_scout-0.5.0.tar.gz", hash = "sha256:6416eb4c6ce08d8ee7e3a98fee60d0e84b1212d60014684ee3474364d5d1ee3c", size = 2784090, upload-time = "2026-09-04T02:11:11.618Z" }
+wheels = [
+    { url = "https://files.pythonhosted.org/packages/f2/38/8e77959434a69b77da35ff68cb68aa3e9f69bc107f9686370a0123f1f6fd/inspect_scout-0.5.0-py3-none-any.whl", hash = "sha256:66d818a8fb8a7b134227871b1a131c56a9f0ac435bb51bd38cf060ab3ce64eb1", size = 2869997, upload-time = "2026-09-04T02:11:09.289Z" },
 ]
 
 [[package]]
@@ -2035,9 +2040,9 @@ requires-dist = [
     { name = "click", specifier = ">=8.0" },
     { name = "hawk", extras = ["cli", "runner"], marker = "python_full_version >= '3.13' and extra == 'hawk'", specifier = ">=2.4.0" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "inspect-ai", git = "https://github.com/UKGovernmentBEIS/inspect_ai?branch=main" },
+    { name = "inspect-ai", specifier = ">=0.3.263" },
     { name = "inspect-flow", marker = "extra == 'flow'", specifier = ">=0.12.0" },
-    { name = "inspect-scout", git = "https://github.com/meridianlabs-ai/inspect_scout?branch=main" },
+    { name = "inspect-scout", specifier = ">=0.5.0" },
     { name = "platformdirs", specifier = ">=4.0" },
     { name = "psutil", specifier = ">=5.9" },
     { name = "python-dotenv", specifier = ">=1.0" },
