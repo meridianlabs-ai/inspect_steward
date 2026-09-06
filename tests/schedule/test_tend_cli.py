@@ -535,8 +535,8 @@ def test_an_interim_score_renders_like_a_final_one(
     echo_turn(running)
     text = capsys.readouterr().out
 
-    assert "0.5 |" in markdown
-    assert "0.5 |" in collected
+    assert "0.50 |" in markdown
+    assert "0.50 |" in collected
     (line,) = [one for one in text.splitlines() if one.startswith("✓ done")]
     assert line.split()[-1] == "0.50"
-    assert "0.5*" not in markdown and "0.50*" not in text
+    assert "0.50*" not in markdown and "0.50*" not in text

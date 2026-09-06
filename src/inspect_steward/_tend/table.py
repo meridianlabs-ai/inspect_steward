@@ -73,7 +73,7 @@ def _cells(row: TaskProgress, key: str, width: int) -> tuple[str, ...]:
         f"{row.running}r" if row.running else "",
         f"{row.queued}q" if row.queued else "",
         row.budget.text if row.budget is not None else "",
-        score_cell(row, digits=2),
+        score_cell(row),
     )
 
 
@@ -91,16 +91,18 @@ def clip(key: str, width: int) -> str:
     return f"{key[:head]}…{key[len(key) - tail :]}"
 
 
-def score_cell(row: TaskProgress, *, digits: int) -> str:
-    """The score column's cell: the headline to `digits`, final or interim alike.
+def score_cell(row: TaskProgress) -> str:
+    """The score column's cell: the headline to two decimals, final or interim alike.
 
     **Two columns now, budget and score, because a running row has both.** The budget is usage against a limit and exists exactly while a task runs; the score used to exist exactly once it had finished, which is what let the two share a column. A running task's interim figure ended that: it is a score with a budget beside it. `progress_table` still drops a column empty in every row, so a settled campaign pays for the score alone and a run whose tasks declare no limit pays for nothing it did not use.
+
+    **Always two decimals, so a whole-number score reads as a score.** A bare `1` beside `20%` and `48/200` is a count until a reader stops to place it, where `1.00` is a fraction on sight — and a column that renders `1` for one task and `0.83` for the next is not aligned on the decimal point it is meant to be read down. The same fixed shape in every surface, so the terminal, the post and the operator's page never disagree about a cell.
 
     An interim figure is not marked. A reader of a row that says `10/30` beside a score knows the score is over the ten, and a marker would be telling them what the row already says.
     """
     if row.headline is None:
         return ""
-    return f"{row.headline:.{digits}f}" if digits > 0 else f"{row.headline:.3g}"
+    return f"{row.headline:.2f}"
 
 
 def _line(cells: tuple[str, ...], widths: list[int]) -> str:

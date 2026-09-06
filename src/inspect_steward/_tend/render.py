@@ -235,7 +235,7 @@ def _tasks(result: "TendResult") -> list[str]:
         if budgeted:
             cells += [_budget_cell(row)]
         if scored:
-            cells += [score_cell(row, digits=0)]
+            cells += [score_cell(row)]
         body.append(tuple(cells))
     lines = pipe_table(tuple(header), body)
     return lines + [""]
@@ -450,7 +450,7 @@ def _progress(result: "TendResult") -> list[str]:
         if budgeted:
             cells += [_budget_cell(row)]
         if scored:
-            cells += [score_cell(row, digits=0)]
+            cells += [score_cell(row)]
         body.append(tuple(cells))
 
     # a sub-heading rather than a section of its own, because the document has
