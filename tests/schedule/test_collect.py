@@ -387,7 +387,13 @@ def parked(workspace: Workspace, monkeypatch: pytest.MonkeyPatch) -> Workspace:
         }
     )
 
-    def read(inflight: object, logs: object, *, stuck_after: float = 0.0) -> LiveFleet:
+    def read(
+        inflight: object,
+        logs: object,
+        *,
+        known: object = None,
+        stuck_after: float = 0.0,
+    ) -> LiveFleet:
         return fleet
 
     monkeypatch.setattr("inspect_steward._tend.turn._live", read)

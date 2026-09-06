@@ -10,6 +10,14 @@ The counts a turn already computes answer *what is Steward doing* — two to spa
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 
+from inspect_ai.log import EvalMetric, EvalResults, EvalScore, HeadlineMetric
+
+# private, deliberately: the rule that turns a declaration into one metric is
+# Inspect's, and `observe._headline` says why Steward must not keep a second
+# one. `headline_metric` reads only a log with results, which a running task
+# has not got; exporting this is the upstream ask
+from inspect_ai.log._headline import resolve_headline_metric
+
 from .._evalset.display import KeyParts, ShortKeys, shorten_keys
 from .._evalset.observe import (
     LogAttempt,
@@ -119,6 +127,12 @@ class TaskProgress:
     headline: float | None = None
     headline_name: str | None = None
     """The metric in the score column, and which metric it is. Declared by the task where it says — see `LogAttempt.headline`."""
+
+    interim: int | None = None
+    """How many scored samples `headline` describes while the task runs, or `None` for the final figure.
+
+    An interim figure comes from the worker's completed-only scoring pass — the task's own metrics and reducers over the samples scored so far — and moves as samples land. The final figure replaces it when the log does.
+    """
 
     budget: Budget | None = None
     """The per-sample limit worth showing, and how far into it a typical running sample is. `None` when the task declared no limit anything can be measured against, or when nothing is running to have spent any."""
@@ -323,6 +337,7 @@ def _row(
     answered = live is not None and live.unavailable is None
 
     completed, total, errored = _counts(task, attempt, live if answered else None)
+    headline, headline_name, interim = _headline(attempt, live if answered else None)
     return TaskProgress(
         scanned=scanned,
         key=task.key,
@@ -339,8 +354,9 @@ def _row(
         errored=errored,
         running=live.samples.in_flight if answered and live is not None else 0,
         queued=_queued(task, live if answered else None, completed, total, errored),
-        headline=attempt.headline if attempt is not None else None,
-        headline_name=attempt.headline_name if attempt is not None else None,
+        headline=headline,
+        headline_name=headline_name,
+        interim=interim,
         budget=_budget(attempt, live if answered else None),
         connections=(
             (live.connections.in_use, live.connections.limit)
@@ -395,6 +411,48 @@ def _queued(
     if task.state in (TaskState.COMPLETE, TaskState.ORPHANED):
         return 0
     return max(0, total - completed - errored)
+
+
+def _headline(
+    attempt: LogAttempt | None, live: LiveTask | None
+) -> tuple[float | None, str | None, int | None]:
+    """The score cell: the log's final figure, else the worker's interim one over the samples scored so far.
+
+    **The final figure always wins**, and it is read off the log exactly as before. The interim is resolved from the pass's entries by Inspect's own rule, against the declaration the header carries, so the number a running row shows is the one its finished row will show once the same samples are all there is.
+    """
+    if attempt is not None and attempt.headline is not None:
+        return attempt.headline, attempt.headline_name, None
+    if live is None or live.interim is None or not live.interim.entries:
+        return None, None, None
+    results = EvalResults(
+        scores=[
+            EvalScore(
+                name=entry.name,
+                # the pass reports `EvalScore.name` and not `.scorer`; the two
+                # coincide for every scorer whose metrics are flat
+                scorer=entry.name,
+                reducer=entry.reducer,
+                metrics={
+                    key: EvalMetric(name=key, value=value)
+                    for key, value in entry.metrics.items()
+                },
+            )
+            for entry in live.interim.entries
+        ]
+    )
+    declared = (
+        HeadlineMetric.model_validate(attempt.headline_spec)
+        if attempt is not None and attempt.headline_spec
+        else None
+    )
+    resolved = resolve_headline_metric(results, declared)
+    if resolved is None:
+        return None, None, None
+    return (
+        float(resolved.metric.value),
+        f"{resolved.score.name}/{resolved.name}",
+        live.interim.scored,
+    )
 
 
 def _budget(attempt: LogAttempt | None, live: LiveTask | None) -> Budget | None:

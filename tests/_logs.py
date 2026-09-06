@@ -284,6 +284,7 @@ def write_log(
     format: LogFormat = "json",
     scores: dict[str, dict[str, float]] | None = None,
     headline: HeadlineMetric | None = None,
+    declared: HeadlineMetric | None = None,
     selection: dict[str, Any] | None = None,
     sandbox: SandboxEnvironmentSpec | None = None,
     model_base_url: str | None = None,
@@ -306,6 +307,7 @@ def write_log(
         format: `json` for a document, `eval` for a real zip.
         scores: Scorer name to metric name to value, e.g. `{"exact": {"accuracy": 0.75}}`.
         headline: Which of `scores` the task declared as its headline, as scoring resolves it onto `results.headline`. `None` leaves the log undeclared, where a reader falls back to the first metric of the first score.
+        declared: The task's own declaration, `eval.headline_metric`, which a running log carries before any result exists.
         selection: `limit`, `sample_id` and `sample_shuffle` the log ran with — which samples, rather than how many.
         sandbox: The sandbox the log ran under, **as resolved** — which is what a log records, config file and all.
         model_base_url: The gateway the log's model calls went to.
@@ -369,6 +371,9 @@ def write_log(
         else None,
         samples=[sample.as_sample() for sample in samples] if samples else None,
     )
+
+    if declared is not None:
+        log.eval.headline_metric = declared
 
     location = log_dir / f"{_file_stem(task, created)}.{format}"
     log_dir.mkdir(parents=True, exist_ok=True)

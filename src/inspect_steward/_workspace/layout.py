@@ -139,6 +139,14 @@ class Workspace:
         return self.state / "classed.json"
 
     @property
+    def interim(self) -> Path:
+        """`.steward/interim.json` — what the last tend harvested from each running task's interim scoring pass.
+
+        Disposable like `classed.json`: it exists so a turn asks a worker for interim metrics only when more samples have scored since it last asked, and losing it costs one pass per running task, never a wrong number.
+        """
+        return self.state / "interim.json"
+
+    @property
     def synced(self) -> Path:
         """`.steward/synced.json` — what the propagation last wrote out, by name and stamp.
 

@@ -14,6 +14,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 import pytest
+from inspect_ai.log import HeadlineMetric
 from inspect_steward._evalset.cache import (
     CACHE_VERSION,
     AttemptCache,
@@ -211,3 +212,23 @@ def test_the_version_is_written(tmp_path: Path) -> None:
     write_attempt_cache(path, AttemptCache())
 
     assert json.loads(path.read_text(encoding="utf-8"))["version"] == CACHE_VERSION
+
+
+def test_the_headline_declaration_rides_the_cache(tmp_path: Path) -> None:
+    # carried as a plain mapping so it round-trips without a codec of its own,
+    # and read back exactly, since a running task's interim figure is resolved
+    # against it
+    write_log(
+        tmp_path,
+        TASK,
+        scores={"exact": {"accuracy": 0.75}},
+        declared=HeadlineMetric(scorer="judge", metric="mean"),
+    )
+    cache = AttemptCache()
+    observe_logs(tmp_path, cache=cache)
+    write_attempt_cache(tmp_path / "observed.json", cache)
+
+    loaded = read_attempt_cache(tmp_path / "observed.json")
+
+    (entry,) = loaded.entries.values()
+    assert entry.attempt.headline_spec == {"scorer": "judge", "metric": "mean"}

@@ -509,3 +509,33 @@ def agent_items(rendered: str) -> int:
     found = re.search(r"agent: (\d+|no) open item", rendered)
     assert found is not None, rendered
     return 0 if found.group(1) == "no" else int(found.group(1))
+
+
+def test_an_interim_score_renders_like_a_final_one(
+    workspace: Workspace, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """A running task's score, in every rendering, with nothing to mark it.
+
+    A real turn with a synthesized row, for the reason the resources test gives: no synthesized state produces a running worker, and the cell is a rendering decision.
+    """
+    result = turn(workspace)
+    rows = [
+        replace(
+            row, headline=0.5, headline_name="exact/accuracy", interim=24, live=True
+        )
+        if row.key.startswith("done")
+        else row
+        for row in result.progress.rows
+    ]
+    running = replace(result, progress=replace(result.progress, rows=rows))
+
+    markdown = status_markdown(running, header=False)
+    collected = collect_markdown(running)
+    echo_turn(running)
+    text = capsys.readouterr().out
+
+    assert "| 0.5 |" in markdown
+    assert "| 0.5 |" in collected
+    (line,) = [one for one in text.splitlines() if one.startswith("✓ done")]
+    assert line.split()[-1] == "0.50"
+    assert "0.5*" not in markdown and "0.50*" not in text

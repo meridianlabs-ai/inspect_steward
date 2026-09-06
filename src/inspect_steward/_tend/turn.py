@@ -21,7 +21,7 @@ They cannot drift, because they are the same code path with one flag. That is wo
 import hashlib
 import os
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -79,14 +79,17 @@ from .._util.duration import is_after, seconds_since
 from .._worker import (
     DEFAULT_STUCK_AFTER,
     Fleet,
+    Interim,
     LiveFleet,
     LiveTarget,
     Unavailable,
     read_fleet,
+    read_interim,
     record_exited,
     resolve_eval_set_id,
     resolve_inflight,
     task_config,
+    write_interim,
 )
 from .._workspace import (
     ACTION,
@@ -1110,9 +1113,11 @@ def _turn(
     # the block under it -- a second read would be a second set of numbers, and
     # a row saying `83 running` beside a block saying nothing is running is the
     # kind of disagreement a reader has no way to resolve
+    known = read_interim(workspace.interim)
     fleet = _live(
         inflight,
         logs,
+        known=known,
         stuck_after=(
             settings.stuck_after
             if settings.stuck_after is not None
@@ -1427,17 +1432,34 @@ def _turn(
     write_attempt_cache(workspace.observed, cache.keep({*logs.locations} - moved))
     # the classification cache follows the same discipline, narrowed the same
     # way, plus to the evals still running (its per-sample memo keys on them)
+    running_evals = {
+        attempt.eval_id
+        for attempts in logs.attempts.values()
+        for attempt in attempts
+        if attempt.status == "started"
+    }
     write_classed_cache(
         workspace.classed,
-        classed.keep(
-            {*logs.locations} - moved,
-            running={
-                attempt.eval_id
-                for attempts in logs.attempts.values()
-                for attempt in attempts
-                if attempt.status == "started"
+        classed.keep({*logs.locations} - moved, running=running_evals),
+    )
+    # the interim harvest keeps the same discipline: what this turn's fleet
+    # read holds, over what the last one held for an eval still running whose
+    # worker did not answer this time -- so a busy worker costs a turn of the
+    # figure, not a fresh pass next turn
+    write_interim(
+        workspace.interim,
+        {
+            **{
+                eval_id: interim
+                for eval_id, interim in known.items()
+                if eval_id in running_evals
             },
-        ),
+            **{
+                task.eval_id: task.interim
+                for task in fleet.tasks.values()
+                if task.interim is not None and task.eval_id
+            },
+        },
     )
 
     # before the observation, so a crash between the two costs a repeated
@@ -2336,6 +2358,7 @@ def _live(
     inflight: InFlight,
     logs: ObservedLogs,
     *,
+    known: Mapping[str, Interim] | None = None,
     stuck_after: float = DEFAULT_STUCK_AFTER,
 ) -> LiveFleet:
     """Ask the running workers how they are getting on.
@@ -2349,7 +2372,7 @@ def _live(
         for worker in inflight.running
         if worker.socket is not None
     ]
-    return read_fleet(targets, _locations(logs), stuck_after=stuck_after)
+    return read_fleet(targets, _locations(logs), known=known, stuck_after=stuck_after)
 
 
 def _findings(

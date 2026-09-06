@@ -6,7 +6,7 @@ One line per task, columns right-aligned on their own widths so the numbers stac
 ⚙ sec_bench_pro[default]@openai/gpt-5   37/183  20%  83r  63q  2e  52/80c  115/300t
 ```
 
-Read left to right it is: what state the task is in, which task, how much of it is done, how much is moving right now, how much is still to come, how much has errored, how hard the model pool is working, how much of what landed the scanners have reached, and how far into its budget a typical sample is — or, for a finished task, what it scored. Every column is omitted when it has nothing to say — a finished task has no running samples and nothing left to queue, an errored count of zero is the ordinary case, a fully scanned run has no gap, a task with no declared limit has no budget column — so a settled campaign renders as a quiet list rather than a field of zeroes.
+Read left to right it is: what state the task is in, which task, how much of it is done, how much is moving right now, how much is still to come, how much has errored, how hard the model pool is working, how much of what landed the scanners have reached, how far into its budget a typical sample is, and what it scored — final for a finished task, interim over the samples scored so far for a running one. Every column is omitted when it has nothing to say — a finished task has no running samples and nothing left to queue, an errored count of zero is the ordinary case, a fully scanned run has no gap, a task with no declared limit has no budget column — so a settled campaign renders as a quiet list rather than a field of zeroes.
 
 **Widths are computed per render rather than fixed.** Display keys vary from `addition` to a sweep entry with three arguments and a model, and a column padded for the worst case wastes the terminal on every other line.
 """
@@ -72,7 +72,8 @@ def _cells(row: TaskProgress, key: str, width: int) -> tuple[str, ...]:
         f"{round(row.fraction * 100)}%",
         f"{row.running}r" if row.running else "",
         f"{row.queued}q" if row.queued else "",
-        _outcome(row),
+        row.budget.text if row.budget is not None else "",
+        score_cell(row, digits=2),
     )
 
 
@@ -90,16 +91,16 @@ def clip(key: str, width: int) -> str:
     return f"{key[:head]}…{key[len(key) - tail :]}"
 
 
-def _outcome(row: TaskProgress) -> str:
-    """The last column: how far a running task is into its budget, or what a finished one scored.
+def score_cell(row: TaskProgress, *, digits: int) -> str:
+    """The score column's cell: the headline to `digits`, final or interim alike.
 
-    **One column, because no row ever has both.** A budget is usage against a limit and usage comes from a worker, so it exists exactly while a task is running; a headline metric is computed at scoring time, so it exists exactly once one has finished. Two columns for two states of the same row cost every line the width of whichever it is not in — which on the narrow table is the difference between a task name and a truncated one.
+    **Two columns now, budget and score, because a running row has both.** The budget is usage against a limit and exists exactly while a task runs; the score used to exist exactly once it had finished, which is what let the two share a column. A running task's interim figure ended that: it is a score with a budget beside it. `progress_table` still drops a column empty in every row, so a settled campaign pays for the score alone and a run whose tasks declare no limit pays for nothing it did not use.
 
-    Read down the column it is *where each task has got to*, which is the same question either way.
+    An interim figure is not marked. A reader of a row that says `10/30` beside a score knows the score is over the ten, and a marker would be telling them what the row already says.
     """
-    if row.budget is not None:
-        return row.budget.text
-    return f"{row.headline:.2f}" if row.headline is not None else ""
+    if row.headline is None:
+        return ""
+    return f"{row.headline:.{digits}f}" if digits > 0 else f"{row.headline:.3g}"
 
 
 def _line(cells: tuple[str, ...], widths: list[int]) -> str:

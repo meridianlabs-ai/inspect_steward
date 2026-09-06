@@ -142,12 +142,40 @@ class LiveStuck:
 
 
 @dataclass(frozen=True)
+class InterimEntry:
+    """One score's metrics from an interim pass: what `EvalScore` carries, as the pass reports it."""
+
+    name: str
+    """The score's name — what the pass calls `scorer`, which is `EvalScore.name`."""
+
+    reducer: str | None
+    metrics: Mapping[str, float]
+
+
+@dataclass(frozen=True)
+class Interim:
+    """A running task's metrics over the samples scored so far, and how many that is.
+
+    From the control channel's completed-only scoring pass, which computes the task's own metrics with its own reducers over the samples whose final scores exist, holding nothing and calling no grader. Raw entries rather than a resolved number, because which of them is the headline is the task's declaration in its log header, and the reader does not have the header. `scored` is the gate: the same count next turn means the same figures, so nothing is asked.
+
+    Empty entries at a count means the pass was asked at that count and had nothing to say — no scorers, no scored sample it could fold, or a pass that did not finish — and records that so the same count is not asked again.
+    """
+
+    scored: int
+    entries: tuple[InterimEntry, ...] = ()
+
+
+@dataclass(frozen=True)
 class LiveTask:
     """What one worker says about itself right now."""
 
     pid: int
     identifier: str
     task_id: str = ""
+    eval_id: str = ""
+    interim: Interim | None = None
+    """The interim metrics harvested or reused this turn, or `None` where no completed sample carries a score yet."""
+
     samples: LiveSamples = field(default_factory=LiveSamples)
     usage: LiveUsage = field(default_factory=LiveUsage)
     connections: LiveConnections = field(default_factory=LiveConnections)
@@ -230,6 +258,7 @@ def read_fleet(
     targets: list[LiveTarget],
     locations: Mapping[str, str],
     *,
+    known: Mapping[str, Interim] | None = None,
     timeout: float = TIMEOUT,
     stuck_after: float = DEFAULT_STUCK_AFTER,
 ) -> LiveFleet:
@@ -238,6 +267,7 @@ def read_fleet(
     Args:
         targets: Running workers with a discovered socket. An empty list is an empty fleet and costs nothing — which is the common shape late in a campaign, when everything has finished and there is nothing live to ask.
         locations: Log location to task identifier, for naming the rows a packed worker reports. Required rather than defaulted, and positional rather than keyword, because a caller that omits it is only ever wrong: at the default width it is unread, and at any other width its absence silently costs every row its identity and reports a running task as finished. An empty mapping says *nothing to correlate* out loud.
+        known: The last turn's interim harvest by eval id, reused wherever the scored count has not moved.
         timeout: Seconds to wait per worker.
         stuck_after: Seconds a running sample may go without activity before it reads as stuck.
 
@@ -247,7 +277,9 @@ def read_fleet(
     if not targets:
         return LiveFleet()
     return asyncio.run(
-        read_fleet_async(targets, locations, timeout=timeout, stuck_after=stuck_after)
+        read_fleet_async(
+            targets, locations, known=known, timeout=timeout, stuck_after=stuck_after
+        )
     )
 
 
@@ -255,6 +287,7 @@ async def read_fleet_async(
     targets: list[LiveTarget],
     locations: Mapping[str, str],
     *,
+    known: Mapping[str, Interim] | None = None,
     timeout: float = TIMEOUT,
     stuck_after: float = DEFAULT_STUCK_AFTER,
 ) -> LiveFleet:
@@ -263,6 +296,7 @@ async def read_fleet_async(
     Args:
         targets: Running workers with a discovered socket.
         locations: Log location to task identifier, for naming the rows a packed worker reports.
+        known: The last turn's interim harvest by eval id.
         timeout: Seconds to wait per worker.
         stuck_after: Seconds a running sample may go without activity before it reads as stuck.
 
@@ -275,7 +309,10 @@ async def read_fleet_async(
     # measured against the same instant rather than drifting with read order
     now = time.time()
     read = await asyncio.gather(
-        *(_read(target, timeout, locations, stuck_after, now) for target in targets),
+        *(
+            _read(target, timeout, locations, stuck_after, now, known or {})
+            for target in targets
+        ),
     )
     return LiveFleet(tasks={task.identifier: task for tasks in read for task in tasks})
 
@@ -286,6 +323,7 @@ async def _read(
     locations: Mapping[str, str],
     stuck_after: float = DEFAULT_STUCK_AFTER,
     now: float = 0.0,
+    known: Mapping[str, Interim] | None = None,
 ) -> list[LiveTask]:
     """One worker's reads, or why they did not happen.
 
@@ -342,6 +380,32 @@ async def _read(
             )
             samples = dict(zip(evals, read[: len(evals)], strict=True))
             configs = dict(zip(tasks, read[len(evals) :], strict=True))
+            # the interim metrics, a second round because the gate reads the
+            # first: only a task whose sample listing shows a scored sample has
+            # anything a pass could compute, and only a count that moved since
+            # the last harvest has anything new. Gathered like the rest, and
+            # each one keeps its failures to itself -- a pass that did not
+            # answer costs the score cell, not the row
+            asks: dict[str, tuple[str, int]] = {}
+            for row in rows:
+                task_id, eval_id = _text(row.get("task_id")), _text(row.get("eval_id"))
+                scored = _scored(samples.get(eval_id))
+                if task_id and eval_id and scored:
+                    asks[task_id] = (eval_id, scored)
+            harvested = dict(
+                zip(
+                    asks,
+                    await asyncio.gather(
+                        *(
+                            _interim(
+                                client, task_id, scored, (known or {}).get(eval_id)
+                            )
+                            for task_id, (eval_id, scored) in asks.items()
+                        )
+                    ),
+                    strict=True,
+                )
+            )
     except httpx.TimeoutException:
         # alive, and its event loop is busy running the eval -- which is the
         # thing it is supposed to be doing, so this is not a fault
@@ -368,6 +432,8 @@ async def _read(
                 pid=target.pid,
                 identifier=identifier,
                 task_id=_text(row.get("task_id")),
+                eval_id=_text(row.get("eval_id")),
+                interim=harvested.get(_text(row.get("task_id"))),
                 samples=_samples(row.get("samples")),
                 usage=_usage(samples.get(_text(row.get("eval_id")))),
                 parked=_parked(samples.get(_text(row.get("eval_id")))),
@@ -411,6 +477,107 @@ async def _get(client: httpx.AsyncClient, path: str) -> object:
     response = await client.get(path)
     response.raise_for_status()
     return cast(object, response.json())
+
+
+POLLS = 3
+"""How many times a harvest asks after a pass whether it has finished. A completed-only pass computes at its first scheduling point, so the first answer nearly always carries the result; the rest cover a busy event loop, and a pass still running after them is recorded as nothing rather than waited for."""
+
+POLL_WAIT = 0.2
+"""Seconds between those asks."""
+
+
+def _scored(payload: object) -> int:
+    """How many of one eval's samples carry a score, off the listing `_read` already fetched.
+
+    The gate for the interim pass: a listing with no scored sample has nothing a pass could fold, and a count that has not moved since the last harvest means the same figures.
+    """
+    if not isinstance(payload, dict):
+        return 0
+    rows = cast(dict[str, object], payload).get("samples")
+    if not isinstance(rows, list):
+        return 0
+    return sum(
+        1
+        for entry in cast(list[object], rows)
+        if isinstance(entry, dict)
+        and isinstance(scores := cast(dict[str, object], entry).get("scores"), dict)
+        and scores
+    )
+
+
+async def _interim(
+    client: httpx.AsyncClient, task_id: str, scored: int, previous: Interim | None
+) -> Interim:
+    """The task's interim metrics at this scored count: the last harvest where the count has not moved, else a fresh pass."""
+    if previous is not None and previous.scored == scored:
+        return previous
+    return await _harvest(client, task_id, scored)
+
+
+async def _harvest(client: httpx.AsyncClient, task_id: str, scored: int) -> Interim:
+    """Start a completed-only scoring pass and read its result.
+
+    `POST /tasks/{id}/score?completed_only=true` starts it and returns at once; the same path read back carries `result` once `running` is false. Every way the pass can decline — the task gone from the process, no scorers, a pass that errored or was torn down, or one still running after the last poll — is recorded as an empty harvest at this count, so the same question is not put again until more samples have scored. Nothing here raises: the row's other columns are already read, and the score cell is the only thing at stake.
+    """
+    path = f"/tasks/{task_id}/score"
+    try:
+        started = await client.post(path, params={"completed_only": "true"})
+        if started.status_code != 200:
+            return Interim(scored=scored)
+        for _ in range(POLLS):
+            answer = await client.get(path)
+            if answer.status_code != 200:
+                return Interim(scored=scored)
+            payload: object = answer.json()
+            if not _running(payload):
+                return Interim(scored=scored, entries=_entries(payload))
+            await asyncio.sleep(POLL_WAIT)
+    except (httpx.HTTPError, OSError, ValueError):
+        pass
+    return Interim(scored=scored)
+
+
+def _running(payload: object) -> bool:
+    return isinstance(payload, dict) and bool(
+        cast(dict[str, object], payload).get("running")
+    )
+
+
+def _entries(payload: object) -> tuple[InterimEntry, ...]:
+    """The pass's `result.metrics`, or nothing where it erred, was interrupted, or folded no score."""
+    if not isinstance(payload, dict):
+        return ()
+    envelope = cast(dict[str, object], payload)
+    if envelope.get("error") is not None or envelope.get("interrupted") is not None:
+        return ()
+    result = envelope.get("result")
+    if not isinstance(result, dict):
+        return ()
+    metrics = cast(dict[str, object], result).get("metrics")
+    if not isinstance(metrics, list):
+        return ()
+    entries: list[InterimEntry] = []
+    for raw in cast(list[object], metrics):
+        if not isinstance(raw, dict):
+            continue
+        entry = cast(dict[str, object], raw)
+        name = _text(entry.get("scorer"))
+        values = entry.get("metrics")
+        if not name or not isinstance(values, dict):
+            continue
+        reducer = entry.get("reducer")
+        entries.append(
+            InterimEntry(
+                name=name,
+                reducer=reducer if isinstance(reducer, str) else None,
+                metrics={
+                    key: float(value)
+                    for key, value in cast(dict[str, object], values).items()
+                    if isinstance(value, int | float) and not isinstance(value, bool)
+                },
+            )
+        )
+    return tuple(entries)
 
 
 def _task_rows(payload: object) -> list[dict[str, object]]:

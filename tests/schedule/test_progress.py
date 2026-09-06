@@ -21,6 +21,8 @@ from inspect_steward._tend import Progress, progress_table, task_progress
 from inspect_steward._tend.progress import LIVE_ONLY, live_totals
 from inspect_steward._tend.table import clip
 from inspect_steward._worker import (
+    Interim,
+    InterimEntry,
     LiveConnections,
     LiveFleet,
     LiveParked,
@@ -54,6 +56,7 @@ def live(
     connections: tuple[int, int | None] = (0, None),
     parked: LiveParked | None = None,
     unavailable: str | None = None,
+    interim: Interim | None = None,
 ) -> LiveFleet:
     in_use, limit = connections
     return LiveFleet(
@@ -61,6 +64,8 @@ def live(
             task.identifier: LiveTask(
                 pid=1,
                 identifier=task.identifier,
+                eval_id="E1",
+                interim=interim,
                 samples=LiveSamples(
                     total=total, completed=completed, in_flight=in_flight, queued=queued
                 ),
@@ -600,3 +605,82 @@ def test_the_block_says_what_it_covers_and_that_it_is_only_now() -> None:
     assert block.figures.startswith("1 task · 3 refusals · 0 HTTP retries")
     assert "average since start" in block.figures
     assert "fall as tasks finish" in LIVE_ONLY
+
+
+# --- the interim headline -----------------------------------------------
+
+INTERIM = Interim(
+    scored=4,
+    entries=(
+        InterimEntry(name="exact", reducer=None, metrics={"accuracy": 0.75}),
+        InterimEntry(name="judge", reducer=None, metrics={"mean": 0.42}),
+    ),
+)
+
+
+def test_a_running_task_shows_the_interim_headline_its_declaration_names(
+    tmp_path: Path,
+) -> None:
+    # the same rule the final figure is read by, applied to the pass's entries
+    # against the declaration the header carries before any result exists
+    write_log(
+        tmp_path,
+        TASK,
+        status="started",
+        declared=HeadlineMetric(scorer="judge", metric="mean"),
+    )
+    fleet = live(TASK, completed=4, in_flight=2, interim=INTERIM)
+
+    (row,) = rows(tmp_path, [TASK], fleet).rows
+
+    assert (row.headline, row.headline_name, row.interim) == (0.42, "judge/mean", 4)
+
+
+def test_an_undeclared_task_shows_the_first_metric_of_the_first_score(
+    tmp_path: Path,
+) -> None:
+    write_log(tmp_path, TASK, status="started")
+    fleet = live(TASK, completed=4, in_flight=2, interim=INTERIM)
+
+    (row,) = rows(tmp_path, [TASK], fleet).rows
+
+    assert (row.headline, row.headline_name, row.interim) == (0.75, "exact/accuracy", 4)
+
+
+def test_the_final_figure_beats_the_interim_one(tmp_path: Path) -> None:
+    # a landed log with a worker still answering for it, in the moment between
+    # the two: the log's number is the one that will stand
+    write_log(tmp_path, TASK, scores={"exact": {"accuracy": 0.9}})
+    fleet = live(TASK, completed=10, interim=INTERIM)
+
+    (row,) = rows(tmp_path, [TASK], fleet).rows
+
+    assert (row.headline, row.interim) == (0.9, None)
+
+
+@pytest.mark.parametrize(
+    "fleet",
+    [
+        pytest.param(live(TASK, completed=4, interim=None), id="nothing-scored"),
+        pytest.param(live(TASK, completed=4, interim=Interim(scored=4)), id="declined"),
+        pytest.param(
+            live(TASK, completed=4, interim=INTERIM, unavailable="busy"), id="busy"
+        ),
+    ],
+)
+def test_no_interim_means_no_score(tmp_path: Path, fleet: LiveFleet) -> None:
+    write_log(tmp_path, TASK, status="started")
+
+    (row,) = rows(tmp_path, [TASK], fleet).rows
+
+    assert (row.headline, row.interim) == (None, None)
+
+
+def test_the_terminal_shows_an_interim_score_like_a_final_one(tmp_path: Path) -> None:
+    # unmarked: the row's own counts say how much of the task the figure is over
+    write_log(tmp_path, TASK, status="started")
+    fleet = live(TASK, completed=4, in_flight=2, interim=INTERIM)
+
+    (line, *_) = progress_table(rows(tmp_path, [TASK], fleet))
+
+    assert line.split()[-1] == "0.75"

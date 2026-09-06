@@ -31,7 +31,7 @@ from .items import (
     waiting_to_land,
 )
 from .progress import LIVE_ONLY, TaskProgress, compact, display_keys, short_keys
-from .table import clip, resources_table
+from .table import clip, resources_table, score_cell
 
 if TYPE_CHECKING:
     # the turn imports this module to write its file, so the type it passes can
@@ -220,7 +220,7 @@ def _tasks(result: "TendResult") -> list[str]:
         if budgeted:
             cells += [_budget_cell(row)]
         if scored:
-            cells += [f"{row.headline:.3g}" if row.headline is not None else ""]
+            cells += [score_cell(row, digits=0)]
         lines.append("| " + " | ".join(cells) + " |")
     if short.model is not None:
         lines += ["", f"Every task runs `{short.model}`."]
@@ -432,7 +432,7 @@ def _progress(result: "TendResult") -> list[str]:
         if budgeted:
             cells += [_budget_cell(row)]
         if scored:
-            cells += [f"{row.headline:.3g}" if row.headline is not None else ""]
+            cells += [score_cell(row, digits=0)]
         lines.append("| " + " | ".join(cells) + " |")
 
     notes: list[str] = []

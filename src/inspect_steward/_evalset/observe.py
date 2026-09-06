@@ -103,6 +103,12 @@ class LogAttempt:
     headline_name: str | None = None
     """Which metric `headline` is, as `<score>/<metric>`."""
 
+    headline_spec: dict[str, Any] | None = None
+    """The task's own headline declaration, `eval.headline_metric` as a plain mapping, or `None` where it declared none.
+
+    Carried beside the resolved value because a running log has no results to resolve against, and the interim figures a worker computes mid-run have to be read by the same declaration the final ones will be (`_tend.progress`).
+    """
+
     selection: dict[str, Any] = field(default_factory=dict[str, Any])
     """Which samples this log ran — `limit`, `sample_id` and `sample_shuffle`, from `eval.config`, whichever were set.
 
@@ -653,6 +659,11 @@ def _attempt(location: str, mtime: float | None, header: EvalLog) -> LogAttempt:
         mtime=mtime,
         headline=headline,
         headline_name=headline_name,
+        headline_spec=(
+            header.eval.headline_metric.model_dump(exclude_none=True)
+            if header.eval.headline_metric is not None
+            else None
+        ),
         selection={
             name: value
             for name, value in (

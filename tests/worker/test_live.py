@@ -20,9 +20,12 @@ import time
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
+from typing import cast
 
 import pytest
 from inspect_steward._worker import (
+    Interim,
+    InterimEntry,
     LiveConnections,
     LiveFleet,
     LiveSamples,
@@ -30,6 +33,7 @@ from inspect_steward._worker import (
     LiveUsage,
     read_fleet,
 )
+from inspect_steward._worker.live import POLLS
 
 
 @pytest.fixture
@@ -120,14 +124,19 @@ Spelled out at each call rather than defaulted, because it is exactly what a pac
 
 @contextmanager
 def worker(
-    socket: Path, routes: Routes | None = None, *, stall: bool = False
+    socket: Path,
+    routes: Routes | None = None,
+    *,
+    stall: bool = False,
+    seen: list[str] | None = None,
 ) -> Generator[LiveTarget]:
     """Serve `routes` on `socket` until the block exits.
 
     Args:
         socket: Where to bind.
-        routes: Path to JSON body; anything unrouted is a 404.
+        routes: Path to JSON body; anything unrouted is a 404. A `(status, body)` tuple answers with that status.
         stall: Accept the connection and never answer — a worker whose event loop is busy running the eval, which is the case this module is shaped around.
+        seen: Where to record each request as `METHOD /path`, for a test about what was not asked.
     """
     loop = asyncio.new_event_loop()
     listening = threading.Event()
@@ -145,15 +154,22 @@ def worker(
             await stopping.wait()
             writer.close()
             return
-        path = request.split(b" ")[1].decode()
+        method, path = (part.decode() for part in request.split(b" ")[:2])
+        if seen is not None:
+            seen.append(f"{method} {path}")
         # exact match first so a fixture can pin the query string the client
         # must send; the stripped fallback keeps every routes table that only
         # cares about the resource working unchanged
         key = path if path in table else path.split("?")[0]
         found = key in table
-        body = json.dumps(table.get(key)).encode()
+        answer = table.get(key)
+        if isinstance(answer, tuple):
+            status, answer = cast(tuple[int, object], answer)
+        else:
+            status = 200 if found else 404
+        body = json.dumps(answer).encode()
         writer.write(
-            f"HTTP/1.1 {200 if found else 404} .\r\n"
+            f"HTTP/1.1 {status} .\r\n"
             f"Content-Type: application/json\r\n"
             # this server answers one request per connection, and HTTP/1.1
             # means keep-alive unless a response says otherwise. Without this
@@ -827,3 +843,155 @@ def test_a_knob_the_loop_cannot_turn_is_no_level(sockets: Path) -> None:
     assert task.sandboxes is None
     assert task.connections_ceiling is None
     assert task.scale_downs == ()
+
+
+# --- the interim metrics ------------------------------------------------
+
+
+def listing(scored: int) -> dict[str, object]:
+    """A sample listing with `scored` completed samples carrying scores, beside one that does not and one still running."""
+    return {
+        "samples": [
+            sample(2, 10, 20),
+            *({"status": "completed", "scores": {"exact": 1.0}} for _ in range(scored)),
+            {"status": "completed", "scores": {}},
+        ]
+    }
+
+
+PASS_STARTED: dict[str, object] = {
+    "ok": True,
+    "pass_id": "p1",
+    "running": True,
+    "completed_only": True,
+    "changed": True,
+}
+
+PASS_DONE: dict[str, object] = {
+    "ok": True,
+    "pass_id": "p1",
+    "running": False,
+    "completed_only": True,
+    "result": {
+        "counts": {"completed_scored": 3},
+        "samples": [],
+        "metrics": [
+            {
+                "scorer": "exact",
+                "reducer": None,
+                "metrics": {"accuracy": 0.5, "stderr": 0.1},
+            }
+        ],
+        "interim": True,
+    },
+}
+
+PASS_EMPTY: dict[str, object] = {
+    **PASS_DONE,
+    "result": {"counts": {"completed_scored": 0}, "samples": [], "metrics": None},
+}
+
+PASS_TORN: dict[str, object] = {
+    **PASS_DONE,
+    "interrupted": "task finished or was retried during the pass",
+}
+
+HARVESTED = Interim(
+    scored=3,
+    entries=(
+        InterimEntry(
+            name="exact", reducer=None, metrics={"accuracy": 0.5, "stderr": 0.1}
+        ),
+    ),
+)
+
+START = "POST /tasks/T1/score?completed_only=true"
+
+
+def scoring(
+    scored: int, *, post: object = PASS_STARTED, get: object = PASS_DONE
+) -> Routes:
+    """A worker with `scored` scored samples whose pass answers `post` to the start and `get` to the poll."""
+    return {
+        **WORKER,
+        "/evals/E1/samples": listing(scored),
+        "/tasks/T1/score?completed_only=true": post,
+        "/tasks/T1/score": get,
+    }
+
+
+def test_a_scored_sample_harvests_the_interim_metrics(sockets: Path) -> None:
+    seen: list[str] = []
+    with worker(sockets / "w.sock", scoring(3), seen=seen) as target:
+        (task,) = read_fleet([target], NO_PACKING).tasks.values()
+
+    assert task.eval_id == "E1"
+    assert task.interim == HARVESTED
+    assert seen.count(START) == 1
+    assert "GET /tasks/T1/score" in seen
+
+
+def test_nothing_scored_asks_for_nothing(sockets: Path) -> None:
+    # the gate: a listing with no scored sample has nothing a pass could fold,
+    # so the request is not made at all
+    seen: list[str] = []
+    with worker(sockets / "w.sock", scoring(0), seen=seen) as target:
+        (task,) = read_fleet([target], NO_PACKING).tasks.values()
+
+    assert task.interim is None
+    assert not any("score" in request for request in seen)
+
+
+def test_a_count_that_has_not_moved_reuses_the_last_harvest(sockets: Path) -> None:
+    seen: list[str] = []
+    with worker(sockets / "w.sock", scoring(3), seen=seen) as target:
+        (task,) = read_fleet(
+            [target], NO_PACKING, known={"E1": HARVESTED}
+        ).tasks.values()
+
+    assert task.interim is HARVESTED
+    assert not any("score" in request for request in seen)
+
+
+def test_a_count_that_grew_asks_again(sockets: Path) -> None:
+    stale = Interim(scored=2, entries=HARVESTED.entries)
+    seen: list[str] = []
+    with worker(sockets / "w.sock", scoring(3), seen=seen) as target:
+        (task,) = read_fleet([target], NO_PACKING, known={"E1": stale}).tasks.values()
+
+    assert task.interim == HARVESTED
+    assert seen.count(START) == 1
+
+
+@pytest.mark.parametrize(
+    "post, get",
+    [
+        pytest.param((409, {"error": "no scorers"}), PASS_DONE, id="no-scorers"),
+        pytest.param((404, {"error": "task T1 not found"}), PASS_DONE, id="gone"),
+        pytest.param(PASS_STARTED, PASS_EMPTY, id="nothing-folded"),
+        pytest.param(PASS_STARTED, PASS_TORN, id="torn-down"),
+        pytest.param(PASS_STARTED, (500, {"error": "fell over"}), id="poll-failed"),
+    ],
+)
+def test_a_pass_that_declines_is_recorded_as_empty_at_this_count(
+    sockets: Path, post: object, get: object
+) -> None:
+    # recorded rather than left `None`, so the same count is not asked again
+    # next turn; and the row's other columns are untouched
+    with worker(sockets / "w.sock", scoring(3, post=post, get=get)) as target:
+        (task,) = read_fleet([target], NO_PACKING).tasks.values()
+
+    assert task.interim == Interim(scored=3)
+    assert task.samples.completed == 5
+    assert task.usage.turns == 2
+
+
+def test_a_pass_still_running_after_the_last_poll_is_not_waited_for(
+    sockets: Path,
+) -> None:
+    seen: list[str] = []
+    with worker(sockets / "w.sock", scoring(3, get=PASS_STARTED), seen=seen) as target:
+        (task,) = read_fleet([target], NO_PACKING).tasks.values()
+
+    assert task.interim == Interim(scored=3)
+    assert seen.count("GET /tasks/T1/score") == POLLS
