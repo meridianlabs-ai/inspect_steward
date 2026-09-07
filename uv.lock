@@ -1931,8 +1931,8 @@ wheels = [
 
 [[package]]
 name = "inspect-scout"
-version = "0.5.0"
-source = { registry = "https://pypi.org/simple" }
+version = "0.5.1.dev3"
+source = { git = "https://github.com/meridianlabs-ai/inspect_scout?rev=main#5375cdcfa40482331d83d1d625b01c2b75faf8c2" }
 dependencies = [
     { name = "anyio" },
     { name = "click" },
@@ -1964,10 +1964,6 @@ dependencies = [
     { name = "uvicorn" },
     { name = "wrapt" },
     { name = "zstandard" },
-]
-sdist = { url = "https://files.pythonhosted.org/packages/d0/16/ebee1fc05300899ef044b2a4ea1e48ec1251eb5a9b3b071c40e10aeb5d24/inspect_scout-0.5.0.tar.gz", hash = "sha256:6416eb4c6ce08d8ee7e3a98fee60d0e84b1212d60014684ee3474364d5d1ee3c", size = 2784090, upload-time = "2026-09-04T02:11:11.618Z" }
-wheels = [
-    { url = "https://files.pythonhosted.org/packages/f2/38/8e77959434a69b77da35ff68cb68aa3e9f69bc107f9686370a0123f1f6fd/inspect_scout-0.5.0-py3-none-any.whl", hash = "sha256:66d818a8fb8a7b134227871b1a131c56a9f0ac435bb51bd38cf060ab3ce64eb1", size = 2869997, upload-time = "2026-09-04T02:11:09.289Z" },
 ]
 
 [[package]]
@@ -2042,7 +2038,7 @@ requires-dist = [
     { name = "httpx", specifier = ">=0.27" },
     { name = "inspect-ai", specifier = ">=0.3.263" },
     { name = "inspect-flow", marker = "extra == 'flow'", specifier = ">=0.12.0" },
-    { name = "inspect-scout", specifier = ">=0.5.0" },
+    { name = "inspect-scout", git = "https://github.com/meridianlabs-ai/inspect_scout?rev=main" },
     { name = "platformdirs", specifier = ">=4.0" },
     { name = "psutil", specifier = ">=5.9" },
     { name = "python-dotenv", specifier = ">=1.0" },

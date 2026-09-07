@@ -75,6 +75,16 @@ class Smoke:
     landed: int = 0
     """Samples the rehearsal actually produced."""
 
+    landed_by_task: tuple[tuple[str, int], ...] = ()
+    """Per task with a readable current log, its display key and the samples it landed.
+
+    **What keeps a zero from reading as silence.** `landed` is one aggregate, so an arm that produced
+    nothing — a credential storm the cap reaped mid-retry, a sandbox that never started — just fails
+    to add to the total and disappears among the arms that did. Carried per task, that arm is a `0`
+    row the digest can name rather than an absence a reader has to notice is missing. A task with no
+    readable current log is absent rather than zero (`_smoke.run.landed_by_task`); the no-log case is
+    `errors`' to name."""
+
     population: int = 0
     """Samples the real run would produce, from the untruncated capture. A count rather than an estimate, and the thing a reader is actually sizing up — the rehearsal ran `landed` of them."""
 
@@ -265,7 +275,31 @@ def _ran(smoke: Smoke) -> list[str]:
     ]
     if smoke.population:
         lines.extend([f"The run itself is {smoke.population:,} samples.", ""])
+    lines.extend(_barren(smoke))
     return lines
+
+
+def _barren(smoke: Smoke) -> list[str]:
+    """Name any arm that ran and produced no samples, which the aggregate count hides.
+
+    **Report, not verdict.** Under a cap a zero can be the deadline cutting an arm off before its
+    first sample — the tool working — so this does not fail the rehearsal; it makes the fact visible
+    and points at where its cause would be. An arm erroring on its own terms (auth, quota, a bad key)
+    lands here too: its samples never finalized, so the errored *count* is zero and only the worker
+    log carries the reason.
+    """
+    barren = [key for key, count in smoke.landed_by_task if count == 0]
+    if not barren:
+        return []
+    named = ", ".join(f"`{key}`" for key in barren)
+    one = len(barren) == 1
+    return [
+        f"Produced no samples — nothing was rehearsed for {'this arm' if one else 'these arms'}: "
+        f"{named}. If {'it was' if one else 'they were'} erroring on {'its' if one else 'their'} "
+        "own terms (auth, quota, a bad key), the errored count is 0 because none finalized — read "
+        f"the worker log for {'it' if one else 'each'}.",
+        "",
+    ]
 
 
 def _satisfied(smoke: Smoke) -> list[str]:
@@ -379,6 +413,11 @@ def echo_smoke(smoke: Smoke) -> list[str]:
             f"log store — not rehearsed"
         )
         lines.extend(f"    {one.key} — {one.source}" for one in smoke.satisfied)
+    lines.extend(
+        f"  ! no samples: {key} produced none — check its worker log"
+        for key, count in smoke.landed_by_task
+        if count == 0
+    )
     for check in smoke.probe.checks:
         mark = _MARK[check.verdict]
         waived = " (waived)" if check.name in smoke.waived_away else ""

@@ -46,6 +46,8 @@ from inspect_scout import (
 )
 from pydantic import BaseModel, Field
 
+from .model import scan_model_resolver
+
 
 def needs_timeline(transcript: Transcript) -> bool:
     """Whether scanning this transcript requires its timeline (and events).
@@ -334,11 +336,38 @@ def scoring_integrity(model: str | Model | None = None) -> Scanner[Transcript]:
     async def question(transcript: Transcript) -> str:
         return integrity_question(transcript)
 
-    llm = llm_scanner(
-        question=question, answer=AnswerStructured(type=IntegrityAnswer), model=model
-    )
+    def build(scan_model: str | Model | None) -> Scanner[Transcript]:
+        return llm_scanner(
+            question=question,
+            answer=AnswerStructured(type=IntegrityAnswer),
+            model=scan_model,
+        )
+
+    # An explicit model is the caller's word and wins outright — the ScannerSpec
+    # `params.model` path, and the behaviour that predates the resolver.
+    if model is not None:
+        llm = build(model)
+
+        async def scan(transcript: Transcript) -> Result | list[Result]:
+            return await llm(transcript)
+
+        return scan
+
+    # No explicit model: resolve the scan model per transcript from the model
+    # that produced it (`Transcript.model`), via the registered resolver. No
+    # resolver — or a resolver that returns None for this transcript — falls
+    # through to `model=None`, i.e. the ambient scan model, byte-identical to the
+    # pre-resolver default. Each distinct resolved model is built once and
+    # memoised, so a mixed-vendor run pays one construction per scan model rather
+    # than one per transcript (cf. veevals `_util.judgescan.mapped_judge`).
+    resolver = scan_model_resolver()
+    built: dict[str | None, Scanner[Transcript]] = {}
 
     async def scan(transcript: Transcript) -> Result | list[Result]:
+        resolved = resolver(transcript.model) if resolver is not None else None
+        llm = built.get(resolved)
+        if llm is None:
+            llm = built[resolved] = build(resolved)
         return await llm(transcript)
 
     return scan

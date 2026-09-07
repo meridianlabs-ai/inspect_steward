@@ -5,7 +5,12 @@ The resolution *into* the declared value — flag over file over `STEWARD_SCAN_M
 
 import os
 
-from inspect_steward._scan import SCOUT_SCAN_MODEL, establish_scan_model
+from inspect_steward._scan import (
+    SCOUT_SCAN_MODEL,
+    establish_scan_model,
+    scan_model_resolver,
+    set_scan_model_resolver,
+)
 from pytest import MonkeyPatch
 
 
@@ -39,3 +44,19 @@ def test_a_declared_model_overwrites_a_differing_ambient_one(
 def test_nothing_configured_is_nothing_configured() -> None:
     assert establish_scan_model(None) is None
     assert SCOUT_SCAN_MODEL not in os.environ
+
+
+def test_the_scan_model_resolver_registers_and_clears() -> None:
+    """The per-sample rung a consumer plugs its policy into; None clears it again."""
+    assert scan_model_resolver() is None
+
+    def policy(model: str | None) -> str | None:
+        return "openai/judge" if model else None
+
+    set_scan_model_resolver(policy)
+    try:
+        assert scan_model_resolver() is policy
+        assert scan_model_resolver()("anthropic/subject") == "openai/judge"  # type: ignore[misc]
+    finally:
+        set_scan_model_resolver(None)
+    assert scan_model_resolver() is None

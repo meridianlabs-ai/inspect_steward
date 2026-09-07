@@ -31,7 +31,12 @@ from .._evalset.manifest import (
     shaping,
     worker_overrides,
 )
-from .._evalset.observe import ObservedLogs, observe_logs, observe_tasks
+from .._evalset.observe import (
+    ObservedLogs,
+    TaskObservation,
+    observe_logs,
+    observe_tasks,
+)
 from .._launch import LaunchError
 from .._launch.launch import (
     capture_run,
@@ -706,13 +711,49 @@ def current_records(
     Returns:
         Task identifier to record count, for every task whose current log was read.
     """
+    return {
+        obs.identifier: count
+        for obs, count in _observed_records(manifest, logs, read_logs)
+    }
+
+
+def _observed_records(
+    manifest: Manifest, logs: ObservedLogs, read_logs: Sequence[EvalLog]
+) -> list[tuple[TaskObservation, int]]:
+    """Each task with a readable current log, paired with the sample records it holds.
+
+    The one read of the record counts that both :func:`current_records` (by identifier, for the slice
+    check and the coverage denominator) and :func:`landed_by_task` (by display key, for the digest's
+    per-arm breakdown) are built from — so the number an arm is reported to have landed and the number
+    the verdict is computed against are the same number.
+    """
     records = {log.location: len(log.samples or []) for log in read_logs}
-    landed: dict[str, int] = {}
+    rows: list[tuple[TaskObservation, int]] = []
     for task in observe_tasks(manifest, logs).tasks:
         current = task.current
         if current is not None and current.location in records:
-            landed[task.identifier] = records[current.location]
-    return landed
+            rows.append((task, records[current.location]))
+    return rows
+
+
+def landed_by_task(
+    manifest: Manifest, logs: ObservedLogs, read_logs: Sequence[EvalLog]
+) -> list[tuple[str, int]]:
+    """Per task with a readable current log, its display key and the samples it landed.
+
+    **What tells a zero apart from silence.** The digest reports one aggregate `landed`, so an arm
+    that produced nothing — a credential storm the cap then reaped, a sandbox that never came up —
+    just fails to add to the total and vanishes among the arms that did land samples. A run spanning
+    arms most needs the arm that got zero named; carried per task, a zero is a row rather than an
+    absence. Keyed by the operator-facing `key`, in manifest order.
+
+    A task with no readable current log is absent rather than zero, on `current_records`' discipline:
+    *nothing is known* and *nothing is there* send a reader after two different problems, and the
+    no-log case is `unfinished`'s to name.
+    """
+    return [
+        (obs.key, count) for obs, count in _observed_records(manifest, logs, read_logs)
+    ]
 
 
 def failures(logs: ObservedLogs) -> tuple[tuple[str, ...], int]:
@@ -818,7 +859,8 @@ def conclude(
     # the current attempts rather than every file in the directory, so this
     # number, the slice check and the coverage denominator are all over the
     # same population -- a retry's superseded log is history, not results
-    landed = sum(current_records(rehearsed, logs, read_logs).values())
+    per_task = landed_by_task(rehearsed, logs, read_logs)
+    landed = sum(count for _, count in per_task)
     return Smoke(
         outcome=outcome(
             result,
@@ -843,6 +885,7 @@ def conclude(
         waived=tuple(waived),
         tasks=len(rehearsed.tasks),
         landed=landed,
+        landed_by_task=tuple(per_task),
         # `samples × epochs`, which is `observe`'s own `required_samples` and
         # has to be: the numerator counts sample *records* off the logs, and a
         # two-epoch task contributes two of them per dataset row

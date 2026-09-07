@@ -8,6 +8,7 @@
 """
 
 import os
+from collections.abc import Callable
 
 SCOUT_SCAN_MODEL = "SCOUT_SCAN_MODEL"
 """Scout's scan-model variable, which Steward both reads and writes."""
@@ -31,3 +32,42 @@ def establish_scan_model(declared: str | bool | None = None) -> str | None:
         os.environ[SCOUT_SCAN_MODEL] = declared
         return declared
     return os.environ.get(SCOUT_SCAN_MODEL, "").strip() or None
+
+
+#: Type of a per-sample scan-model resolver: given the model that produced a
+#: transcript (`Transcript.model`, which may be `None`), return the model to
+#: scan it with, or `None` to defer to the ambient default.
+ScanModelResolver = Callable[[str | None], str | None]
+
+_resolver: "ScanModelResolver | None" = None
+
+
+def set_scan_model_resolver(resolver: "ScanModelResolver | None") -> None:
+    """Register a per-sample scan-model policy, or clear it with `None`.
+
+    A **per-sample rung between the explicit scanner model and the fleet-wide
+    `SCOUT_SCAN_MODEL`/ambient default.** `SCOUT_SCAN_MODEL` and a scanner's
+    injected `params.model` are one value for the whole fleet — settled before
+    any worker spawns — which cannot be right for a launch spanning arms of
+    different vendors, where the model that should grade a transcript is a
+    function of the vendor that produced it. A resolver is that function,
+    consulted once per transcript inside the scan.
+
+    Inversion of control, deliberately: Steward owns the seam and knows nothing
+    of who registers it. The one built-in consumer is `scoring_integrity`, which
+    calls it only when constructed with no explicit `model`; a resolver that
+    returns `None` for a transcript leaves that transcript on the ambient default
+    exactly as if none were registered, so registering one is safe by
+    construction and never worsens the no-model case.
+
+    Kept off the `SCOUT_SCAN_MODEL` string path on purpose: a run with no
+    resolver is byte-identical to before, and the scan-config drift hash
+    (`_scan.bracket`) — which keys on the settled string — is unaffected.
+    """
+    global _resolver
+    _resolver = resolver
+
+
+def scan_model_resolver() -> "ScanModelResolver | None":
+    """The registered per-sample scan-model resolver, or `None`."""
+    return _resolver

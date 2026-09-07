@@ -16,7 +16,13 @@ from .bracket import (
 )
 from .builtin import INTEGRITY_SCANNER, builtin_scanners
 from .findings import ScanFindings, scan_findings
-from .model import SCOUT_SCAN_MODEL, establish_scan_model
+from .model import (
+    SCOUT_SCAN_MODEL,
+    ScanModelResolver,
+    establish_scan_model,
+    scan_model_resolver,
+    set_scan_model_resolver,
+)
 from .summary import finalize_scan, rebuild_summary, sync_scan
 
 __all__ = [
@@ -24,8 +30,11 @@ __all__ = [
     "SCOUT_SCAN_MODEL",
     "ScanError",
     "ScanFindings",
+    "ScanModelResolver",
     "builtin_scanners",
     "establish_scan_model",
+    "scan_model_resolver",
+    "set_scan_model_resolver",
     "existing_eval_set_id",
     "finalize_scan",
     "initialize_scan",
