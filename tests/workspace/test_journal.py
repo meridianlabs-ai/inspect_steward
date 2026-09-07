@@ -14,6 +14,8 @@ from pathlib import Path
 import pytest
 from inspect_steward._workspace import (
     ACKNOWLEDGED,
+    AGENT_ARMED,
+    AGENT_DISARMED,
     ARMED,
     COLLECTED,
     DISARMED,
@@ -27,6 +29,7 @@ from inspect_steward._workspace import (
     append_event,
     create_workspace,
     read_acks,
+    read_agent_armed,
     read_armed,
     read_collected,
     read_journal,
@@ -498,6 +501,39 @@ def test_disarming_clears_it(tmp_path: Path) -> None:
     append_event(journal, DISARMED, scheduler="cron")
 
     assert read_armed(read_journal(journal).events) is None
+
+
+def test_the_tend_timer_and_the_agent_collect_fold_independently(
+    tmp_path: Path,
+) -> None:
+    # the two are a separate event pair on purpose: neither fold sees the
+    # other's events, so the agent's collect can never be mistaken for the tend
+    # timer (which is what `unsupervised` watches)
+    journal = tmp_path / "journal.jsonl"
+    append_event(journal, ARMED, scheduler="cron", interval=600, label="steward-aaa")
+    append_event(
+        journal,
+        AGENT_ARMED,
+        scheduler="launchd",
+        interval=900,
+        label="steward-aaa-collect",
+    )
+
+    events = read_journal(journal).events
+    tend = read_armed(events)
+    agent = read_agent_armed(events)
+
+    assert tend is not None and (tend.scheduler, tend.interval) == ("cron", 600)
+    assert agent is not None and (agent.scheduler, agent.interval) == ("launchd", 900)
+
+    # and disarming one leaves the other in force
+    append_event(journal, DISARMED, scheduler="cron")
+    events = read_journal(journal).events
+    assert read_armed(events) is None
+    assert read_agent_armed(events) is not None
+
+    append_event(journal, AGENT_DISARMED, scheduler="launchd")
+    assert read_agent_armed(read_journal(journal).events) is None
 
 
 ARMED_PAYLOADS: list[tuple[str, dict[str, object]]] = [

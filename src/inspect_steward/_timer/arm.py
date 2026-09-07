@@ -10,17 +10,28 @@ The backends know how to install a timer; this is what makes doing so a fact abo
 """
 
 from dataclasses import dataclass
+from typing import Callable
 
 from .._workspace import (
+    AGENT_ARMED,
+    AGENT_DISARMED,
     ARMED,
     DISARMED,
     Armed,
     Workspace,
     append_event,
+    read_agent_armed,
     read_armed,
     read_journal,
 )
-from .entry import Runner, TimerEntry, TimerError, run_command, timer_entry
+from .entry import (
+    Runner,
+    TimerEntry,
+    TimerError,
+    agent_timer_entry,
+    run_command,
+    timer_entry,
+)
 from .scheduler import Scheduler, detect, scheduler
 
 
@@ -36,29 +47,112 @@ class Armament:
 
 
 def entry_for(workspace: Workspace, interval: int) -> TimerEntry:
-    """This workspace's entry, as every backend needs it described."""
+    """This workspace's tend-timer entry, as every backend needs it described."""
     return timer_entry(workspace.root, interval, output=workspace.timer_log)
 
 
-def recorded(workspace: Workspace) -> Armed | None:
-    """What the journal says is armed, without asking any scheduler.
+def agent_entry_for(
+    workspace: Workspace, interval: int, command: list[str] | None = None
+) -> TimerEntry:
+    """This workspace's agent-collect entry, as every backend needs it described.
 
-    Args:
-        workspace: The workspace.
+    `command` is what `arm_agent` schedules; a disarm or a status probe needs only the entry's label, so it passes nothing and the argv is left empty.
+    """
+    return agent_timer_entry(
+        workspace.root, interval, output=workspace.collect_log, command=command or []
+    )
 
-    Returns:
-        The timer in force, or `None` where none was armed.
+
+def _recorded(workspace: Workspace, fold: Callable[..., Armed | None]) -> Armed | None:
+    """What the journal's `fold` says is armed, without asking any scheduler.
 
     Raises:
-        TimerError: The journal could not be read. **An unreadable journal is not *nothing is armed*, and the difference is the whole reason this raises.** This fold is the only record of what was installed, so a `disarm` that read the error as an empty history would print *no timer was armed* while the timer it could not see goes on tending every interval — and would leave nothing able to find it again. A missing journal is still an empty history; an unreadable one is an unanswered question.
+        TimerError: The journal could not be read. **An unreadable journal is not *nothing is armed*, and the difference is the whole reason this raises.** This fold is the only record of what was installed, so a `disarm` that read the error as an empty history would print *no timer was armed* while the entry it could not see goes on firing every interval — and would leave nothing able to find it again. A missing journal is still an empty history; an unreadable one is an unanswered question.
     """
     try:
-        return read_armed(read_journal(workspace.journal).events)
+        return fold(read_journal(workspace.journal).events)
     except OSError as ex:
         raise TimerError(
-            f"this workspace's journal could not be read, so what timer is "
+            f"this workspace's journal could not be read, so what is "
             f"armed here is unknown: {ex}"
         ) from ex
+
+
+def recorded(workspace: Workspace) -> Armed | None:
+    """What the journal says is armed as the tend timer. See `_recorded`."""
+    return _recorded(workspace, read_armed)
+
+
+def recorded_agent(workspace: Workspace) -> Armed | None:
+    """What the journal says is armed as the agent collect. See `_recorded`."""
+    return _recorded(workspace, read_agent_armed)
+
+
+def _arm(
+    workspace: Workspace,
+    entry: TimerEntry,
+    name: str | None,
+    runner: Runner,
+    *,
+    armed_event: str,
+    noun: str,
+    predisarm: Callable[[], str | None],
+) -> Armament:
+    """Install `entry` under a chosen backend and record it under `armed_event`.
+
+    Shared by `arm` (the tend timer) and `arm_agent` (the agent collect). `predisarm` is the matching disarm, called first so each kind's arming stays idempotent without either touching the other's entry.
+    """
+    chosen = _choose(entry, name, runner)
+    predisarm()
+    chosen.arm(entry)
+
+    try:
+        append_event(
+            workspace.journal,
+            armed_event,
+            scheduler=chosen.name,
+            interval=entry.interval,
+            label=entry.label,
+        )
+    except OSError as ex:
+        # **An installed entry that nothing recorded is one nothing can remove.**
+        # This event is the only record of which backend holds the entry, so
+        # without it a disarm has nowhere to look and the machine goes on firing
+        # every interval until somebody edits a crontab by hand. Undoing the
+        # arming is the only exit that leaves the two halves agreeing -- and if
+        # that fails too, its error is the one worth surfacing, since it is the
+        # one that names something still installed
+        chosen.disarm(entry)
+        raise TimerError(
+            f"the {noun} was installed and then removed again, because the "
+            f"journal that has to record it could not be written: {ex}"
+        ) from ex
+
+    return Armament(
+        scheduler=chosen.name,
+        interval=entry.interval,
+        label=entry.label,
+        description=chosen.describe(entry),
+    )
+
+
+def _disarm(
+    workspace: Workspace,
+    runner: Runner,
+    *,
+    current: Armed | None,
+    entry: TimerEntry | None,
+    disarmed_event: str,
+) -> str | None:
+    """Remove `entry` from the backend `current` names, and record the disarm.
+
+    Shared by `disarm` and `disarm_agent`. Silent when `current` is `None` — which is also what an arming calls to stay idempotent, and *there was nothing armed* is the state a disarm wanted either way. `entry` is `None` exactly when `current` is.
+    """
+    if current is None or entry is None:
+        return None
+    scheduler(current.scheduler, runner=runner).disarm(entry)
+    append_event(workspace.journal, disarmed_event, scheduler=current.scheduler)
+    return current.scheduler
 
 
 def arm(
@@ -68,7 +162,7 @@ def arm(
     name: str | None = None,
     runner: Runner | None = None,
 ) -> Armament:
-    """Install a timer for this workspace and record that it exists.
+    """Install a tend timer for this workspace and record that it exists.
 
     Args:
         workspace: The workspace to supervise.
@@ -82,47 +176,57 @@ def arm(
     Raises:
         TimerError: The named backend cannot be used here, the scheduler refused, or the journal that has to record the arming could not be written.
     """
-    entry = entry_for(workspace, interval)
-
     runner = runner or run_command
-    chosen = _choose(entry, name, runner)
-    disarm(workspace, runner=runner)
-    chosen.arm(entry)
+    return _arm(
+        workspace,
+        entry_for(workspace, interval),
+        name,
+        runner,
+        armed_event=ARMED,
+        noun="timer",
+        predisarm=lambda: disarm(workspace, runner=runner),
+    )
 
-    try:
-        append_event(
-            workspace.journal,
-            ARMED,
-            scheduler=chosen.name,
-            interval=interval,
-            label=entry.label,
-        )
-    except OSError as ex:
-        # **An installed timer that nothing recorded is one nothing can remove.**
-        # This event is the only record of which backend holds the entry, so
-        # without it `disarm` has nowhere to look and the machine goes on tending
-        # every interval until somebody edits a crontab by hand. Undoing the
-        # arming is the only exit that leaves the two halves agreeing -- and if
-        # that fails too, its error is the one worth surfacing, since it is the
-        # one that names something still installed
-        chosen.disarm(entry)
-        raise TimerError(
-            f"the timer was installed and then removed again, because the "
-            f"journal that has to record it could not be written: {ex}"
-        ) from ex
 
-    return Armament(
-        scheduler=chosen.name,
-        interval=interval,
-        label=entry.label,
-        description=chosen.describe(entry),
+def arm_agent(
+    workspace: Workspace,
+    interval: int,
+    command: list[str],
+    *,
+    name: str | None = None,
+    runner: Runner | None = None,
+) -> Armament:
+    """Install a recurring agent collect for this workspace and record that it exists.
+
+    The `arm` counterpart for the agent half of the loop: an independent scheduler entry that runs `command` (an `<agent> exec` invocation) on the same interval, taken down separately and never seen by the tend timer's supervision.
+
+    Args:
+        workspace: The workspace.
+        interval: Seconds between collects.
+        command: The argv to schedule, with an absolute program path.
+        name: A specific backend, or `None` to detect one.
+        runner: How backends reach the system.
+
+    Returns:
+        What was installed.
+
+    Raises:
+        TimerError: The named backend cannot be used here, the scheduler refused, or the journal that has to record the arming could not be written.
+    """
+    runner = runner or run_command
+    return _arm(
+        workspace,
+        agent_entry_for(workspace, interval, command),
+        name,
+        runner,
+        armed_event=AGENT_ARMED,
+        noun="schedule",
+        predisarm=lambda: disarm_agent(workspace, runner=runner),
     )
 
 
 def disarm(workspace: Workspace, *, runner: Runner | None = None) -> str | None:
-    """Remove the timer this workspace recorded, if it recorded one.
-
-    Silent when nothing is armed, because that is also what `arm` calls to make itself idempotent and because *there was no timer* is the state a disarm wanted either way.
+    """Remove the tend timer this workspace recorded, if it recorded one.
 
     Args:
         workspace: The workspace.
@@ -135,13 +239,38 @@ def disarm(workspace: Workspace, *, runner: Runner | None = None) -> str | None:
         TimerError: The scheduler would not remove it.
     """
     current = recorded(workspace)
-    if current is None:
-        return None
+    entry = entry_for(workspace, current.interval) if current else None
+    return _disarm(
+        workspace,
+        runner or run_command,
+        current=current,
+        entry=entry,
+        disarmed_event=DISARMED,
+    )
 
-    entry = entry_for(workspace, current.interval)
-    scheduler(current.scheduler, runner=runner or run_command).disarm(entry)
-    append_event(workspace.journal, DISARMED, scheduler=current.scheduler)
-    return current.scheduler
+
+def disarm_agent(workspace: Workspace, *, runner: Runner | None = None) -> str | None:
+    """Remove the agent collect this workspace recorded, if it recorded one.
+
+    Args:
+        workspace: The workspace.
+        runner: How backends reach the system.
+
+    Returns:
+        The backend that was removed, or `None` where nothing was armed.
+
+    Raises:
+        TimerError: The scheduler would not remove it.
+    """
+    current = recorded_agent(workspace)
+    entry = agent_entry_for(workspace, current.interval) if current else None
+    return _disarm(
+        workspace,
+        runner or run_command,
+        current=current,
+        entry=entry,
+        disarmed_event=AGENT_DISARMED,
+    )
 
 
 @dataclass(frozen=True)
@@ -178,10 +307,30 @@ class Installed:
         )
 
 
+def _installed(
+    workspace: Workspace,
+    interval: int | None,
+    current: Armed | None,
+    entry: TimerEntry | None,
+    runner: Runner,
+) -> Installed:
+    """Pair the journal record with a scheduler probe. Shared by `installed`/`installed_agent`."""
+    present: bool | None = None
+    if current is not None and entry is not None:
+        try:
+            present = scheduler(current.scheduler, runner=runner).armed(entry)
+        except TimerError:
+            # a backend this version does not know, or one whose command is
+            # gone. Unknown rather than absent: claiming the entry is missing
+            # would be a stronger statement than anything was learned here
+            present = None
+    return Installed(armed=current, present=present, interval=interval)
+
+
 def installed(
     workspace: Workspace, interval: int | None, *, runner: Runner | None = None
 ) -> Installed:
-    """Read the record and then ask the scheduler whether it is true.
+    """Read the tend-timer record and then ask the scheduler whether it is true.
 
     The one place that pays for a probe. Every other reader — a tend, a `status`, the item projection — goes on the journal alone, because this costs a subprocess and they run every ten minutes.
 
@@ -194,17 +343,28 @@ def installed(
         Both answers, and whether they agree.
     """
     current = recorded(workspace)
-    present: bool | None = None
-    if current is not None:
-        try:
-            backend = scheduler(current.scheduler, runner=runner or run_command)
-            present = backend.armed(entry_for(workspace, current.interval))
-        except TimerError:
-            # a backend this version does not know, or one whose command is
-            # gone. Unknown rather than absent: claiming the timer is missing
-            # would be a stronger statement than anything was learned here
-            present = None
-    return Installed(armed=current, present=present, interval=interval)
+    entry = entry_for(workspace, current.interval) if current else None
+    return _installed(workspace, interval, current, entry, runner or run_command)
+
+
+def installed_agent(
+    workspace: Workspace, interval: int | None, *, runner: Runner | None = None
+) -> Installed:
+    """Read the agent-collect record and then ask the scheduler whether it is true.
+
+    The `installed` counterpart for `steward schedule status`.
+
+    Args:
+        workspace: The workspace.
+        interval: What the workspace currently asks for, for the drift comparison.
+        runner: How backends reach the system.
+
+    Returns:
+        Both answers, and whether they agree.
+    """
+    current = recorded_agent(workspace)
+    entry = agent_entry_for(workspace, current.interval) if current else None
+    return _installed(workspace, interval, current, entry, runner or run_command)
 
 
 def _choose(entry: TimerEntry, name: str | None, runner: Runner) -> Scheduler:
@@ -222,9 +382,14 @@ def _choose(entry: TimerEntry, name: str | None, runner: Runner) -> Scheduler:
 __all__ = [
     "Armament",
     "Installed",
+    "agent_entry_for",
     "arm",
+    "arm_agent",
     "disarm",
+    "disarm_agent",
     "entry_for",
     "installed",
+    "installed_agent",
     "recorded",
+    "recorded_agent",
 ]

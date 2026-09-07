@@ -34,7 +34,7 @@ from .._tend import TendError, TendResult, tend
 from .._tend.anomalies_md import outcomes_grid
 from .._tend.table import plain_table
 from .._tend.turn import SCAN_FOLD_RESTORED
-from .._timer import TimerError, disarm
+from .._timer import TimerError, disarm, disarm_agent
 from .._workspace import (
     ACTION,
     SIGNOFF,
@@ -92,7 +92,10 @@ class Signoff:
     """The superseded attempts moved out of `logs/`, or `None` where nothing was signed."""
 
     disarmed: str | None = None
-    """The scheduler taken down, or `None` where nothing was armed."""
+    """The tend timer's scheduler taken down, or `None` where nothing was armed."""
+
+    disarmed_agent: str | None = None
+    """The agent collect's scheduler taken down, or `None` where nothing was scheduled. Separate from `disarmed` because the two are armed and removed independently."""
 
     warnings: list[str] = field(default_factory=list[str])
     """Things worth telling the signer that are not refusals — a paused run, journal damage, a log that would not read, a move that failed."""
@@ -342,6 +345,18 @@ def _signoff(
             f"it is still tending, so remove it with `steward timer disarm`"
         ) from ex
 
+    # the agent's own recurring collect comes down too -- a signed run has
+    # nothing left for the agent to look at, so a schedule left firing spends
+    # its harness's budget every interval against the same explicit instruction
+    try:
+        disarmed_agent = disarm_agent(workspace)
+    except (TimerError, OSError) as ex:
+        raise SignoffError(
+            f"the run was signed and its timer taken down, but the agent's "
+            f"scheduled collect could not be removed: {ex} — it is still "
+            f"collecting, so remove it with `steward schedule disarm`"
+        ) from ex
+
     _post(workspace, signed, signature)
     return Signoff(
         turn=signed,
@@ -350,6 +365,7 @@ def _signoff(
         published=published,
         unpublished=unpublished,
         disarmed=disarmed,
+        disarmed_agent=disarmed_agent,
         warnings=warnings,
     )
 

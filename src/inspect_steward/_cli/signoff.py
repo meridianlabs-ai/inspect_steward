@@ -179,6 +179,10 @@ def _echo_signoff(result: Signoff, root: Path) -> None:
         click.echo(f"  {result.unpublished}")
     if result.disarmed is not None:
         click.echo(f"  disarmed {result.disarmed} — nothing tends this run now")
+    if result.disarmed_agent is not None:
+        click.echo(
+            f"  disarmed {result.disarmed_agent} — nothing collects this run now"
+        )
     if result.unverified is not None:
         click.echo(f"  ! {result.unverified}")
         return
@@ -247,6 +251,7 @@ def _signoff_json(result: Signoff) -> str:
             },
             "unpublished": result.unpublished,
             "disarmed": result.disarmed,
+            "disarmed_agent": result.disarmed_agent,
             "unverified": result.unverified,
             "warnings": result.warnings,
         },

@@ -63,7 +63,10 @@ def test_runbook_carries_the_bounds() -> None:
     for bound in (
         "### What you may do",
         "### Stopping",
-        "Edit the definition",
+        # editing the definition is bounded rather than forbidden: never
+        # unbidden, and never reverted to hide drift
+        "never edit it unbidden",
+        "never revert it to hide the drift",
         "Writing `_steward.yaml`",
         "Move or delete a log",
         "Trust the artifact, not the exit code",

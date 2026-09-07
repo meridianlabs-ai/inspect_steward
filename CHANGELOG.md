@@ -1,3 +1,8 @@
+## Unreleased
+
+- Codex CLI background scheduling command (`steward schedule --agent codex`).
+- Cleanup status.md formatting (bold not headers, exclude log).
+
 ## 0.2.1 (06 September 2026)
 
 - Unify agent and slack notification rendering.

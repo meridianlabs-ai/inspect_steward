@@ -36,12 +36,14 @@ from inspect_steward._tend.turn import SCAN_FOLD_FAILED
 from inspect_steward._workspace import (
     ACKNOWLEDGED,
     ACTION,
+    AGENT_ARMED,
     ARMED,
     PAUSED,
     RULING,
     Workspace,
     append_event,
     create_workspace,
+    read_agent_armed,
     read_journal,
     read_signoff,
 )
@@ -502,6 +504,26 @@ def test_signing_takes_the_timer_down(tmp_path: Path) -> None:
     assert turn(workspace).supervision.armed is None  # type: ignore[union-attr]
 
 
+def test_signing_takes_both_schedules_down(tmp_path: Path) -> None:
+    # the tend timer and the agent's own collect are independent entries; a
+    # signed run has nothing left for either, so both come down
+    workspace = done(tmp_path)
+    append_event(workspace.journal, ARMED, scheduler="cron", interval=600, label="w")
+    append_event(
+        workspace.journal,
+        AGENT_ARMED,
+        scheduler="cron",
+        interval=600,
+        label="w-collect",
+    )
+
+    result = sign(workspace)
+
+    assert result.disarmed == "cron"
+    assert result.disarmed_agent == "cron"
+    assert read_agent_armed(read_journal(workspace.journal).events) is None
+
+
 def test_a_signed_run_reads_locked_and_stops_asking_to_be_accepted(
     tmp_path: Path,
 ) -> None:
@@ -889,6 +911,13 @@ def test_a_scan_nothing_could_re_read_leaves_the_timer_up(
     module = importlib.import_module("inspect_steward._signoff.sign")
     workspace = scanned(tmp_path)
     append_event(workspace.journal, ARMED, scheduler="cron", interval=600, label="w")
+    append_event(
+        workspace.journal,
+        AGENT_ARMED,
+        scheduler="cron",
+        interval=600,
+        label="w-collect",
+    )
     real = module.tend
     turns = 0
 
@@ -904,9 +933,13 @@ def test_a_scan_nothing_could_re_read_leaves_the_timer_up(
 
     assert result.signature is not None
     assert result.unverified is not None
+    # both the tend timer and the agent collect stay up: the disarms live past
+    # this early return, for the same reason
     assert result.disarmed is None
+    assert result.disarmed_agent is None
     assert turn(workspace).supervision is not None
     assert turn(workspace).supervision.armed is not None  # type: ignore[union-attr]
+    assert read_agent_armed(read_journal(workspace.journal).events) is not None
 
 
 def test_a_final_turn_that_cannot_run_leaves_the_signature_standing(

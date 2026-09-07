@@ -27,6 +27,8 @@ from .directives import (
 from .journal import (
     ACKNOWLEDGED,
     ACTION,
+    AGENT_ARMED,
+    AGENT_DISARMED,
     ARMED,
     COLLECTED,
     DISARMED,
@@ -65,6 +67,7 @@ from .journal import (
     Smoked,
     append_event,
     read_acks,
+    read_agent_armed,
     read_armed,
     read_collected,
     read_journal,
@@ -107,6 +110,8 @@ from .sync import (
 
 __all__ = [
     "ACKNOWLEDGED",
+    "AGENT_ARMED",
+    "AGENT_DISARMED",
     "ARMED",
     "COLLECTED",
     "DEFAULT_TEND_INTERVAL",
@@ -172,6 +177,7 @@ __all__ = [
     "operator_name",
     "ensure_gitignore",
     "read_acks",
+    "read_agent_armed",
     "read_armed",
     "read_claim",
     "read_collected",

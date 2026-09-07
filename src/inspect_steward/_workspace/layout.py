@@ -268,6 +268,14 @@ class Workspace:
         """
         return self.state / "timer.log"
 
+    @property
+    def collect_log(self) -> Path:
+        """`.steward/collect.log` — what a scheduled agent collect printed, before its harness could log anything.
+
+        The `timer_log` counterpart for the agent's own recurring collect (`steward schedule`): the scheduled `<agent> exec` runs under a stripped environment through the same shell redirect, so its output lands here rather than in a terminal nobody is watching. Kept separate from `timer.log` so a mechanical tend and an agent collect do not interleave their output in one file.
+        """
+        return self.state / "collect.log"
+
     def definition(self, type: DefinitionType) -> Path:
         """Conventional path for a definition of `type`.
 

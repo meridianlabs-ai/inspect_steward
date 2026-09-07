@@ -21,6 +21,8 @@ from typing import cast
 from .._workspace import (
     ACKNOWLEDGED,
     ACTION,
+    AGENT_ARMED,
+    AGENT_DISARMED,
     ARMED,
     DISARMED,
     LAUNCHED,
@@ -47,6 +49,8 @@ _ADMITTED = frozenset(
         RAMP_RESUMED,
         ARMED,
         DISARMED,
+        AGENT_ARMED,
+        AGENT_DISARMED,
         LAUNCHED,
         NOTED,
         RULING,
@@ -154,6 +158,14 @@ def _describe(event: JournalEvent) -> str:
     if event.type == DISARMED:
         scheduler = _text(payload, "scheduler") or "the timer"
         return f"disarmed {scheduler} — nothing tends this run automatically"
+    if event.type == AGENT_ARMED:
+        scheduler = _text(payload, "scheduler") or "a scheduler"
+        interval = payload.get("interval")
+        every = f" every {interval}s" if isinstance(interval, int) else ""
+        return f"scheduled the agent collect on {scheduler}{every}"
+    if event.type == AGENT_DISARMED:
+        scheduler = _text(payload, "scheduler") or "the scheduler"
+        return f"unscheduled the agent collect on {scheduler}"
     if event.type == LAUNCHED:
         tasks = payload.get("tasks")
         count = f"{tasks} tasks" if isinstance(tasks, int) else "the eval set"

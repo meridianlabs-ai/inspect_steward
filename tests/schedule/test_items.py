@@ -53,6 +53,7 @@ from inspect_steward._worker import (
 )
 from inspect_steward._workspace import (
     ACKNOWLEDGED,
+    AGENT_ARMED,
     ARMED,
     COLLECTED,
     DISARMED,
@@ -1130,6 +1131,23 @@ def test_a_run_nobody_ever_armed_is_not_reported_as_unsupervised(
     # a workspace somebody is driving by hand at their terminal, and telling
     # them so every ten minutes is how an attention list stops being read
     workspace = unfinished(tmp_path)
+
+    assert UNSUPERVISED not in items(workspace)
+
+
+def test_the_agent_collect_alone_is_not_supervision(tmp_path: Path) -> None:
+    # scheduling the agent's own collect is not arming the tend timer -- the
+    # supervision floor is the mechanical tend, so a run with only the collect
+    # scheduled is still one nobody armed, and must stay quiet rather than read
+    # as supervised
+    workspace = unfinished(tmp_path)
+    append_event(
+        workspace.journal,
+        AGENT_ARMED,
+        scheduler="cron",
+        interval=600,
+        label="a-collect",
+    )
 
     assert UNSUPERVISED not in items(workspace)
 

@@ -153,3 +153,36 @@ def timer_entry(workspace: Path, interval: int, *, output: Path) -> TimerEntry:
         argv=[sys.executable, "-m", MODULE, "tend"],
         output=output,
     )
+
+
+AGENT_LABEL_SUFFIX = "-collect"
+"""What tells the agent collect's scheduler entry apart from the tend timer's.
+
+The tend timer keeps the bare `entry_label` so an in-flight armed timer stays findable across this change; the agent collect adds this suffix, so the two never share a label and `arm`'s disarm-first step cannot make one remove the other.
+"""
+
+
+def agent_timer_entry(
+    workspace: Path, interval: int, *, output: Path, command: list[str]
+) -> TimerEntry:
+    """Describe a workspace's scheduled agent collect.
+
+    The `timer_entry` counterpart for `steward schedule`: the same backends and the same working directory (so the collect reads the workspace's `.env` exactly as a tend does), but its own suffixed label and its own command — an `<agent> exec` invocation rather than `steward tend`.
+
+    Args:
+        workspace: Workspace root.
+        interval: Seconds between collects.
+        output: Where the collect's output goes (`Workspace.collect_log`).
+        command: The argv a scheduler runs, with an absolute program path for the same PATH reason `timer_entry` uses the absolute interpreter.
+
+    Returns:
+        The entry every backend renders from.
+    """
+    root = Path(workspace).resolve()
+    return TimerEntry(
+        workspace=root,
+        interval=interval,
+        label=entry_label(root) + AGENT_LABEL_SUFFIX,
+        argv=list(command),
+        output=output,
+    )

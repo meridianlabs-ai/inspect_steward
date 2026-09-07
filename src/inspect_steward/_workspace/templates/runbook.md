@@ -107,7 +107,7 @@ Then leave it. The rest of the queue is still yours; the question waits for an o
 
 ## Each session
 
-**Arm your own return first.** Nothing wakes you: the timer runs `steward tend` on its own and never calls you back. Before anything else, and unasked, point whatever your harness has for recurring work, a scheduled prompt or a background watch, at `steward collect` on roughly the tend interval, and handle what it returns. Keep it while the run has work: a task running or queued, a re-run pending, a ruling not yet written into the log. Take it down when the verdict is 🏁 and the decisions section says nothing is for you, and at signoff; a finished run waiting on the operator has nothing for you to read every ten minutes. Arm it again after anything you record that gives the run work: a rerun, a zero, a resume, a launch. If your harness has nothing of the kind, say so once.
+**Arm your own return first.** Nothing wakes you: the timer runs `steward tend` on its own and never calls you back. Before anything else, and unasked, point whatever your harness has for recurring work, a scheduled prompt or a background watch, at `steward collect` on roughly the tend interval, and handle what it returns. Keep it while the run has work: a task running or queued, a re-run pending, a ruling not yet written into the log. Take it down when the verdict is 🏁 and the decisions section says nothing is for you, and at signoff; a finished run waiting on the operator has nothing for you to read every ten minutes. Arm it again after anything you record that gives the run work: a rerun, a zero, a resume, a launch. **If you are the Codex CLI**, you have no in-session scheduler and must not improvise one: run exactly `steward schedule arm --agent codex`, which points a system scheduler at a fresh `steward collect` for you on the same interval, and `steward schedule disarm` to take it down. Arm and take that schedule down on the same rule as the in-session kind above.
 
 Pick up cold, in this order:
 
@@ -162,11 +162,13 @@ Record the answer with the verb the item names, then `steward tend` so it takes 
 
 ### What you may do
 
-**Without asking.** `launch --smoke` and `launch`. `tend`, `status`, `collect`. `raise`, `investigate`, `propose`, `notify`, `note`. `ramp hold` and `ramp resume`. Every `inspect ctl` read, and lowering a worker's concurrency through `inspect ctl config` while containing an incident. `ack --by agent` for an item you resolved yourself, when nobody else would need to know. Writing `analysis.md`.
+**Without asking.** `launch --smoke` and `launch`. `tend`, `status`, `collect`. `schedule arm` and `schedule disarm`, to arm and take down your own return. `raise`, `investigate`, `propose`, `notify`, `note`. `ramp hold` and `ramp resume`. Every `inspect ctl` read, and lowering a worker's concurrency through `inspect ctl config` while containing an incident. `ack --by agent` for an item you resolved yourself, when nobody else would need to know. Writing `analysis.md`.
 
 **Only with an operator's answer, recorded in `--by`.** `ack --by operator`. `rule`, except `dismiss` and a scan finding's `score` (see Anomalies). `signoff`. `pause` and `resume`, except during a stop (see Stopping). `launch --accept CHECK` and `launch --accept-archive`. Writing `_steward.yaml`. Any `inspect ctl` mutation of a sample or task; a pre-authorization in `_steward.yaml` is an answer already given.
 
-**Never.** Edit the definition; raise the change as a question instead. Move or delete a log, not even an empty one. Answer a parked approval or `ask_user`; name the worker, print the command that attaches to it, notify, and wait.
+**Never.** Move or delete a log, not even an empty one. Answer a parked approval or `ask_user`; name the worker, print the command that attaches to it, notify, and wait.
+
+**Editing the definition.** It is the operator's statement of what to run, so never edit it unbidden, and never edit it *back* to erase drift somebody introduced. But when you and the operator agree to change what runs — adding a model, say — either of you may edit it and then run `steward launch`: that recaptures it, schedules the additive task, and clears the drift in one step. You may instead leave the edit for the next tend to raise as drift and relaunch then — the direct path is the same commit without the wait. A launch that would archive existing results still asks first (see Launching).
 
 `--by` records who decided, never who typed. `rule` and `signoff` record the operator's name on their own; pass `--by` only for someone else. `ack`, `pause` and `ramp` take `operator` or `agent`.
 
@@ -223,12 +225,14 @@ A smoke that fails twice is a stop. Notify it explicitly: nothing posts before t
 
 **The tend timer.** `launch` arms it. `steward timer status` is how you check it, not the system scheduler. A run launched `--no-timer` carries an `unsupervised` item until an operator acknowledges it, which says they are driving by hand.
 
+**Your own schedule.** Separate from the tend timer, and for the Codex CLI, which cannot schedule its own return: `steward schedule arm --agent codex` points a system scheduler at a recurring `steward collect` for you, and `steward schedule status` checks it. It is judgement automation you arm and take down (see *Arm your own return first*), not the supervision floor — so its absence is never an `unsupervised` item, and `signoff` takes it down alongside the tend timer.
+
 ### Item kinds
 
 | kind | owner | it means | you |
 |---|---|---|---|
 | `stalled` | operator | a task stopped progressing after its attempts and will not respawn | find out why, then raise |
-| `drift` | operator | the definition changed since it was captured | raise; never edit it back |
+| `drift` | operator | the definition changed since it was captured | raise, or `launch` to adopt an intended change; never revert it to hide the drift |
 | `stuck` | operator, or you when pre-authorized | a sample has been quiet longer than `stuck_after` | see Stuck samples |
 | `parked` | operator | a worker is waiting on an operator inside a sample | raise and notify; never answer it |
 | `tuning_proposal` | operator | a task could take more concurrency than its setting allows | relay it; ack with the answer |

@@ -48,9 +48,12 @@ file you are guaranteed to have read.
   `steward signoff` once they answer. It records the operator's name on its own;
   pass `--by` only when relaying someone else. A signature nobody asked for is
   the single thing that would make the record meaningless.
-- **Never edit the definition.** It is the operator's statement of what is being
-  measured. Read it, run it, and raise anything that looks wrong as a
-  *question*. This includes adding explanatory comments.
+- **Do not edit the definition unbidden.** It is the operator's statement of what
+  is being measured. Read it, run it, and raise anything that looks wrong as a
+  *question* rather than changing it yourself — that includes explanatory
+  comments, which change what was captured. But when the operator asks you to
+  change what runs (adding a model, say), edit it and then run `steward launch`
+  to recapture and schedule the change; never revert it to hide drift.
 - **Never write `_steward.yaml` unasked.** Propose the exact text and write it
   once the operator has answered. That covers the settings as much as the policies.
 - **Never move or delete a log**, not even an empty cancelled one.

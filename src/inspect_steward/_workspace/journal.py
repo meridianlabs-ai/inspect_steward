@@ -24,6 +24,8 @@ from .._util.jsonl import (
 __all__ = [
     "ACKNOWLEDGED",
     "ACTION",
+    "AGENT_ARMED",
+    "AGENT_DISARMED",
     "ARMED",
     "COLLECTED",
     "DISARMED",
@@ -59,6 +61,7 @@ __all__ = [
     "Smoked",
     "append_event",
     "read_acks",
+    "read_agent_armed",
     "read_armed",
     "read_collected",
     "read_journal",
@@ -156,6 +159,17 @@ Carries `scheduler`, `interval` in seconds, and `label`.
 
 DISARMED = "disarmed"
 """Journal event: the timer was removed. Carries `scheduler`."""
+
+AGENT_ARMED = "agent_armed"
+"""Journal event: the agent's own recurring collect was scheduled, and by which scheduler.
+
+The counterpart to `ARMED` for the *agent* half of the loop rather than the mechanical tend: a harness with no in-session scheduler (the Codex CLI, say) points an OS scheduler at a recurring `steward collect`, and this records it so `steward schedule status` and a disarm can find it. A separate event from `ARMED` on purpose — the tend timer is the supervision floor and its absence is what `unsupervised` watches, while this is judgement automation the agent arms for itself, so folding the two together would let one arm the other's item (`read_armed`, `_tend.items`).
+
+Carries `scheduler`, `interval` in seconds, and `label`.
+"""
+
+AGENT_DISARMED = "agent_disarmed"
+"""Journal event: the agent's recurring collect was removed. Carries `scheduler`."""
 
 LAUNCHED = "launched"
 """Journal event: somebody started this run, and what they started it with.
@@ -655,22 +669,18 @@ def read_ramp_holds(events: list[JournalEvent]) -> dict[str, RampHold]:
     return holds
 
 
-def read_armed(events: list[JournalEvent]) -> Armed | None:
-    """Fold a journal down to what timer is installed.
+def _fold_armed(
+    events: list[JournalEvent], armed_type: str, disarmed_type: str
+) -> Armed | None:
+    """The two-state arm/disarm fold, over whichever event pair is asked for.
 
-    The same two-state shape as `read_pause`. What it reports is what the *arming* said, not what the scheduler currently holds — nothing here shells out, because a turn runs this every ten minutes and `steward timer status` is where paying for the truth belongs.
-
-    Args:
-        events: Events in file order, as `read_journal` returns them.
-
-    Returns:
-        The timer in force, or `None` where none was ever armed or the last word was a disarm.
+    Shared by `read_armed` (the mechanical tend timer) and `read_agent_armed` (the agent's own collect), so the two folds cannot drift; each names its own event pair and neither sees the other's.
     """
     armed: Armed | None = None
     for event in events:
-        if event.type == DISARMED:
+        if event.type == disarmed_type:
             armed = None
-        elif event.type == ARMED:
+        elif event.type == armed_type:
             scheduler = event.payload.get("scheduler")
             interval = event.payload.get("interval")
             label = event.payload.get("label")
@@ -684,6 +694,34 @@ def read_armed(events: list[JournalEvent]) -> Armed | None:
                 ts=event.ts,
             )
     return armed
+
+
+def read_armed(events: list[JournalEvent]) -> Armed | None:
+    """Fold a journal down to what timer is installed.
+
+    The same two-state shape as `read_pause`. What it reports is what the *arming* said, not what the scheduler currently holds — nothing here shells out, because a turn runs this every ten minutes and `steward timer status` is where paying for the truth belongs.
+
+    Args:
+        events: Events in file order, as `read_journal` returns them.
+
+    Returns:
+        The timer in force, or `None` where none was ever armed or the last word was a disarm.
+    """
+    return _fold_armed(events, ARMED, DISARMED)
+
+
+def read_agent_armed(events: list[JournalEvent]) -> Armed | None:
+    """Fold a journal down to whether the agent's recurring collect is scheduled.
+
+    The `AGENT_ARMED`/`AGENT_DISARMED` counterpart to `read_armed`, and deliberately over a separate event pair: the mechanical tend timer and the agent's collect are armed and taken down independently, and nothing that watches the tend timer (`read_armed`, `ever_armed`, `unsupervised`) must ever see this one.
+
+    Args:
+        events: Events in file order, as `read_journal` returns them.
+
+    Returns:
+        The agent collect in force, or `None` where none was ever armed or the last word was a disarm.
+    """
+    return _fold_armed(events, AGENT_ARMED, AGENT_DISARMED)
 
 
 def read_launched(events: list[JournalEvent]) -> str | None:
