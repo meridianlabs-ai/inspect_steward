@@ -103,3 +103,26 @@ def format_duration(seconds: int) -> str:
         if seconds >= size and seconds % size == 0:
             return f"{seconds // size}{unit}"
     return f"{seconds}s"
+
+
+def format_age(seconds: int) -> str:
+    """Render an elapsed time approximately, for an `X ago` display.
+
+    Unlike `format_duration`, which is the exact inverse of a value an operator typed and so falls back to whole seconds for anything that does not divide evenly, this describes an *arbitrary* age in the coarsest unit that keeps it legible: seconds under a minute, whole minutes under an hour, hours and minutes under a day, then days and hours. So a collection `6518` seconds old reads `1h48m` rather than `6518s`.
+
+    Args:
+        seconds: An elapsed time. Negative is clamped to zero.
+
+    Returns:
+        A short human age, e.g. `45s`, `12m`, `1h48m`, `3d`.
+    """
+    seconds = max(0, seconds)
+    if seconds < 60:
+        return f"{seconds}s"
+    if seconds < 3600:
+        return f"{seconds // 60}m"
+    if seconds < 86400:
+        hours, minutes = divmod(seconds // 60, 60)
+        return f"{hours}h{minutes}m" if minutes else f"{hours}h"
+    days, hours = divmod(seconds // 3600, 24)
+    return f"{days}d{hours}h" if hours else f"{days}d"

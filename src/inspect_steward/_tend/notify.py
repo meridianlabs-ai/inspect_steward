@@ -60,6 +60,7 @@ from .items import (
 )
 from .progress import Progress, fleet_totals, short_keys
 from .render import (
+    headline_glyph,
     rerunning_note,
     signature_field,
     status_headline_text,
@@ -245,7 +246,7 @@ def _pause_post(result: "TendResult", paused: Paused) -> Post:
     lead = Text((f"paused by {paused.by or 'somebody'}{reason}",))
     return Post(
         kind=Kind.PAUSED,
-        glyph=result.verdict.value,
+        glyph=headline_glyph(result),
         title=status_headline_text(result),
         blocks=(lead, *_page(result)),
     )
@@ -255,7 +256,7 @@ def _heartbeat_post(result: "TendResult") -> Post:
     """The heartbeat's body: the run's standing, no items — nothing here is being decided."""
     return Post(
         kind=Kind.HEARTBEAT,
-        glyph=result.verdict.value,
+        glyph=headline_glyph(result),
         title=status_headline_text(result),
         blocks=tuple(_page(result)),
     )
@@ -396,7 +397,7 @@ def turn_post(result: "TendResult") -> Post | None:
     blocks += _page(result)
     return Post(
         kind=kind,
-        glyph=result.verdict.value,
+        glyph=headline_glyph(result),
         title=status_headline_text(result),
         blocks=tuple(blocks),
     )

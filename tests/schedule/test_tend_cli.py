@@ -352,23 +352,29 @@ def test_status_prints_the_markdown_page(
     assert "Regenerated every turn" not in markdown
 
 
-def test_every_rendering_leads_with_the_same_verdict(workspace: Workspace) -> None:
-    # settled, so all three reads see the same state: the spawned worker ran
-    # the EMPTY definition and departed without a log, which anomaly detection
-    # (correctly) reports — the claim here is agreement, not health
+def test_the_operator_page_glyph_is_scoped_to_the_operator(
+    workspace: Workspace,
+) -> None:
+    # the spawned worker ran the EMPTY definition and departed without a log —
+    # an agent-owned anomaly. The run verdict is ⚠️, but nothing is the
+    # operator's, so their page opens ✅ rather than warning them about a queue
+    # that is not theirs. The machine JSON keeps the unscoped run verdict.
     turn(workspace)
     settle(workspace)
 
-    _, text = run("status")
     _, markdown = run("status")
+    _, text = run("status", "--format", "text")
     code, raw = run("status", "--json")
     document = json.loads(raw)
 
-    glyph = document["verdict"]
-    assert glyph == "⚠️"
-    assert text.startswith(glyph)
-    assert glyph in markdown
     assert code == 0
+    # the machine state carries the true run verdict
+    assert document["verdict"] == "⚠️"
+    # the human operator page opens on the operator's own glyph, and the agent's
+    # queue is still there as a count on the right
+    assert markdown.startswith("✅ nothing needs you")
+    assert text.startswith("✅ nothing needs you")
+    assert "agent: 1 open item" in markdown
 
 
 def test_the_resources_table_replaces_the_startup_bound_and_both_renderings_agree(

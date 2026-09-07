@@ -33,7 +33,7 @@ from .._anomaly.model import (
 from .._evalset.classify import kind_of, scan_task, short_token
 from .._evalset.observe import ObservedTasks, TaskObservation, TaskState
 from .._schedule import InFlight, Summary, attempts_made
-from .._util.duration import format_duration, is_after, seconds_since
+from .._util.duration import format_age, format_duration, is_after, seconds_since
 from .._worker import LiveParked, LiveStuck, acp_sockets
 from .._workspace import DEFAULT_TEND_INTERVAL, Ack, Armed, Signature
 from .progress import display_keys
@@ -996,7 +996,7 @@ def _supervision(result: "TendResult") -> list[Item]:
                 subject=armed.scheduler,
                 summary=(
                     f"the {armed.scheduler} timer has not tended for "
-                    f"{format_duration(int(silence))}, which is longer "
+                    f"{format_age(int(silence))}, which is longer "
                     f"than {STALE_INTERVALS} intervals of "
                     f"{format_duration(armed.interval)}"
                 ),

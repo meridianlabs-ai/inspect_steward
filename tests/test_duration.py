@@ -10,6 +10,7 @@ wrote it and ten seconds to whoever wrote the parser.
 import pytest
 from inspect_steward._util.duration import (
     DurationError,
+    format_age,
     format_duration,
     parse_duration,
 )
@@ -79,3 +80,30 @@ def test_seconds_are_rendered_the_way_they_were_written(
     # unit that divides evenly recovers it for every value an operator writes
     assert format_duration(seconds) == text
     assert parse_duration(text) == seconds
+
+
+AGES: list[tuple[str, int, str]] = [
+    ("under a minute stays seconds", 45, "45s"),
+    ("a minute and a half floors to minutes", 94, "1m"),
+    ("whole minutes", 600, "10m"),
+    ("just under an hour", 3599, "59m"),
+    ("a whole hour", 3600, "1h"),
+    ("hours and minutes, never seconds", 6518, "1h48m"),
+    ("a whole number of hours", 7200, "2h"),
+    ("a day", 86400, "1d"),
+    ("days and hours", 100000, "1d3h"),
+    ("negative clamps to zero", -5, "0s"),
+]
+
+
+@pytest.mark.parametrize(
+    ("seconds", "text"),
+    [(seconds, text) for _, seconds, text in AGES],
+    ids=[case for case, _, _ in AGES],
+)
+def test_an_age_is_rendered_in_the_coarsest_legible_unit(
+    seconds: int, text: str
+) -> None:
+    # unlike an interval an operator typed, an arbitrary age reads in coarse
+    # units rather than a raw second count -- `1h48m`, never `6518s`
+    assert format_age(seconds) == text

@@ -15,13 +15,14 @@ from .._anomaly.model import Anomalies, Anomaly, AnomalyState
 from .._evalset.cost import fleet_width, projection
 from .._evalset.observe import TaskState
 from .._schedule import Summary
-from .._util.duration import format_duration
+from .._util.duration import format_age
 from .._util.jsonl import utc_now
 from .anomalies_md import caveat_line, outcomes_block
 from .coverage import TaskCoverage
 from .items import (
     HEADINGS,
     Owner,
+    Verdict,
     answer_command,
     by_owner,
     class_summary,
@@ -132,7 +133,20 @@ def status_headline(result: "TendResult") -> str:
 
     `⚠️ 1 needs an operator · tended 4m ago · agent: 4 open items, collected 12m ago`. The verdict counts the operator's own items, and the agent's queue is a count on the right — what an operator wants to know about the agent is that it is working and how long since it looked, not what it is working on. Shared by the terminal, so the two cannot open differently.
     """
-    return f"{result.verdict.value} {status_headline_text(result)}"
+    return f"{headline_glyph(result)} {status_headline_text(result)}"
+
+
+def headline_glyph(result: "TendResult") -> str:
+    """The headline glyph, scoped to the operator like the sentence beside it.
+
+    The run-level verdict paints ⚠️ whenever anything is open, the agent's items included; beside a sentence that counts only the operator's, that produced `⚠️ nothing needs you` — a warning over a line saying there is nothing to warn about, the exact thing `Verdict` avoids elsewhere. So an `ATTENTION` verdict whose open items are none of the operator's opens with ✅ instead. Every other verdict describes the whole run — signed off, paused, stopped, complete — and stays, because the sentence spells each of those out.
+
+    Shared with the notification, so a post and `status.md` still open with the same glyph as well as the same words (`_tend.notify`).
+    """
+    theirs = any(item.owner is Owner.OPERATOR for item in result.items)
+    if result.verdict is Verdict.ATTENTION and not theirs:
+        return Verdict.CLEAR.value
+    return result.verdict.value
 
 
 def status_headline_text(result: "TendResult") -> str:
@@ -168,7 +182,7 @@ def _tended(result: "TendResult") -> list[str]:
         # there for exactly the same reason
         return ["tended just now"]
     if supervision is not None and supervision.since_tend is not None:
-        return [f"tended {format_duration(int(supervision.since_tend))} ago"]
+        return [f"tended {format_age(int(supervision.since_tend))} ago"]
     return []
 
 
@@ -185,7 +199,7 @@ def _agent(result: "TendResult") -> str:
         # not one whose agent has gone quiet, and the two want different answers
         looked = "never collected"
     elif result.since_collected is not None:
-        looked = f"collected {format_duration(int(result.since_collected))} ago"
+        looked = f"collected {format_age(int(result.since_collected))} ago"
     else:
         looked = "collected"
     return f"agent: {items}, {looked}"
@@ -730,11 +744,11 @@ def _ages(result: "TendResult") -> str:
         # there for exactly the same reason
         parts.append("tended just now")
     elif supervision is not None and supervision.since_tend is not None:
-        parts.append(f"tended {format_duration(int(supervision.since_tend))} ago")
+        parts.append(f"tended {format_age(int(supervision.since_tend))} ago")
     if result.collected is None:
         # never, rather than long ago -- a workspace no agent has attached to is
         # not one whose agent has gone quiet, and the two want different answers
         parts.append("never collected")
     elif result.since_collected is not None:
-        parts.append(f"collected {format_duration(int(result.since_collected))} ago")
+        parts.append(f"collected {format_age(int(result.since_collected))} ago")
     return f" · {' · '.join(parts)}" if parts else ""

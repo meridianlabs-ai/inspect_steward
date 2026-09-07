@@ -182,7 +182,20 @@ def _command(agent: str) -> list[str]:
             f"run it — install it, or drive collect from your own harness"
         )
     if agent == "codex":
-        return [program, "exec", "--sandbox", "workspace-write", COLLECT_PROMPT]
+        # **The sandbox and the approval gate both come off, deliberately.** A
+        # scheduled collect runs with nobody in the session: it has to reach the
+        # run's log store to observe it -- frequently S3, which the default
+        # `workspace-write` sandbox blocks along with the rest of the network, so
+        # a collect there hangs and times out rather than reading anything -- and
+        # it has to carry out `steward` verbs without pausing for an approval no
+        # one is there to give. Both are the operator's call, made by arming this
+        # on the machine that will run it.
+        return [
+            program,
+            "exec",
+            "--dangerously-bypass-approvals-and-sandbox",
+            COLLECT_PROMPT,
+        ]
     # the Choice gates this; a new AGENTS entry without a branch is the bug it catches
     raise click.ClickException(f"no scheduled-collect command is defined for {agent}")
 

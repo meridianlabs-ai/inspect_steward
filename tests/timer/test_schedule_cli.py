@@ -98,7 +98,10 @@ def test_arming_records_and_installs_the_agent_command(
     # the installed command is the agent invocation, not a tend
     assert crontab.text is not None
     assert FAKE_CODEX in crontab.text
-    assert "exec" in crontab.text and "workspace-write" in crontab.text
+    # the sandbox and approval gate come off: a scheduled collect must reach the
+    # (often S3) log store and act with nobody in the session
+    assert "exec" in crontab.text
+    assert "--dangerously-bypass-approvals-and-sandbox" in crontab.text
     assert "steward collect" in crontab.text
     assert "*/30 * * * *" in crontab.text
 
