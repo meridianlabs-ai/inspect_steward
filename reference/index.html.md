@@ -26,6 +26,7 @@ steward [OPTIONS] COMMAND [ARGS]...
 | [resume](#steward-resume) | Start scheduling again. |
 | [rule](#steward-rule) | Rule on anomaly classes: what the failures mean, and what happens to the data. |
 | [runbook](#steward-runbook) | Print the agent runbook: how Steward works. |
+| [schedule](#steward-schedule) | Arm, disarm, and inspect the agent’s recurring collect. |
 | [signoff](#steward-signoff) | Attest that these results are accepted, and end the run. |
 | [status](#steward-status) | Report where the run stands, and what the next turn would do. |
 | [tasks](#steward-tasks) | Enumerate the tasks defined by an eval set definition. |
@@ -422,6 +423,82 @@ steward runbook [OPTIONS]
 | Name     | Type    | Description                 | Default |
 |----------|---------|-----------------------------|---------|
 | `--help` | boolean | Show this message and exit. | `False` |
+
+## steward schedule
+
+Arm, disarm, and inspect the agent’s recurring collect.
+
+#### Usage
+
+``` text
+steward schedule [OPTIONS] COMMAND [ARGS]...
+```
+
+#### Subcommands
+
+|  |  |
+|----|----|
+| [arm](#steward-schedule-arm) | Schedule `<agent> exec` to collect and act on this workspace on a schedule. |
+| [disarm](#steward-schedule-disarm) | Remove this workspace’s scheduled collect. |
+| [status](#steward-schedule-status) | Say what is scheduled, and check that it is really there. |
+
+### steward schedule arm
+
+Schedule `<agent> exec` to collect and act on this workspace on a schedule.
+
+Idempotent: an existing schedule is removed first, so re-arming at a new interval or under a different scheduler leaves exactly one. Independent of the tend timer — arming this arms neither, and `steward timer` is unaffected.
+
+#### Usage
+
+``` text
+steward schedule arm [OPTIONS]
+```
+
+#### Options
+
+| Name | Type | Description | Default |
+|----|----|----|----|
+| `--agent` | choice (`codex`) | Which harness runs the scheduled collect. | `codex` |
+| `--tend-interval` | value | How often a scheduled tend runs, with a unit, e.g. `10m`. Overrides `tend_interval` in `_steward.yaml` and `STEWARD_TEND_INTERVAL`. | None |
+| `--scheduler` | choice (`launchd` \| `systemd` \| `cron`) | Which scheduler to use. Detected when not given, preferring one that survives a reboot. | None |
+| `--help` | boolean | Show this message and exit. | `False` |
+
+### steward schedule disarm
+
+Remove this workspace’s scheduled collect.
+
+Nothing else stops: the tend timer keeps tending, and `steward collect` still works by hand. What ends is the agent being called back automatically.
+
+#### Usage
+
+``` text
+steward schedule disarm [OPTIONS]
+```
+
+#### Options
+
+| Name     | Type    | Description                 | Default |
+|----------|---------|-----------------------------|---------|
+| `--help` | boolean | Show this message and exit. | `False` |
+
+### steward schedule status
+
+Say what is scheduled, and check that it is really there.
+
+Asks the scheduler rather than the journal, the same way `steward timer status` does, and for the same reason.
+
+#### Usage
+
+``` text
+steward schedule status [OPTIONS]
+```
+
+#### Options
+
+| Name     | Type    | Description                          | Default |
+|----------|---------|--------------------------------------|---------|
+| `--json` | boolean | Output the schedule’s state as JSON. | `False` |
+| `--help` | boolean | Show this message and exit.          | `False` |
 
 ## steward signoff
 

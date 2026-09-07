@@ -293,6 +293,12 @@ ul.task-list li input[type="checkbox"] {
   <li><a href="#steward-resume" id="toc-steward-resume" class="nav-link" data-scroll-target="#steward-resume">steward resume</a></li>
   <li><a href="#steward-rule" id="toc-steward-rule" class="nav-link" data-scroll-target="#steward-rule">steward rule</a></li>
   <li><a href="#steward-runbook" id="toc-steward-runbook" class="nav-link" data-scroll-target="#steward-runbook">steward runbook</a></li>
+  <li><a href="#steward-schedule" id="toc-steward-schedule" class="nav-link" data-scroll-target="#steward-schedule">steward schedule</a>
+  <ul class="collapse">
+  <li><a href="#steward-schedule-arm" id="toc-steward-schedule-arm" class="nav-link" data-scroll-target="#steward-schedule-arm">steward schedule arm</a></li>
+  <li><a href="#steward-schedule-disarm" id="toc-steward-schedule-disarm" class="nav-link" data-scroll-target="#steward-schedule-disarm">steward schedule disarm</a></li>
+  <li><a href="#steward-schedule-status" id="toc-steward-schedule-status" class="nav-link" data-scroll-target="#steward-schedule-status">steward schedule status</a></li>
+  </ul></li>
   <li><a href="#steward-signoff" id="toc-steward-signoff" class="nav-link" data-scroll-target="#steward-signoff">steward signoff</a></li>
   <li><a href="#steward-status" id="toc-steward-status" class="nav-link" data-scroll-target="#steward-status">steward status</a></li>
   <li><a href="#steward-tasks" id="toc-steward-tasks" class="nav-link" data-scroll-target="#steward-tasks">steward tasks</a></li>
@@ -405,22 +411,26 @@ ul.task-list li input[type="checkbox"] {
 <td>Print the agent runbook: how Steward works.</td>
 </tr>
 <tr class="odd">
+<td><a href="#steward-schedule">schedule</a></td>
+<td>Arm, disarm, and inspect the agent’s recurring collect.</td>
+</tr>
+<tr class="even">
 <td><a href="#steward-signoff">signoff</a></td>
 <td>Attest that these results are accepted, and end the run.</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><a href="#steward-status">status</a></td>
 <td>Report where the run stands, and what the next turn would do.</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><a href="#steward-tasks">tasks</a></td>
 <td>Enumerate the tasks defined by an eval set definition.</td>
 </tr>
-<tr class="even">
+<tr class="odd">
 <td><a href="#steward-tend">tend</a></td>
 <td>Run one turn of the supervision loop.</td>
 </tr>
-<tr class="odd">
+<tr class="even">
 <td><a href="#steward-timer">timer</a></td>
 <td>Arm, disarm, and inspect the timer that tends this run.</td>
 </tr>
@@ -1541,17 +1551,180 @@ ul.task-list li input[type="checkbox"] {
 </table>
 </section>
 </section>
+<section id="steward-schedule" class="level2" data-toc-label="schedule">
+<h2 data-toc-label="schedule" class="anchored" data-anchor-id="steward-schedule">steward schedule</h2>
+<p>Arm, disarm, and inspect the agent’s recurring collect.</p>
+<section id="usage-17" class="level4">
+<h4 class="anchored" data-anchor-id="usage-17">Usage</h4>
+<pre class="text"><code>steward schedule [OPTIONS] COMMAND [ARGS]...</code></pre>
+</section>
+<section id="subcommands-2" class="level4">
+<h4 class="anchored" data-anchor-id="subcommands-2">Subcommands</h4>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 35%">
+<col style="width: 65%">
+</colgroup>
+<tbody>
+<tr class="odd">
+<td><a href="#steward-schedule-arm">arm</a></td>
+<td>Schedule <code>&lt;agent&gt; exec</code> to collect and act on this workspace on a schedule.</td>
+</tr>
+<tr class="even">
+<td><a href="#steward-schedule-disarm">disarm</a></td>
+<td>Remove this workspace’s scheduled collect.</td>
+</tr>
+<tr class="odd">
+<td><a href="#steward-schedule-status">status</a></td>
+<td>Say what is scheduled, and check that it is really there.</td>
+</tr>
+</tbody>
+</table>
+</section>
+<section id="steward-schedule-arm" class="level3" data-toc-label="arm">
+<h3 data-toc-label="arm" class="anchored" data-anchor-id="steward-schedule-arm">steward schedule arm</h3>
+<p>Schedule <code>&lt;agent&gt; exec</code> to collect and act on this workspace on a schedule.</p>
+<p>Idempotent: an existing schedule is removed first, so re-arming at a new interval or under a different scheduler leaves exactly one. Independent of the tend timer — arming this arms neither, and <code>steward timer</code> is unaffected.</p>
+<section id="usage-18" class="level4">
+<h4 class="anchored" data-anchor-id="usage-18">Usage</h4>
+<pre class="text"><code>steward schedule arm [OPTIONS]</code></pre>
+</section>
+<section id="options-15" class="level4">
+<h4 class="anchored" data-anchor-id="options-15">Options</h4>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 25%">
+<col style="width: 15%">
+<col style="width: 50%">
+<col style="width: 10%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Name</th>
+<th>Type</th>
+<th>Description</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>--agent</code></td>
+<td>choice (<code>codex</code>)</td>
+<td>Which harness runs the scheduled collect.</td>
+<td><code>codex</code></td>
+</tr>
+<tr class="even">
+<td><code>--tend-interval</code></td>
+<td>value</td>
+<td>How often a scheduled tend runs, with a unit, e.g.&nbsp;<code>10m</code>. Overrides <code>tend_interval</code> in <code>_steward.yaml</code> and <code>STEWARD_TEND_INTERVAL</code>.</td>
+<td>None</td>
+</tr>
+<tr class="odd">
+<td><code>--scheduler</code></td>
+<td>choice (<code>launchd</code> | <code>systemd</code> | <code>cron</code>)</td>
+<td>Which scheduler to use. Detected when not given, preferring one that survives a reboot.</td>
+<td>None</td>
+</tr>
+<tr class="even">
+<td><code>--help</code></td>
+<td>boolean</td>
+<td>Show this message and exit.</td>
+<td><code>False</code></td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
+<section id="steward-schedule-disarm" class="level3" data-toc-label="disarm">
+<h3 data-toc-label="disarm" class="anchored" data-anchor-id="steward-schedule-disarm">steward schedule disarm</h3>
+<p>Remove this workspace’s scheduled collect.</p>
+<p>Nothing else stops: the tend timer keeps tending, and <code>steward collect</code> still works by hand. What ends is the agent being called back automatically.</p>
+<section id="usage-19" class="level4">
+<h4 class="anchored" data-anchor-id="usage-19">Usage</h4>
+<pre class="text"><code>steward schedule disarm [OPTIONS]</code></pre>
+</section>
+<section id="options-16" class="level4">
+<h4 class="anchored" data-anchor-id="options-16">Options</h4>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 25%">
+<col style="width: 15%">
+<col style="width: 50%">
+<col style="width: 10%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Name</th>
+<th>Type</th>
+<th>Description</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>--help</code></td>
+<td>boolean</td>
+<td>Show this message and exit.</td>
+<td><code>False</code></td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
+<section id="steward-schedule-status" class="level3" data-toc-label="status">
+<h3 data-toc-label="status" class="anchored" data-anchor-id="steward-schedule-status">steward schedule status</h3>
+<p>Say what is scheduled, and check that it is really there.</p>
+<p>Asks the scheduler rather than the journal, the same way <code>steward timer status</code> does, and for the same reason.</p>
+<section id="usage-20" class="level4">
+<h4 class="anchored" data-anchor-id="usage-20">Usage</h4>
+<pre class="text"><code>steward schedule status [OPTIONS]</code></pre>
+</section>
+<section id="options-17" class="level4">
+<h4 class="anchored" data-anchor-id="options-17">Options</h4>
+<table class="caption-top table">
+<colgroup>
+<col style="width: 25%">
+<col style="width: 15%">
+<col style="width: 50%">
+<col style="width: 10%">
+</colgroup>
+<thead>
+<tr class="header">
+<th>Name</th>
+<th>Type</th>
+<th>Description</th>
+<th>Default</th>
+</tr>
+</thead>
+<tbody>
+<tr class="odd">
+<td><code>--json</code></td>
+<td>boolean</td>
+<td>Output the schedule’s state as JSON.</td>
+<td><code>False</code></td>
+</tr>
+<tr class="even">
+<td><code>--help</code></td>
+<td>boolean</td>
+<td>Show this message and exit.</td>
+<td><code>False</code></td>
+</tr>
+</tbody>
+</table>
+</section>
+</section>
+</section>
 <section id="steward-signoff" class="level2" data-toc-label="signoff">
 <h2 data-toc-label="signoff" class="anchored" data-anchor-id="steward-signoff">steward signoff</h2>
 <p>Attest that these results are accepted, and end the run.</p>
 <p>Runs a final turn, refuses with every blocker at once if anything is still unnamed, moves superseded attempts into <code>logs-archive/</code>, records who signed and what they signed over, and takes the timer down. It does not commit the journal — that stays yours.</p>
 <p>An operator decides this. An agent may prompt for it and may run it once they answer, recording their name, which is why the signer is recorded rather than the process. <code>--publish</code> is the same shape one step further out: exporting results into a shared store is the operator’s call too, so it is asked rather than configured.</p>
-<section id="usage-17" class="level4">
-<h4 class="anchored" data-anchor-id="usage-17">Usage</h4>
+<section id="usage-21" class="level4">
+<h4 class="anchored" data-anchor-id="usage-21">Usage</h4>
 <pre class="text"><code>steward signoff [OPTIONS]</code></pre>
 </section>
-<section id="options-15" class="level4">
-<h4 class="anchored" data-anchor-id="options-15">Options</h4>
+<section id="options-18" class="level4">
+<h4 class="anchored" data-anchor-id="options-18">Options</h4>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 25%">
@@ -1619,12 +1792,12 @@ ul.task-list li input[type="checkbox"] {
 <p>Report where the run stands, and what the next turn would do.</p>
 <p><code>tend --dry-run</code>: the same reads and the same decision, with the actions discarded. Read-only — it spawns nothing, moves nothing, writes nothing, and does not take the run claim, so it is safe to run as often as you like while a tend is in flight.</p>
 <p>Markdown by default, because that is the operator’s page and what an agent relays verbatim (runbook, <em>When the operator asks how it is going</em>), and its columns line up read as plain text either way. <code>--format text</code> is the terminal preview an operator reads before launch — the only read-only view of what the next tend would spawn and of the startup-memory projection width is chosen against. <code>--json</code> for the machine-readable state.</p>
-<section id="usage-18" class="level4">
-<h4 class="anchored" data-anchor-id="usage-18">Usage</h4>
+<section id="usage-22" class="level4">
+<h4 class="anchored" data-anchor-id="usage-22">Usage</h4>
 <pre class="text"><code>steward status [OPTIONS]</code></pre>
 </section>
-<section id="options-16" class="level4">
-<h4 class="anchored" data-anchor-id="options-16">Options</h4>
+<section id="options-19" class="level4">
+<h4 class="anchored" data-anchor-id="options-19">Options</h4>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 25%">
@@ -1697,12 +1870,12 @@ ul.task-list li input[type="checkbox"] {
 <h2 data-toc-label="tasks" class="anchored" data-anchor-id="steward-tasks">steward tasks</h2>
 <p>Enumerate the tasks defined by an eval set definition.</p>
 <p>DEFINITION is a Python file culminating in an eval_set() call, an Inspect Flow spec (Python or YAML), or a Hawk eval set config (YAML).</p>
-<section id="usage-19" class="level4">
-<h4 class="anchored" data-anchor-id="usage-19">Usage</h4>
+<section id="usage-23" class="level4">
+<h4 class="anchored" data-anchor-id="usage-23">Usage</h4>
 <pre class="text"><code>steward tasks [OPTIONS] DEFINITION</code></pre>
 </section>
-<section id="options-17" class="level4">
-<h4 class="anchored" data-anchor-id="options-17">Options</h4>
+<section id="options-20" class="level4">
+<h4 class="anchored" data-anchor-id="options-20">Options</h4>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 25%">
@@ -1752,12 +1925,12 @@ ul.task-list li input[type="checkbox"] {
 <p>Run one turn of the supervision loop.</p>
 <p>Reconciles the log directory against the committed manifest: spawns what should be running, records what died, archives what the definition no longer asks for, then rewrites status.md and appends to the journal. Never blocks — everything long-running is a detached child that a later turn observes.</p>
 <p>Safe to call as often as you like. A repeated turn is a no-op, and an interrupted one is reconciled by the next.</p>
-<section id="usage-20" class="level4">
-<h4 class="anchored" data-anchor-id="usage-20">Usage</h4>
+<section id="usage-24" class="level4">
+<h4 class="anchored" data-anchor-id="usage-24">Usage</h4>
 <pre class="text"><code>steward tend [OPTIONS]</code></pre>
 </section>
-<section id="options-18" class="level4">
-<h4 class="anchored" data-anchor-id="options-18">Options</h4>
+<section id="options-21" class="level4">
+<h4 class="anchored" data-anchor-id="options-21">Options</h4>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 25%">
@@ -1841,12 +2014,12 @@ ul.task-list li input[type="checkbox"] {
 <section id="steward-timer" class="level2" data-toc-label="timer">
 <h2 data-toc-label="timer" class="anchored" data-anchor-id="steward-timer">steward timer</h2>
 <p>Arm, disarm, and inspect the timer that tends this run.</p>
-<section id="usage-21" class="level4">
-<h4 class="anchored" data-anchor-id="usage-21">Usage</h4>
+<section id="usage-25" class="level4">
+<h4 class="anchored" data-anchor-id="usage-25">Usage</h4>
 <pre class="text"><code>steward timer [OPTIONS] COMMAND [ARGS]...</code></pre>
 </section>
-<section id="subcommands-2" class="level4">
-<h4 class="anchored" data-anchor-id="subcommands-2">Subcommands</h4>
+<section id="subcommands-3" class="level4">
+<h4 class="anchored" data-anchor-id="subcommands-3">Subcommands</h4>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 35%">
@@ -1872,12 +2045,12 @@ ul.task-list li input[type="checkbox"] {
 <h3 data-toc-label="arm" class="anchored" data-anchor-id="steward-timer-arm">steward timer arm</h3>
 <p>Install a timer that tends this workspace on a schedule.</p>
 <p>Idempotent: an existing timer is removed first, so re-arming at a new interval or under a different scheduler leaves exactly one.</p>
-<section id="usage-22" class="level4">
-<h4 class="anchored" data-anchor-id="usage-22">Usage</h4>
+<section id="usage-26" class="level4">
+<h4 class="anchored" data-anchor-id="usage-26">Usage</h4>
 <pre class="text"><code>steward timer arm [OPTIONS]</code></pre>
 </section>
-<section id="options-19" class="level4">
-<h4 class="anchored" data-anchor-id="options-19">Options</h4>
+<section id="options-22" class="level4">
+<h4 class="anchored" data-anchor-id="options-22">Options</h4>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 25%">
@@ -1920,12 +2093,12 @@ ul.task-list li input[type="checkbox"] {
 <h3 data-toc-label="disarm" class="anchored" data-anchor-id="steward-timer-disarm">steward timer disarm</h3>
 <p>Remove this workspace’s timer.</p>
 <p>Nothing else stops: workers in flight finish, and <code>steward tend</code> still works by hand. What ends is anything happening without somebody typing it, which every later <code>status</code> then reports.</p>
-<section id="usage-23" class="level4">
-<h4 class="anchored" data-anchor-id="usage-23">Usage</h4>
+<section id="usage-27" class="level4">
+<h4 class="anchored" data-anchor-id="usage-27">Usage</h4>
 <pre class="text"><code>steward timer disarm [OPTIONS]</code></pre>
 </section>
-<section id="options-20" class="level4">
-<h4 class="anchored" data-anchor-id="options-20">Options</h4>
+<section id="options-23" class="level4">
+<h4 class="anchored" data-anchor-id="options-23">Options</h4>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 25%">
@@ -1956,12 +2129,12 @@ ul.task-list li input[type="checkbox"] {
 <h3 data-toc-label="status" class="anchored" data-anchor-id="steward-timer-status">steward timer status</h3>
 <p>Say what is armed, and check that it is really there.</p>
 <p>The one command that asks the scheduler rather than the journal. Every other reader — a tend, a <code>status</code>, the item projection — goes on what arming recorded, because they run every few minutes and this costs a subprocess.</p>
-<section id="usage-24" class="level4">
-<h4 class="anchored" data-anchor-id="usage-24">Usage</h4>
+<section id="usage-28" class="level4">
+<h4 class="anchored" data-anchor-id="usage-28">Usage</h4>
 <pre class="text"><code>steward timer status [OPTIONS]</code></pre>
 </section>
-<section id="options-21" class="level4">
-<h4 class="anchored" data-anchor-id="options-21">Options</h4>
+<section id="options-24" class="level4">
+<h4 class="anchored" data-anchor-id="options-24">Options</h4>
 <table class="caption-top table">
 <colgroup>
 <col style="width: 25%">
