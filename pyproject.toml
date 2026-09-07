@@ -25,18 +25,13 @@ dependencies = [
     # so this floor is the whole story for inspect-ai; `inspect-harbor` still
     # resolves through `[tool.uv.sources]` below, for the reason given there.
     "inspect-ai>=0.3.263",
-    # inspect-scout from git main rather than PyPI, tracking scout ahead of a
-    # release for the same reason harbor does. This is a PEP 508 direct
-    # reference rather than a `[tool.uv.sources]` entry (as harbor is) because
-    # scout is a runtime dependency: pip installs from git -- e.g.
-    # `pip install git+https://github.com/.../inspect_steward` -- read
-    # `[project.dependencies]` but ignore `[tool.uv.sources]`, so only a direct
-    # reference here gets git-main scout to those installs rather than the PyPI
-    # wheel. Built with `allow-direct-references` set below. The cost is that
-    # inspect_steward itself cannot be uploaded to PyPI while this points at
-    # git; revert to `inspect-scout>=<next-release>` the day scout ships what we
-    # need.
-    "inspect-scout @ git+https://github.com/meridianlabs-ai/inspect_scout@main",
+    # inspect-scout 0.5.1 (2026-09-07) is the first release carrying what this
+    # project needs, so this is a plain PyPI floor. It was a git direct
+    # reference before that; if scout ever needs tracking ahead of a release
+    # again, note that pip ignores `[tool.uv.sources]` for runtime
+    # dependencies, so only a PEP 508 direct reference here (with hatch's
+    # `allow-direct-references`) reaches pip installs from git.
+    "inspect-scout>=0.5.1",
     "click>=8.0",
     "pyyaml>=6.0",
     # the process table is how Steward finds a worker that has not yet reached
@@ -164,9 +159,6 @@ version-file = "src/inspect_steward/_version.py"
 
 [tool.hatch.version.raw-options]
 local_scheme = "no-local-version" # Important for PyPI compatibility
-
-[tool.hatch.metadata]
-allow-direct-references = true
 
 [tool.uv]
 managed = true
