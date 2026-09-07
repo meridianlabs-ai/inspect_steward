@@ -178,7 +178,8 @@ def test_the_title_is_the_operator_headline(tmp_path: Path) -> None:
 
 def test_a_post_carries_the_whole_operator_page(tmp_path: Path) -> None:
     # not just the items and the task table any more: a post carries the same
-    # page `status.md` does, so the fleet total leads and the logs line trails
+    # page `status.md` does, so the fleet total leads -- and the logs line no
+    # longer trails either surface
     workspace, _ = prepared(tmp_path, [DONE, OTHER, PENDING])
     paused(workspace)
     turn(workspace)
@@ -189,11 +190,11 @@ def test_a_post_carries_the_whole_operator_page(tmp_path: Path) -> None:
 
     assert post is not None
     assert any(
-        isinstance(block, Field) and block.label == "Logs" for block in post.blocks
-    )
-    assert any(
         isinstance(block, Text) and any("samples" in line for line in block.lines)
         for block in post.blocks
+    )
+    assert not any(
+        isinstance(block, Field) and block.label == "Logs" for block in post.blocks
     )
 
 

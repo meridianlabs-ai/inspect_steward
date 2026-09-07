@@ -244,7 +244,7 @@ class Live:
     """
 
     resources: tuple[TaskResources, ...] = ()
-    """Per running task, in fleet order — the `### resources` table's rows."""
+    """Per running task, in fleet order — the `**resources**` table's rows."""
 
     usage: ProcessUsage = field(default_factory=ProcessUsage)
     """What the live processes are costing the machine, counted once per pid.

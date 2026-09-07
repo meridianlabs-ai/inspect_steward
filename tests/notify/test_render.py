@@ -38,7 +38,7 @@ POST = Post(
                 "addition      4/4  100%   1.00",
             )
         ),
-        Field("Logs", "`s3://bucket/run`"),
+        Field("Signed off", "by kaia at `2026-09-07T02:00:00Z`"),
     ),
 )
 

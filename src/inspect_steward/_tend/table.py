@@ -214,11 +214,11 @@ def glyph(row: TaskProgress) -> str:
 
 
 RESOURCES_HEADER = ("task", "refusals", "retries", "memory", "cpu")
-"""The `### resources` table's columns, in reading order."""
+"""The `**resources**` table's columns, in reading order."""
 
 
 def resources_cells(progress: Progress, *, width: int = 0) -> list[tuple[str, ...]]:
-    """The `### resources` rows: each running task's refusals, HTTP retries, memory and CPU, in the task table's order.
+    """The `**resources**` rows: each running task's refusals, HTTP retries, memory and CPU, in the task table's order.
 
     Per task rather than a fleet total, which is what lets the figures stand without a caveat: a finished task has no row, so nothing here falls to zero as the run completes. Memory and CPU are the task's even share of its process (`TaskResources`).
 

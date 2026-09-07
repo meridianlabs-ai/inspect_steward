@@ -406,7 +406,7 @@ def test_the_resources_table_replaces_the_startup_bound_and_both_renderings_agre
     # figures render lighter than the anomalies beside them and reach Slack as
     # a preformatted block
     lines = markdown.splitlines()
-    start = lines.index("### resources")
+    start = lines.index("**resources**")
     assert lines[start + 2] == "```"
     assert lines[start + 3].split() == ["task", "refusals", "retries", "memory", "cpu"]
     assert lines[start + 4].split() == ["done", "3", "41", "2.0", "GiB", "1.5"]

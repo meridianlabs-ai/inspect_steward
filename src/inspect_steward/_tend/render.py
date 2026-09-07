@@ -79,9 +79,6 @@ def status_markdown(result: "TendResult", *, header: bool = True) -> str:
     lines += _operator(result)
     lines += _outcomes(result)
     lines += _resources(result)
-    # last, because it is the one line that never changes
-    if (field := log_field(result)) is not None:
-        lines += [f"**{field[0]}** {field[1]}", ""]
     return "\n".join(lines)
 
 
@@ -217,16 +214,6 @@ def signature_field(result: "TendResult") -> tuple[str, str] | None:
     return "Signed off", f"by {signature.by} at `{signature.ts}`{note}"
 
 
-def log_field(result: "TendResult") -> tuple[str, str] | None:
-    """Where this run's logs are, as a labelled value, or `None` where the turn recorded no directory.
-
-    In full rather than shortened, because the audience is somebody about to paste it into `samples_df` or `inspect view` — and it is frequently not under the workspace at all, which is the case that made it worth a line (`TendResult.log_dir`). Shared with the notification.
-    """
-    if result.log_dir is None:
-        return None
-    return "Logs", f"`{result.log_dir}`"
-
-
 def _tasks(result: "TendResult") -> list[str]:
     """The operator's task table: where each task stands, and nothing it would have to ask about.
 
@@ -248,7 +235,7 @@ def _operator(result: "TendResult") -> list[str]:
     """
     for owner, group in by_owner(result.items):
         if owner is Owner.OPERATOR:
-            return ["### operator", "", *(f"- {item.summary}" for item in group), ""]
+            return ["**operator**", "", *(f"- {item.summary}" for item in group), ""]
     return []
 
 
@@ -267,7 +254,7 @@ def _outcomes(result: "TendResult") -> list[str]:
     if note and table:
         body.append("")
     body += note
-    return ["### anomalies", "", *body, ""]
+    return ["**anomalies**", "", *body, ""]
 
 
 def rerunning_note(anomalies: Anomalies) -> list[str]:
@@ -282,7 +269,7 @@ def rerunning_note(anomalies: Anomalies) -> list[str]:
 def _resources(result: "TendResult") -> list[str]:
     """Per running task, what it has met and what it is costing, as a fenced plain table with its keys clipped like the task table's. Absent while no worker is answering."""
     table = resources_table(result.progress, width=KEY_WIDTH)
-    return ["### resources", "", *table, ""] if table else []
+    return ["**resources**", "", *table, ""] if table else []
 
 
 def _live(result: "TendResult") -> list[str]:

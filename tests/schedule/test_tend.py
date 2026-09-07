@@ -357,7 +357,7 @@ def test_a_tend_reads_the_directory_the_launch_recorded(
     # and the summary says where, because nothing else does: the runbook sends
     # an agent to `samples_df`, and there is no `logs/` here to guess at
     assert result.log_dir == str(under_a_root)
-    assert f"**Logs** `{under_a_root}`" in workspace.status.read_text(encoding="utf-8")
+    assert f"**Logs** `{under_a_root}`" in collect_markdown(result)
 
 
 def test_a_manifest_committed_before_the_field_resolves_as_it_always_did(
@@ -385,7 +385,7 @@ def test_drift_is_reported_and_never_applied(tmp_path: Path) -> None:
 
     assert drifted.drift is True
     assert "steward launch" in collect_markdown(drifted)
-    assert "### operator" in workspace.status.read_text(encoding="utf-8")
+    assert "**operator**" in workspace.status.read_text(encoding="utf-8")
     # reported, never acted on: the manifest is still the one that was committed
     assert drifted.summary.states["complete"] == 1
     assert drifted.spawned == []
@@ -796,7 +796,7 @@ def test_status_md_is_quiet_when_there_is_nothing_to_say(tmp_path: Path) -> None
 
     rendered = workspace.status.read_text(encoding="utf-8")
     assert "nothing needs you" in rendered
-    assert "### operator" not in rendered
+    assert "**operator**" not in rendered
 
 
 # --- pausing ------------------------------------------------------------

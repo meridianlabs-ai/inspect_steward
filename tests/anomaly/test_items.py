@@ -253,10 +253,10 @@ def test_an_accepting_ruling_keeps_its_effect_on_the_record(tmp_path: Path) -> N
     assert "exclude by kaia" in document
     # and the operator's page carries the same samples as a count, under `nan`
     page = status_markdown(result)
-    assert "### anomalies" in page
+    assert "**anomalies**" in page
     # the fenced plain table under the heading: a blank, the fence, the header,
     # the row. Only `nan` has a count, so the empty columns are dropped
-    table = page[page.index("### anomalies") :].splitlines()
+    table = page[page.index("**anomalies**") :].splitlines()
     assert table[3].split() == ["task", "nan"]
     assert table[4].split()[1] == "2"
 
@@ -289,7 +289,7 @@ def test_an_operator_limit_window_waits_for_adjudication(tmp_path: Path) -> None
     # the operator's page has it as an operator-ended, unscored sample, not a
     # class; it is the only outcome here, so its column is the only one shown
     page = status_markdown(result)
-    table = page[page.index("### anomalies") :].splitlines()
+    table = page[page.index("**anomalies**") :].splitlines()
     assert table[3].split()[-1] == "oper_unscored"
     assert table[4].split()[-1] != "·"
 
@@ -349,7 +349,7 @@ def test_the_agent_page_carries_the_anomalies_block(tmp_path: Path) -> None:
     clean, _ = prepared(tmp_path / "clean", [SynthTask("fine")])
     write_log(clean.logs, SynthTask("fine"))
     assert "### anomalies" not in collect_markdown(status(clean))
-    assert "### anomalies" not in status_markdown(status(clean))
+    assert "**anomalies**" not in status_markdown(status(clean))
 
 
 def _anomaly_events(workspace: Workspace) -> list[dict[str, Any]]:

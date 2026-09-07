@@ -60,7 +60,6 @@ from .items import (
 )
 from .progress import Progress, fleet_totals, short_keys
 from .render import (
-    log_field,
     rerunning_note,
     signature_field,
     status_headline_text,
@@ -408,7 +407,7 @@ def _page(result: "TendResult", *, width: int = NARROW) -> list[Block]:
 
     Built from the same cell builders the page is (`task_table_cells`, `outcomes_grid`, `resources_cells`), so a post and `status.md` cannot disagree about what a turn found. The tables are clipped to the phone width whatever the target: a post is read on a phone whether it arrives by Slack or mail, where the page is read on a laptop.
 
-    The order is the page's — fleet total, signature, task table, anomalies, resources, logs — so the two read alike. The task table keeps the `ROWS` cap and names what it dropped, and names nothing else beneath it: the model every row shares is elided from the keys and left there, the way the operator's page leaves it.
+    The order is the page's — fleet total, signature, task table, anomalies, resources — so the two read alike. The task table keeps the `ROWS` cap and names what it dropped, and names nothing else beneath it: the model every row shares is elided from the keys and left there, the way the operator's page leaves it.
     """
     blocks: list[Block] = []
     if (fleet := fleet_totals(result.progress)) is not None:
@@ -436,8 +435,6 @@ def _page(result: "TendResult", *, width: int = NARROW) -> list[Block]:
         table = plain_table(RESOURCES_HEADER, cells)
         blocks.append(Table(tuple(table), heading="resources"))
 
-    if (log := log_field(result)) is not None:
-        blocks.append(Field(*log))
     return blocks
 
 
