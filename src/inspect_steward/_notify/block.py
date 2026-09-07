@@ -21,7 +21,7 @@ class Text:
 
 @dataclass(frozen=True)
 class Field:
-    """A labelled value on one line — `**Logs** path`, `**Signed off** by …`.
+    """A labelled value on one line — `**Signed off** by …`.
 
     The label is the one thing a dialect emphasises: `**bold**` in markdown, `*bold*` in Slack, and neither in text. Carried as label and value so the renderer decides which.
     """

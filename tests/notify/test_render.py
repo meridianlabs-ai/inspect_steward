@@ -94,10 +94,12 @@ def test_a_heading_takes_the_dialect_it_can_show() -> None:
 
 
 def test_a_field_takes_the_bold_the_dialect_has() -> None:
-    post = Post(kind=Kind.HEARTBEAT, title="x", blocks=(Field("Logs", "`/tmp/run`"),))
+    post = Post(
+        kind=Kind.HEARTBEAT, title="x", blocks=(Field("Signed off", "by kaia"),)
+    )
 
-    assert "**Logs** `/tmp/run`" in render(post, Dialect.MARKDOWN)
-    assert "*Logs* `/tmp/run`" in render(post, Dialect.MRKDWN)
+    assert "**Signed off** by kaia" in render(post, Dialect.MARKDOWN)
+    assert "*Signed off* by kaia" in render(post, Dialect.MRKDWN)
     assert "**" not in render(post, Dialect.MRKDWN)
 
 
@@ -169,11 +171,7 @@ def test_a_post_with_nothing_but_a_title_renders_as_one() -> None:
 
 
 @pytest.mark.parametrize("dialect", [Dialect.MARKDOWN, Dialect.MRKDWN])
-def test_a_post_ends_on_the_logs_field(dialect: Dialect) -> None:
-    # the operator's page ends on where the logs are, and a post carries the same
-    # content -- so the reader who wants the location has it, and it lands last
-    # because it is the one line that never changes
+def test_a_signed_off_post_carries_the_signature(dialect: Dialect) -> None:
     body = render(POST, dialect)
 
-    assert "Logs" in body
-    assert body.rstrip().endswith("`s3://bucket/run`")
+    assert "Signed off" in body
