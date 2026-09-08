@@ -261,7 +261,7 @@ def tend_items(
         *_stalled(result, lookup, inflight),
         *_parked(result, lookup),
         *_stuck(result, lookup),
-        *_tuning(result),
+        *_tuning(result, lookup),
         *_drift(result),
         *_degraded(result),
         *_orphans(result, lookup),
@@ -693,7 +693,7 @@ def _stuck_action(task_id: str, stuck: LiveStuck) -> str | None:
     )
 
 
-def _tuning(result: "TendResult") -> list[Item]:
+def _tuning(result: "TendResult", lookup: dict[str, TaskObservation]) -> list[Item]:
     """Capacity tend has no authority to take, put in front of the one who could grant it.
 
     Two conditions with one shape (`_tend.tuning.Proposal`): a pinned setpoint holding a clean, saturated window, and a ramp at its ceiling with pushback still absent. Both mean the binding constraint is a number an operator chose, so the owner is the operator — and the agent's part is to relay it (`raise`) and to record the ruling for them (`ack`): "seen, happy at 60" is an acknowledgment, and the next level up would be a different item.
@@ -716,7 +716,17 @@ def _tuning(result: "TendResult") -> list[Item]:
             )
         items.append(
             Item(
-                id=f"{TUNING_PROPOSAL}:{_digest(proposal.identifier)}:{proposal.level}",
+                # `_named`, not `_digest`: a task identifier carries no colon,
+                # so `_digest` would truncate every arm of a multi-arm run to
+                # the same leading characters and collide the items into one
+                # nobody could ack. `_named` pins each to eight hex of its full
+                # identifier, unique in any manifest. The `:level` suffix keeps
+                # the ack narrow — capacity at 60 accepted is not 80 accepted.
+                id=(
+                    f"{TUNING_PROPOSAL}:"
+                    f"{_named(lookup.get(proposal.identifier), proposal.identifier)}:"
+                    f"{proposal.level}"
+                ),
                 kind=TUNING_PROPOSAL,
                 owner=OWNERS[TUNING_PROPOSAL],
                 level=Level.INFO,

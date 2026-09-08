@@ -764,15 +764,9 @@ def test_the_ramp_record_folds_to_levels_and_step_times(tmp_path: Path) -> None:
 # --- the proposal as an item ----------------------------------------------
 
 
-def test_a_proposal_is_the_humans_item_and_its_id_carries_the_level() -> None:
-    """Capacity at 60 accepted is not capacity at 80 accepted.
-
-    The item is acknowledgeable — the agent relays it and records the ruling
-    with `steward ack` — and the level in the id is what keeps that ruling
-    narrow: a task later authorized higher produces a fresh item the first time
-    it holds a clean window at its new bound.
-    """
-    result = TendResult(
+def tuned(tuning: TuningPlan) -> TendResult:
+    """A turn whose only content is `tuning`, for exercising its items."""
+    return TendResult(
         summary=Summary(
             tasks=1,
             states={},
@@ -798,8 +792,19 @@ def test_a_proposal_is_the_humans_item_and_its_id_carries_the_level() -> None:
         degraded=None,
         claim=None,
         broke=None,
-        tuning=plan(ramp=None, baseline=base(capacity=("t1",))),
+        tuning=tuning,
     )
+
+
+def test_a_proposal_is_the_humans_item_and_its_id_carries_the_level() -> None:
+    """Capacity at 60 accepted is not capacity at 80 accepted.
+
+    The item is acknowledgeable — the agent relays it and records the ruling
+    with `steward ack` — and the level in the id is what keeps that ruling
+    narrow: a task later authorized higher produces a fresh item the first time
+    it holds a clean window at its new bound.
+    """
+    result = tuned(plan(ramp=None, baseline=base(capacity=("t1",))))
 
     items = tend_items(result, ObservedTasks(tasks=[]), InFlight())
 
@@ -809,6 +814,34 @@ def test_a_proposal_is_the_humans_item_and_its_id_carries_the_level() -> None:
     assert item.acknowledgeable
     assert item.id.endswith(":40")
     assert "pinned" in item.summary
+
+
+def test_arms_of_one_task_get_distinct_proposal_ids() -> None:
+    """Three arms sharing a leading run must each be its own item.
+
+    A task identifier carries no colon, so keying the item on the tail after
+    the last colon truncated every arm of a multi-arm run to the same leading
+    characters: all three ids came out byte-identical, `ack` refused as
+    ambiguous, and no qualified form could name one. Each arm is pinned by
+    eight hex of its full identifier, unique in any manifest.
+    """
+    arms = (
+        "veevals/explanation-arm-a",
+        "veevals/explanation-arm-b",
+        "veevals/explanation-arm-c",
+    )
+    tuning = plan(
+        *(sig(identifier=arm, pid=index + 1) for index, arm in enumerate(arms)),
+        ramp=None,
+        baseline=base(*arms, pids=(1, 2, 3), capacity=arms),
+        cpu={1: 12.0, 2: 12.0, 3: 12.0},
+    )
+    assert len(tuning.proposals) == 3
+
+    items = tend_items(tuned(tuning), ObservedTasks(tasks=[]), InFlight())
+
+    ids = [entry.id for entry in items if entry.kind == TUNING_PROPOSAL]
+    assert len(ids) == len(set(ids)) == 3
 
 
 # --- carrying out a move, and the receipt for it --------------------------
