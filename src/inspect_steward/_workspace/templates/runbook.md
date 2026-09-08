@@ -272,6 +272,7 @@ Tend ramps sample concurrency on its own, one step per clean window, and steps b
 
 - `steward ramp hold --reason ...` stops the climb; levels stay where they are and the defensive cut stays active. Add a task identifier to hold one task. `steward ramp resume` re-arms it. Both are yours on your own judgement.
 - A `tuning_proposal` is capacity tend may not take: a pinned `max_samples` that is saturated and clean, or a ramp at the top of its range with no pushback. Raise it, and when the operator answers, `steward ack` with their answer. A different level is a different item.
+- **Ramp in steps of 50.** When the top of the range binds and the ask is how much higher to set it, recommend raising it by 50 and let the next clean window earn the next 50. Name that step as the recommendation; a larger jump is an alternative they can pick.
 - Never lower a pinned setpoint and never edit `samples_ramp`; both are the operator's numbers. The one downward retune that is yours is under A running worker.
 
 ### Standing rules
