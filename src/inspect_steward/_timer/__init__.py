@@ -12,6 +12,7 @@ from .arm import (
     recorded,
     recorded_agent,
 )
+from .collect import AgentRunner, guarded_collect, run_agent
 from .cron import Cron, cron_line, cron_schedule, markers, with_block, without_block
 from .entry import (
     AGENT_LABEL_SUFFIX,
@@ -31,6 +32,7 @@ from .systemd import Systemd, render_service, render_timer
 __all__ = [
     "AGENT_LABEL_SUFFIX",
     "ORDER",
+    "AgentRunner",
     "Armament",
     "Completed",
     "Cron",
@@ -52,6 +54,7 @@ __all__ = [
     "disarm_agent",
     "entry_for",
     "entry_label",
+    "guarded_collect",
     "installed",
     "installed_agent",
     "markers",
@@ -60,6 +63,7 @@ __all__ = [
     "render_plist",
     "render_service",
     "render_timer",
+    "run_agent",
     "run_command",
     "scheduler",
     "schedulers",

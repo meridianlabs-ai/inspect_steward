@@ -276,6 +276,16 @@ class Workspace:
         """
         return self.state / "collect.log"
 
+    @property
+    def collect_lock(self) -> Path:
+        """`.steward/collect.lock` — the advisory lock a scheduled agent collect holds while it runs.
+
+        What keeps two collects from overlapping: the scheduler fires on an interval, but a collect that outruns that interval must not have a second agent started on top of it, both reasoning and issuing `steward` verbs at once (`_timer.collect.guarded_collect`). An `flock` rather than a pidfile, because the kernel releases it when the holder exits *for any reason* — a crash, a kill, an OOM — so an unattended schedule can never wedge itself on a lock nobody is left to clear. Under `.steward/` because it is machine-only and disposable: deleting it mid-run at worst lets one extra collect start, and the next fire recreates it.
+
+        Only the agent collect needs this. Overlapping tends are already prevented by the claim a writing command holds (`claim`); a collect takes no claim, precisely so an operator can collect while the fleet is up, which is what leaves this gap to close here.
+        """
+        return self.state / "collect.lock"
+
     def definition(self, type: DefinitionType) -> Path:
         """Conventional path for a definition of `type`.
 

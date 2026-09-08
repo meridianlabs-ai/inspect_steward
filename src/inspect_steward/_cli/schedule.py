@@ -5,10 +5,14 @@ The runbook tells the agent to point *"whatever your harness has for recurring w
 **Distinct from `steward timer`, deliberately.** The tend timer runs the *mechanical* half and its absence is what `unsupervised` watches; this runs the *judgement* half, which the agent arms for itself and which nothing has to guarantee. So it is a sibling group with its own scheduler entry (labelled apart so neither disarms the other) and its own journal events — not a flag on `timer` or `collect`.
 
 Like the tend timer, the scheduled collect runs under a stripped environment that reads the workspace's `.env` from its working directory; unlike it, it also needs its harness's own credentials, which live wherever that harness keeps them (`codex login` writes `~/.codex`). Steward does not vet either — it cannot tell one harness's auth model from another's, and a false refusal is worse than a schedule the operator can check with `status`.
+
+**What the scheduler fires is the `run` wrapper, not `<agent> exec` directly.** A scheduler is not a supervisor — cron in particular starts a fresh process every interval regardless of the last — so a collect that outruns its interval would have a second agent stacked on top of it. `arm` schedules `steward schedule run`, which takes a non-blocking lock and only then execs the agent, skipping the tick if a previous collect still holds it (`_timer.collect`). The agent argv is resolved at fire time; arm still resolves it once to fail fast on a missing harness.
 """
 
 import json
 import shutil
+import sys
+from datetime import datetime, timezone
 
 import click
 
@@ -17,7 +21,9 @@ from .._timer import (
     TimerError,
     arm_agent,
     disarm_agent,
+    guarded_collect,
     installed_agent,
+    run_agent,
 )
 from .._util.duration import format_duration
 from .._workspace import (
@@ -72,7 +78,11 @@ def arm_command(agent: str, tend_interval: int | None, name: str | None) -> None
     """
     workspace = find_workspace()
     seconds = _interval(workspace, tend_interval)
-    command = _command(agent)
+    # resolve the agent now so a missing harness fails at arm time rather than
+    # silently every interval, but schedule the Steward wrapper rather than the
+    # agent directly -- the wrapper is what takes the overlap lock (`_run`)
+    _command(agent)
+    command = _scheduled_command(agent)
 
     # the scheduled collect writes to `.steward/collect.log`; a workspace made
     # before `.steward/` was ignored would otherwise track it
@@ -168,6 +178,52 @@ def status_command(output_json: bool) -> None:
             f"  this workspace now asks for {format_duration(wanted)} — "
             f"`steward schedule arm` applies it"
         )
+
+
+@schedule_command.command("run", hidden=True)
+@click.option(
+    "--agent",
+    type=click.Choice(list(AGENTS)),
+    default="codex",
+    help="Which harness to run under the overlap lock.",
+)
+def run_command(agent: str) -> None:
+    """Run one scheduled collect under the overlap lock (what the scheduler fires).
+
+    Not for operators: `arm` schedules this rather than the agent directly, so that a collect outrunning its interval is skipped rather than stacked on top of the one still running. Exits `0` on a skip, which is not a failure but the guard doing its job — so the scheduler does not treat an ordinary busy interval as a fault.
+    """
+    workspace = find_workspace()
+    # the scheduler's `mkdir -p` already makes `.steward/`, but a hand-run of
+    # this command need not have, and the lock's parent must exist to open it
+    workspace.collect_lock.parent.mkdir(parents=True, exist_ok=True)
+    argv = _command(agent)
+
+    def on_skip() -> None:
+        stamp = datetime.now(timezone.utc).strftime("%Y-%m-%d %H:%M:%SZ")
+        click.echo(
+            f"{stamp} collect skipped: a previous {agent} collect is still "
+            f"running (it holds {workspace.collect_lock})"
+        )
+
+    raise SystemExit(
+        guarded_collect(workspace.collect_lock, argv, runner=run_agent, on_skip=on_skip)
+    )
+
+
+def _scheduled_command(agent: str) -> list[str]:
+    """The argv the scheduler actually runs: this Steward wrapper, not the agent.
+
+    Running `schedule run` rather than `<agent> exec` directly is what puts the overlap lock (`_timer.collect.guarded_collect`) in front of every fire, uniformly across backends — cron, which starts a process every interval regardless, most of all. The interpreter is absolute for the same reason `_timer.entry` uses it: a scheduled command inherits almost no `PATH`.
+    """
+    return [
+        sys.executable,
+        "-m",
+        "inspect_steward",
+        "schedule",
+        "run",
+        "--agent",
+        agent,
+    ]
 
 
 def _command(agent: str) -> list[str]:

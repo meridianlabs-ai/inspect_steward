@@ -10,9 +10,12 @@ Cron is the backend throughout, driven by the in-memory crontab (`_fake`), and
 `codex` is faked onto PATH so nothing here needs it installed.
 """
 
+import fcntl
 import json
+import os
 import shutil
 from pathlib import Path
+from typing import Sequence
 
 import pytest
 from click.testing import CliRunner
@@ -95,15 +98,66 @@ def test_arming_records_and_installs_the_agent_command(
     recorded = read_agent_armed(read_journal(workspace.journal).events)
     assert recorded is not None
     assert (recorded.scheduler, recorded.interval) == ("cron", 1800)
-    # the installed command is the agent invocation, not a tend
+    # the installed command is the Steward wrapper that takes the overlap lock,
+    # not `<agent> exec` directly -- the agent argv is resolved at fire time
     assert crontab.text is not None
-    assert FAKE_CODEX in crontab.text
+    assert "-m inspect_steward schedule run --agent codex" in crontab.text
+    assert "*/30 * * * *" in crontab.text
+
+
+def test_the_codex_invocation_is_what_the_wrapper_runs(
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # the agent argv moved from the scheduled command to fire time, but its
+    # content is unchanged: `exec`, the bypass flag, and the collect prompt. The
+    # wrapper runs it under the lock rather than the scheduler running it directly
+    seen: list[list[str]] = []
+
+    def spy(argv: Sequence[str]) -> int:
+        seen.append(list(argv))
+        return 0
+
+    monkeypatch.setattr("inspect_steward._cli.schedule.run_agent", spy)
+
+    code, output = run("schedule", "run", "--agent", "codex")
+
+    assert code == 0, output
+    (argv,) = seen
+    assert argv[0] == FAKE_CODEX
     # the sandbox and approval gate come off: a scheduled collect must reach the
     # (often S3) log store and act with nobody in the session
-    assert "exec" in crontab.text
-    assert "--dangerously-bypass-approvals-and-sandbox" in crontab.text
-    assert "steward collect" in crontab.text
-    assert "*/30 * * * *" in crontab.text
+    assert "exec" in argv
+    assert "--dangerously-bypass-approvals-and-sandbox" in argv
+    assert any("steward collect" in part for part in argv)
+
+
+def test_run_skips_when_a_previous_collect_holds_the_lock(
+    workspace: Workspace, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # hold the lock the wrapper will reach for, so this fire finds a collect
+    # already running and stands down rather than starting a second agent
+    workspace.collect_lock.parent.mkdir(parents=True, exist_ok=True)
+    held = os.open(workspace.collect_lock, os.O_CREAT | os.O_RDWR, 0o644)
+    fcntl.flock(held, fcntl.LOCK_EX | fcntl.LOCK_NB)
+
+    ran = False
+
+    def spy(_argv: Sequence[str]) -> int:
+        nonlocal ran
+        ran = True
+        return 0
+
+    monkeypatch.setattr("inspect_steward._cli.schedule.run_agent", spy)
+    try:
+        code, output = run("schedule", "run", "--agent", "codex")
+    finally:
+        os.close(held)
+
+    # a skip exits 0 so the scheduler does not read a busy interval as a fault,
+    # says so on the log the redirect captures, and never starts the agent
+    assert code == 0, output
+    assert "collect skipped" in output
+    assert not ran
 
 
 def test_the_schedule_entry_is_labelled_apart_from_the_tend_timer(
