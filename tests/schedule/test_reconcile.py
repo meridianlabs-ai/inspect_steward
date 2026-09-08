@@ -1409,6 +1409,36 @@ def test_a_pinned_run_ignores_stale_levels() -> None:
     assert spawns(result)[0].max_samples == 12
 
 
+@pytest.mark.parametrize(
+    ("options", "pool", "expected"),
+    [
+        # ramp mode: the max tracks the ramp's top, the min is the floor
+        pytest.param({}, POOL, (20, DEFAULT_SAMPLES_RAMP[1]), id="default_ramp"),
+        pytest.param({}, Pool(samples_ramp=(60, 300)), (20, 300), id="a_written_range"),
+        # pinned mode: the max tracks the pinned setpoint so connections >= samples
+        pytest.param({"max_samples": 60}, POOL, (20, 60), id="pinned_above_the_floor"),
+        # a pinned setpoint below the floor still gets the floor's worth of
+        # connections -- 12 samples with 20 connections is ample
+        pytest.param({}, Pool(max_samples=12), (20, 20), id="pinned_below_the_floor"),
+        # a top below the floor is the one case the min clamps down to, since an
+        # adaptive range refuses a min above its max
+        pytest.param(
+            {}, Pool(samples_ramp=(5, 10)), (10, 10), id="a_range_below_the_floor"
+        ),
+    ],
+)
+def test_a_worker_spawns_with_an_adaptive_connection_range(
+    options: dict[str, Any], pool: Pool, expected: tuple[int, int]
+) -> None:
+    # the pool is provisioned to the sample ceiling at spawn so inspect's own
+    # controllers can climb to it without the tuning loop chasing them up
+    manifest = synth_manifest([TASK], **options)
+
+    result = reconcile(manifest, InFlight(), nothing_run(manifest), pool=pool)
+
+    assert spawns(result)[0].connections == expected
+
+
 def test_a_packed_batch_spawns_at_its_lowest_level() -> None:
     # one selection value applied per task: a fresh task must not inherit a
     # sibling's climb, and the climbed one costs a tend before the loop

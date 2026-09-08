@@ -38,7 +38,7 @@ Deliberately modest, because the ratchet is asymmetric: raising a limit takes ef
 Also the default ramp's floor, and the two agree by construction: a run that starts at 50 and never earns a step is exactly the run this constant always described.
 """
 
-DEFAULT_SAMPLES_RAMP = (DEFAULT_MAX_SAMPLES, 150)
+DEFAULT_SAMPLES_RAMP = (DEFAULT_MAX_SAMPLES, 200)
 """The range the tuning loop explores when nobody pinned a setpoint or wrote a range.
 
 On by default, which withdraws an earlier position deliberately (scheduling.md, *The signal is mechanical*): a run left alone at 50 all night compounds its undershoot for exactly the hours Steward exists to cover, and every step up is gated on measured absence of pushback where staying low is gated on nothing. The ceiling is a bound on discovery, not a promise of load — a run that never earns a step never leaves the floor.
@@ -48,6 +48,12 @@ DEFAULT_STALL_AFTER = 2
 """Consecutive attempts that may finish nothing new before a task is left alone.
 
 Two rather than one, because a single fruitless attempt is ordinary — a worker killed by a host blip finishes nothing and deserves the retry that a resume makes nearly free. Two in a row is a pattern, and the third would be the first attempt with evidence against it.
+"""
+
+CONNECTIONS_MIN = 20
+"""The floor of the adaptive connection range a worker spawns with.
+
+The deliberate twin of `tuning.CONNECTIONS_FLOOR`, kept here rather than imported so `_schedule` does not depend on `_tend`: the two are the same number for the same reason — the adaptive controllers' own starting level, below which a bound is strangling rather than throttling. A spawn floors the range's minimum here; a storm cut floors the ceiling there, and the two must agree.
 """
 
 
@@ -210,6 +216,11 @@ class SpawnWorker:
 
     max_samples: int
     """Sample concurrency, applied per task rather than divided among them — inspect's semaphore is per task, so a definition's value passes through unchanged however many tasks a worker holds (scheduling.md, *The three knobs have different scopes*)."""
+
+    connections: tuple[int, int] | None = None
+    """The `(min, max)` adaptive connection range this worker's model pool spawns with, or `None` to leave inspect's own default.
+
+    The max is where the tuning loop's controllers may climb to on their own; tend moves it only on genuine sustained saturation (`_tend.tuning._ceilings`), never past a hard cap. Set once here from the sample regime — the ramp's top where a ramp is in force, the pinned setpoint otherwise (`_spawn_connections`) — so a worker starts provisioned for the samples it will run rather than climbing from inspect's default of 100 while tend chases it."""
 
     @property
     def first(self) -> SpawnTask:
@@ -479,12 +490,14 @@ def reconcile(
         if ramp is not None
         else None
     )
+    connections = _spawn_connections(ramp, max_samples)
     spawning = [
         SpawnWorker(
             tasks=batch,
             max_samples=_spawn_level(
                 batch, max_samples, levels if ramp and levels else {}, ramp, share
             ),
+            connections=connections,
         )
         for batch in poured.workers
     ]
@@ -976,6 +989,19 @@ def _spawn_level(
     if share is not None:
         recorded.append(share)
     return max(min(recorded), 1)
+
+
+def _spawn_connections(
+    ramp: tuple[int, int] | None, max_samples: int
+) -> tuple[int, int]:
+    """The `(min, max)` adaptive connection range a worker spawns with.
+
+    The max tracks the sample ceiling, because one generate is in flight per running sample in the ordinary shape, so the connections a worker could hold open are bounded by the samples it may run: the ramp's top where a ramp is in force, the pinned setpoint otherwise. Provisioning the pool there at spawn lets inspect's own controllers climb to it without the tuning loop chasing them up from inspect's default of 100 — the loop is left only the exception, a genuine multi-connection-per-sample workload that saturates the top (`_tend.tuning._ceilings`).
+
+    The min is `CONNECTIONS_MIN`, never above the max — the clamp matters only for a pinned setpoint below 20, where a floor above the ceiling is the one thing `AdaptiveConcurrency` refuses.
+    """
+    top = ramp[1] if ramp is not None else max(max_samples, CONNECTIONS_MIN)
+    return (min(CONNECTIONS_MIN, top), top)
 
 
 def _sandbox_share(budget: int | None, tasks: int) -> int | None:

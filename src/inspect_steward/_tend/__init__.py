@@ -27,6 +27,7 @@ from .tuning import (
     observation_payload,
     plan_tuning,
     read_baseline,
+    read_conn_steps,
     read_ramp_record,
     signals,
 )
@@ -75,6 +76,7 @@ __all__ = [
     "plan_tuning",
     "progress_table",
     "read_baseline",
+    "read_conn_steps",
     "read_ramp_record",
     "signals",
     "status",

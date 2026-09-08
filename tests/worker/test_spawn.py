@@ -19,6 +19,8 @@ from inspect_ai._eval.eval_set_selection import (
     read_eval_set_selection,
 )
 from inspect_ai.log import list_eval_logs, read_eval_log
+from inspect_ai.model import GenerateConfig
+from inspect_ai.util import AdaptiveConcurrency
 from inspect_steward import read_eval_set
 from inspect_steward._notify import INSPECT_NOTIFICATION
 from inspect_steward._util.jsonl import read_events
@@ -75,6 +77,50 @@ def test_a_worker_inherits_the_runs_overrides_and_keeps_its_own(
     # and this worker's, which are the whole point of a per-worker container
     assert built.overrides.max_tasks == 2
     assert built.overrides.log_dir == "s3://bucket/logs"
+
+
+def test_a_worker_spawns_with_an_adaptive_range_without_clobbering_the_config() -> None:
+    """The connection range composes into the model config rather than replacing it.
+
+    `generate_config` is the one override field merged by member, so a worker
+    carrying nothing but a range leaves a run-wide config's other settings in
+    place. Set as a whole value it would silently drop them. (The definition's
+    own identity-bearing config — temperature, reasoning — is protected one layer
+    down, at the eval boundary, which `EvalSetOverrides` cannot even carry.)
+    """
+    built = worker_selection(
+        action("id-a"),
+        eval_set_id=EVAL_SET_ID,
+        log_dir="s3://bucket/logs",
+        overrides=EvalSetOverrides(generate_config=GenerateConfig(timeout=30)),
+        connections=(20, 200),
+    )
+
+    assert built.overrides is not None
+    config = built.overrides.generate_config
+    assert config is not None
+    # the worker's range landed. The member-wise merge leaves the nested value
+    # as a mapping, which the selection's JSON round-trip validates back into an
+    # `AdaptiveConcurrency` on the far side of the boundary
+    adaptive = config.adaptive_connections
+    bounds = (
+        adaptive.model_dump() if isinstance(adaptive, AdaptiveConcurrency) else adaptive
+    )
+    assert isinstance(bounds, dict)
+    assert (bounds["min"], bounds["max"]) == (20, 200)
+    # and the run's own generate-config field survived the member-wise merge
+    assert config.timeout == 30
+
+
+def test_a_worker_leaves_the_config_alone_where_no_range_is_given() -> None:
+    # `None` connections means no generate_config of Steward's, so a run whose
+    # definition sets its own is not handed an empty container that erases it
+    built = worker_selection(
+        action("id-a"), eval_set_id=EVAL_SET_ID, log_dir="s3://bucket/logs"
+    )
+
+    assert built.overrides is not None
+    assert built.overrides.generate_config is None
 
 
 def test_a_worker_is_asked_to_notify_only_where_a_channel_is_settled(

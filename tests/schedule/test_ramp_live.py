@@ -12,10 +12,7 @@ from typing import Any
 
 import pytest
 from inspect_steward._launch import Launch, launch
-from inspect_steward._schedule.reconcile import (
-    DEFAULT_MAX_SAMPLES,
-    DEFAULT_SAMPLES_RAMP,
-)
+from inspect_steward._schedule.reconcile import DEFAULT_MAX_SAMPLES
 from inspect_steward._tend import Refused, TendResult, tend
 from inspect_steward._workspace import (
     ACTION,
@@ -97,13 +94,13 @@ def test_a_saturated_worker_with_no_pushback_earns_a_step(
 
     until("the raised limit to read back live", landed)
 
-    # the connection ceiling is no longer raced to the ramp's top ahead of the
-    # samples: with the setpoint at the floor -- well under the adaptive default
-    # of 100 -- the pool already covers it, so the ceiling tracks the setpoint
-    # if it moves at all and is never provisioned to DEFAULT_SAMPLES_RAMP[1]
-    for payload in ramp_actions(workspace):
-        if payload.get("knob") == "max_connections":
-            to = payload.get("to")
-            assert isinstance(to, int)
-            assert to != DEFAULT_SAMPLES_RAMP[1]
-            assert to <= FLOOR + 20
+    # the connection ceiling is set once at spawn -- the worker starts with the
+    # adaptive range (20, DEFAULT_SAMPLES_RAMP[1]), so inspect's own controllers
+    # climb inside it and the tuning loop never has to. Near the floor the fifty
+    # samples never saturate a 200 pool, and mockllm never pushes back, so no
+    # `max_connections` move -- raise or cut -- should ever fire
+    assert not [
+        payload
+        for payload in ramp_actions(workspace)
+        if payload.get("knob") == "max_connections"
+    ]

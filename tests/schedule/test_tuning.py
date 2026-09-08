@@ -23,6 +23,7 @@ from inspect_steward._tend import (
     observation_payload,
     plan_tuning,
     read_baseline,
+    read_conn_steps,
     read_ramp_record,
 )
 from inspect_steward._tend.items import tend_items
@@ -65,6 +66,7 @@ def sig(
     sandboxes: tuple[int, int] | None = None,
     ceiling: int | None = None,
     limit: int | None = None,
+    conn_in_use: int = 0,
 ) -> TaskSignals:
     """One task's window, defaulting to a clean, saturated one."""
     return TaskSignals(
@@ -81,6 +83,7 @@ def sig(
         sandboxes=sandboxes,
         connections_ceiling=ceiling,
         connections_limit=limit,
+        connections_in_use=conn_in_use,
     )
 
 
@@ -90,6 +93,7 @@ def base(
     pids: tuple[int, ...] = (1,),
     pushback: tuple[str, ...] = (),
     capacity: tuple[str, ...] = (),
+    conn_saturated: tuple[str, ...] = (),
 ) -> Baseline:
     """The previous turn's record for these tasks, matching `sig`'s defaults."""
     names = identifiers or ("t1",)
@@ -101,6 +105,7 @@ def base(
         errors={name: 0 for name in names},
         pushback=frozenset(pushback),
         capacity=frozenset(capacity),
+        conn_saturated=frozenset(conn_saturated),
     )
 
 
@@ -111,6 +116,7 @@ def plan(
     baseline: Baseline | None = None,
     holds: dict[str, RampHold] | None = None,
     last_step: dict[str, float] | None = None,
+    last_conn_step: dict[str, float] | None = None,
     cpu: dict[int, float] | None = None,
     absent: tuple[str, ...] = (),
 ) -> TuningPlan:
@@ -121,6 +127,7 @@ def plan(
         baseline=baseline if baseline is not None else base(),
         holds=holds or {},
         last_step=last_step or {},
+        last_conn_step=last_conn_step or {},
         cpu=cpu if cpu is not None else {1: 12.0},
         now=NOW,
         absent=absent,
@@ -483,91 +490,123 @@ def test_the_cut_never_goes_below_the_controllers_start() -> None:
     assert cut.to == CONNECTIONS_FLOOR
 
 
-# --- the way back up tracks the setpoint, stepwise ------------------------
+# --- the way back up: bounded, only on genuine sustained saturation -------
 
 
-def test_a_clear_window_raises_the_ceiling_toward_the_setpoint_by_doubling() -> None:
-    # the pool at 50 would cap throughput below the 200-sample setpoint, so the
-    # ceiling climbs toward it -- by at most a doubling per window
-    (raise_,) = ceilings(plan(sig(level=200, in_use=200, ceiling=50, limit=30)))
-
-    assert (raise_.at, raise_.to) == (50, 100)
-
-
-def test_the_raise_stops_at_the_sample_setpoint() -> None:
-    # one generate in flight per sample in the ordinary shape, so the setpoint
-    # is the most connections those samples could hold open
-    (raise_,) = ceilings(plan(sig(level=200, in_use=200, ceiling=150, limit=30)))
-
-    assert raise_.to == 200
-
-
-def test_a_ceiling_that_already_covers_the_setpoint_is_left_alone() -> None:
-    # 100 connections is ample for 40 samples, and the default bound is neither
-    # raised past the setpoint nor lowered to meet it
-    assert ceilings(plan(sig(level=40, ceiling=100, limit=30))) == []
+def saturated(
+    identifier: str = "t1",
+    *,
+    ceiling: int = 100,
+    pid: int = 1,
+) -> TaskSignals:
+    """A row whose controllers both want more (at the ceiling) and fill it."""
+    return sig(
+        identifier,
+        level=200,
+        in_use=200,
+        pid=pid,
+        ceiling=ceiling,
+        limit=ceiling,
+        conn_in_use=ceiling,
+    )
 
 
-def test_the_raise_does_not_wait_for_a_full_window() -> None:
-    # unlike a sample step, the ceiling raise is gated on the absence of
-    # pushback rather than a clean window, so it fires on the first tend even
-    # with no baseline -- a pool under the setpoint is a hidden cap to clear now
-    result = plan(sig(level=150, in_use=150, ceiling=100), baseline=Baseline())
+def test_one_saturated_window_records_but_does_not_raise() -> None:
+    # saturation in a single window is a busy moment the controllers own; the
+    # raise waits for a second, so this turn only records what it saw
+    result = plan(saturated(), baseline=base())
 
-    (raise_,) = ceilings(result)
-    assert raise_.to == 150
-    assert steps(result) == []
+    assert ceilings(result) == []
+    assert result.record["conn_saturated"] == ["t1"]
+
+
+def test_two_saturated_windows_double_the_ceiling() -> None:
+    # the controllers at the ceiling and filling it, twice running with no
+    # pushback: the samples hold more than one connection each, so the pool grows
+    (raise_,) = ceilings(plan(saturated(), baseline=base(conn_saturated=("t1",))))
+
+    assert (raise_.at, raise_.to) == (100, 200)
+
+
+def test_the_raise_is_clamped_to_the_hard_cap() -> None:
+    # twice the ramp's top (2 * 200 = 400) is the ceiling on the ceiling: a
+    # doubling from 300 would reach 600, so it lands on the cap instead
+    (raise_,) = ceilings(
+        plan(saturated(ceiling=300), baseline=base(conn_saturated=("t1",)))
+    )
+
+    assert raise_.to == 2 * RAMP[1]
+
+
+def test_a_ceiling_already_at_the_cap_is_left_alone() -> None:
+    # nothing left to give: doubling would exceed the cap and clamping brings it
+    # back to where it already is, which is no move
+    assert (
+        ceilings(plan(saturated(ceiling=400), baseline=base(conn_saturated=("t1",))))
+        == []
+    )
+
+
+def test_wanting_more_without_filling_it_is_not_saturation() -> None:
+    # the controllers are at the ceiling (limit 100) but only half in use: a
+    # limit climbed past demand is not demand, so nothing is recorded or raised
+    result = plan(
+        sig(level=200, in_use=200, ceiling=100, limit=100, conn_in_use=50),
+        baseline=base(conn_saturated=("t1",)),
+    )
+
+    assert ceilings(result) == []
+    assert result.record["conn_saturated"] == []
+
+
+def test_a_recent_raise_lets_the_pool_settle() -> None:
+    # the spacing gate: a doubling has sandboxes to start and connections to open
+    # before the next window can judge it, so a raise within STEP_SPACING waits
+    result = plan(
+        saturated(),
+        baseline=base(conn_saturated=("t1",)),
+        last_conn_step={"t1": NOW - STEP_SPACING / 2},
+    )
+
+    assert ceilings(result) == []
+    assert result.record["conn_saturated"] == ["t1"]
 
 
 def test_pushback_or_a_hold_stalls_the_raise() -> None:
-    pushing = plan(sig(level=200, in_use=200, ceiling=50, scale_downs=(EDGE + 200,)))
-    held = plan(sig(level=200, in_use=200, ceiling=50), holds=hold())
+    pushing = plan(
+        sig(
+            level=200,
+            in_use=200,
+            ceiling=100,
+            limit=100,
+            conn_in_use=100,
+            scale_downs=(EDGE + 200,),
+        ),
+        baseline=base(conn_saturated=("t1",)),
+    )
+    held = plan(saturated(), baseline=base(conn_saturated=("t1",)), holds=hold())
 
     assert ceilings(pushing) == []
     assert ceilings(held) == []
+    # an unclean window is not saturation, so the two-window count resets too
+    assert pushing.record["conn_saturated"] == []
+    assert held.record["conn_saturated"] == []
 
 
 def test_holding_one_arm_holds_its_process_s_ceiling_too() -> None:
     # the knob is process-scoped, so it cannot be raised for one task and not
     # its sibling: the only reading that keeps `ramp hold <identifier>` honest
     # is the one that treats a held row as holding the process
-    alone = plan(sig(level=200, in_use=200, ceiling=50), holds=hold("t1"))
+    alone = plan(saturated(), baseline=base(conn_saturated=("t1",)), holds=hold("t1"))
     packed = plan(
-        sig(level=200, in_use=200, ceiling=50),
-        sig("t2", level=200, in_use=200, ceiling=50),
-        baseline=base("t1", "t2"),
+        saturated(),
+        saturated("t2"),
+        baseline=base("t1", "t2", conn_saturated=("t1", "t2")),
         holds=hold("t2"),
     )
 
     assert ceilings(alone) == []
     assert ceilings(packed) == []
-
-
-# --- past the setpoint, only on the controllers' own demand ---------------
-
-
-def test_connections_pinned_at_the_ceiling_grow_past_the_setpoint() -> None:
-    # a multi-agent sample holds several connections, so the controllers can
-    # want more than one per sample -- and when they have grown to the ceiling
-    # and stayed clean, that pin is the licence to double past the setpoint
-    (raise_,) = ceilings(plan(sig(level=150, in_use=150, ceiling=150, limit=150)))
-
-    assert (raise_.at, raise_.to) == (150, 300)
-
-
-def test_a_ceiling_at_the_setpoint_with_room_to_grow_is_left_alone() -> None:
-    # the controllers sit below the ceiling (limit 100 < 150), so the samples
-    # are not asking for more than one connection each -- nothing to do
-    assert ceilings(plan(sig(level=150, in_use=150, ceiling=150, limit=100))) == []
-
-
-def test_pushback_stalls_the_grow_past_a_pin_too() -> None:
-    # the pin only licences a raise while the provider is not objecting
-    result = plan(
-        sig(level=150, in_use=150, ceiling=150, limit=150, scale_downs=(EDGE + 200,))
-    )
-
-    assert ceilings(result) == []
 
 
 # --- pinned mode: the signal runs, the authority does not -----------------
@@ -759,6 +798,49 @@ def test_the_ramp_record_folds_to_levels_and_step_times(tmp_path: Path) -> None:
     # the connections move is not a level, and the last word wins
     assert levels == {"t1": 80}
     assert set(last_step) == {"t1"}
+
+
+def test_conn_steps_folds_raises_only_not_cuts(tmp_path: Path) -> None:
+    journal = tmp_path / "journal.jsonl"
+    # a raise, then a cut on the same task: only the raise is a spacing source,
+    # because gating the recovery raise on the cut before it would strand the
+    # ceiling down exactly when the pushback has cleared
+    append_event(
+        journal,
+        ACTION,
+        action="ramp",
+        knob="max_connections",
+        identifier="t1",
+        at=100,
+        to=200,
+    )
+    append_event(
+        journal,
+        ACTION,
+        action="ramp",
+        knob="max_connections",
+        identifier="t1",
+        at=200,
+        to=40,
+    )
+    # a sample step is a different knob and never a connection spacing source
+    append_event(
+        journal,
+        ACTION,
+        action="ramp",
+        knob="max_samples",
+        identifier="t2",
+        at=40,
+        to=80,
+    )
+    # a raise with no recorded `at` still counts (it defaults to 0)
+    append_event(
+        journal, ACTION, action="ramp", knob="max_connections", identifier="t3", to=200
+    )
+
+    steps = read_conn_steps(read_journal(journal).events)
+
+    assert set(steps) == {"t1", "t3"}
 
 
 # --- the proposal as an item ----------------------------------------------

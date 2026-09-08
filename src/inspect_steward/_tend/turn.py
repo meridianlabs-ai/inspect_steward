@@ -172,6 +172,7 @@ from .tuning import (
     observation_payload,
     plan_tuning,
     read_baseline,
+    read_conn_steps,
     read_ramp_record,
     signals,
 )
@@ -738,6 +739,9 @@ class _History:
     last_step: dict[str, float] = field(default_factory=dict[str, float])
     """When each task's setpoint last moved, for the spacing gate."""
 
+    last_conn_step: dict[str, float] = field(default_factory=dict[str, float])
+    """When each task's connection ceiling last rose, for the connection raise's spacing gate."""
+
     damage: list[DamagedLine] = field(default_factory=list[DamagedLine])
     """Lines the journal read could not turn into events. Kept rather than discarded, because every fold above ran without whatever these lines said — and that is a fact about this turn's answers, not merely about the file (`items.JOURNAL_DAMAGE`)."""
 
@@ -780,6 +784,7 @@ def _history(workspace: Workspace) -> _History:
     status_failing, fold_failing, sync_failing = _episodes(events)
     breaks_since, breaks = _breaks(events)
     ramp_levels, last_step = read_ramp_record(events)
+    last_conn_step = read_conn_steps(events)
     pool: Pool | None = None
     recorded_stuck: int | None = None
     previous: frozenset[str] | None = None
@@ -835,6 +840,7 @@ def _history(workspace: Workspace) -> _History:
         ramp_holds=read_ramp_holds(events),
         ramp_levels=ramp_levels,
         last_step=last_step,
+        last_conn_step=last_conn_step,
         damage=read.damage,
         status_failing=status_failing,
         fold_failing=fold_failing,
@@ -1239,6 +1245,7 @@ def _turn(
         baseline=history.baseline,
         holds=history.ramp_holds,
         last_step=history.last_step,
+        last_conn_step=history.last_conn_step,
         cpu=progress.live.usage.seconds if progress.live is not None else {},
         now=datetime.now(timezone.utc).timestamp(),
         absent=inflight.running_identifiers - {task.identifier for task in answered},

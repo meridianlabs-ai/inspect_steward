@@ -34,6 +34,8 @@ from inspect_ai._eval.eval_set_selection import (
 )
 from inspect_ai._eval.evalset import eval_set_id_for_log_dir
 from inspect_ai._util.file import safe_filename
+from inspect_ai.model import GenerateConfig
+from inspect_ai.util import AdaptiveConcurrency
 
 from .._evalset.command import DefinitionCommand, definition_command
 from .._evalset.detect import DefinitionType
@@ -174,6 +176,7 @@ class Fleet:
                 log_dir=self.log_dir,
                 overrides=self.overrides,
                 scanners=self.scanners,
+                connections=action.connections,
             ).model_dump_json(exclude_none=True, indent=2),
             encoding="utf-8",
         )
@@ -241,6 +244,7 @@ def worker_selection(
     log_dir: str,
     overrides: EvalSetOverrides | None = None,
     scanners: dict[str, dict[str, Any]] | None = None,
+    connections: tuple[int, int] | None = None,
 ) -> EvalSetSelection:
     """Build the selection document for one worker.
 
@@ -248,16 +252,77 @@ def worker_selection(
 
     **The run's overrides and this worker's are one container, merged here.** Inspect would accept a run-wide document by environment variable as readily, and Steward does not use it: a worker's overrides then live in two places, one of them a file under `.steward/` that this design tells people they may delete. Merging into the selection leaves exactly one document per worker, written from the manifest the fleet is converging on.
 
+    **The connection range composes rather than replaces.** It is set as `generate_config.adaptive_connections`, and `generate_config` is the one override field merged by member — at the run/worker layer (`merge_eval_set_overrides`) and again at the eval boundary, where only its explicitly-set fields overlay the definition's `**kwargs`. So a worker carrying nothing but a range leaves the definition's temperature, reasoning, and every other model setting untouched. The one thing that defeats it is the definition (or a run-wide override) setting an explicit `max_connections` or using batch mode, either of which turns adaptive off entirely (`inspect_ai.util._concurrency.adaptive_active`) — in which case the range is silently ignored, which is the definition's choice to make.
+
     Args:
         action: The tasks to run.
         eval_set_id: Eval set id to stamp into the worker's logs.
         log_dir: Log directory for the worker.
-        overrides: Inspect's arguments for the run, from the committed manifest. This worker's three own values are applied over them.
+        overrides: Inspect's arguments for the run, from the committed manifest. This worker's own values are applied over them.
         scanners: Scanners the worker realizes and merges with the definition's own — a selection field of its own rather than an override, because injection merges where an override replaces.
+        connections: The `(min, max)` adaptive connection range to spawn with, or `None` to leave the definition's own (`reconcile._spawn_connections`).
 
     Returns:
         The selection.
     """
+    merged = merge_eval_set_overrides(
+        overrides,
+        EvalSetOverrides(
+            log_dir=log_dir,
+            max_samples=action.max_samples,
+            # likewise unconditional, and for a sharper reason: every other
+            # override left unset falls back to what the definition passed,
+            # but `eval_set()` fills `max_tasks` in below the selection
+            # branch, so an unset one falls through to `eval()`'s rule
+            # instead -- one task at a time for a single model, the model
+            # count for several. A packed worker would run its batch
+            # sequentially with nobody having chosen that. The whole batch,
+            # because how much runs at once is bounded fleet-wide by the
+            # pour, not here
+            max_tasks=len(action.tasks),
+            # **the half of the channel that exporting a variable does not
+            # buy.** `build_apprise(True)` reads
+            # `INSPECT_EVAL_NOTIFICATION`, but a worker's `eval_set()` only
+            # calls it when its own `notification` argument is truthy — so
+            # a fleet handed the value and not this one is a fleet that
+            # never notifies, silently, while Steward posts normally.
+            # Conditional on the variable rather than on a setting, because
+            # that is what `_notify.channel` has already settled: present
+            # for a channel from either vocabulary, absent when there is
+            # none, and absent leaves whatever the definition chose
+            notification=True
+            if os.environ.get(INSPECT_NOTIFICATION, "").strip()
+            else None,
+            # only the one field is set, so `model_dump(exclude_unset=...)`
+            # at the eval boundary contributes exactly `adaptive_connections`
+            # and leaves the definition's model config alone
+            generate_config=GenerateConfig(
+                adaptive_connections=AdaptiveConcurrency(
+                    min=connections[0], max=connections[1]
+                )
+            )
+            if connections is not None
+            else None,
+        ),
+    )
+    # inspect merges `generate_config` by member with `model_copy(update=...)`,
+    # which leaves the nested `adaptive_connections` a dict where a model belongs
+    # -- correct on the wire but noisy on serialize. Re-validating the one
+    # sub-model coerces it back, so writing the selection stays warning-free. The
+    # dump is warning-suppressed only for this intermediate step; the value it
+    # produces is what the round-trip would have validated anyway
+    if (
+        merged is not None
+        and isinstance((config := merged.generate_config), GenerateConfig)
+        and isinstance(config.adaptive_connections, dict)
+    ):
+        merged = merged.model_copy(
+            update={
+                "generate_config": GenerateConfig.model_validate(
+                    config.model_dump(warnings=False)
+                )
+            }
+        )
     return EvalSetSelection(
         version=EVAL_SET_SELECTION_VERSION,
         eval_set_id=eval_set_id,
@@ -279,36 +344,7 @@ def worker_selection(
         # always present rather than conditional: `log_dir` is what puts a
         # worker's logs where Steward is watching, so there is no Steward worker
         # that wants the definition's directory
-        overrides=merge_eval_set_overrides(
-            overrides,
-            EvalSetOverrides(
-                log_dir=log_dir,
-                max_samples=action.max_samples,
-                # likewise unconditional, and for a sharper reason: every other
-                # override left unset falls back to what the definition passed,
-                # but `eval_set()` fills `max_tasks` in below the selection
-                # branch, so an unset one falls through to `eval()`'s rule
-                # instead -- one task at a time for a single model, the model
-                # count for several. A packed worker would run its batch
-                # sequentially with nobody having chosen that. The whole batch,
-                # because how much runs at once is bounded fleet-wide by the
-                # pour, not here
-                max_tasks=len(action.tasks),
-                # **the half of the channel that exporting a variable does not
-                # buy.** `build_apprise(True)` reads
-                # `INSPECT_EVAL_NOTIFICATION`, but a worker's `eval_set()` only
-                # calls it when its own `notification` argument is truthy — so
-                # a fleet handed the value and not this one is a fleet that
-                # never notifies, silently, while Steward posts normally.
-                # Conditional on the variable rather than on a setting, because
-                # that is what `_notify.channel` has already settled: present
-                # for a channel from either vocabulary, absent when there is
-                # none, and absent leaves whatever the definition chose
-                notification=True
-                if os.environ.get(INSPECT_NOTIFICATION, "").strip()
-                else None,
-            ),
-        ),
+        overrides=merged,
     )
 
 

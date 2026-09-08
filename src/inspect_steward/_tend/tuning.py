@@ -22,7 +22,7 @@ from .._workspace import ACTION, OBSERVATION, JournalEvent, RampHold
 RAMP_STEP = 20
 """How much one clean window buys.
 
-Fixed rather than proportional: the default range climbs 40→200 in eight steps, each one small enough that the drain back out of it is minutes rather than hours (the ratchet: lowering a limit never preempts, it waits for holders to finish).
+Fixed rather than proportional: the default range climbs 50→200 in eight steps, each one small enough that the drain back out of it is minutes rather than hours (the ratchet: lowering a limit never preempts, it waits for holders to finish).
 """
 
 STEP_SPACING = 20 * 60.0
@@ -99,6 +99,11 @@ class TaskSignals:
     connections_limit: int | None = None
     """The highest limit any of this row's controllers currently holds. What a storm cut clamps the ceiling to."""
 
+    connections_in_use: int = 0
+    """How many connections the row's controllers hold open right now, summed across them.
+
+    The demand half of the connection up-gate: a ceiling raised past what the samples hold open provisions capacity nobody is using, so the raise fires only when the controllers are both *at* the ceiling (`connections_limit >= connections_ceiling` — they want more) and *filling* it (`connections_in_use >= connections_ceiling` — the want is real). Summed rather than a maximum because it answers the same question `_connections` does — how many are open across the row's models — where the ceiling is one setting worn by each."""
+
 
 def signals(key: str, live: LiveTask) -> TaskSignals:
     """One live row as the policy's input.
@@ -125,6 +130,7 @@ def signals(key: str, live: LiveTask) -> TaskSignals:
         sandboxes=live.sandboxes,
         connections_ceiling=live.connections_ceiling,
         connections_limit=live.connections_limit,
+        connections_in_use=live.connections.in_use,
     )
 
 
@@ -152,6 +158,9 @@ class Baseline:
 
     capacity: frozenset[str] = frozenset()
     """Tasks whose previous window was already clean at a bound. Capacity in two consecutive windows is a proposal; in one, it is a good ten minutes."""
+
+    conn_saturated: frozenset[str] = frozenset()
+    """Tasks whose process was genuinely connection-saturated last window — the controllers at their ceiling and filling it, with no pushback. Saturation in two consecutive windows earns a ceiling raise; in one, it is a busy moment the controllers own, the same asymmetry `pushback` draws for the way down."""
 
     budget: int | None = None
     """The machine's sandbox budget as the previous turn resolved it, or `None` where nothing was host-bound.
@@ -229,6 +238,7 @@ def plan_tuning(
     baseline: Baseline,
     holds: Mapping[str, RampHold],
     last_step: Mapping[str, float],
+    last_conn_step: Mapping[str, float],
     cpu: Mapping[int, float],
     now: float,
     absent: Collection[str] = (),
@@ -242,6 +252,7 @@ def plan_tuning(
         baseline: What the previous turn recorded.
         holds: The holds in force, keyed by identifier with `""` for the fleet's.
         last_step: When each task's setpoint last moved, by identifier, unix.
+        last_conn_step: When each task's connection ceiling last *rose*, by identifier, unix — the spacing a raise measures from, so a doubling has time to be exercised before another lands on top of it. Cuts are not recorded here, because a cut must never gate the raise that would follow it clearing.
         cpu: Cumulative CPU seconds per pid, read this turn.
         now: The turn's clock, unix — passed in so the policy stays pure.
         absent: Running tasks whose worker did not answer, which have no window this turn but are still holding whatever the last turn left them at. Charged against the sandbox budget at that level, because a worker too busy to serve its socket is running samples exactly as hard as one that answered — and *busy* is the ordinary state of a fleet mid-generate, not a failure. Charged whether or not it was sandboxed, since the reading that would say is the one that did not arrive: the error is then a step declined, which costs a tend, rather than a host over-committed, which costs the run.
@@ -258,6 +269,7 @@ def plan_tuning(
     moves: list[Move] = []
     lines: list[str] = []
     capacity: set[str] = set()
+    conn_saturated: set[str] = set()
     proposals: list[Proposal] = []
 
     if ramp is not None:
@@ -269,7 +281,17 @@ def plan_tuning(
                 + (f" — {held.reason}" if held.reason else "")
                 + " · `steward ramp resume` re-arms it"
             )
-        moves.extend(_ceilings(tasks, pushback, storms, holds))
+        ceiling_moves, conn_saturated = _ceilings(
+            tasks,
+            pushback,
+            storms,
+            holds,
+            ramp=ramp,
+            baseline=baseline,
+            last_conn_step=last_conn_step,
+            now=now,
+        )
+        moves.extend(ceiling_moves)
 
     sandboxed = _budget(tasks, budget)
     unmeasured = sum(
@@ -501,6 +523,7 @@ def plan_tuning(
             "errors": {task.identifier: task.errored for task in tasks},
             "pushback": sorted(pushback),
             "capacity": sorted(capacity),
+            "conn_saturated": sorted(conn_saturated),
             "budget": sandboxed,
         },
         lines=lines,
@@ -564,16 +587,25 @@ def _ceilings(
     pushback: Collection[str],
     storms: Collection[str],
     holds: Mapping[str, RampHold],
-) -> list[Move]:
-    """The connection-ceiling moves, one per process.
+    *,
+    ramp: tuple[int, int],
+    baseline: Baseline,
+    last_conn_step: Mapping[str, float],
+    now: float,
+) -> tuple[list[Move], set[str]]:
+    """The connection-ceiling moves, one per process, and who was saturated this window.
 
-    The asymmetry lives here. A storm cuts the ceiling to where the controllers already fell — at once, holds notwithstanding, because backoffs stop within seconds of the ceiling landing and the climb-back that would restart them cannot happen. A clear window raises it by at most doubling, and the target is the process's **sample setpoint** — the sum of its tasks' `max_samples`. One generate is in flight per running sample in the ordinary shape, so the setpoint is the most connections those samples could hold open, and holding the ceiling there keeps the pool from silently capping throughput below the sample limiter while never provisioning the range's top ahead of the climb. So the ceiling tracks the sample ramp up rather than racing to it, and the way back up is stepwise where the way down was one move.
+    A worker already spawns provisioned to the sample ceiling (`reconcile._spawn_connections`): the controllers may climb on their own up to the ramp's top without this loop lifting a finger, so the raise here is no longer *tracking* the ramp — that job moved to the spawn. What is left is the one thing inspect's own controllers cannot do, which is grow the pool past the top when the samples genuinely need more than one connection each. That is a real shape — a multi-agent sample fans out several generates — and a real bound, so the raise is gated hard and capped hard.
 
-    **Past the setpoint the raise needs a reason, and the controllers give it.** A sample is not always one generate in flight — a multi-agent sample fans out several — so the setpoint is a floor to reach without asking and a ceiling to exceed only on demand. The demand signal is the controllers themselves pinned at the ceiling (`connections_limit` reaching `connections_ceiling`) across a clean window: they wanted more and the provider did not object, which is exactly scheduling.md §3.3's *pinned at max with no scale-downs is limited by the ceiling, not by the provider*. Below the setpoint the raise fires whether or not they are pinned, since a ceiling under the sample level is a hidden cap to clear regardless; at or above it, only the pin licences another double. A fresh worker's default bound (100) is left alone while the setpoint sits under it and no controller is pinned.
+    **The asymmetry the module promises lives here, sharpened.** A storm cuts the ceiling to where the controllers already fell — at once, holds notwithstanding, because the climb-back that would restart the backoffs cannot happen. A raise needs *genuine saturation sustained*: the controllers at their ceiling (`connections_limit >= connections_ceiling` — they want more) **and** filling it (`connections_in_use >= connections_ceiling` — the want is real, not a limit optimistically climbed past demand), with no pushback, across two consecutive windows, spaced since the last raise. The old loop raised on the *want* alone, which a multi-agent burst trips every turn, and doubled without a cap — a runaway to 380 while 127 were in use. Requiring the *fill* too, the second window, the spacing, and a hard cap of twice the ramp's top together make that impossible: the worst case is one bounded doubling.
 
-    Per process rather than per task, because the knob is process-scoped: one row is elected per pid, a packed process storms if any of its rows do, and its ceiling reads as the highest any row reports. The setpoint the raise aims at is likewise summed across the process's rows, since the pool is shared by every sample the process runs. **A hold on any of a process's rows holds the whole process's ceiling**, for the same reason — the knob cannot be raised for one task and not its sibling, so the only reading that keeps `ramp hold <identifier>` honest is the conservative one.
+    Per process rather than per task, because the knob is process-scoped: one row is elected per pid, a packed process storms if any of its rows do, its ceiling reads as the highest any row reports, and it is saturated if any of its rows is. **A hold on any of a process's rows holds the whole process's ceiling**, for the same reason — the knob cannot be raised for one task and not its sibling, so the conservative reading is the only one that keeps `ramp hold <identifier>` honest.
+
+    Returns the moves and the set of identifiers whose process was genuinely saturated this window — recorded so next turn can tell a sustained saturation from a busy moment, exactly as `pushback` is recorded to tell a storm from an episode.
     """
+    cap = 2 * ramp[1]
     moves: list[Move] = []
+    saturated_now: set[str] = set()
     seen: set[int] = set()
     for task in tasks:
         if task.pid in seen or task.connections_ceiling is None:
@@ -585,10 +617,6 @@ def _ceilings(
             for entry in siblings
             if entry.connections_ceiling is not None
         )
-        # the pool the process's samples could hold open: one generate in flight
-        # per running sample, so the sum of the setpoints is the ceiling above
-        # which connection headroom is capacity no sample exists to use
-        setpoint = sum(entry.level for entry in siblings if entry.level is not None)
         held = "" in holds or any(entry.identifier in holds for entry in siblings)
         if any(entry.identifier in storms for entry in siblings):
             # the highest any controller currently holds, never their sum: the
@@ -613,52 +641,48 @@ def _ceilings(
                         ),
                     )
                 )
-        elif not held and not any(entry.identifier in pushback for entry in siblings):
-            # the controllers have grown to the ceiling and stayed clean: the
-            # pool is the binding constraint, not the provider (scheduling.md
-            # §3.3). Below the setpoint that is expected and the raise just
-            # tracks the samples up; at or above it, the samples are holding
-            # more than one connection each -- a multi-agent shape -- and the
-            # push is the licence to grow past the setpoint on real demand
-            pinned = any(
-                entry.connections_limit is not None
-                and entry.connections_ceiling is not None
-                and entry.connections_limit >= entry.connections_ceiling
-                for entry in siblings
+            continue
+        if held or any(entry.identifier in pushback for entry in siblings):
+            # a hold or a single window of pushback is not a clean window, and an
+            # unclean window is not saturation: recording nothing here resets the
+            # two-window count, the same way a storm's `continue` above does
+            continue
+        # genuine saturation: the controllers both *want* more (at the ceiling)
+        # and are *using* it (filling the ceiling). The fill is the gate the old
+        # loop lacked -- a limit climbed past demand is not demand
+        saturated = any(
+            entry.connections_ceiling is not None
+            and entry.connections_limit is not None
+            and entry.connections_limit >= entry.connections_ceiling
+            and entry.connections_in_use >= entry.connections_ceiling
+            for entry in siblings
+        )
+        if not saturated:
+            continue
+        saturated_now.update(entry.identifier for entry in siblings)
+        sustained = any(
+            entry.identifier in baseline.conn_saturated for entry in siblings
+        )
+        spaced = now - last_conn_step.get(task.identifier, 0.0) >= STEP_SPACING
+        to = min(ceiling * 2, cap)
+        if sustained and spaced and to > ceiling:
+            moves.append(
+                Move(
+                    identifier=task.identifier,
+                    key=task.key,
+                    task_id=task.task_id,
+                    knob="max_connections",
+                    at=ceiling,
+                    to=to,
+                    reason=(
+                        f"connections saturated at the ceiling with no pushback "
+                        f"across two windows; the samples are holding more than "
+                        f"one connection each, so doubling the pool to {to} "
+                        f"(hard cap {cap})"
+                    ),
+                )
             )
-            if ceiling < setpoint:
-                moves.append(
-                    Move(
-                        identifier=task.identifier,
-                        key=task.key,
-                        task_id=task.task_id,
-                        knob="max_connections",
-                        at=ceiling,
-                        to=min(setpoint, ceiling * 2),
-                        reason=(
-                            f"no pushback; raising the connection ceiling toward "
-                            f"the sample setpoint ({setpoint})"
-                        ),
-                    )
-                )
-            elif pinned:
-                moves.append(
-                    Move(
-                        identifier=task.identifier,
-                        key=task.key,
-                        task_id=task.task_id,
-                        knob="max_connections",
-                        at=ceiling,
-                        to=ceiling * 2,
-                        reason=(
-                            "connections pinned at the ceiling with no pushback "
-                            "while it already covers the sample setpoint; the "
-                            "samples are holding more than one connection each, "
-                            "so growing the pool past the setpoint on real demand"
-                        ),
-                    )
-                )
-    return moves
+    return moves, saturated_now
 
 
 def _budget(tasks: Sequence[TaskSignals], declared: int | None) -> int | None:
@@ -733,6 +757,7 @@ def read_baseline(events: list[JournalEvent]) -> Baseline:
             errors=_ints(recorded.get("errors")),
             pushback=frozenset(_strings(recorded.get("pushback"))),
             capacity=frozenset(_strings(recorded.get("capacity"))),
+            conn_saturated=frozenset(_strings(recorded.get("conn_saturated"))),
             budget=budget
             if isinstance(budget, int) and not isinstance(budget, bool)
             else None,
@@ -769,6 +794,37 @@ def read_ramp_record(
         if (when := _unix(event.ts)) is not None:
             steps[identifier] = when
     return levels, steps
+
+
+def read_conn_steps(events: list[JournalEvent]) -> dict[str, float]:
+    """When each task's connection ceiling last *rose*, by identifier, unix.
+
+    A dedicated walk rather than a third answer from `read_ramp_record`, so that reader's shape and its one caller stay untouched. **Raises only** — a `max_connections` ramp whose `to` exceeds its `from`. A storm cut is excluded on purpose: the spacing gate exists to let a raise settle before the next lands, and a cut is not a raise; gating the recovery raise on the cut that preceded it would keep the ceiling down exactly when the pushback has cleared and it should climb.
+
+    Args:
+        events: Events in file order, as `read_journal` returns them.
+
+    Returns:
+        Last-raise times by identifier, empty where none rose.
+    """
+    steps: dict[str, float] = {}
+    for event in events:
+        if event.type != ACTION or event.payload.get("action") != "ramp":
+            continue
+        if event.payload.get("knob") != "max_connections":
+            continue
+        identifier = event.payload.get("identifier")
+        at, to = event.payload.get("at"), event.payload.get("to")
+        if not isinstance(identifier, str) or not identifier:
+            continue
+        if not (isinstance(to, int) and not isinstance(to, bool)):
+            continue
+        was = at if isinstance(at, int) and not isinstance(at, bool) else 0
+        if to <= was:
+            continue
+        if (when := _unix(event.ts)) is not None:
+            steps[identifier] = when
+    return steps
 
 
 def _unix(ts: str) -> float | None:
