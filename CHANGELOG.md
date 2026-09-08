@@ -1,4 +1,4 @@
-## Unreleased
+## 0.2.4 (08 September 2026)
 
 - Bound adaptive model connections: spawn workers with a fixed range (min 20, max the samples ramp's top) and raise the ceiling only on genuine sustained saturation.
 - More accurate model context window detection, using the window the definition resolved at capture and checking it during smoke runs.
