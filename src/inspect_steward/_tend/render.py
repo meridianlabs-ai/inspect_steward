@@ -40,7 +40,6 @@ from .progress import (
 )
 from .table import (
     budget_cell,
-    named_cell,
     pipe_table,
     resources_table,
     score_cell,
@@ -122,6 +121,7 @@ def collect_markdown(result: "TendResult", *, since: int = 0) -> str:
     lines += _progress(result)
     lines += _anomalies(result)
     lines += _live(result)
+    lines += _resources(result, width=0)
     lines += _tuning(result)
     lines += _policies(result)
     lines += _happened(result, since=since)
@@ -280,9 +280,12 @@ def rerunning_note(anomalies: Anomalies) -> list[str]:
     return [f"{count} awaiting a re-run."] if count else []
 
 
-def _resources(result: "TendResult") -> list[str]:
-    """Per running task, what it has met and what it is costing, as a fenced plain table with its keys clipped like the task table's. Absent while no worker is answering."""
-    table = resources_table(result.progress, width=KEY_WIDTH)
+def _resources(result: "TendResult", *, width: int = KEY_WIDTH) -> list[str]:
+    """Per running task, what it has met and what it is costing, as a fenced plain table. Absent while no worker is answering.
+
+    Keys clipped like the task table beside it: `KEY_WIDTH` on the operator's rendered page, and whole (`width=0`) on the agent's collect, where the keys are what the agent types back to `steward rule`.
+    """
+    table = resources_table(result.progress, width=width)
     return ["**resources**", "", *table, ""] if table else []
 
 
@@ -417,7 +420,7 @@ def _progress(result: "TendResult") -> list[str]:
     body: list[tuple[str, ...]] = []
     for row, key in zip(rows, short.keys, strict=True):
         cells = [
-            f"`{named_cell(row, key)}`",
+            f"`{key}`",
             f"{row.completed}/{row.total}",
             f"{round(row.fraction * 100)}%",
         ]

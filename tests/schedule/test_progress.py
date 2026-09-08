@@ -12,14 +12,15 @@ returns one rather than reaching into the table itself.
 
 import os
 import re
+from dataclasses import replace
 from pathlib import Path
 
 import pytest
 from inspect_ai.log import HeadlineMetric
 from inspect_steward._evalset.observe import TaskState, observe_logs, observe_tasks
 from inspect_steward._tend import Progress, progress_table, task_progress
-from inspect_steward._tend.progress import LIVE_ONLY, live_totals
-from inspect_steward._tend.table import clip
+from inspect_steward._tend.progress import LIVE_ONLY, Live, TaskResources, live_totals
+from inspect_steward._tend.table import clip, resources_cells
 from inspect_steward._worker import (
     Interim,
     InterimEntry,
@@ -386,8 +387,46 @@ def test_a_live_row_carries_every_column(tmp_path: Path) -> None:
         )
     )
 
-    for cell in ("5/123", "4%", "57r", "61q", "(52/80)", "115/300t"):
+    # connections have moved to the resources table's `conn` column, so they
+    # are no longer among the progress row's cells
+    for cell in ("5/123", "4%", "57r", "61q", "115/300t"):
         assert cell in line, f"{cell!r} missing from {line!r}"
+    assert "52/80" not in line
+
+
+def test_the_resources_table_carries_connections_in_its_conn_column(
+    tmp_path: Path,
+) -> None:
+    # the model pool a running task holds moved out of the task cell into the
+    # resources table: `in use / ceiling`, or just the count where the pool is
+    # unbounded
+    write_log(tmp_path, TASK, status="started", total=10, completed=1)
+
+    def conn_cell(pool: tuple[int, int | None]) -> str:
+        progress = rows(tmp_path, [TASK], live(TASK, in_flight=5, connections=pool))
+        (row,) = progress.rows
+        progress = replace(
+            progress,
+            live=Live(
+                tasks=1,
+                refusals=0,
+                http_retries=0,
+                resources=(
+                    TaskResources(
+                        identifier=row.identifier,
+                        refusals=0,
+                        http_retries=0,
+                        rss=1024**3,
+                        cores=0.1,
+                    ),
+                ),
+            ),
+        )
+        (cells,) = resources_cells(progress)
+        return cells[1]
+
+    assert conn_cell((52, 80)) == "52/80"
+    assert conn_cell((46, None)) == "46"
 
 
 def test_the_totals_appear_only_when_there_is_more_than_one_row(
@@ -467,7 +506,7 @@ def test_a_busy_sweep_fits_the_narrowest_surface(tmp_path: Path) -> None:
     for line in lines:
         assert len(line) <= SLACK, f"{len(line)} columns: {line!r}"
     # and it is not fitting by having thrown the numbers away
-    assert "(52/80)" in lines[0] and "115/300t" in lines[0]
+    assert "115/300t" in lines[0]
 
 
 def test_the_shared_model_is_named_once_rather_than_on_every_row(

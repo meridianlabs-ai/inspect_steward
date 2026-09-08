@@ -388,6 +388,12 @@ def test_the_resources_table_replaces_the_startup_bound_and_both_renderings_agre
     """
     result = turn(workspace)
     row = next(row for row in result.progress.rows if row.key.startswith("done"))
+    # connections ride in the resources table's `conn` column now, so the row
+    # carries a pool figure for it to show
+    rows = [
+        replace(one, connections=(52, 80)) if one is row else one
+        for one in result.progress.rows
+    ]
     live = Live(
         tasks=1,
         refusals=3,
@@ -402,7 +408,7 @@ def test_the_resources_table_replaces_the_startup_bound_and_both_renderings_agre
             ),
         ),
     )
-    running = replace(result, progress=replace(result.progress, live=live))
+    running = replace(result, progress=replace(result.progress, rows=rows, live=live))
 
     markdown = status_markdown(running, header=False)
     echo_turn(running)
@@ -414,12 +420,19 @@ def test_the_resources_table_replaces_the_startup_bound_and_both_renderings_agre
     lines = markdown.splitlines()
     start = lines.index("**resources**")
     assert lines[start + 2] == "```"
-    assert lines[start + 3].split() == ["task", "refusals", "retries", "memory", "cpu"]
-    assert lines[start + 4].split() == ["done", "3", "41", "2.0", "GiB", "1.5"]
+    assert lines[start + 3].split() == [
+        "task",
+        "conn",
+        "refusals",
+        "retries",
+        "memory",
+        "cpu",
+    ]
+    assert lines[start + 4].split() == ["done", "52/80", "3", "41", "2.0", "GiB", "1.5"]
     assert lines[start + 5] == "```"
     assert "resources:" in text
     (plain,) = [line for line in text.splitlines() if line.strip().startswith("done ")]
-    assert plain.split() == ["done", "3", "41", "2.0", "GiB", "1.5"]
+    assert plain.split() == ["done", "52/80", "3", "41", "2.0", "GiB", "1.5"]
     # the agent's page keeps the fleet total, with the caveat that travels with
     # it: a total that falls as tasks complete otherwise reads as a problem
     # resolving itself

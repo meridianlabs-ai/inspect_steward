@@ -8,6 +8,8 @@ One line per task, columns right-aligned on their own widths so the numbers stac
 
 Read left to right it is: what state the task is in, which task, how much of it is done, how much is moving right now, how much is still to come, how much has errored, how hard the model pool is working, how much of what landed the scanners have reached, how far into its budget a typical sample is, and what it scored — final for a finished task, interim over the samples scored so far for a running one. Every column is omitted when it has nothing to say — a finished task has no running samples and nothing left to queue, an errored count of zero is the ordinary case, a fully scanned run has no gap, a task with no declared limit has no budget column — so a settled campaign renders as a quiet list rather than a field of zeroes.
 
+The model-pool figure has since moved out of these tables into the `conn` column of the `**resources**` table (`resources_cells`), where it stands beside the memory and CPU a reader scanning what a worker costs is already looking for; the task cell here is now the display key alone.
+
 **Widths are computed per render rather than fixed.** Display keys vary from `addition` to a sweep entry with three arguments and a model, and a column padded for the worst case wastes the terminal on every other line.
 """
 
@@ -65,16 +67,10 @@ def progress_table(progress: Progress, *, width: int = 0) -> list[str]:
 def _cells(row: TaskProgress, key: str, width: int) -> tuple[str, ...]:
     """One row's columns, already formatted, before they are padded to a width.
 
-    Connections ride in the name cell as `(8/16)` rather than in a column of their own: they exist only while the task runs, and a reader scanning the numeric columns wants counts there, not a figure that is empty for most of the sweep.
+    The task cell is the display key alone: connections stand in the `conn` column of the `**resources**` table (`resources_cells`), beside the memory and CPU a reader scanning resource figures is already looking for, rather than riding in the name cell of the progress table.
     """
-    name = clip(key, width)
-    if row.connections is not None:
-        in_use, limit = row.connections
-        name = (
-            f"{name} ({in_use}/{limit})" if limit is not None else f"{name} ({in_use})"
-        )
     return (
-        f"{glyph(row)} {name}",
+        f"{glyph(row)} {clip(key, width)}",
         f"{row.completed}/{row.total}",
         f"{round(row.fraction * 100)}%",
         f"{row.running}r" if row.running else "",
@@ -119,7 +115,7 @@ def task_table_cells(
 
     **One builder for two surfaces**, so the operator's `status.md` and a notification cannot disagree about what a turn found — only about how the cells are drawn. `status.md` wraps column zero in backticks and lays the rows out as a pipe table; a post fences them as a plain table. Both start here.
 
-    Samples rather than task states, because *how is the run going* is a question about samples. No errored or scanned column: what errored is in the by-task table, and coverage is the agent's to read aloud at signoff. Connections ride in the task cell, `(8/16)`, because they exist only while the task runs. Every column is present or absent for the whole table rather than per row.
+    Samples rather than task states, because *how is the run going* is a question about samples. No errored or scanned column: what errored is in the by-task table, and coverage is the agent's to read aloud at signoff. No connections either: they stand in the `**resources**` table's `conn` column (`resources_cells`), beside the memory and CPU a reader scanning resource figures is already looking for. Every column is present or absent for the whole table rather than per row.
 
     Args:
         result: The turn that just ran.
@@ -150,7 +146,7 @@ def task_table_cells(
     body: list[tuple[str, ...]] = []
     for row, key in zip(rows, short.keys, strict=True):
         cells = [
-            named_cell(row, clip(key, width)),
+            clip(key, width),
             f"{row.completed}/{row.total}",
             f"{round(row.fraction * 100)}%",
         ]
@@ -164,14 +160,6 @@ def task_table_cells(
             cells += [score_cell(row)]
         body.append(tuple(cells))
     return tuple(header), body
-
-
-def named_cell(row: TaskProgress, key: str) -> str:
-    """The task cell: the display key, and its connections in use while it runs — `swe_bench@gpt-5 (8/16)`."""
-    if row.connections is None:
-        return key
-    in_use, limit = row.connections
-    return f"{key} ({in_use}/{limit})" if limit is not None else f"{key} ({in_use})"
 
 
 def budget_cell(row: TaskProgress) -> str:
@@ -213,17 +201,19 @@ def glyph(row: TaskProgress) -> str:
     return GLYPH.get(row.state, "?")
 
 
-RESOURCES_HEADER = ("task", "refusals", "retries", "memory", "cpu")
-"""The `**resources**` table's columns, in reading order."""
+RESOURCES_HEADER = ("task", "conn", "refusals", "retries", "memory", "cpu")
+"""The `**resources**` table's columns, in reading order.
+
+`conn` leads the figures: the model connections a task holds against its pool ceiling, `46/260`, which used to ride in the task cell of the tables above and now stands here beside the other things a running worker costs."""
 
 
 def resources_cells(progress: Progress, *, width: int = 0) -> list[tuple[str, ...]]:
-    """The `**resources**` rows: each running task's refusals, HTTP retries, memory and CPU, in the task table's order.
+    """The `**resources**` rows: each running task's connections, refusals, HTTP retries, memory and CPU, in the task table's order.
 
-    Per task rather than a fleet total, which is what lets the figures stand without a caveat: a finished task has no row, so nothing here falls to zero as the run completes. Memory and CPU are the task's even share of its process (`TaskResources`).
+    Per task rather than a fleet total, which is what lets the figures stand without a caveat: a finished task has no row, so nothing here falls to zero as the run completes. Connections are the model pool in use against its ceiling; memory and CPU are the task's even share of its process (`TaskResources`).
 
     Args:
-        progress: The turn's rows, for the display keys and the render order.
+        progress: The turn's rows, for the display keys, the connections, and the render order.
         width: Cut display keys to this many characters, or 0 for whole.
 
     Returns:
@@ -236,11 +226,13 @@ def resources_cells(progress: Progress, *, width: int = 0) -> list[tuple[str, ..
     named = {
         row.identifier: key for row, key in zip(progress.rows, short.keys, strict=True)
     }
+    connections = {row.identifier: row.connections for row in progress.rows}
     order = {row.identifier: n for n, row in enumerate(progress.rows)}
     rows = sorted(live.resources, key=lambda one: order.get(one.identifier, len(order)))
     return [
         (
             clip(named.get(one.identifier, one.identifier), width),
+            _conn_cell(connections.get(one.identifier)),
             str(one.refusals),
             str(one.http_retries),
             format_bytes(one.rss),
@@ -248,6 +240,14 @@ def resources_cells(progress: Progress, *, width: int = 0) -> list[tuple[str, ..
         )
         for one in rows
     ]
+
+
+def _conn_cell(connections: tuple[int, int | None] | None) -> str:
+    """The `conn` column: model connections in use against the pool ceiling — `46/260`, `46` where the pool is unbounded, empty where the task reported none."""
+    if connections is None:
+        return ""
+    in_use, limit = connections
+    return f"{in_use}/{limit}" if limit is not None else str(in_use)
 
 
 def resources_table(progress: Progress, *, width: int = 0) -> list[str]:
