@@ -843,7 +843,13 @@ def conclude(
         for one in lingering
     )
     sample_failures, errored = failures(logs)
-    result = probe(read_logs, models=models(rehearsed, scan_model=scan_model))
+    result = probe(
+        read_logs,
+        models=models(rehearsed, scan_model=scan_model),
+        # the windows the definition resolved in its own process, which for a private router is the
+        # only faithful source -- re-resolving here returns None and would fail a healthy run
+        captured=rehearsed.windows,
+    )
     # spliced rather than computed inside `probe`, which is about transcripts and
     # has no scan fold to ask -- what it buys is the whole of the check
     # machinery: a waiver by name, a mark in the digest, and a place in the verdict

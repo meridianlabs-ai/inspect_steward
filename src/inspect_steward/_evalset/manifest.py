@@ -113,6 +113,24 @@ class Manifest(BaseModel):
     tasks: list[ManifestTask]
     """Resolved tasks in the eval set."""
 
+    windows: dict[str, int | None] | None = None
+    """Each model's context window as the DEFINITION itself resolved it at capture, keyed by
+    `provider/name` (`str(ModelName(...))`, the same string `tasks[].model` uses) — or `None` on an
+    older manifest, or a definition that does not record it.
+
+    **The window resolves faithfully only where the definition ran.** A model registered by a
+    definition's `set_model_info()` (a private router with a 1M window) resolves that window inside
+    the capture subprocess and nowhere else — Steward's own interpreter never ran the definition, so
+    re-resolving there returns `None` and the smoke's `context_window` check would wrongly fail a run
+    that is fine. So the capture subprocess records it here (via `STEWARD_CAPTURE_WINDOWS`) and the
+    check trusts this over its own resolution. A value of `None` for a key means the definition
+    resolved no window for that model — the arm would fall back to 128000, the real defect the check
+    exists to catch.
+
+    `MANIFEST_VERSION` deliberately did not move, on the `capture_rss` reasoning: absence means *this
+    definition did not record windows*, and the check falls back to resolving them itself — exactly
+    its behaviour before this field existed."""
+
 
 def manifest_digest(manifest: Manifest) -> str:
     """Hash the work a committed manifest asks for: which tasks, and how much of each.

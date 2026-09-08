@@ -1,3 +1,4 @@
+import json
 from pathlib import Path
 from typing import Any
 
@@ -5,6 +6,7 @@ import pytest
 from inspect_ai._eval.evalset import TASK_IDENTIFIER_VERSION
 from inspect_steward import Manifest, ReadEvalSetError, read_eval_set
 from inspect_steward._evalset.manifest import MANIFEST_VERSION
+from inspect_steward._evalset.read import _read_captured_windows
 from inspect_steward._schedule import Pool, resolve_samples_ramp
 
 from ._hawk import requires_hawk
@@ -211,3 +213,74 @@ def test_read_eval_set_definition_error(tmp_path: Path) -> None:
 def test_read_eval_set_missing_file() -> None:
     with pytest.raises(ValueError, match="does not exist"):
         read_eval_set("nonexistent.py")
+
+
+def test_a_definition_that_records_windows_has_them_on_the_manifest(
+    tmp_path: Path,
+) -> None:
+    # the channel the smoke's context_window check reads: a definition resolves
+    # each model's window in its own process (where its set_model_info is live)
+    # and records it, because Steward's interpreter cannot resolve a private
+    # router and would wrongly fail the run
+    manifest = read_eval_set(FIXTURES / "windows_evalset.py", cwd=tmp_path)
+
+    assert manifest.windows == {"mockllm/model": 1_048_576}
+
+
+def test_a_definition_that_records_nothing_leaves_windows_unset(
+    tmp_path: Path,
+) -> None:
+    # a plain definition writes no sidecar, and the check falls back to resolving
+    # windows in its own interpreter -- exactly its behaviour before this existed
+    manifest = read_eval_set(FIXTURES / "simple_evalset.py", cwd=tmp_path)
+
+    assert manifest.windows is None
+
+
+def test_a_manifest_written_before_windows_still_reads() -> None:
+    # the reason MANIFEST_VERSION did not move: absence means "not recorded"
+    document: dict[str, Any] = {
+        "version": MANIFEST_VERSION,
+        "identifier_version": TASK_IDENTIFIER_VERSION,
+        "source": {
+            "type": "evalset",
+            "path": "evalset.py",
+            "content_hash": "sha256:abc",
+            "args": {},
+        },
+        "options": {},
+        "tasks": [],
+    }
+
+    assert Manifest.model_validate(document).windows is None
+
+
+class TestReadingTheWindowsSidecar:
+    """The sidecar is written by another process and optional, so a bad one must not break a launch."""
+
+    def test_a_missing_sidecar_is_none(self, tmp_path: Path) -> None:
+        assert _read_captured_windows(tmp_path / "windows.json") is None
+
+    def test_a_clean_mapping_with_a_null_is_kept(self, tmp_path: Path) -> None:
+        # null is the definition saying it resolved no window, which the check
+        # must see -- it is a failure, not a missing breadcrumb
+        path = tmp_path / "windows.json"
+        path.write_text(json.dumps({"a/b": 1_048_576, "c/d": None}))
+
+        assert _read_captured_windows(path) == {"a/b": 1_048_576, "c/d": None}
+
+    @pytest.mark.parametrize(
+        "content",
+        [
+            "not json at all",
+            json.dumps([1, 2, 3]),  # not a mapping
+            json.dumps({"a/b": "1048576"}),  # window is a string, not an int
+            json.dumps({"a/b": 1.5}),  # window is a float
+            json.dumps({"a/b": True}),  # bool is never a token count
+        ],
+    )
+    def test_a_malformed_sidecar_is_none(self, tmp_path: Path, content: str) -> None:
+        path = tmp_path / "windows.json"
+        path.write_text(content)
+
+        assert _read_captured_windows(path) is None

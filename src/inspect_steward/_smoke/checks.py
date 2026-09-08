@@ -107,18 +107,28 @@ class Probe:
         return tuple(check.name for check in self.checks if check.blocks)
 
 
-def probe(logs: Sequence[EvalLog], *, models: Iterable[str]) -> Probe:
+def probe(
+    logs: Sequence[EvalLog],
+    *,
+    models: Iterable[str],
+    captured: Mapping[str, int | None] | None = None,
+) -> Probe:
     """Ask the rehearsal's transcripts whether the run is configured as intended.
 
     Args:
         logs: The smoke's own logs, read whole. Never the run's.
         models: Every distinct model the manifest names, plus the scan model where one is configured — a scanner reviewing with a mis-resolved window is the same failure one layer over.
+        captured: Each model's context window as the DEFINITION resolved it at capture, keyed by the same `provider/name` string `models` uses. The definition's process is the only one that ran its `set_model_info()`, so for a private router this is the true window where re-resolving here returns `None`. Trusted over `window()` for any model it names — a number is that model's window, `None` is the definition itself falling back to 128000. Absent (an older or non-recording definition) means resolve here as before.
 
     Returns:
         The checks, and the per-model windows behind the first of them.
     """
+    captured = captured or {}
     samples = [sample for log in logs for sample in (log.samples or [])]
-    windows = tuple(window(name) for name in sorted(set(models)))
+    windows = tuple(
+        Window(model=name, tokens=captured[name]) if name in captured else window(name)
+        for name in sorted(set(models))
+    )
     return Probe(
         checks=(
             _context_window(windows, samples),

@@ -257,6 +257,92 @@ class TestTheContextWindow:
         assert "128000" in entry.detail
 
 
+class TestACapturedWindow:
+    """*What the definition resolved in its own process*, trusted over what we resolve here.
+
+    A model registered by a definition's `set_model_info()` — a private router with a 1M window — resolves that window inside the capture subprocess and nowhere else: this interpreter never ran the definition, so re-resolving here returns `None` and the run reads as a 128000 fallback it does not have. The capture records the true window and the check trusts it. `None` is kept and means the definition itself found no window — the real fallback the check exists to catch.
+    """
+
+    ROUTER = "fireworks/accounts/fireworks/routers/glm-5p3-us"
+
+    def test_a_captured_window_passes_where_this_interpreter_cannot_resolve(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # the false negative this fix removes. This interpreter resolves the
+        # router to nothing (no set_model_info here); the captured value is the
+        # window the definition's own process resolved, and it is trusted
+        aliasing(monkeypatch, None)
+
+        result = probe(
+            [log(sample())], models=[self.ROUTER], captured={self.ROUTER: 1_048_576}
+        )
+
+        entry = check(result, CONTEXT_WINDOW)
+        assert entry.verdict is Verdict.PASSED
+        assert "1048576" in entry.detail
+
+    def test_a_captured_window_is_trusted_even_when_resolution_here_raises(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # proves the captured value short-circuits this interpreter entirely:
+        # get_model raises here, and the run still passes because the definition
+        # already answered. A supervisor-side lookup is never even attempted
+        def boom(name: str) -> Any:
+            raise RuntimeError("this interpreter cannot answer")
+
+        monkeypatch.setattr(checks_module, "get_model", boom)
+
+        result = probe(
+            [log(sample())],
+            models=["mycorp/private-router"],
+            captured={"mycorp/private-router": 200_000},
+        )
+
+        entry = check(result, CONTEXT_WINDOW)
+        assert entry.verdict is Verdict.PASSED
+        assert "200000" in entry.detail
+
+    def test_a_captured_null_fails_the_definition_resolved_no_window(self) -> None:
+        # null is the definition saying it found no window: the arm would assume
+        # 128000 and stop shrinking oversized tool output. That is a failure the
+        # capture demonstrated rather than one this interpreter predicted
+        result = probe(
+            [log(sample())], models=[self.ROUTER], captured={self.ROUTER: None}
+        )
+
+        entry = check(result, CONTEXT_WINDOW)
+        assert entry.verdict is Verdict.FAILED
+        assert entry.blocks
+        assert "128000" in entry.detail
+
+    def test_capture_joins_on_the_exact_provider_slash_name_key(
+        self, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # the join is by `str(ModelName(...))` = "provider/name"; a bare name does
+        # not match, so a mis-keyed capture does not silently pass a model this
+        # interpreter cannot resolve -- it falls back and fails, as it should
+        aliasing(monkeypatch, None)
+
+        result = probe(
+            [log(sample())],
+            models=["mycorp/nothing-at-all"],
+            captured={"nothing-at-all": 1_048_576},
+        )
+
+        entry = check(result, CONTEXT_WINDOW)
+        assert entry.verdict is Verdict.FAILED
+        assert entry.blocks
+
+    def test_absent_capture_resolves_here_exactly_as_before(self) -> None:
+        # a definition that records nothing (older, or not veevals) leaves the
+        # check as it was: resolve in this interpreter
+        result = probe([log(sample())], models=[MODEL], captured=None)
+
+        entry = check(result, CONTEXT_WINDOW)
+        assert entry.verdict is Verdict.PASSED
+        assert "128000" in entry.detail
+
+
 class TestReasoningAtTheModelLayer:
     """*Did the reasoning from turn N reach turn N+1's input.*
 

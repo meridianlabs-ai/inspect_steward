@@ -1,3 +1,4 @@
+import json
 import os
 import subprocess
 import tempfile
@@ -20,6 +21,16 @@ from .manifest import (
 )
 
 INSPECT_EVAL_SET_CAPTURE = "INSPECT_EVAL_SET_CAPTURE"
+
+STEWARD_CAPTURE_WINDOWS = "STEWARD_CAPTURE_WINDOWS"
+"""Where the capture subprocess writes each model's resolved context window, for the smoke check.
+
+Steward owns this name and the path; a definition that understands it (veevals) writes a
+`{provider/name: tokens|null}` sidecar there, and one that does not simply leaves the path
+unwritten. The window resolves correctly only inside the definition's own process — Steward's
+interpreter never ran it — which is why the resolution is delegated to the capture rather than
+re-done here. See `_read_captured_windows` and `_smoke/checks.py::probe`.
+"""
 
 _STDERR_TAIL_BYTES = 8192
 
@@ -98,13 +109,16 @@ def read_eval_set(
             log_dir=str(Path(tmp_dir) / "logs"),
         )
         measured: list[CaptureCost] = []
+        windows_path = Path(tmp_dir) / "windows.json"
         capture = _run_capture(
             command,
             Path(tmp_dir) / "manifest.json",
+            windows_path=windows_path,
             env=env,
             timeout=timeout,
             cost=measured,
         )
+        windows = _read_captured_windows(windows_path)
 
     keys = compute_display_keys(capture.tasks)
     return Manifest(
@@ -129,12 +143,15 @@ def read_eval_set(
             ManifestTask(**task.model_dump(), key=key)
             for task, key in zip(capture.tasks, keys, strict=True)
         ],
+        windows=windows,
     )
 
 
 def _run_capture(
     command: DefinitionCommand,
     manifest_path: Path,
+    *,
+    windows_path: Path,
     env: dict[str, str] | None,
     timeout: float | None,
     cost: list[CaptureCost],
@@ -144,6 +161,9 @@ def _run_capture(
         **command.env,
         **(env or {}),
         INSPECT_EVAL_SET_CAPTURE: str(manifest_path),
+        # ask a definition that understands it to record each model's resolved window here; one that
+        # does not just leaves the path unwritten, and the check falls back to its own resolution
+        STEWARD_CAPTURE_WINDOWS: str(windows_path),
         "INSPECT_DISPLAY": "plain",
     }
     # `Popen` rather than `subprocess.run`, for the one thing `run` cannot give:
@@ -206,3 +226,32 @@ def _run_capture(
             returncode=result.returncode,
             stderr=result.stderr,
         ) from ex
+
+
+def _read_captured_windows(path: Path) -> dict[str, int | None] | None:
+    """The per-model windows the capture recorded, or `None` where it recorded none.
+
+    Defensive by design: the sidecar is written by a separate process and is optional, so anything
+    other than a clean `{str: int|null}` mapping is treated as *not recorded* and the check falls
+    back to resolving windows itself — the sidecar can only help, never break a launch. A model
+    whose value is `null` is kept: that is the definition saying it resolved no window, which the
+    check must see as a failure rather than as a missing breadcrumb.
+    """
+    if not path.exists():
+        return None
+    try:
+        loaded = json.loads(path.read_bytes())
+    except (OSError, ValueError):
+        return None
+    if not isinstance(loaded, dict):
+        return None
+    windows: dict[str, int | None] = {}
+    for key, value in loaded.items():
+        if not isinstance(key, str):
+            return None
+        # bool is an int subclass and is never a token count -- reject the whole mapping as malformed
+        if value is None or (isinstance(value, int) and not isinstance(value, bool)):
+            windows[key] = value
+        else:
+            return None
+    return windows
