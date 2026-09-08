@@ -52,7 +52,7 @@ The adaptive controllers' own starting level: a ceiling below where a fresh cont
 WINDOW_FALLBACK = 600.0
 """Seconds of history to treat as the window when no previous observation exists.
 
-Only the connections ceiling consults it — a fresh worker's first tend raises the ceiling to the ramp target without waiting a window, because until then the default bound (100) silently caps a climb the range authorized. Every sample-level gate simply waits for a real baseline instead.
+Only the connections ceiling consults it — the ceiling raise is gated on the absence of pushback rather than on a whole clean window, so a first tend with no baseline still needs *some* span to have found no scale-downs in, and this is it. Every sample-level gate simply waits for a real baseline instead.
 """
 
 
@@ -269,7 +269,7 @@ def plan_tuning(
                 + (f" — {held.reason}" if held.reason else "")
                 + " · `steward ramp resume` re-arms it"
             )
-        moves.extend(_ceilings(tasks, ramp, pushback, storms, holds))
+        moves.extend(_ceilings(tasks, pushback, storms, holds))
 
     sandboxed = _budget(tasks, budget)
     unmeasured = sum(
@@ -561,18 +561,18 @@ def _at_every_sample(task: TaskSignals, level: int | None) -> bool:
 
 def _ceilings(
     tasks: Sequence[TaskSignals],
-    ramp: tuple[int, int],
     pushback: Collection[str],
     storms: Collection[str],
     holds: Mapping[str, RampHold],
 ) -> list[Move]:
     """The connection-ceiling moves, one per process.
 
-    The asymmetry lives here. A storm cuts the ceiling to where the controllers already fell — at once, holds notwithstanding, because backoffs stop within seconds of the ceiling landing and the climb-back that would restart them cannot happen. A clear window raises it by at most doubling toward the ramp ceiling, so the way back up is stepwise where the way down was one move. The first raise is also how a fresh worker's default bound (100) gets out of the way of a range that authorized more.
+    The asymmetry lives here. A storm cuts the ceiling to where the controllers already fell — at once, holds notwithstanding, because backoffs stop within seconds of the ceiling landing and the climb-back that would restart them cannot happen. A clear window raises it by at most doubling, and the target is the process's **sample setpoint** — the sum of its tasks' `max_samples`. One generate is in flight per running sample in the ordinary shape, so the setpoint is the most connections those samples could hold open, and holding the ceiling there keeps the pool from silently capping throughput below the sample limiter while never provisioning the range's top ahead of the climb. So the ceiling tracks the sample ramp up rather than racing to it, and the way back up is stepwise where the way down was one move.
 
-    Per process rather than per task, because the knob is process-scoped: one row is elected per pid, a packed process storms if any of its rows do, and its ceiling reads as the highest any row reports. **A hold on any of a process's rows holds the whole process's ceiling**, for the same reason — the knob cannot be raised for one task and not its sibling, so the only reading that keeps `ramp hold <identifier>` honest is the conservative one.
+    **Past the setpoint the raise needs a reason, and the controllers give it.** A sample is not always one generate in flight — a multi-agent sample fans out several — so the setpoint is a floor to reach without asking and a ceiling to exceed only on demand. The demand signal is the controllers themselves pinned at the ceiling (`connections_limit` reaching `connections_ceiling`) across a clean window: they wanted more and the provider did not object, which is exactly scheduling.md §3.3's *pinned at max with no scale-downs is limited by the ceiling, not by the provider*. Below the setpoint the raise fires whether or not they are pinned, since a ceiling under the sample level is a hidden cap to clear regardless; at or above it, only the pin licences another double. A fresh worker's default bound (100) is left alone while the setpoint sits under it and no controller is pinned.
+
+    Per process rather than per task, because the knob is process-scoped: one row is elected per pid, a packed process storms if any of its rows do, and its ceiling reads as the highest any row reports. The setpoint the raise aims at is likewise summed across the process's rows, since the pool is shared by every sample the process runs. **A hold on any of a process's rows holds the whole process's ceiling**, for the same reason — the knob cannot be raised for one task and not its sibling, so the only reading that keeps `ramp hold <identifier>` honest is the conservative one.
     """
-    _, target = ramp
     moves: list[Move] = []
     seen: set[int] = set()
     for task in tasks:
@@ -585,6 +585,10 @@ def _ceilings(
             for entry in siblings
             if entry.connections_ceiling is not None
         )
+        # the pool the process's samples could hold open: one generate in flight
+        # per running sample, so the sum of the setpoints is the ceiling above
+        # which connection headroom is capacity no sample exists to use
+        setpoint = sum(entry.level for entry in siblings if entry.level is not None)
         held = "" in holds or any(entry.identifier in holds for entry in siblings)
         if any(entry.identifier in storms for entry in siblings):
             # the highest any controller currently holds, never their sum: the
@@ -609,22 +613,51 @@ def _ceilings(
                         ),
                     )
                 )
-        elif (
-            ceiling < target
-            and not held
-            and not any(entry.identifier in pushback for entry in siblings)
-        ):
-            moves.append(
-                Move(
-                    identifier=task.identifier,
-                    key=task.key,
-                    task_id=task.task_id,
-                    knob="max_connections",
-                    at=ceiling,
-                    to=min(target, ceiling * 2),
-                    reason=f"no pushback; raising the connection ceiling toward {target}",
-                )
+        elif not held and not any(entry.identifier in pushback for entry in siblings):
+            # the controllers have grown to the ceiling and stayed clean: the
+            # pool is the binding constraint, not the provider (scheduling.md
+            # §3.3). Below the setpoint that is expected and the raise just
+            # tracks the samples up; at or above it, the samples are holding
+            # more than one connection each -- a multi-agent shape -- and the
+            # push is the licence to grow past the setpoint on real demand
+            pinned = any(
+                entry.connections_limit is not None
+                and entry.connections_ceiling is not None
+                and entry.connections_limit >= entry.connections_ceiling
+                for entry in siblings
             )
+            if ceiling < setpoint:
+                moves.append(
+                    Move(
+                        identifier=task.identifier,
+                        key=task.key,
+                        task_id=task.task_id,
+                        knob="max_connections",
+                        at=ceiling,
+                        to=min(setpoint, ceiling * 2),
+                        reason=(
+                            f"no pushback; raising the connection ceiling toward "
+                            f"the sample setpoint ({setpoint})"
+                        ),
+                    )
+                )
+            elif pinned:
+                moves.append(
+                    Move(
+                        identifier=task.identifier,
+                        key=task.key,
+                        task_id=task.task_id,
+                        knob="max_connections",
+                        at=ceiling,
+                        to=ceiling * 2,
+                        reason=(
+                            "connections pinned at the ceiling with no pushback "
+                            "while it already covers the sample setpoint; the "
+                            "samples are holding more than one connection each, "
+                            "so growing the pool past the setpoint on real demand"
+                        ),
+                    )
+                )
     return moves
 
 

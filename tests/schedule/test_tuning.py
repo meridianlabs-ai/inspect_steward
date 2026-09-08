@@ -483,34 +483,45 @@ def test_the_cut_never_goes_below_the_controllers_start() -> None:
     assert cut.to == CONNECTIONS_FLOOR
 
 
-# --- the way back up is stepwise ------------------------------------------
+# --- the way back up tracks the setpoint, stepwise ------------------------
 
 
-def test_a_clear_window_restores_the_ceiling_by_doubling() -> None:
-    (raise_,) = ceilings(plan(sig(ceiling=50, limit=30)))
+def test_a_clear_window_raises_the_ceiling_toward_the_setpoint_by_doubling() -> None:
+    # the pool at 50 would cap throughput below the 200-sample setpoint, so the
+    # ceiling climbs toward it -- by at most a doubling per window
+    (raise_,) = ceilings(plan(sig(level=200, in_use=200, ceiling=50, limit=30)))
 
     assert (raise_.at, raise_.to) == (50, 100)
 
 
-def test_the_restore_stops_at_the_ramp_ceiling() -> None:
-    (raise_,) = ceilings(plan(sig(ceiling=150, limit=30)))
+def test_the_raise_stops_at_the_sample_setpoint() -> None:
+    # one generate in flight per sample in the ordinary shape, so the setpoint
+    # is the most connections those samples could hold open
+    (raise_,) = ceilings(plan(sig(level=200, in_use=200, ceiling=150, limit=30)))
 
     assert raise_.to == 200
 
 
-def test_a_fresh_worker_gets_the_ceiling_before_it_has_a_window() -> None:
-    # the one move that does not wait for a baseline: until the ceiling moves,
-    # the default bound silently caps a climb the range authorized
-    result = plan(sig(ceiling=100), baseline=Baseline())
+def test_a_ceiling_that_already_covers_the_setpoint_is_left_alone() -> None:
+    # 100 connections is ample for 40 samples, and the default bound is neither
+    # raised past the setpoint nor lowered to meet it
+    assert ceilings(plan(sig(level=40, ceiling=100, limit=30))) == []
+
+
+def test_the_raise_does_not_wait_for_a_full_window() -> None:
+    # unlike a sample step, the ceiling raise is gated on the absence of
+    # pushback rather than a clean window, so it fires on the first tend even
+    # with no baseline -- a pool under the setpoint is a hidden cap to clear now
+    result = plan(sig(level=150, in_use=150, ceiling=100), baseline=Baseline())
 
     (raise_,) = ceilings(result)
-    assert raise_.to == 200
+    assert raise_.to == 150
     assert steps(result) == []
 
 
-def test_pushback_or_a_hold_stalls_the_restore() -> None:
-    pushing = plan(sig(ceiling=50, scale_downs=(EDGE + 200,)))
-    held = plan(sig(ceiling=50), holds=hold())
+def test_pushback_or_a_hold_stalls_the_raise() -> None:
+    pushing = plan(sig(level=200, in_use=200, ceiling=50, scale_downs=(EDGE + 200,)))
+    held = plan(sig(level=200, in_use=200, ceiling=50), holds=hold())
 
     assert ceilings(pushing) == []
     assert ceilings(held) == []
@@ -520,10 +531,10 @@ def test_holding_one_arm_holds_its_process_s_ceiling_too() -> None:
     # the knob is process-scoped, so it cannot be raised for one task and not
     # its sibling: the only reading that keeps `ramp hold <identifier>` honest
     # is the one that treats a held row as holding the process
-    alone = plan(sig(ceiling=50), holds=hold("t1"))
+    alone = plan(sig(level=200, in_use=200, ceiling=50), holds=hold("t1"))
     packed = plan(
-        sig(ceiling=50),
-        sig("t2", ceiling=50),
+        sig(level=200, in_use=200, ceiling=50),
+        sig("t2", level=200, in_use=200, ceiling=50),
         baseline=base("t1", "t2"),
         holds=hold("t2"),
     )
@@ -532,8 +543,31 @@ def test_holding_one_arm_holds_its_process_s_ceiling_too() -> None:
     assert ceilings(packed) == []
 
 
-def test_a_ceiling_already_at_target_is_left_alone() -> None:
-    assert ceilings(plan(sig(ceiling=200))) == []
+# --- past the setpoint, only on the controllers' own demand ---------------
+
+
+def test_connections_pinned_at_the_ceiling_grow_past_the_setpoint() -> None:
+    # a multi-agent sample holds several connections, so the controllers can
+    # want more than one per sample -- and when they have grown to the ceiling
+    # and stayed clean, that pin is the licence to double past the setpoint
+    (raise_,) = ceilings(plan(sig(level=150, in_use=150, ceiling=150, limit=150)))
+
+    assert (raise_.at, raise_.to) == (150, 300)
+
+
+def test_a_ceiling_at_the_setpoint_with_room_to_grow_is_left_alone() -> None:
+    # the controllers sit below the ceiling (limit 100 < 150), so the samples
+    # are not asking for more than one connection each -- nothing to do
+    assert ceilings(plan(sig(level=150, in_use=150, ceiling=150, limit=100))) == []
+
+
+def test_pushback_stalls_the_grow_past_a_pin_too() -> None:
+    # the pin only licences a raise while the provider is not objecting
+    result = plan(
+        sig(level=150, in_use=150, ceiling=150, limit=150, scale_downs=(EDGE + 200,))
+    )
+
+    assert ceilings(result) == []
 
 
 # --- pinned mode: the signal runs, the authority does not -----------------

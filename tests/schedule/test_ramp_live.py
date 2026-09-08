@@ -97,8 +97,13 @@ def test_a_saturated_worker_with_no_pushback_earns_a_step(
 
     until("the raised limit to read back live", landed)
 
-    # the connection ceiling was patched toward the ramp target where the
-    # worker had adaptive controllers to patch; absent controllers, no move
+    # the connection ceiling is no longer raced to the ramp's top ahead of the
+    # samples: with the setpoint at the floor -- well under the adaptive default
+    # of 100 -- the pool already covers it, so the ceiling tracks the setpoint
+    # if it moves at all and is never provisioned to DEFAULT_SAMPLES_RAMP[1]
     for payload in ramp_actions(workspace):
         if payload.get("knob") == "max_connections":
-            assert payload.get("to") == DEFAULT_SAMPLES_RAMP[1]
+            to = payload.get("to")
+            assert isinstance(to, int)
+            assert to != DEFAULT_SAMPLES_RAMP[1]
+            assert to <= FLOOR + 20
