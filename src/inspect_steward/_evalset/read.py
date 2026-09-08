@@ -3,7 +3,7 @@ import os
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 from inspect_ai._eval.eval_set_manifest import EvalSetCapture
 
@@ -246,7 +246,7 @@ def _read_captured_windows(path: Path) -> dict[str, int | None] | None:
     if not isinstance(loaded, dict):
         return None
     windows: dict[str, int | None] = {}
-    for key, value in loaded.items():
+    for key, value in cast("dict[object, object]", loaded).items():
         if not isinstance(key, str):
             return None
         # bool is an int subclass and is never a token count -- reject the whole mapping as malformed
