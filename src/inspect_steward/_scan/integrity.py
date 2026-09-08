@@ -31,6 +31,7 @@ import json
 from collections.abc import AsyncIterator
 from typing import Literal, TypeAlias
 
+from inspect_ai.approval import ApprovalPolicy, approval, auto_approver
 from inspect_ai.event import ModelEvent, TimelineEvent, TimelineSpan
 from inspect_ai.model import Model
 from inspect_scout import (
@@ -310,6 +311,28 @@ def integrity_question(transcript: Transcript) -> str:
     return _QUESTION.format(outcome=_outcome_line(transcript))
 
 
+# A scanner reviews recorded transcripts; it is never the agent under evaluation. But its
+# structured-output `answer` tool call still flows through inspect's
+# execute_tools -> apply_tool_approval, and online scanning runs inside the same per-sample
+# context as the eval it accompanies. So without this, an approval-initialised
+# `eval_set(approval=...)` (e.g. an escape guard) would judge the scanner's own `answer` call:
+# with no active sample the guard fails closed, its fail-streak breaker trips, and the scan
+# dies with `TerminateSampleError: Tool call approver requested termination.`. Approve-all for
+# the duration of the review so scanner tooling is never gated by the agent's approval policy.
+# (An empty policy list is not a pass-through — `policy_approver([])` rejects every call.)
+_SCAN_APPROVAL: list[ApprovalPolicy] = [
+    ApprovalPolicy(auto_approver("approve"), tools="*")
+]
+
+
+async def _review(
+    llm: Scanner[Transcript], transcript: Transcript
+) -> Result | list[Result]:
+    """Run an LLM scanner with tool approval suspended — see ``_SCAN_APPROVAL``."""
+    with approval(_SCAN_APPROVAL):
+        return await llm(transcript)
+
+
 @scanner(loader=adaptive_loader())
 def scoring_integrity(model: str | Model | None = None) -> Scanner[Transcript]:
     """Flag transcripts whose recorded score cannot be taken at face value.
@@ -349,7 +372,7 @@ def scoring_integrity(model: str | Model | None = None) -> Scanner[Transcript]:
         llm = build(model)
 
         async def scan(transcript: Transcript) -> Result | list[Result]:
-            return await llm(transcript)
+            return await _review(llm, transcript)
 
         return scan
 
@@ -368,6 +391,6 @@ def scoring_integrity(model: str | Model | None = None) -> Scanner[Transcript]:
         llm = built.get(resolved)
         if llm is None:
             llm = built[resolved] = build(resolved)
-        return await llm(transcript)
+        return await _review(llm, transcript)
 
     return scan

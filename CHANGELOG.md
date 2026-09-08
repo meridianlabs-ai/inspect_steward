@@ -1,3 +1,7 @@
+## Unreleased
+
+- Ensure that tool call approval is not applied to llm_scanner `answer()` tool.
+
 ## 0.2.3 (07 September 2026)
 
 - Improved handling of live scan results (fold periodically, cleanup local buffer).
