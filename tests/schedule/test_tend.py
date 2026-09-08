@@ -670,9 +670,37 @@ def test_the_observation_carries_the_settings_a_later_turn_reads_back(
         "samples_ramp": None,
         "stall_after": 2,
         "stuck_after": None,
+        "scan_fold_interval": None,
     }
     assert recorded["states"]["complete"] == 1
     assert recorded["drift"] is False
+
+
+def test_a_non_scanning_tend_records_no_fold_instant(tmp_path: Path) -> None:
+    # nothing to fold means the observation carries `folded_at: None`, which the
+    # next turn's cadence reads as "never folded" and treats as due
+    done = SynthTask("done")
+    workspace, _ = prepared(tmp_path, [done])
+    write_log(workspace.logs, done)
+
+    turn(workspace)
+
+    (recorded,) = observations(workspace)
+    assert recorded["folded_at"] is None
+    assert recorded["settings"]["scan_fold_interval"] is None
+
+
+def test_history_reads_the_most_recent_fold_instant(tmp_path: Path) -> None:
+    # `folded_at` is carried forward every observation, so the most recent one
+    # is authoritative — the left edge the fold cadence measures its interval
+    # from (`_tend.turn._findings`)
+    from inspect_steward._tend.turn import _history
+
+    workspace, _ = prepared(tmp_path, [SynthTask("done")])
+    append_event(workspace.journal, OBSERVATION, folded_at="2026-09-08T00:00:00+00:00")
+    append_event(workspace.journal, OBSERVATION, folded_at="2026-09-08T01:00:00+00:00")
+
+    assert _history(workspace).folded_at == "2026-09-08T01:00:00+00:00"
 
 
 def test_a_sample_pin_outlives_the_turn_that_set_it(

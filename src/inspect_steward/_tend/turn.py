@@ -55,7 +55,10 @@ from .._evalset.observe import (
 )
 from .._notify import Channel, describe_channel, establish_channel
 from .._scan import (
+    DEFAULT_SCAN_FOLD_INTERVAL,
     ScanFindings,
+    buffer_files,
+    drain_buffer,
     establish_scan_model,
     existing_eval_set_id,
     merged_scanners,
@@ -373,6 +376,12 @@ class TendResult:
     """When the scan fold started failing, or `None` while it folds.
 
     Unlike the two beside it this raises no item: what it costs is freshness, and the read it feeds goes on answering from the rows already compacted. What it must not do is go unnoticed at the one moment it changes an answer, so signoff warns on it — a signature taken while rows are still unfolded is a signature over results this run has not finished looking at.
+    """
+
+    folded_at: str | None = None
+    """When the scan buffer was last folded to the compacted output, carried into the observation.
+
+    Set to now on a turn that folds, carried forward from the previous observation otherwise, and `None` before the first fold. What the fold cadence measures its interval from (`_findings`): a fold happens once this is `scan_fold_interval` seconds stale while a fleet is writing, or at once when the run quiesces with rows still buffered.
     """
 
     sync_failing: dict[str, str] = field(default_factory=dict[str, str])
@@ -736,7 +745,10 @@ class _History:
     """When `status.md` stopped being writable, or `None` while it writes. The episode's opening edge, as `_write_status` journalled it — what tells this turn whether a failure is news and a success is a recovery."""
 
     fold_failing: str | None = None
-    """When the scan fold started failing, or `None` while it folds. The same episode mechanics, and what keeps the fold being retried after the cheap `running or departed` gate has stopped firing (`_findings`)."""
+    """When the scan fold started failing, or `None` while it folds. The same episode mechanics, and what keeps the fold being retried after the cadence gate has stopped firing (`_findings`)."""
+
+    folded_at: str | None = None
+    """When the most recent observation recorded a successful scan fold, or `None` where no turn has folded. The left edge the fold cadence's interval measures from (`_findings`)."""
 
     sync_failing: dict[str, str] = field(default_factory=dict[str, str])
     """Destinations the propagation has stopped reaching, each with when it stopped. The same episode mechanics as `status_failing`, per target."""
@@ -773,6 +785,7 @@ def _history(workspace: Workspace) -> _History:
     previous: frozenset[str] | None = None
     complete: frozenset[str] | None = None
     since: float | None = None
+    folded_at: str | None = None
     for event in reversed(events):
         if event.type != OBSERVATION:
             continue
@@ -780,6 +793,10 @@ def _history(workspace: Workspace) -> _History:
             previous = frozenset(_strings(event.payload.get("items")))
             complete = _recorded(event.payload.get("complete"))
             since = _elapsed(event.ts)
+            # carried forward every observation, so the most recent one is
+            # authoritative -- the left edge the fold cadence measures from
+            recorded_fold = event.payload.get("folded_at")
+            folded_at = recorded_fold if isinstance(recorded_fold, str) else None
         if pool is None:
             pool = _pool(event.payload.get("settings"))
             if pool is not None and isinstance(
@@ -821,6 +838,7 @@ def _history(workspace: Workspace) -> _History:
         damage=read.damage,
         status_failing=status_failing,
         fold_failing=fold_failing,
+        folded_at=folded_at,
         sync_failing=sync_failing,
         breaks=breaks,
         breaks_since=breaks_since,
@@ -979,6 +997,12 @@ class _Settings:
     Not something a turn acts on, and deliberately the *expressed* preference rather than the resolved one — it exists to be compared against what is actually armed, and a comparison against Steward's own default would report drift from a number nobody wrote.
     """
 
+    scan_fold_interval: int | None = None
+    """Seconds between mid-run scan folds while a fleet writes, or `None` for `DEFAULT_SCAN_FOLD_INTERVAL`.
+
+    A cost knob the fold cadence reads (`_findings`), not a standing authority — so a degraded turn falls back to the default rather than to a last-known-good, unlike `stuck_after` beside it.
+    """
+
     sync: str | bool | None = None
     """Where the workspace propagates to, as `_steward.yaml` or the environment expressed it.
 
@@ -1131,7 +1155,7 @@ def _turn(
     # the state it *would* hold for a status -- but only an executing turn
     # appends them (below, before the observation)
     classed = read_classed_cache(workspace.classed)
-    found = _findings(
+    found, folded_at = _findings(
         workspace,
         manifest,
         observed,
@@ -1141,6 +1165,8 @@ def _turn(
         scan_id,
         execute=execute,
         fold_failing=history.fold_failing,
+        folded_at=history.folded_at,
+        scan_fold_interval=settings.scan_fold_interval,
     )
     detection = detect(
         observed,
@@ -1264,6 +1290,7 @@ def _turn(
         scan_id=scan_id,
         coverage=scanned,
         fold_failing=history.fold_failing,
+        folded_at=folded_at,
         journal_damage=history.damage,
         status_failing=history.status_failing,
         sync_failing=history.sync_failing,
@@ -1474,6 +1501,7 @@ def _turn(
         result,
         pool=settings.pool,
         stuck_after=settings.stuck_after,
+        scan_fold_interval=settings.scan_fold_interval,
         tuning=observation_payload(plan, retuned),
     )
     _sync(workspace, settings, log_dir, failing=history.sync_failing)
@@ -1937,6 +1965,12 @@ def _settings(
             # an agent reading `status` needs the ones it can have
             policies=_policies(directives) if directives is not None else [],
             interval=directives.tend_interval if directives is not None else None,
+            # a cost knob, not an authority: fall back to the default rather
+            # than a last-known-good, so nothing standing rides on a number a
+            # broken file took down with it
+            scan_fold_interval=(
+                directives.scan_fold_interval if directives is not None else None
+            ),
             # and the store on the same rule the policies keep: a file that
             # parsed still says where it is. A file that did not says nothing,
             # and the readiness item then invites no decision -- which is the
@@ -2017,6 +2051,7 @@ def _settings(
         ),
         degraded=None,
         interval=directives.tend_interval,
+        scan_fold_interval=directives.scan_fold_interval,
         policies=_policies(directives),
         log_store=resolve_log_store(directives),
         stuck_after=stuck_after if stuck_after is not None else directives.stuck_after,
@@ -2111,6 +2146,7 @@ def _record(
     pool: Pool,
     tuning: dict[str, Any],
     stuck_after: int | None = None,
+    scan_fold_interval: int | None = None,
 ) -> None:
     """Append this turn's observation to the journal.
 
@@ -2154,6 +2190,9 @@ def _record(
             for identifier in _finished(result.progress)
             if identifier not in result.held
         ],
+        # when the scan buffer was last folded, carried forward every turn so
+        # the next turn's cadence measures its interval from the most recent one
+        folded_at=result.folded_at,
         # what this turn ran under, which is what a later turn reads back when
         # `_steward.yaml` will not parse
         settings={
@@ -2166,6 +2205,7 @@ def _record(
             # payload sentinel keys on `stall_after` alone, so an extra key
             # costs it nothing
             "stuck_after": stuck_after,
+            "scan_fold_interval": scan_fold_interval,
         },
         # what the next turn's window measures against (`_tend.tuning.Baseline`)
         tuning=tuning,
@@ -2375,6 +2415,16 @@ def _live(
     return read_fleet(targets, _locations(logs), known=known, stuck_after=stuck_after)
 
 
+def _fold_due(
+    *, fold_failing: bool, buffer_nonempty: bool, interval_due: bool, active: bool
+) -> bool:
+    """Whether this turn folds the scan buffer.
+
+    A fold is paid on a cadence rather than every tend: rows are waiting, the interval since the last fold is up, and a fleet is still writing (`running or departed`). A quiescent run does not fold — a settled campaign must not re-compact the whole buffer every interval, and the tail it leaves is folded and cleaned by the terminal finalize at signoff, whose post-finalize re-check un-signs a run over anything it uncovers. An open retry episode (`fold_failing`) forces a fold regardless, which is what stops a fold that failed on the departure turn from being skipped until that finalize (`_findings`).
+    """
+    return fold_failing or (buffer_nonempty and interval_due and active)
+
+
 def _findings(
     workspace: Workspace,
     manifest: Manifest,
@@ -2386,16 +2436,20 @@ def _findings(
     *,
     execute: bool,
     fold_failing: str | None,
-) -> ScanFindings:
-    """Fold the workers' buffered scan rows, then read what they flagged.
+    folded_at: str | None,
+    scan_fold_interval: int | None,
+) -> tuple[ScanFindings, str | None]:
+    """Fold the workers' buffered scan rows, drain what folded, then read what they flagged.
 
     The tend's half of the scan bracket (`_scan.summary`), and the second half of it is the reason the first has to happen here: workers in selection mode never enter upstream's `scan_context`, so **nothing but this fold ever compacts a row**. Without it the whole census is blind to scanning until signoff.
 
-    **The fold is an executing turn's, the read is both dispositions'.** A `status` previews the anomalies it would find and mutates nothing, which is the contract every other part of it honours — so it reads whatever the last tend folded and is at worst one interval behind.
+    **The fold is an executing turn's, the read is both dispositions'.** A `status` previews the anomalies it would find and mutates nothing, which is the contract every other part of it honours — so it reads whatever the last tend folded and is at worst one interval behind. Returns the fold instant beside the census: the new one on a turn that folded, the carried-forward one otherwise — the left edge the next turn's cadence measures from.
 
-    **Folded while the run is not quiescent, or while a fold is owed.** The first is `running or departed`: a worker writes rows as its samples settle, and one that has left but not yet been reaped is the case where the last of them landed after the previous fold. Once the reap lands there is nothing new and a settled campaign pays nothing per turn — which matters, because a mid-run fold re-compacts the whole buffer and its cost grows with the run.
+    **Folded on a cadence, not every turn, because the fold's cost grows with the run.** A mid-run fold re-compacts the whole buffer, so paying it per tend rewrites an ever-larger object every interval. Instead it fires when the buffer holds rows, `scan_fold_interval` has elapsed since the last fold, and a fleet is still writing (`running or departed`) — see `_fold_due`. A quiescent run folds nothing; the tail it leaves is folded and cleaned by the terminal finalize at signoff, whose post-finalize re-check catches anything it uncovers.
 
-    **The second is an open episode, and without it the cheap gate has a hole that ends at the signature.** A fold that failed on the departure turn is a fold that never happens: the reap lands, the gate stops firing, and rows sit in the buffer through every later tend — until signoff's terminal finalize folds them, *after* the gate has passed, revealing a finding the signature does not cover. So a failure opens an episode (`scan_fold_failed`) that keeps the fold running every turn until one succeeds, on `status.md`'s and the propagation's mechanics exactly.
+    **What a fold compacts, it then drains.** The buffer is scout's local staging and grows unbounded until the terminal finalize cleans it — which fills the disk on a fleet of concurrent multi-day tasks that write for days before they land. So after a successful fold the buffer files that fold compacted are deleted (`drain_buffer`), bounding the local buffer to roughly one interval of rows across the whole active run. Snapshotting the file list *before* the fold is what makes the drain exact — see `buffer_files`.
+
+    **A failed fold opens an episode, without which the cadence has a hole that ends at the signature.** A fold that failed and then stopped being due would leave rows in the buffer through every later tend — until signoff's terminal finalize folds them, *after* the gate has passed, revealing a finding the signature does not cover. So a failure opens `scan_fold_failed`, which keeps the fold running every turn until one succeeds, on `status.md`'s and the propagation's mechanics exactly.
 
     Never raises. A directory that will not fold costs this turn's freshness and is retried; one that will not *read* is a different thing entirely and is reported (`ScanFindings.unreadable`), because unread and unflagged are not the same answer.
 
@@ -2403,50 +2457,73 @@ def _findings(
     """
     material = manifest.scan
     if material is None:
-        return ScanFindings()
+        return ScanFindings(), folded_at
     if scan_id is None:
-        return ScanFindings(
-            unreadable=[
-                UnreadableLog(
-                    location=log_dir,
-                    reason=(
-                        "this run scans, and neither the log directory's "
-                        "`.eval-set-id` nor the committed manifest says which "
-                        "scan the rows belong to"
-                    ),
-                    what="this run's scan results",
-                )
-            ]
+        return (
+            ScanFindings(
+                unreadable=[
+                    UnreadableLog(
+                        location=log_dir,
+                        reason=(
+                            "this run scans, and neither the log directory's "
+                            "`.eval-set-id` nor the committed manifest says which "
+                            "scan the rows belong to"
+                        ),
+                        what="this run's scan results",
+                    )
+                ]
+            ),
+            folded_at,
         )
     scanners = tuple(sorted(merged_scanners(material)))
     if not scanners:
-        return ScanFindings()
+        return ScanFindings(), folded_at
     scan_dir = scan_dir_location(log_dir=log_dir, scan_id=scan_id, scans=material.scans)
-    if execute and (inflight.running or inflight.departed or fold_failing):
-        started = time.monotonic()
-        try:
-            sync_scan(log_dir=log_dir, scan_id=scan_id, scans=material.scans)
-        except Exception as ex:
-            steward_log(
-                workspace.log,
-                f"the scan rows in {scan_dir} could not be folded: "
-                f"{type(ex).__name__}: {ex}",
-            )
-            if fold_failing is None:
-                _mark(workspace, SCAN_FOLD_FAILED, target=scan_dir)
-        else:
-            # the cost this fold pays is the one step 29 asked to be *measured*
-            # before it is engineered around: it re-compacts the whole buffer,
-            # so it grows with the run rather than with the turn
-            steward_log(
-                workspace.log,
-                f"folded the scan rows in {time.monotonic() - started:.1f}s",
-            )
-            if fold_failing is not None:
-                _mark(workspace, SCAN_FOLD_RESTORED, target=scan_dir)
+    if execute:
+        # snapshotted before the fold so the drain removes exactly what the fold
+        # compacts: every file here is folded by a sync that starts after this,
+        # and one a worker writes during the fold survives to the next
+        snapshot = buffer_files(log_dir=log_dir, scan_id=scan_id, scans=material.scans)
+        interval = scan_fold_interval or DEFAULT_SCAN_FOLD_INTERVAL
+        elapsed = _elapsed(folded_at) if folded_at is not None else None
+        interval_due = elapsed is None or elapsed >= interval
+        active = bool(inflight.running or inflight.departed)
+        if _fold_due(
+            fold_failing=fold_failing is not None,
+            buffer_nonempty=bool(snapshot),
+            interval_due=interval_due,
+            active=active,
+        ):
+            started = time.monotonic()
+            try:
+                sync_scan(log_dir=log_dir, scan_id=scan_id, scans=material.scans)
+            except Exception as ex:
+                steward_log(
+                    workspace.log,
+                    f"the scan rows in {scan_dir} could not be folded: "
+                    f"{type(ex).__name__}: {ex}",
+                )
+                if fold_failing is None:
+                    _mark(workspace, SCAN_FOLD_FAILED, target=scan_dir)
+            else:
+                if fold_failing is not None:
+                    _mark(workspace, SCAN_FOLD_RESTORED, target=scan_dir)
+                # the rows are on the compacted output now, so the local buffer
+                # files that fold read are free to delete — bounding the buffer
+                # to about one interval regardless of when tasks land
+                drained = drain_buffer(snapshot)
+                folded_at = utc_now()
+                steward_log(
+                    workspace.log,
+                    f"folded the scan rows in {time.monotonic() - started:.1f}s"
+                    f", drained {drained} buffered",
+                )
     try:
-        return scan_findings(
-            scan_dir, scanners=scanners, attempts=scan_attempts(observed, logs)
+        return (
+            scan_findings(
+                scan_dir, scanners=scanners, attempts=scan_attempts(observed, logs)
+            ),
+            folded_at,
         )
     except Exception as ex:
         # the whole directory rather than one scanner's file — a `_scan.json`
@@ -2459,14 +2536,17 @@ def _findings(
                 f"the scan rows in {scan_dir} could not be read: "
                 f"{type(ex).__name__}: {ex}",
             )
-        return ScanFindings(
-            unreadable=[
-                UnreadableLog(
-                    location=scan_dir,
-                    reason=f"{type(ex).__name__}: {ex}",
-                    what="this run's scan results",
-                )
-            ]
+        return (
+            ScanFindings(
+                unreadable=[
+                    UnreadableLog(
+                        location=scan_dir,
+                        reason=f"{type(ex).__name__}: {ex}",
+                        what="this run's scan results",
+                    )
+                ]
+            ),
+            folded_at,
         )
 
 

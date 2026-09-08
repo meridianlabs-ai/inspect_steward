@@ -198,14 +198,9 @@ def test_scanning_rides_the_workers_and_a_relaunch_attaches(
     # state that makes the tend's fold load-bearing rather than a convenience
     assert not (scan_dir / "transcript_echo.parquet").exists()
 
-    finished = turn(workspace)
-    assert finished.summary.states["complete"] == 2
-
-    # record-only workers: one buffer row per transcript per scanner (2
-    # addition samples + 1 echo sample × 2 epochs), from two concurrent
-    # writers. The buffer still holds them after the tend's fold, because that
-    # fold is `complete=False` — a sibling worker's `is_recorded` must keep
-    # answering, and the prune waits for signoff
+    # record-only workers wrote one buffer row per transcript per scanner (2
+    # addition samples + 1 echo sample × 2 epochs), from two concurrent writers
+    # — read before the fold, because the fold then drains what it compacts
     def stems(scanner: str) -> set[str]:
         sdir = RecorderBuffer.buffer_dir(str(scan_dir)) / f"scanner={scanner}"
         return {p.stem for p in sdir.glob("*.parquet")} if sdir.exists() else set()
@@ -216,11 +211,17 @@ def test_scanning_rides_the_workers_and_a_relaunch_attaches(
     # ambient model under evaluation (mockllm) — no scan model is configured
     assert stems("scoring_integrity") == echoed
 
-    # and the tend folded them forward on the turn that reaped the workers,
-    # which is what makes a landed task's findings readable within a tend of
-    # its samples settling
+    finished = turn(workspace)
+    assert finished.summary.states["complete"] == 2
+
+    # the tend folded them forward on the turn that reaped the workers — which
+    # makes a landed task's findings readable within a tend — and then drained
+    # the buffer files it compacted, so the local scratch does not grow with the
+    # run. The rows live on in the compacted output the read consumes
     assert (scan_dir / "transcript_echo.parquet").exists()
     assert rebuild_summary(str(scan_dir)).scanners["transcript_echo"].scans == 4
+    assert stems("transcript_echo") == set()
+    assert stems("scoring_integrity") == set()
 
     # coverage off the rows that fold just produced, and the one assertion here
     # that needs a real two-scanner directory: a transcript counts as recorded
@@ -231,7 +232,8 @@ def test_scanning_rides_the_workers_and_a_relaunch_attaches(
     assert finished.coverage.gap == 0
     assert all(entry.complete for entry in finished.coverage.by_task.values())
 
-    # a re-launch attaches: same directory, same spec, rows undisturbed
+    # a re-launch attaches: same directory, same spec, and the compacted rows
+    # the drain left behind are undisturbed
     relaunched = launch(workspace, definition)
     assert isinstance(relaunched, Launch)
     assert relaunched.committed is True
@@ -240,7 +242,7 @@ def test_scanning_rides_the_workers_and_a_relaunch_attaches(
         "transcript_echo",
         "scoring_integrity",
     }
-    assert stems("transcript_echo") == echoed
+    assert rebuild_summary(str(scan_dir)).scanners["transcript_echo"].scans == 4
 
     # the terminal act: fold, prune, and a summary derived from the rows.
     # This is where the buffer's accumulated `_summary.json` would lie —

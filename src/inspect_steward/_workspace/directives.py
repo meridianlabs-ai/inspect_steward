@@ -299,7 +299,14 @@ class Directives(BaseModel):
     A standing preference rather than what is currently installed. `steward timer arm` reads it, but a timer armed at one interval and a file later edited to another disagree until somebody re-arms, which is a `timer_drift` item rather than something a tend quietly fixes — reaching into a user's crontab unprompted is not a mechanical act.
     """
 
-    @field_validator("tend_interval", "stuck_after", mode="before")
+    scan_fold_interval: int | None = Field(default=None, gt=0)
+    """Seconds between mid-run scan folds while a fleet is writing, or `None` for the default.
+
+    Written with a unit — `scan_fold_interval: 10m` — and stored as seconds, the same shape as `tend_interval`. A cost knob rather than an authority: the fold re-compacts the whole buffer and drains it, so a longer interval trades more local buffer held and more S3 traffic saved. `None` is the default (`DEFAULT_SCAN_FOLD_INTERVAL`), and a degraded turn falls back to it rather than to a last-known-good, since nothing standing turns on the number (`_tend.turn._findings`)."""
+
+    @field_validator(
+        "tend_interval", "stuck_after", "scan_fold_interval", mode="before"
+    )
     @classmethod
     def _duration(cls, value: object) -> object:
         """A duration is written with its unit, and a bare number is refused.

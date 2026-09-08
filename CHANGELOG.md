@@ -1,3 +1,7 @@
+## 0.2.3 (07 September 2026)
+
+- Improved handling of live scan results (fold periodically, cleanup local buffer).
+
 ## 0.2.2 (07 September 2026)
 
 - Codex CLI background scheduling command (`steward schedule --agent codex`).

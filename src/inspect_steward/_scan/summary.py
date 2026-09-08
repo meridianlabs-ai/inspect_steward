@@ -18,6 +18,7 @@ Not rebuilt: `validation` and `metrics`. The online dispatch records neither (`s
 """
 
 import json
+from collections.abc import Iterable
 from typing import Any, cast
 
 import pyarrow.fs as pafs  # pyright: ignore[reportMissingTypeStubs]
@@ -31,13 +32,18 @@ from inspect_ai.model import ModelUsage
 # constants and the truthiness/usage helpers are imported rather than copied
 # so the two ends cannot drift
 from inspect_scout import Summary
-from inspect_scout._recorder.buffer import SCAN_SUMMARY
+from inspect_scout._recorder.buffer import SCAN_SUMMARY, RecorderBuffer
 from inspect_scout._recorder.file import SCAN_JSON, FileRecorder
 from inspect_scout._recorder.summary import ScannerSummary, add_model_usage
 from inspect_scout._validation.validate import is_positive_value
 from upath import UPath
 
 from .bracket import scan_dir_location
+
+DEFAULT_SCAN_FOLD_INTERVAL = 60 * 60
+"""Seconds between mid-run folds when a fleet is writing, absent an operator override.
+
+The fold's cost grows with the run, so it is paid on a cadence rather than every tend — the whole point is to fold *less often* than the ten-minute tend, so an interval at the tend's own cadence would fold every turn and save nothing. An hour is six tends: it cuts the fold's S3 rewrites roughly six-fold, and the buffer it drains on the same beat (`buffer_files`/`drain_buffer`) is bounded to about an hour of rows rather than the whole run. The trade is readability latency — a landed arm's findings surface within one interval, and the last interval's tail is folded by the terminal finalize at signoff — which an operator shortens with `scan_fold_interval` where the disk is tight (`_tend.turn._findings`)."""
 
 SUMMARY_COLUMNS = (
     "transcript_id",
@@ -57,6 +63,8 @@ def sync_scan(*, log_dir: str, scan_id: str, scans: str | None = None) -> None:
 
     Idempotent: a fold with nothing new merges the compacted output with an empty buffer and rewrites the same rows.
 
+    The `_summary.json` this leaves in the buffer is scout's last-writer-wins accumulator and is **not authoritative mid-run** (see the module docstring) — Steward's own coverage reads the rows, not this file, and `finalize_scan` rewrites it from the rows terminally.
+
     Args:
         log_dir: The run's log directory.
         scan_id: The scan id (the run's eval set id).
@@ -68,6 +76,56 @@ def sync_scan(*, log_dir: str, scan_id: str, scans: str | None = None) -> None:
             complete=False,
         )
     )
+
+
+def buffer_files(
+    *, log_dir: str, scan_id: str, scans: str | None = None
+) -> list[UPath]:
+    """Snapshot the scan buffer's per-transcript parquet files.
+
+    Scout's online recorder writes one file per transcript per scanner into a local buffer (`scanner=<name>/<transcript_id>.parquet`). Resolved through scout's own `RecorderBuffer.buffer_dir` so the location — `$SCOUT_SCANBUFFER_DIR` or the data dir, hashed by scan location — is exactly the one scout writes to, never a path reconstructed here.
+
+    Taken **before** a fold so the caller can drain precisely what the fold compacts: a file present now is folded by a `sync_scan` that starts after this returns (its glob is a superset of this one), while a file a worker writes during or after the fold is not in this list and survives to the next fold.
+
+    Never raises: a buffer that will not list costs the drain, not the turn.
+
+    Returns:
+        Every buffer file currently present, sorted, or an empty list where the buffer directory is absent or unreadable.
+    """
+    try:
+        root = RecorderBuffer.buffer_dir(
+            scan_dir_location(log_dir=log_dir, scan_id=scan_id, scans=scans)
+        )
+        if not root.exists():
+            return []
+        return sorted(root.glob("scanner=*/*.parquet"), key=lambda p: p.as_posix())
+    except OSError:
+        return []
+
+
+def drain_buffer(files: Iterable[UPath]) -> int:
+    """Delete buffer files whose rows a fold has just compacted, freeing local disk as the run goes.
+
+    Safe because the compacted output is authoritative once written. Scout's compaction keeps a prior compacted row when the buffer file for that transcript is gone (its `extra_inputs` union), so a drained-but-folded transcript is never dropped from the results; and inspect-ai's online resume-skip reads the compacted `transcript_id`s, not only the buffer, so a resumed worker does not re-scan it. Verified against inspect-ai 0.3.263 / inspect-scout 0.5.1 — a future online path that made resume buffer-only would turn this into a re-scan rather than a correctness fault.
+
+    Leaves the buffer's `_summary.json` and errors files alone — `finalize_scan` rebuilds the summary from the rows.
+
+    Never raises: a file that will not unlink costs its own row, not the turn.
+
+    Args:
+        files: The buffer files to remove, as `buffer_files` snapshotted them before the fold.
+
+    Returns:
+        How many files were removed.
+    """
+    removed = 0
+    for path in files:
+        try:
+            path.unlink(missing_ok=True)
+        except OSError:
+            continue
+        removed += 1
+    return removed
 
 
 def finalize_scan(*, log_dir: str, scan_id: str, scans: str | None = None) -> Summary:

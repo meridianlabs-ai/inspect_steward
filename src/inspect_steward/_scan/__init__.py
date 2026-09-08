@@ -23,15 +23,25 @@ from .model import (
     scan_model_resolver,
     set_scan_model_resolver,
 )
-from .summary import finalize_scan, rebuild_summary, sync_scan
+from .summary import (
+    DEFAULT_SCAN_FOLD_INTERVAL,
+    buffer_files,
+    drain_buffer,
+    finalize_scan,
+    rebuild_summary,
+    sync_scan,
+)
 
 __all__ = [
+    "DEFAULT_SCAN_FOLD_INTERVAL",
     "INTEGRITY_SCANNER",
     "SCOUT_SCAN_MODEL",
     "ScanError",
     "ScanFindings",
     "ScanModelResolver",
+    "buffer_files",
     "builtin_scanners",
+    "drain_buffer",
     "establish_scan_model",
     "scan_model_resolver",
     "set_scan_model_resolver",
