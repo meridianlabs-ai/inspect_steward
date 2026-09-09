@@ -1,6 +1,7 @@
 ## Unreleased
 
 - Stop a scheduled agent collect from tearing down its own schedule.
+- Improve runbook to more decisively prompt for signoff gates.
 
 ## 0.2.4 (08 September 2026)
 
