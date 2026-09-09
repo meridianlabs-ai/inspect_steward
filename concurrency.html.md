@@ -12,7 +12,7 @@ By default, local sandboxes are limited to 2 \* available CPU cores for Docker, 
 
 ## Samples and Tasks
 
-By default, Steward runs 50 samples in parallel for each task (`max_samples=50`), and runs all tasks in the eval set in parallel (each in their own process). The 50 is a starting point: Steward [ramps sample concurrency](#automatic-ramp) toward 150 while the provider keeps up. Set `max_samples` yourself and Steward honors that number exactly and never ramps.
+By default, Steward runs 50 samples in parallel for each task (`max_samples=50`), and runs all tasks in the eval set in parallel (each in their own process). The 50 is a starting point: Steward [ramps sample concurrency](#automatic-ramp) toward 200 while the provider keeps up. Set `max_samples` yourself and Steward honors that number exactly and never ramps.
 
 You can change these defaults in your call to [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set):
 
@@ -53,7 +53,7 @@ During each `steward tend` operation, Steward checks to see if the following is 
 - The model provider showed no rate-limit pushback;
 - No sample errored, and HTTP retries did not surge;
 
-If all checks pass, then tend adds an additional 20 samples to the limit. This ramp continues up to 150 as long as the checks continue to pass.
+If all checks pass, then tend adds an additional 20 samples to the limit. This ramp continues up to 200 as long as the checks continue to pass.
 
 On sustained pushback (rate-limit episodes in two consecutive windows) the ramp reverses. The connection ceiling is clamped down to where Inspect’s own controllers already fell, and sample concurrency steps back down so new samples stop being admitted against capacity that is not there. Samples already running are never interrupted. The way back up is stepwise, through the same gates.
 
@@ -66,7 +66,7 @@ samples_ramp: [40, 300]   # explore this range
 samples_ramp: false       # never ramp; tasks stay at 50
 ```
 
-Narrowing the range works on a live run: a task the ramp had taken to 150 comes back to a new ceiling of 100 at the next tend.
+Narrowing the range works on a live run: a task the ramp had taken to 200 comes back to a new ceiling of 100 at the next tend.
 
 To freeze the climb without changing configuration:
 

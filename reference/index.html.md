@@ -446,7 +446,7 @@ steward schedule [OPTIONS] COMMAND [ARGS]...
 
 Schedule `<agent> exec` to collect and act on this workspace on a schedule.
 
-Idempotent: an existing schedule is removed first, so re-arming at a new interval or under a different scheduler leaves exactly one. Independent of the tend timer — arming this arms neither, and `steward timer` is unaffected.
+Idempotent: a schedule already installed exactly as asked is left in place, and any other existing schedule is removed first, so re-arming at a new interval or under a different scheduler leaves exactly one. Independent of the tend timer — arming this arms neither, and `steward timer` is unaffected.
 
 #### Usage
 

@@ -180,9 +180,12 @@ ul.task-list li input[type="checkbox"] {
     <h2 id="toc-title">On this page</h2>
    
   <ul>
-  <li><a href="#september-2026" id="toc-september-2026" class="nav-link active" data-scroll-target="#september-2026">0.2.2 (07 September 2026)</a></li>
-  <li><a href="#september-2026-1" id="toc-september-2026-1" class="nav-link" data-scroll-target="#september-2026-1">0.2.1 (06 September 2026)</a></li>
-  <li><a href="#september-2026-2" id="toc-september-2026-2" class="nav-link" data-scroll-target="#september-2026-2">0.2.0 (06 September 2026)</a></li>
+  <li><a href="#september-2026" id="toc-september-2026" class="nav-link active" data-scroll-target="#september-2026">0.2.5 (09 September 2026)</a></li>
+  <li><a href="#september-2026-1" id="toc-september-2026-1" class="nav-link" data-scroll-target="#september-2026-1">0.2.4 (08 September 2026)</a></li>
+  <li><a href="#september-2026-2" id="toc-september-2026-2" class="nav-link" data-scroll-target="#september-2026-2">0.2.3 (07 September 2026)</a></li>
+  <li><a href="#september-2026-3" id="toc-september-2026-3" class="nav-link" data-scroll-target="#september-2026-3">0.2.2 (07 September 2026)</a></li>
+  <li><a href="#september-2026-4" id="toc-september-2026-4" class="nav-link" data-scroll-target="#september-2026-4">0.2.1 (06 September 2026)</a></li>
+  <li><a href="#september-2026-5" id="toc-september-2026-5" class="nav-link" data-scroll-target="#september-2026-5">0.2.0 (06 September 2026)</a></li>
   </ul>
 </nav>
     </div>
@@ -193,21 +196,43 @@ ul.task-list li input[type="checkbox"] {
 
 
 <section id="september-2026" class="level2">
-<h2 class="anchored" data-anchor-id="september-2026">0.2.2 (07 September 2026)</h2>
+<h2 class="anchored" data-anchor-id="september-2026">0.2.5 (09 September 2026)</h2>
+<ul>
+<li>Stop a scheduled agent collect from tearing down its own schedule.</li>
+<li>Improve runbook to more decisively prompt for signoff gates.</li>
+</ul>
+</section>
+<section id="september-2026-1" class="level2">
+<h2 class="anchored" data-anchor-id="september-2026-1">0.2.4 (08 September 2026)</h2>
+<ul>
+<li>Bound adaptive model connections: spawn workers with a fixed range (min 20, max the samples ramp’s top) and raise the ceiling only on genuine sustained saturation.</li>
+<li>More accurate model context window detection, using the window the definition resolved at capture and checking it during smoke runs.</li>
+<li>Ensure that tool call approval is not applied to llm_scanner <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.scorer.html#answer">answer()</a></span> tool.</li>
+<li>Prevent overlapping scheduled agent collects: a collect that outruns its interval holds a lock so the next scheduler fire is skipped rather than stacking a second agent on top.</li>
+</ul>
+</section>
+<section id="september-2026-2" class="level2">
+<h2 class="anchored" data-anchor-id="september-2026-2">0.2.3 (07 September 2026)</h2>
+<ul>
+<li>Improved handling of live scan results (fold periodically, cleanup local buffer).</li>
+</ul>
+</section>
+<section id="september-2026-3" class="level2">
+<h2 class="anchored" data-anchor-id="september-2026-3">0.2.2 (07 September 2026)</h2>
 <ul>
 <li>Codex CLI background scheduling command (<code>steward schedule --agent codex</code>).</li>
 <li>Cleanup status.md formatting (bold not headers, exclude log).</li>
 </ul>
 </section>
-<section id="september-2026-1" class="level2">
-<h2 class="anchored" data-anchor-id="september-2026-1">0.2.1 (06 September 2026)</h2>
+<section id="september-2026-4" class="level2">
+<h2 class="anchored" data-anchor-id="september-2026-4">0.2.1 (06 September 2026)</h2>
 <ul>
 <li>Unify agent and slack notification rendering.</li>
 <li>Accept <code>INSPECT_LOG_DIR</code> as definition of log root dir.</li>
 </ul>
 </section>
-<section id="september-2026-2" class="level2">
-<h2 class="anchored" data-anchor-id="september-2026-2">0.2.0 (06 September 2026)</h2>
+<section id="september-2026-5" class="level2">
+<h2 class="anchored" data-anchor-id="september-2026-5">0.2.0 (06 September 2026)</h2>
 <ul>
 <li>Initial release.</li>
 </ul>

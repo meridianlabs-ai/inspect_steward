@@ -1584,7 +1584,7 @@ ul.task-list li input[type="checkbox"] {
 <section id="steward-schedule-arm" class="level3" data-toc-label="arm">
 <h3 data-toc-label="arm" class="anchored" data-anchor-id="steward-schedule-arm">steward schedule arm</h3>
 <p>Schedule <code>&lt;agent&gt; exec</code> to collect and act on this workspace on a schedule.</p>
-<p>Idempotent: an existing schedule is removed first, so re-arming at a new interval or under a different scheduler leaves exactly one. Independent of the tend timer — arming this arms neither, and <code>steward timer</code> is unaffected.</p>
+<p>Idempotent: a schedule already installed exactly as asked is left in place, and any other existing schedule is removed first, so re-arming at a new interval or under a different scheduler leaves exactly one. Independent of the tend timer — arming this arms neither, and <code>steward timer</code> is unaffected.</p>
 <section id="usage-18" class="level4">
 <h4 class="anchored" data-anchor-id="usage-18">Usage</h4>
 <pre class="text"><code>steward schedule arm [OPTIONS]</code></pre>

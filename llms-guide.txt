@@ -333,7 +333,7 @@ See [Tend Loop](#tend-loop) and [Notifications](#notifications) for additional d
 
 | \_steward.yaml | Environment | Default | Description |
 |----|----|----|----|
-| `samples_ramp` | `STEWARD_SAMPLES_RAMP` | \[50, 150\] | Range to discover sample concurrency in; `false` for no automatic ramp. |
+| `samples_ramp` | `STEWARD_SAMPLES_RAMP` | \[50, 200\] | Range to discover sample concurrency in; `false` for no automatic ramp. |
 | `max_workers` | `STEWARD_MAX_WORKERS` | one per task | Pack the run into this many worker processes. |
 
 See [Automatic Ramp](./concurrency.html.md#automatic-ramp) and [Worker Processes](./concurrency.html.md#worker-processes) for additional details.
@@ -438,7 +438,7 @@ By default, local sandboxes are limited to 2 \* available CPU cores for Docker, 
 
 ## Samples and Tasks
 
-By default, Steward runs 50 samples in parallel for each task (`max_samples=50`), and runs all tasks in the eval set in parallel (each in their own process). The 50 is a starting point: Steward [ramps sample concurrency](#automatic-ramp) toward 150 while the provider keeps up. Set `max_samples` yourself and Steward honors that number exactly and never ramps.
+By default, Steward runs 50 samples in parallel for each task (`max_samples=50`), and runs all tasks in the eval set in parallel (each in their own process). The 50 is a starting point: Steward [ramps sample concurrency](#automatic-ramp) toward 200 while the provider keeps up. Set `max_samples` yourself and Steward honors that number exactly and never ramps.
 
 You can change these defaults in your call to [eval_set()](https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set):
 
@@ -479,7 +479,7 @@ During each `steward tend` operation, Steward checks to see if the following is 
 - The model provider showed no rate-limit pushback;
 - No sample errored, and HTTP retries did not surge;
 
-If all checks pass, then tend adds an additional 20 samples to the limit. This ramp continues up to 150 as long as the checks continue to pass.
+If all checks pass, then tend adds an additional 20 samples to the limit. This ramp continues up to 200 as long as the checks continue to pass.
 
 On sustained pushback (rate-limit episodes in two consecutive windows) the ramp reverses. The connection ceiling is clamped down to where Inspect’s own controllers already fell, and sample concurrency steps back down so new samples stop being admitted against capacity that is not there. Samples already running are never interrupted. The way back up is stepwise, through the same gates.
 
@@ -492,7 +492,7 @@ samples_ramp: [40, 300]   # explore this range
 samples_ramp: false       # never ramp; tasks stay at 50
 ```
 
-Narrowing the range works on a live run: a task the ramp had taken to 150 comes back to a new ceiling of 100 at the next tend.
+Narrowing the range works on a live run: a task the ramp had taken to 200 comes back to a new ceiling of 100 at the next tend.
 
 To freeze the climb without changing configuration:
 
@@ -830,7 +830,7 @@ Then leave it. The rest of the queue is still yours; the question waits for an o
 
 ## Each session
 
-**Arm your own return first.** Nothing wakes you: the timer runs `steward tend` on its own and never calls you back. Before anything else, and unasked, point whatever your harness has for recurring work, a scheduled prompt or a background watch, at `steward collect` on roughly the tend interval, and handle what it returns. Keep it while the run has work: a task running or queued, a re-run pending, a ruling not yet written into the log. Take it down when the verdict is 🏁 and the decisions section says nothing is for you, and at signoff; a finished run waiting on the operator has nothing for you to read every ten minutes. Arm it again after anything you record that gives the run work: a rerun, a zero, a resume, a launch. **If you are the Codex CLI**, you have no in-session scheduler and must not improvise one: run exactly `steward schedule arm --agent codex`, which points a system scheduler at a fresh `steward collect` for you on the same interval, and `steward schedule disarm` to take it down. Arm and take that schedule down on the same rule as the in-session kind above.
+**Arm your own return first.** Nothing wakes you: the timer runs `steward tend` on its own and never calls you back. Before anything else, and unasked, point whatever your harness has for recurring work, a scheduled prompt or a background watch, at `steward collect` on roughly the tend interval, and handle what it returns. Keep it while the run has work: a task running or queued, a re-run pending, a ruling not yet written into the log. Take it down when the verdict is 🏁 and the decisions section says nothing is for you, and at signoff; a finished run waiting on the operator has nothing for you to read every ten minutes. Arm it again after anything you record that gives the run work: a rerun, a zero, a resume, a launch. **If you are the Codex CLI**, you have no in-session scheduler and must not improvise one: run exactly `steward schedule arm --agent codex`, which points a system scheduler at a fresh `steward collect` for you on the same interval, and `steward schedule disarm` to take it down. That schedule is *recurring* — once armed it keeps firing on its own — so the *arm it again* rule above is not for it: arm it once when the run has work, and take it down with `steward schedule disarm` on the same standing-down rule as the in-session kind above.
 
 Pick up cold, in this order:
 
@@ -995,6 +995,7 @@ Tend ramps sample concurrency on its own, one step per clean window, and steps b
 
 - `steward ramp hold --reason ...` stops the climb; levels stay where they are and the defensive cut stays active. Add a task identifier to hold one task. `steward ramp resume` re-arms it. Both are yours on your own judgement.
 - A `tuning_proposal` is capacity tend may not take: a pinned `max_samples` that is saturated and clean, or a ramp at the top of its range with no pushback. Raise it, and when the operator answers, `steward ack` with their answer. A different level is a different item.
+- **Ramp in steps of 50.** When the top of the range binds and the ask is how much higher to set it, recommend raising it by 50 and let the next clean window earn the next 50. Name that step as the recommendation; a larger jump is an alternative they can pick.
 - Never lower a pinned setpoint and never edit `samples_ramp`; both are the operator’s numbers. The one downward retune that is yours is under A running worker.
 
 ### Standing rules
@@ -1022,9 +1023,11 @@ Write anywhere outside the markers, and never move or delete them; a section who
 
 ### Signoff
 
-At 🏁 every task has finished and nobody has accepted the results. Tell the operator by notification, then get the run to where their answer is one command. A refused `steward signoff` signs nothing and prints every blocker with its remedy, so run it early and work the list: windows to rule (`limit:operator` included, since it raises no item), errored samples to cover, tasks to settle, unreadable logs to acknowledge, `scanerror:` classes to rule. Acknowledging a stall or an unreadable log is a decision about the data, so give it a ruling’s reason.
+The endgame begins when the last task lands, not at 🏁: a landed task’s scan windows are open work, and clearing them is what carries the run to 🏁, where every task has finished and nobody has accepted the results. Drive it home in order.
 
-The gate does not refuse over these, so say them yourself. Render the by-task table from `steward status`; it is the samples they are signing over. Read the `scanned` column of `steward collect` aloud: 48 of 50 scanned is a different thing to sign than 50 of 50. Name the scan findings you dismissed or noted and why; the operator hears that from you, not from the file. When the readiness item names a log store, ask whether to publish and never assume; a published log is a claim other projects reuse sight-unseen.
+1.  **Investigate every landed task’s scan findings.** As each task lands its windows are yours at once (see *A finished task’s findings*); sweep any you have not judged. This is what earns 🏁 — the verdict does not reach it while a window is still open — and it is the one endgame step nothing enforces: the gate can insist a window was ruled, not that you looked before you ruled it.
+2.  **Rule or hand off everything still the operator’s.** A refused `steward signoff` signs nothing and prints every blocker with its remedy, so run it early and work the list: windows to rule (`limit:operator` included, since it raises no item), errored samples to cover, tasks to settle, unreadable logs to acknowledge, `scanerror:` classes to rule. Acknowledging a stall or an unreadable log is a decision about the data, so give it a ruling’s reason.
+3.  **Put the signoff to the operator.** Tell them by notification and get the run to where their answer is one command. The gate does not refuse over these, so say them yourself: render the by-task table from `steward status`; it is the samples they are signing over. Read the `scanned` column of `steward collect` aloud: 48 of 50 scanned is a different thing to sign than 50 of 50. Name the scan findings you dismissed or noted and why; the operator hears that from you, not from the file. When the readiness item names a log store, ask whether to publish and never assume; a published log is a claim other projects reuse sight-unseen.
 
 Then, when they answer:
 

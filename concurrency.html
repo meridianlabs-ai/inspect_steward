@@ -353,7 +353,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 </section>
 <section id="samples-and-tasks" class="level2">
 <h2 class="anchored" data-anchor-id="samples-and-tasks">Samples and Tasks</h2>
-<p>By default, Steward runs 50 samples in parallel for each task (<code>max_samples=50</code>), and runs all tasks in the eval set in parallel (each in their own process). The 50 is a starting point: Steward <a href="#automatic-ramp">ramps sample concurrency</a> toward 150 while the provider keeps up. Set <code>max_samples</code> yourself and Steward honors that number exactly and never ramps.</p>
+<p>By default, Steward runs 50 samples in parallel for each task (<code>max_samples=50</code>), and runs all tasks in the eval set in parallel (each in their own process). The 50 is a starting point: Steward <a href="#automatic-ramp">ramps sample concurrency</a> toward 200 while the provider keeps up. Set <code>max_samples</code> yourself and Steward honors that number exactly and never ramps.</p>
 <p>You can change these defaults in your call to <span class="element-type-name ref-interlink"><a href="https://inspect.aisi.org.uk/reference/inspect_ai.html#eval_set">eval_set()</a></span>:</p>
 <div class="code-with-filename">
 <div class="code-with-filename-file">
@@ -390,7 +390,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <li>The model provider showed no rate-limit pushback;</li>
 <li>No sample errored, and HTTP retries did not surge;</li>
 </ul>
-<p>If all checks pass, then tend adds an additional 20 samples to the limit. This ramp continues up to 150 as long as the checks continue to pass.</p>
+<p>If all checks pass, then tend adds an additional 20 samples to the limit. This ramp continues up to 200 as long as the checks continue to pass.</p>
 <p>On sustained pushback (rate-limit episodes in two consecutive windows) the ramp reverses. The connection ceiling is clamped down to where Inspect’s own controllers already fell, and sample concurrency steps back down so new samples stop being admitted against capacity that is not there. Samples already running are never interrupted. The way back up is stepwise, through the same gates.</p>
 <p>Set the range with <code>samples_ramp</code> in the Steward config file or the <code>STEWARD_SAMPLES_RAMP</code> environment variable:</p>
 <div class="code-with-filename">
@@ -400,7 +400,7 @@ pre > code.sourceCode > span > a:first-child::before { text-decoration: underlin
 <div class="code-copy-outer-scaffold"><div class="sourceCode" id="cb3" data-filename="_steward.yaml"><pre class="sourceCode yaml code-with-copy"><code class="sourceCode yaml"><span id="cb3-1"><a href="#cb3-1" aria-hidden="true" tabindex="-1"></a><span class="fu">samples_ramp</span><span class="kw">:</span><span class="at"> </span><span class="kw">[</span><span class="dv">40</span><span class="kw">,</span><span class="at"> </span><span class="dv">300</span><span class="kw">]</span><span class="co">   # explore this range</span></span>
 <span id="cb3-2"><a href="#cb3-2" aria-hidden="true" tabindex="-1"></a><span class="fu">samples_ramp</span><span class="kw">:</span><span class="at"> </span><span class="ch">false</span><span class="co">       # never ramp; tasks stay at 50</span></span></code></pre></div><button title="Copy to Clipboard" class="code-copy-button"><i class="bi"></i></button></div>
 </div>
-<p>Narrowing the range works on a live run: a task the ramp had taken to 150 comes back to a new ceiling of 100 at the next tend.</p>
+<p>Narrowing the range works on a live run: a task the ramp had taken to 200 comes back to a new ceiling of 100 at the next tend.</p>
 <p>To freeze the climb without changing configuration:</p>
 <div class="code-with-filename">
 <div class="code-with-filename-file">
