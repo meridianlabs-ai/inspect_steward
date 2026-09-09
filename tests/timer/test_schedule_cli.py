@@ -21,6 +21,8 @@ import pytest
 from click.testing import CliRunner
 from inspect_steward._cli.main import steward
 from inspect_steward._workspace import (
+    AGENT_ARMED,
+    AGENT_DISARMED,
     Workspace,
     create_workspace,
     read_agent_armed,
@@ -221,6 +223,53 @@ def test_re_arming_the_collect_leaves_one(
     assert crontab.text is not None
     assert crontab.text.count("-collect >>>") == 1
     assert "*/30" not in crontab.text
+
+
+def test_re_arming_an_unchanged_schedule_leaves_it_in_place(
+    workspace: Workspace, crontab: FakeCrontab
+) -> None:
+    # re-arming is otherwise disarm-first, which for the agent's own scheduled
+    # collect means a collect that re-armed while running would tear down the
+    # timer firing it. An identical re-arm is a no-op instead: it never disarms,
+    # so it writes no new armed/disarmed events and never removes the entry.
+    run(
+        "schedule",
+        "arm",
+        "--agent",
+        "codex",
+        "--tend-interval",
+        "30m",
+        "--scheduler",
+        "cron",
+    )
+
+    def armings() -> tuple[int, int]:
+        events = read_journal(workspace.journal).events
+        return (
+            sum(event.type == AGENT_ARMED for event in events),
+            sum(event.type == AGENT_DISARMED for event in events),
+        )
+
+    assert armings() == (1, 0)
+
+    code, output = run(
+        "schedule",
+        "arm",
+        "--agent",
+        "codex",
+        "--tend-interval",
+        "30m",
+        "--scheduler",
+        "cron",
+    )
+
+    assert code == 0, output
+    assert "already armed" in output
+    # no second arm and, the point of the guard, no disarm that would have
+    # stopped a running collect mid-arm
+    assert armings() == (1, 0)
+    assert crontab.text is not None
+    assert crontab.text.count("-collect >>>") == 1
 
 
 def test_a_missing_agent_binary_is_refused_rather_than_scheduled(

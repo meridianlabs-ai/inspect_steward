@@ -45,8 +45,10 @@ COLLECT_PROMPT = (
     "watching this session. Run `steward collect` in this directory and read "
     "it. Follow `steward runbook`: act on whatever needs a decision "
     "(investigate, propose, rule, notify), put at most one question to the "
-    "operator, and record what you do through the `steward` verbs. If nothing "
-    "in the collection is for you, do nothing and send no message."
+    "operator, and record what you do through the `steward` verbs. Your "
+    "recurring collect is already armed — this session is it firing — so you do "
+    "not need to re-arm it. If nothing in the collection is for you, do nothing "
+    "and send no message."
 )
 """What a scheduled `<agent> exec` is told to do. Shipped with the code, not the workspace, so it cannot drift from the CLI it drives."""
 
@@ -74,7 +76,7 @@ def schedule_command() -> None:
 def arm_command(agent: str, tend_interval: int | None, name: str | None) -> None:
     """Schedule `<agent> exec` to collect and act on this workspace on a schedule.
 
-    Idempotent: an existing schedule is removed first, so re-arming at a new interval or under a different scheduler leaves exactly one. Independent of the tend timer — arming this arms neither, and `steward timer` is unaffected.
+    Idempotent: a schedule already installed exactly as asked is left in place, and any other existing schedule is removed first, so re-arming at a new interval or under a different scheduler leaves exactly one. Independent of the tend timer — arming this arms neither, and `steward timer` is unaffected.
     """
     workspace = find_workspace()
     seconds = _interval(workspace, tend_interval)
@@ -83,6 +85,30 @@ def arm_command(agent: str, tend_interval: int | None, name: str | None) -> None
     # agent directly -- the wrapper is what takes the overlap lock (`_run`)
     _command(agent)
     command = _scheduled_command(agent)
+
+    # **A schedule already installed exactly as asked is left in place, not torn
+    # down and rebuilt.** Re-arming is otherwise disarm-first (`_timer.arm`), and
+    # a scheduled collect that re-arms its own unchanged schedule while running
+    # would `disable --now` the very timer firing it -- stopping itself mid-arm,
+    # before the re-install, so the schedule vanishes and the service fails. A
+    # genuine change (a new interval, a different scheduler) still falls through
+    # and re-arms; only the no-op re-arm is skipped, and only when the scheduler
+    # confirms the entry is really there.
+    try:
+        state = installed_agent(workspace, seconds)
+    except TimerError as ex:
+        raise click.ClickException(str(ex)) from ex
+    if (
+        state.armed is not None
+        and state.present
+        and not state.drifted
+        and (name is None or name == state.armed.scheduler)
+    ):
+        click.echo(
+            f"already armed — {agent} collects every "
+            f"{format_duration(state.armed.interval)} ({state.armed.scheduler})"
+        )
+        return
 
     # the scheduled collect writes to `.steward/collect.log`; a workspace made
     # before `.steward/` was ignored would otherwise track it

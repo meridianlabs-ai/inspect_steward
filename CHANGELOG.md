@@ -1,3 +1,7 @@
+## Unreleased
+
+- Stop a scheduled agent collect from tearing down its own schedule.
+
 ## 0.2.4 (08 September 2026)
 
 - Bound adaptive model connections: spawn workers with a fixed range (min 20, max the samples ramp's top) and raise the ceiling only on genuine sustained saturation.
