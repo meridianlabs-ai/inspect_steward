@@ -47,9 +47,11 @@ from .live import (
 )
 from .spawn import (
     MAX_KEY_LENGTH,
+    TAIL_BYTES,
     Fleet,
     SpawnedWorker,
     resolve_eval_set_id,
+    tail,
     worker_selection,
     worker_stem,
 )
@@ -75,6 +77,7 @@ __all__ = [
     "MAX_KEY_LENGTH",
     "STEWARD_TASK",
     "STEWARD_WORKER",
+    "TAIL_BYTES",
     "TERM_GRACE",
     "CancelView",
     "ConfigView",
@@ -117,6 +120,7 @@ __all__ = [
     "resolve_inflight",
     "scan_processes",
     "stop_workers",
+    "tail",
     "task_config",
     "worker_selection",
     "worker_stem",

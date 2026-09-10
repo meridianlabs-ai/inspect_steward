@@ -39,7 +39,7 @@ from .._anomaly.model import (
 from .._evalset.classify import OPERATOR_LIMIT, task_error_class
 from .._evalset.instances import Instance, InstanceBatch, in_results
 from .._evalset.observe import ObservedTasks, TaskObservation
-from .._marks import MARK_ATTEMPTS, Runs, Target, resolve_runs, spawn_runner
+from .._marks import MARK_ATTEMPTS, MarkRun, Runs, Target, resolve_runs, spawn_runner
 from .._schedule import InFlight
 from .._worker import LiveFleet, Unavailable, requeue_sample
 from .._workspace import ACTION, RULING, Workspace, append_event, steward_log
@@ -397,7 +397,7 @@ def _mark(
     landed = applied.runs(key, ruling.ts)
     spent = [run for run in runs.finished(key, ruling.ts) if run.run not in landed]
     if len(spent) >= MARK_ATTEMPTS:
-        output = workspace.marks_run(spent[-1].run) / "run.log"
+        output = _diagnostic_output(workspace, spent, ruling.disposition)
         acted.failures.append(
             f"could not write the {ruling.disposition.value} on "
             f"{finding_label(key)}: the run failed {len(spent)} times — read "
@@ -439,6 +439,26 @@ def _mark(
             workspace.log,
             f"deferred writing the {ruling.disposition.value} on {key}: {reasons}",
         )
+
+
+def _diagnostic_output(
+    workspace: Workspace, spent: Sequence[MarkRun], disposition: Disposition
+) -> str:
+    """Where to read about a ruling whose runs are used up.
+
+    The newest attempt's output where it has any; otherwise the newest attempt that wrote something, since a runner that failed the same way three times said so on the first attempt as clearly as the last. When none wrote a word, the newest path still — and for a zero, the side workers' directory beside it, where a worker that never landed a log left the only copy of why.
+    """
+    outputs = [workspace.marks_run(run.run) / "run.log" for run in spent]
+    for output in reversed(outputs):
+        try:
+            if output.stat().st_size > 0:
+                return str(output)
+        except OSError:
+            continue
+    fallback = str(outputs[-1])
+    if disposition is Disposition.ZERO:
+        fallback += f" and the side worker logs in {workspace.marks_workers}"
+    return fallback
 
 
 def _grouped(

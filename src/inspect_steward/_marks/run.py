@@ -11,7 +11,7 @@ Spawned by the tend's executor with a run id (`spawn.py`), it reads everything e
 
 import os
 import time
-from collections.abc import Sequence
+from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, cast
@@ -27,7 +27,12 @@ from inspect_ai.log import EvalSample, read_eval_log
 from .._anomaly.applied import RULING_APPLIED, read_applied
 from .._anomaly.fold import read_anomalies
 from .._anomaly.model import Anomalies, Anomaly, Disposition, Ruling
-from .._evalset.manifest import ManifestTask, read_manifest, worker_overrides
+from .._evalset.manifest import (
+    Manifest,
+    ManifestTask,
+    read_manifest,
+    worker_overrides,
+)
 from .._evalset.observe import observe_logs, observe_tasks
 from .._scan import ScanError, initialize_scan
 from .._schedule import SpawnTask, SpawnWorker
@@ -38,6 +43,7 @@ from .._worker import (
     cancel_sample,
     resolve_eval_set_id,
     resolve_inflight,
+    tail,
 )
 from .._workspace import (
     ACTION,
@@ -65,6 +71,9 @@ CLAIM_WAIT = 120.0
 """Seconds to wait for the workspace claim. A tend holds it for seconds; a launch or a smoke for longer, and those are worth failing this run over rather than editing beside."""
 
 CLAIM_POLL = 2.0
+
+TAIL_LINES = 40
+"""Lines of each side worker's output a failed side run carries in its error. The worker's own last words are the only copy of why it wrote nothing; this many lines holds a traceback and the line before it."""
 
 
 def run_mark(workspace: Workspace, run: str) -> int:
@@ -132,16 +141,9 @@ def _carry_out(workspace: Workspace, run: str, directory: Path) -> str:
             if recorded.disposition is Disposition.EXCLUDE:
                 marked = mark_unscored(log, group, anomaly, ruling)
             else:
+                # `_side_run` holds every target, or has raised
                 marked = harvest_scores(
-                    log,
-                    {target: scored[target] for target in group if target in scored},
-                    anomaly,
-                    ruling,
-                )
-                marked.deferred.extend(
-                    (target, "the side run landed no record of it")
-                    for target in group
-                    if target not in scored
+                    log, {target: scored[target] for target in group}, anomaly, ruling
                 )
             if marked.edited:
                 commit(log, location)
@@ -251,7 +253,12 @@ class _Side:
     ids: list[int | str] = field(default_factory=list[int | str])
     """The typed sample ids the selection names — taken from the main log, since the census spells every id as a string."""
 
+    selectors: list[str] = field(default_factory=list[str])
+    """The same ids as the worker's `sample_id` override must spell them (see `_selectors`)."""
+
     worker: str | None = None
+    output: Path | None = None
+    """The worker's merged output, once spawned."""
 
 
 def _side_run(
@@ -277,6 +284,7 @@ def _side_run(
         sides.setdefault(target.task, _Side(row=row, targets=[])).targets.append(target)
     for side in sides.values():
         side.ids = _typed_ids(side.targets)
+        side.selectors = _selectors(side.row, side.ids)
 
     log_dir = str(directory / "logs")
     eval_set_id = resolve_eval_set_id(log_dir)
@@ -308,11 +316,11 @@ def _side_run(
                 # which is upstream's rule and what a slice of named ids wants
                 overrides=merge_eval_set_overrides(
                     worker_overrides(manifest),
-                    EvalSetOverrides(sample_id=side.ids),
+                    EvalSetOverrides(sample_id=side.selectors),
                 ),
                 scanners=None,
             )
-            side.worker = fleet.spawn(
+            spawned_worker = fleet.spawn(
                 SpawnWorker(
                     tasks=(
                         SpawnTask(
@@ -327,7 +335,9 @@ def _side_run(
                     ),
                     max_samples=len(side.ids),
                 )
-            ).worker
+            )
+            side.worker = spawned_worker.worker
+            side.output = spawned_worker.output
             spawned.append(side.worker)
         capped = _watch(workspace, spawned, started)
     finally:
@@ -350,6 +360,20 @@ def _side_run(
     narrowed = manifest.model_copy(
         update={"tasks": [side.row for side in sides.values()]}
     )
+    scored, locations = _collect_side_scores(narrowed, log_dir, sides)
+    return scored, {"log_dir": log_dir, "locations": locations}
+
+
+def _collect_side_scores(
+    narrowed: Manifest, log_dir: str, sides: Mapping[str, _Side]
+) -> tuple[dict[Target, EvalSample], list[str]]:
+    """Read the side run's verdicts back, or raise where it left nothing to read.
+
+    A side run that lands no log, or a log without one of the samples it was told to run, will land the same way next time: the selection or the definition is wrong, not the moment. Raising here is what makes the run fail rather than defer, so the attempts run out and the failure reaches the report — carrying the workers' own last words, since a worker that never got as far as a log said why only there.
+
+    Returns:
+        Each target with the scratch sample carrying its score, and the landed logs' locations, in observation order.
+    """
     scored: dict[Target, EvalSample] = {}
     locations: list[str] = []
     for observed in observe_tasks(narrowed, observe_logs(log_dir)).tasks:
@@ -366,7 +390,53 @@ def _side_run(
             sample = by_key.get((target.sample_id, target.epoch))
             if sample is not None:
                 scored[target] = sample
-    return scored, {"log_dir": log_dir, "locations": locations}
+    # every side's targets, so that a task whose worker landed nothing is
+    # missing too — `_carry_out` commits per log and journals at the end,
+    # and a KeyError between the two would leave an edit no event records
+    missing = [
+        target
+        for side in sides.values()
+        for target in side.targets
+        if target not in scored
+    ]
+    if not locations:
+        raise RuntimeError(
+            "the side run landed no log — its workers exited without writing "
+            f"one. {_worker_tails(sides)}"
+        )
+    if missing:
+        named = ", ".join(
+            f"{target.sample_id}:{target.epoch} in {target.task}" for target in missing
+        )
+        raise RuntimeError(
+            f"the side run's log holds no record of {named}. {_worker_tails(sides)}"
+        )
+    return scored, locations
+
+
+def _worker_tails(sides: Mapping[str, _Side]) -> str:
+    """The end of each side worker's output, for an error about a run that wrote no log."""
+    blocks: list[str] = []
+    for side in sides.values():
+        if side.worker is None or side.output is None:
+            continue
+        lines = tail(side.output).strip().splitlines()
+        if lines:
+            block = "\n".join(lines[-TAIL_LINES:])
+            blocks.append(f"worker {side.worker} wrote:\n{block}")
+    if blocks:
+        return "\n\n".join(blocks)
+    outputs = [str(side.output.parent) for side in sides.values() if side.output]
+    where = ", ".join(dict.fromkeys(outputs)) or "the side workers' directory"
+    return f"see the side worker logs in {where}"
+
+
+def _selectors(row: ManifestTask, ids: Sequence[int | str]) -> list[str]:
+    """The ids as the side worker's `sample_id` override must spell them.
+
+    A workaround for upstream: `resolve_task_sample_ids` reads everything before the first `:` of an id as a task-scoping prefix and drops the id when that prefix is not the task's name — so a corpus id like `user:cybergym/arvo_6008` leaves an empty filter, and the worker exits having run nothing and written no log. Qualifying every id with the task's name round-trips such an id and is a no-op for an int or a colon-free one. The *effective* name (`Task.name`), which is what the runtime resolves against: the registry name for a registered task, but an explicit `Task(name=...)` overrides it and an ad-hoc task has none. Remove once upstream stops splitting on the id's own colon — see `BRIEF-inspect-ai-sample-id-colon.md`.
+    """
+    return [f"{row.name}:{id}" for id in ids]
 
 
 def _typed_ids(targets: Sequence[Target]) -> list[int | str]:

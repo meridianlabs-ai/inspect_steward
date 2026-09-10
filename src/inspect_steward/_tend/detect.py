@@ -44,13 +44,12 @@ from .._evalset.observe import (
 )
 from .._scan.findings import log_key
 from .._schedule.reconcile import InFlight
+from .._worker import TAIL_BYTES
+from .._worker import tail as read_tail
 from .._worker.live import LiveFleet
 
 UNIFORM_ZERO_MIN = 10
 """Samples a log must hold before a zero headline is worth confirming. Below this, one task of a handful of hard samples trips the detector more often than a broken grader does."""
-
-TAIL_BYTES = 4096
-"""How much of a departed worker's output file is read for its traceback. A definition that dies on import prints one standard traceback at the end; anything that needs more than this is investigation material either way."""
 
 
 @dataclass(frozen=True)
@@ -247,7 +246,7 @@ def _departed_without_logs(
             if identifier in orphaned or logs.attempts.get(identifier):
                 continue
             if tail is None:
-                tail = _tail(workers_dir / f"{worker.worker}.log")
+                tail = read_tail(workers_dir / f"{worker.worker}.log")
                 # the whole tail as the message, deliberately: an ENOSPC or a
                 # credentials failure printed anywhere in a dying worker's last
                 # 4KB is the substrate whatever raised it
@@ -263,18 +262,6 @@ def _departed_without_logs(
                 )
             )
     return instances
-
-
-def _tail(output: Path) -> str:
-    """The end of a worker's output file, or empty for one that wrote nothing."""
-    try:
-        with output.open("rb") as stream:
-            stream.seek(0, 2)
-            size = stream.tell()
-            stream.seek(max(0, size - TAIL_BYTES))
-            return stream.read().decode("utf-8", errors="replace")
-    except OSError:
-        return ""
 
 
 def _uniform_zeros(observed: ObservedTasks, zero: dict[str, bool]) -> list[Instance]:

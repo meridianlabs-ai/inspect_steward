@@ -46,6 +46,21 @@ from .inflight import STEWARD_TASK, STEWARD_WORKER, record_intent, record_launch
 MAX_KEY_LENGTH = 80
 """Longest display key a worker's file stem keeps. A key carries a task name, a solver, a model, and every distinguishing argument, so an argument sweep can produce a long one; the identifier hash beside it is what keeps two truncations apart."""
 
+TAIL_BYTES = 4096
+"""How much of a departed worker's output file is read for its traceback. A definition that dies on import prints one standard traceback at the end; anything that needs more than this is investigation material either way."""
+
+
+def tail(output: Path) -> str:
+    """The end of a worker's output file, or empty for one that wrote nothing."""
+    try:
+        with output.open("rb") as stream:
+            stream.seek(0, 2)
+            size = stream.tell()
+            stream.seek(max(0, size - TAIL_BYTES))
+            return stream.read().decode("utf-8", errors="replace")
+    except OSError:
+        return ""
+
 
 @dataclass(frozen=True)
 class SpawnedWorker:
