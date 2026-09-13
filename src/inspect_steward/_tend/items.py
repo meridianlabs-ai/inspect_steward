@@ -698,6 +698,8 @@ def _tuning(result: "TendResult", lookup: dict[str, TaskObservation]) -> list[It
 
     Two conditions with one shape (`_tend.tuning.Proposal`): a pinned setpoint holding a clean, saturated window, and a ramp at its ceiling with pushback still absent. Both mean the binding constraint is a number an operator chose, so the owner is the operator — and the agent's part is to relay it (`raise`) and to record the ruling for them (`ack`): "seen, happy at 60" is an acknowledgment, and the next level up would be a different item.
 
+    **No proposal reaches here by default** (`_tend.tuning.PROPOSE_CAPACITY`), so this builds nothing: an ask repeated every clean window walked operators up an envelope the ratchet makes expensive to walk back down. What a bound is holding back still shows in the tuning block, which carries no question. Kept whole against wanting the item back.
+
     **The summary says what is binding and at what number, and stops.** That it is the operator's to decide is what the item's owner already means, and *how* to decide it is the runbook's — repeating either in a sentence that appears in every post and every `status.md` costs a line each time to say something that never varies.
 
     The id carries the level, which is what makes an acknowledgment mean something narrow: capacity at 60 accepted is not capacity at 80 accepted, and a task the operator authorizes higher produces a fresh item the first time it holds a clean window at its new bound.
