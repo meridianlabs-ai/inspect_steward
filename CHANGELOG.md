@@ -1,3 +1,8 @@
+## 0.2.7 (13 September 2026)
+
+- Agent no longer makes proactive tuning proposals when the samples ramp reaches its maximum.
+- Lower the default `samples_ramp` ceiling from 200 to 150.
+
 ## 0.2.6 (10 September 2026)
 
 - Land `zero` rulings on corpora whose sample ids contain a colon (work around inspect_ai reading the id's prefix as a task name); a side run that lands no usable log now fails rather than deferring forever, and the sign-off failure points at a run log with content and at the side worker logs.

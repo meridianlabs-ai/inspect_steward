@@ -22,7 +22,15 @@ from .._workspace import ACTION, OBSERVATION, JournalEvent, RampHold
 RAMP_STEP = 20
 """How much one clean window buys.
 
-Fixed rather than proportional: the default range climbs 50→200 in eight steps, each one small enough that the drain back out of it is minutes rather than hours (the ratchet: lowering a limit never preempts, it waits for holders to finish).
+Fixed rather than proportional: the default range climbs 50→150 in five steps, each one small enough that the drain back out of it is minutes rather than hours (the ratchet: lowering a limit never preempts, it waits for holders to finish).
+"""
+
+PROPOSE_CAPACITY = False
+"""Whether a bound the loop cannot move is put to the operator as an item.
+
+Off, because the ask is one-directional: raising a limit takes effect at once and lowering one only stops new acquires and waits for in-flight samples to drain, so an item every clean window walks an operator up an envelope they chose and cannot cheaply walk back down. The envelope is the standing judgement (`samples_ramp`), and discovering a setpoint inside it is the whole of this loop's authority. Someone who wants more says so, and the range is theirs to widen.
+
+Retained rather than deleted: the signal is still measured and still recorded, so flipping this to `True` restores the item with its two-turn history intact.
 """
 
 STEP_SPACING = 20 * 60.0
@@ -193,6 +201,8 @@ class Proposal:
     """Capacity somebody chose not to authorize, surfaced to the one who could.
 
     Two shapes with one meaning — *the binding constraint is yours*. A pinned setpoint showing a clean, saturated window for two turns running; a ramp at its ceiling with pushback still absent. In both, tend has no authority left to spend, so the item's owner is the operator whose number binds (scheduling.md §3.3).
+
+    **Not raised by default** (`PROPOSE_CAPACITY`). Steward reports where a bound binds and stops there; asking to move it is the operator's to start. The shape is retained against wanting it back.
     """
 
     identifier: str
@@ -242,6 +252,7 @@ def plan_tuning(
     cpu: Mapping[int, float],
     now: float,
     absent: Collection[str] = (),
+    propose: bool = PROPOSE_CAPACITY,
 ) -> TuningPlan:
     """Decide this turn's retunes.
 
@@ -256,6 +267,7 @@ def plan_tuning(
         cpu: Cumulative CPU seconds per pid, read this turn.
         now: The turn's clock, unix — passed in so the policy stays pure.
         absent: Running tasks whose worker did not answer, which have no window this turn but are still holding whatever the last turn left them at. Charged against the sandbox budget at that level, because a worker too busy to serve its socket is running samples exactly as hard as one that answered — and *busy* is the ordinary state of a fleet mid-generate, not a failure. Charged whether or not it was sandboxed, since the reading that would say is the one that did not arrive: the error is then a step declined, which costs a tend, rather than a host over-committed, which costs the run.
+        propose: Whether a bound this loop may not move is surfaced as a `Proposal` for the operator. Off (`PROPOSE_CAPACITY`); the signal is measured and recorded either way, so turning it on is the only step in restoring the item.
 
     Returns:
         The plan. Empty moves under a pinned setpoint, always.
@@ -317,7 +329,11 @@ def plan_tuning(
             # pinned mode: the signal still runs, the authority does not
             if blocked is None and not held and not _at_every_sample(task, task.level):
                 capacity.add(task.identifier)
-                if task.identifier in baseline.capacity and task.level is not None:
+                if (
+                    propose
+                    and task.identifier in baseline.capacity
+                    and task.level is not None
+                ):
                     proposals.append(
                         Proposal(
                             identifier=task.identifier,
@@ -435,7 +451,7 @@ def plan_tuning(
                 continue
             if blocked is None and not held:
                 capacity.add(task.identifier)
-                if task.identifier in baseline.capacity:
+                if propose and task.identifier in baseline.capacity:
                     proposals.append(
                         Proposal(
                             identifier=task.identifier,

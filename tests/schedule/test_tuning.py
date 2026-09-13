@@ -119,6 +119,7 @@ def plan(
     last_conn_step: dict[str, float] | None = None,
     cpu: dict[int, float] | None = None,
     absent: tuple[str, ...] = (),
+    propose: bool = False,
 ) -> TuningPlan:
     return plan_tuning(
         list(tasks) or [sig()],
@@ -131,6 +132,7 @@ def plan(
         cpu=cpu if cpu is not None else {1: 12.0},
         now=NOW,
         absent=absent,
+        propose=propose,
     )
 
 
@@ -619,9 +621,37 @@ def test_a_pinned_setpoint_is_never_moved() -> None:
     assert not result.active
 
 
+@pytest.mark.parametrize(
+    ("ramp", "task", "level"),
+    [
+        pytest.param(RAMP, sig(level=200, in_use=200), 200, id="at_the_ceiling"),
+        pytest.param(None, sig(), 40, id="pinned"),
+    ],
+)
+def test_a_bound_it_may_not_move_is_reported_and_not_proposed(
+    ramp: tuple[int, int] | None, task: TaskSignals, level: int
+) -> None:
+    """The signal is measured and written down; the ask is not made.
+
+    An item every clean window walked operators up an envelope the ratchet
+    makes expensive to walk back down, so the default is to say where the
+    bound binds and stop (`PROPOSE_CAPACITY`). The record still names the
+    task, which is what lets the switch restore the item with its two-turn
+    history rather than a turn behind.
+    """
+    baseline = base(level=level, capacity=("t1",))
+
+    result = plan(task, ramp=ramp, baseline=baseline)
+
+    assert result.proposals == []
+    assert result.record["capacity"] == ["t1"]
+    if ramp is not None:
+        assert any("at the ceiling" in line for line in result.lines)
+
+
 def test_pinned_capacity_becomes_a_proposal_on_the_second_window() -> None:
-    first = plan(ramp=None)
-    second = plan(ramp=None, baseline=base(capacity=("t1",)))
+    first = plan(ramp=None, propose=True)
+    second = plan(ramp=None, baseline=base(capacity=("t1",)), propose=True)
 
     assert first.proposals == [] and first.record["capacity"] == ["t1"]
     (proposal,) = second.proposals
@@ -631,8 +661,8 @@ def test_pinned_capacity_becomes_a_proposal_on_the_second_window() -> None:
 def test_a_ramp_at_its_ceiling_proposes_raising_the_envelope() -> None:
     at_top = sig(level=200, in_use=200)
 
-    first = plan(at_top, baseline=base(level=200))
-    second = plan(at_top, baseline=base(level=200, capacity=("t1",)))
+    first = plan(at_top, baseline=base(level=200), propose=True)
+    second = plan(at_top, baseline=base(level=200, capacity=("t1",)), propose=True)
 
     assert first.proposals == []
     (proposal,) = second.proposals
@@ -645,7 +675,9 @@ def test_a_ramp_holding_every_sample_the_task_has_does_not_propose() -> None:
     # ceiling raised past that admits no sample that does not exist
     at_top = sig(level=25, in_use=25, samples=25)
 
-    result = plan(at_top, ramp=(20, 25), baseline=base(level=25, capacity=("t1",)))
+    result = plan(
+        at_top, ramp=(20, 25), baseline=base(level=25, capacity=("t1",)), propose=True
+    )
 
     assert result.proposals == []
     assert result.record["capacity"] == []
@@ -656,7 +688,7 @@ def test_more_samples_than_the_ceiling_still_proposes() -> None:
     # the envelope genuinely binds when the task has more samples than it admits
     at_top = sig(level=200, in_use=200, samples=500)
 
-    result = plan(at_top, baseline=base(level=200, capacity=("t1",)))
+    result = plan(at_top, baseline=base(level=200, capacity=("t1",)), propose=True)
 
     (proposal,) = result.proposals
     assert not proposal.pinned and proposal.ceiling == 200
@@ -673,7 +705,9 @@ def test_a_step_never_climbs_past_the_sample_count() -> None:
 def test_a_pinned_setpoint_holding_every_sample_does_not_propose() -> None:
     at_top = sig(level=25, in_use=25, samples=25)
 
-    result = plan(at_top, ramp=None, baseline=base(level=25, capacity=("t1",)))
+    result = plan(
+        at_top, ramp=None, baseline=base(level=25, capacity=("t1",)), propose=True
+    )
 
     assert result.proposals == []
     assert result.record["capacity"] == []
@@ -709,14 +743,18 @@ def test_the_correction_is_not_gated_like_a_step() -> None:
 
 
 def test_a_dirty_window_is_not_capacity() -> None:
-    result = plan(sig(errored=1), ramp=None, baseline=base(capacity=("t1",)))
+    result = plan(
+        sig(errored=1), ramp=None, baseline=base(capacity=("t1",)), propose=True
+    )
 
     assert result.proposals == [] and result.record["capacity"] == []
 
 
 def test_a_held_task_is_not_offered_as_capacity() -> None:
     # somebody said stop; proposing more of what they stopped is not listening
-    result = plan(ramp=None, baseline=base(capacity=("t1",)), holds=hold())
+    result = plan(
+        ramp=None, baseline=base(capacity=("t1",)), holds=hold(), propose=True
+    )
 
     assert result.proposals == []
 
@@ -886,7 +924,7 @@ def test_a_proposal_is_the_humans_item_and_its_id_carries_the_level() -> None:
     narrow: a task later authorized higher produces a fresh item the first time
     it holds a clean window at its new bound.
     """
-    result = tuned(plan(ramp=None, baseline=base(capacity=("t1",))))
+    result = tuned(plan(ramp=None, baseline=base(capacity=("t1",)), propose=True))
 
     items = tend_items(result, ObservedTasks(tasks=[]), InFlight())
 
@@ -917,6 +955,7 @@ def test_arms_of_one_task_get_distinct_proposal_ids() -> None:
         ramp=None,
         baseline=base(*arms, pids=(1, 2, 3), capacity=arms),
         cpu={1: 12.0, 2: 12.0, 3: 12.0},
+        propose=True,
     )
     assert len(tuning.proposals) == 3
 
