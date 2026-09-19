@@ -146,7 +146,10 @@ class InterimEntry:
     """One score's metrics from an interim pass: what `EvalScore` carries, as the pass reports it."""
 
     name: str
-    """The score's name — what the pass calls `scorer`, which is `EvalScore.name`."""
+    """The score's name (`EvalScore.name`) — a dict-valued scorer names its scores for its value keys (e.g. `hijack`)."""
+
+    scorer: str
+    """The originating scorer (`EvalScore.scorer`). Differs from `name` only for a dict-valued scorer, and is what tells two scorers' same-`name` scores apart — which a headline declaration needs to select one of them."""
 
     reducer: str | None
     metrics: Mapping[str, float]
@@ -561,14 +564,21 @@ def _entries(payload: object) -> tuple[InterimEntry, ...]:
         if not isinstance(raw, dict):
             continue
         entry = cast(dict[str, object], raw)
-        name = _text(entry.get("scorer"))
+        # Inspect now reports `name` (EvalScore.name) and `scorer`
+        # (EvalScore.scorer) apart. A legacy payload carries only `scorer`,
+        # which held the score name — read it as the name and let scorer
+        # coincide with it, the old behaviour (right for flat scorers, and
+        # the best a legacy pass allows for dict-valued ones).
+        name = _text(entry.get("name")) or _text(entry.get("scorer"))
+        scorer = _text(entry.get("scorer")) or name
         values = entry.get("metrics")
-        if not name or not isinstance(values, dict):
+        if not name or not scorer or not isinstance(values, dict):
             continue
         reducer = entry.get("reducer")
         entries.append(
             InterimEntry(
                 name=name,
+                scorer=scorer,
                 reducer=reducer if isinstance(reducer, str) else None,
                 metrics={
                     key: float(value)
