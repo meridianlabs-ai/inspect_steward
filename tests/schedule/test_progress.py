@@ -30,6 +30,8 @@ from inspect_steward._worker import (
     LiveSamples,
     LiveTask,
     LiveUsage,
+    read_interim,
+    write_interim,
 )
 
 from .._logs import SynthTask, synth_manifest, write_log
@@ -651,8 +653,12 @@ def test_the_block_says_what_it_covers_and_that_it_is_only_now() -> None:
 INTERIM = Interim(
     scored=4,
     entries=(
-        InterimEntry(name="exact", reducer=None, metrics={"accuracy": 0.75}),
-        InterimEntry(name="judge", reducer=None, metrics={"mean": 0.42}),
+        InterimEntry(
+            name="exact", scorer="exact", reducer=None, metrics={"accuracy": 0.75}
+        ),
+        InterimEntry(
+            name="judge", scorer="judge", reducer=None, metrics={"mean": 0.42}
+        ),
     ),
 )
 
@@ -723,3 +729,75 @@ def test_the_terminal_shows_an_interim_score_like_a_final_one(tmp_path: Path) ->
     (line, *_) = progress_table(rows(tmp_path, [TASK], fleet))
 
     assert line.split()[-1] == "0.75"
+
+
+# two dict-valued scorers both emit `hijack` with a `mean` metric, so neither
+# the score name nor the metric name can tell them apart — only the scorer
+# can. The adjudicated one is first, so a lost scorer identity falls back to
+# it (the wrong number) rather than the declared `oss_fuzz_scorer`.
+COLLIDING = Interim(
+    scored=5,
+    entries=(
+        InterimEntry(
+            name="hijack",
+            scorer="oss_fuzz_adjudicated_scorer",
+            reducer=None,
+            metrics={"mean": 0.28},
+        ),
+        InterimEntry(
+            name="hijack",
+            scorer="oss_fuzz_scorer",
+            reducer=None,
+            metrics={"mean": 0.32},
+        ),
+    ),
+)
+
+
+def test_a_declared_scorer_selects_among_dict_scorers_sharing_a_score(
+    tmp_path: Path, caplog: pytest.LogCaptureFixture
+) -> None:
+    # the headline names the scorer, which is the only field that distinguishes
+    # the two `hijack` scores — so it must resolve to `oss_fuzz_scorer`'s 0.32,
+    # not the first entry's 0.28, and without the resolver abandoning to the
+    # first-metric fallback (which warns)
+    write_log(
+        tmp_path,
+        TASK,
+        status="started",
+        declared=HeadlineMetric(
+            scorer="oss_fuzz_scorer", score="hijack", metric="mean"
+        ),
+    )
+    fleet = live(TASK, completed=5, in_flight=2, interim=COLLIDING)
+
+    with caplog.at_level("WARNING"):
+        (row,) = rows(tmp_path, [TASK], fleet).rows
+
+    assert (row.headline, row.headline_name, row.interim) == (0.32, "hijack/mean", 5)
+    assert not [r for r in caplog.records if "not found" in r.getMessage()]
+
+
+def test_the_declared_scorer_still_selects_after_a_cache_round_trip(
+    tmp_path: Path,
+) -> None:
+    # the same selection must hold once the entries have been through
+    # `.steward/interim.json`, which is where the scorer identity would be lost
+    # if the cache dropped it
+    path = tmp_path / ".steward" / "interim.json"
+    write_interim(path, {"E1": COLLIDING})
+    reloaded = read_interim(path)["E1"]
+
+    write_log(
+        tmp_path,
+        TASK,
+        status="started",
+        declared=HeadlineMetric(
+            scorer="oss_fuzz_scorer", score="hijack", metric="mean"
+        ),
+    )
+    fleet = live(TASK, completed=5, in_flight=2, interim=reloaded)
+
+    (row,) = rows(tmp_path, [TASK], fleet).rows
+
+    assert (row.headline, row.headline_name, row.interim) == (0.32, "hijack/mean", 5)

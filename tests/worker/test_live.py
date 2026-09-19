@@ -877,6 +877,7 @@ PASS_DONE: dict[str, object] = {
         "samples": [],
         "metrics": [
             {
+                "name": "exact",
                 "scorer": "exact",
                 "reducer": None,
                 "metrics": {"accuracy": 0.5, "stderr": 0.1},
@@ -900,7 +901,10 @@ HARVESTED = Interim(
     scored=3,
     entries=(
         InterimEntry(
-            name="exact", reducer=None, metrics={"accuracy": 0.5, "stderr": 0.1}
+            name="exact",
+            scorer="exact",
+            reducer=None,
+            metrics={"accuracy": 0.5, "stderr": 0.1},
         ),
     ),
 )
@@ -929,6 +933,85 @@ def test_a_scored_sample_harvests_the_interim_metrics(sockets: Path) -> None:
     assert task.interim == HARVESTED
     assert seen.count(START) == 1
     assert "GET /tasks/T1/score" in seen
+
+
+DICT_SCORERS: dict[str, object] = {
+    **PASS_DONE,
+    "result": {
+        "counts": {"completed_scored": 3},
+        "samples": [],
+        "metrics": [
+            {
+                "name": "hijack",
+                "scorer": "oss_fuzz_scorer",
+                "reducer": None,
+                "metrics": {"mean": 0.32},
+            },
+            {
+                "name": "hijack",
+                "scorer": "oss_fuzz_adjudicated_scorer",
+                "reducer": None,
+                "metrics": {"masked_mean": 0.28},
+            },
+        ],
+        "interim": True,
+    },
+}
+
+LEGACY: dict[str, object] = {
+    **PASS_DONE,
+    "result": {
+        "counts": {"completed_scored": 3},
+        "samples": [],
+        # a pre-0.3.266 pass: `scorer` held the score name, and there was no
+        # `name` key
+        "metrics": [{"scorer": "exact", "reducer": None, "metrics": {"accuracy": 0.5}}],
+        "interim": True,
+    },
+}
+
+
+def test_dict_valued_scorers_keep_their_scorer_identity(sockets: Path) -> None:
+    # two scorers both report `hijack`; the harvest keeps each entry's
+    # originating scorer, so only `name` collides — never the pair
+    with worker(sockets / "w.sock", scoring(3, get=DICT_SCORERS)) as target:
+        (task,) = read_fleet([target], NO_PACKING).tasks.values()
+
+    assert task.interim == Interim(
+        scored=3,
+        entries=(
+            InterimEntry(
+                name="hijack",
+                scorer="oss_fuzz_scorer",
+                reducer=None,
+                metrics={"mean": 0.32},
+            ),
+            InterimEntry(
+                name="hijack",
+                scorer="oss_fuzz_adjudicated_scorer",
+                reducer=None,
+                metrics={"masked_mean": 0.28},
+            ),
+        ),
+    )
+
+
+def test_a_legacy_payload_without_a_name_reads_the_scorer_key_as_the_name(
+    sockets: Path,
+) -> None:
+    # a pre-0.3.266 pass carried only `scorer` (the score name); it degrades to
+    # the old behaviour, name and scorer coinciding
+    with worker(sockets / "w.sock", scoring(3, get=LEGACY)) as target:
+        (task,) = read_fleet([target], NO_PACKING).tasks.values()
+
+    assert task.interim == Interim(
+        scored=3,
+        entries=(
+            InterimEntry(
+                name="exact", scorer="exact", reducer=None, metrics={"accuracy": 0.5}
+            ),
+        ),
+    )
 
 
 def test_nothing_scored_asks_for_nothing(sockets: Path) -> None:

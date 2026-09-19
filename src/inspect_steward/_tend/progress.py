@@ -428,9 +428,10 @@ def _headline(
         scores=[
             EvalScore(
                 name=entry.name,
-                # the pass reports `EvalScore.name` and not `.scorer`; the two
-                # coincide for every scorer whose metrics are flat
-                scorer=entry.name,
+                # the pass reports name and scorer apart, so two dict-valued
+                # scorers' same-name scores stay distinct — which a headline
+                # declaration naming a scorer needs to select one of them
+                scorer=entry.scorer,
                 reducer=entry.reducer,
                 metrics={
                     key: EvalMetric(name=key, value=value)

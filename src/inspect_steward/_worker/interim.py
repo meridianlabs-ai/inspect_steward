@@ -14,8 +14,10 @@ from typing import Any, cast
 
 from .live import Interim, InterimEntry
 
-INTERIM_VERSION = 1
-"""Bumped when `Interim` changes shape. A file written by another version is discarded rather than migrated."""
+INTERIM_VERSION = 2
+"""Bumped when `Interim` changes shape. A file written by another version is discarded rather than migrated.
+
+v2 adds `scorer` beside `name` on each entry, so a dict-valued scorer's scores keep their originating scorer through the cache; a v1 file is dropped and re-harvested, never migrated."""
 
 
 def read_interim(path: Path) -> dict[str, Interim]:
@@ -72,12 +74,17 @@ def _entry(raw: object) -> InterimEntry | None:
         return None
     record = cast(dict[str, object], raw)
     name = record.get("name")
+    scorer = record.get("scorer")
     reducer = record.get("reducer")
     metrics = record.get("metrics")
     if not isinstance(name, str) or not isinstance(metrics, dict):
         return None
     return InterimEntry(
         name=name,
+        # a v2 file always carries `scorer`; fall back to `name` for the
+        # entry a v1 reader could still meet in the wild (v1 files are dropped
+        # whole by the version gate, so this is belt-and-braces)
+        scorer=scorer if isinstance(scorer, str) else name,
         reducer=reducer if isinstance(reducer, str) else None,
         metrics={
             key: float(value)
@@ -102,6 +109,7 @@ def write_interim(path: Path, known: Mapping[str, Interim]) -> None:
                 "entries": [
                     {
                         "name": entry.name,
+                        "scorer": entry.scorer,
                         "reducer": entry.reducer,
                         "metrics": dict(entry.metrics),
                     }

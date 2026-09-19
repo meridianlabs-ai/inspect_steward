@@ -18,8 +18,15 @@ KNOWN = {
     "E1": Interim(
         scored=3,
         entries=(
-            InterimEntry(name="exact", reducer=None, metrics={"accuracy": 0.5}),
-            InterimEntry(name="judge", reducer="pass_at_5", metrics={"mean": 0.4}),
+            InterimEntry(
+                name="exact", scorer="exact", reducer=None, metrics={"accuracy": 0.5}
+            ),
+            InterimEntry(
+                name="judge",
+                scorer="judge",
+                reducer="pass_at_5",
+                metrics={"mean": 0.4},
+            ),
         ),
     ),
     "E2": Interim(scored=1),
@@ -32,6 +39,38 @@ def test_the_harvest_round_trips(tmp_path: Path) -> None:
     write_interim(path, KNOWN)
 
     assert read_interim(path) == KNOWN
+
+
+def test_a_dict_scorers_scorer_identity_survives_the_round_trip(
+    tmp_path: Path,
+) -> None:
+    # two dict-valued scorers both emit `hijack`; only `scorer` tells the two
+    # entries apart, so the round trip must preserve it (name alone would
+    # collapse them and lose the headline's scorer selector)
+    path = tmp_path / ".steward" / "interim.json"
+    known = {
+        "E1": Interim(
+            scored=5,
+            entries=(
+                InterimEntry(
+                    name="hijack",
+                    scorer="oss_fuzz_scorer",
+                    reducer=None,
+                    metrics={"mean": 0.32},
+                ),
+                InterimEntry(
+                    name="hijack",
+                    scorer="oss_fuzz_adjudicated_scorer",
+                    reducer=None,
+                    metrics={"masked_mean": 0.28},
+                ),
+            ),
+        )
+    }
+
+    write_interim(path, known)
+
+    assert read_interim(path) == known
 
 
 def test_another_version_is_discarded(tmp_path: Path) -> None:

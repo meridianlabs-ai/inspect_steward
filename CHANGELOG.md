@@ -1,3 +1,7 @@
+## Unreleased
+
+- Interim scoring: keep each interim metric's originating scorer, so a running task's headline resolves correctly when two dict-valued scorers emit the same score name (e.g. both a deterministic and an adjudicated scorer reporting `hijack`). Reads the `scorer`/`name` pair from Inspect's interim response (0.3.266+), falling back to the pre-0.3.266 single field for an older worker; the `.steward/interim.json` cache version is bumped, so a stale cache is discarded and re-harvested rather than migrated.
+
 ## 0.2.5 (09 September 2026)
 
 - Stop a scheduled agent collect from tearing down its own schedule.
