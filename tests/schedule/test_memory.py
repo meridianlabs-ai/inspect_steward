@@ -24,6 +24,7 @@ from inspect_steward._tend.memory import (
     memory_report,
     project,
     read_memory_history,
+    read_memory_since,
 )
 from inspect_steward._worker import HostMemory
 from inspect_steward._workspace import OBSERVATION, read_journal
@@ -127,19 +128,22 @@ def test_too_little_to_fit_is_no_line(series: list[MemoryPoint]) -> None:
 # --- the series the journal holds -------------------------------------------
 
 
-def observe(journal: Path, ts: str, memory: dict[str, int] | None | str) -> None:
+def observe(
+    journal: Path, ts: str, memory: dict[str, int | str | None] | None | str
+) -> None:
     """An observation with a chosen timestamp, which `append_event` will not give."""
     with journal.open("a", encoding="utf-8") as file:
         file.write(json.dumps({"ts": ts, "type": OBSERVATION, "memory": memory}) + "\n")
 
 
-def reading(available: int) -> dict[str, int]:
+def reading(available: int, tier: str | None = None) -> dict[str, int | str | None]:
     return {
         "total": TOTAL,
         "available": available,
         "swap_total": 0,
         "swap_used": 0,
         "rss": 10 * GIB,
+        "tier": tier,
     }
 
 
@@ -222,6 +226,50 @@ def test_the_payload_reads_back_as_the_point_it_recorded(tmp_path: Path) -> None
     )
     assert entry.headroom == 18 * GIB
     assert memory_payload(None) is None
+
+
+def test_the_episode_boundary_is_the_last_turn_that_was_not_short(
+    tmp_path: Path,
+) -> None:
+    journal = tmp_path / "journal.jsonl"
+    observe(journal, at(2400), reading(30 * GIB))
+    observe(journal, at(1800), reading(4 * GIB, "low"))
+    # an acknowledged shortage leaves the item list and not the tier, so this
+    # turn is still short and does not move the boundary
+    observe(journal, at(1200), reading(4 * GIB, "low"))
+    observe(journal, at(600), reading(12 * GIB, "projected"))
+
+    since = read_memory_since(read_journal(journal).events)
+
+    assert since == at(2400)
+
+
+def test_a_turn_with_nothing_running_is_not_short(tmp_path: Path) -> None:
+    journal = tmp_path / "journal.jsonl"
+    observe(journal, at(1200), reading(4 * GIB, "low"))
+    observe(journal, at(600), None)
+
+    assert read_memory_since(read_journal(journal).events) == at(600)
+
+
+def test_a_workspace_short_since_its_first_tend_has_no_boundary(tmp_path: Path) -> None:
+    journal = tmp_path / "journal.jsonl"
+    observe(journal, at(600), reading(4 * GIB, "low"))
+
+    assert read_memory_since(read_journal(journal).events) is None
+    assert read_memory_since([]) is None
+
+
+def test_the_payload_carries_the_tier_and_the_report_its_episode() -> None:
+    report = memory_report(
+        host(4 * GIB), 40 * GIB, [], now=NOW, since="2026-09-19T01:00:00Z"
+    )
+    payload = memory_payload(report)
+
+    assert payload is not None and payload["tier"] == "low"
+    assert report.since == "2026-09-19T01:00:00Z"
+    healthy = memory_payload(memory_report(host(30 * GIB), 40 * GIB, [], now=NOW))
+    assert healthy is not None and healthy["tier"] is None
 
 
 def test_the_report_fits_the_reading_just_taken_with_the_history() -> None:

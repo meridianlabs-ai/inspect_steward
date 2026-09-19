@@ -159,6 +159,7 @@ from .memory import (
     memory_payload,
     memory_report,
     read_memory_history,
+    read_memory_since,
 )
 from .notify import held_tasks, notify_turn
 from .progress import Progress, display_keys, live_totals, task_progress
@@ -745,6 +746,9 @@ class _History:
 
     memory: list[MemoryPoint] = field(default_factory=list["MemoryPoint"])
     """The host's recent readings, oldest first — what this turn's reading is fitted against (`_tend.memory.read_memory_history`)."""
+
+    memory_since: str | None = None
+    """When a tend last recorded the host as not short — the boundary a `memory` item's id carries (`_tend.memory.read_memory_since`)."""
     """The previous turn's tuning record — the window's left edge (`_tend.tuning`)."""
 
     ramp_holds: dict[str, RampHold] = field(default_factory=dict[str, "RampHold"])
@@ -855,6 +859,7 @@ def _history(workspace: Workspace) -> _History:
         since_armed=_elapsed(armed.ts) if armed is not None else None,
         baseline=read_baseline(events),
         memory=read_memory_history(events, now=time.time()),
+        memory_since=read_memory_since(events),
         ramp_holds=read_ramp_holds(events),
         ramp_levels=ramp_levels,
         last_step=last_step,
@@ -1261,7 +1266,13 @@ def _turn(
     # running, so the series the next turn fits against is what the fleet is
     # doing to the machine, and never an idle box between runs
     memory = (
-        memory_report(host_memory(), progress.live.usage.rss, history.memory, now=now)
+        memory_report(
+            host_memory(),
+            progress.live.usage.rss,
+            history.memory,
+            now=now,
+            since=history.memory_since,
+        )
         if progress.live is not None
         else None
     )

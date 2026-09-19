@@ -1432,6 +1432,7 @@ def memory(
         ),
         rss=40 * gib,
         projection=projection,
+        since="2026-09-19T01:00:00Z",
     )
 
 
@@ -1454,19 +1455,19 @@ def memory_items(result: TendResult, **kwargs: Any) -> list[Item]:
     [
         pytest.param(
             memory(4),
-            ["memory:low"],
+            ["memory:low:2026-09-19T01:00:00Z"],
             "headroom is 4.0 GiB of 64.0 GiB (6%), no swap",
             id="low",
         ),
         pytest.param(
             memory(20, falling(1800)),
-            ["memory:projected"],
+            ["memory:projected:2026-09-19T01:00:00Z"],
             "falling 1.0 GiB/h — exhausted in ~30m",
             id="projected",
         ),
         pytest.param(
             memory(4, falling(1800)),
-            ["memory:low"],
+            ["memory:low:2026-09-19T01:00:00Z"],
             "(6%)",
             id="low wins over projected",
         ),
@@ -1509,4 +1510,24 @@ def test_an_acknowledged_forecast_does_not_cover_the_host_arriving_there(
     heard = memory_items(replace(result, memory=memory(4)), acknowledged=acknowledged)
 
     assert [entry.id for entry in quiet] == []
-    assert [entry.id for entry in heard] == ["memory:low"]
+    assert [entry.id for entry in heard] == ["memory:low:2026-09-19T01:00:00Z"]
+
+
+def test_an_acknowledged_shortage_does_not_cover_the_next_one(tmp_path: Path) -> None:
+    # the episode is in the id: a host that recovered and ran short again is a
+    # new item, where an ack keyed on the tier alone would have silenced every
+    # shortage after the first for the life of the workspace
+    workspace, _ = prepared(tmp_path, [SynthTask("probe")])
+    result = turn(workspace)
+    (first,) = memory_items(replace(result, memory=memory(4)))
+    acknowledged = frozenset({first.id})
+    relapse = replace(memory(4), since="2026-09-19T09:00:00Z")
+
+    assert (
+        memory_items(replace(result, memory=memory(4)), acknowledged=acknowledged) == []
+    )
+    (again,) = memory_items(replace(result, memory=relapse), acknowledged=acknowledged)
+    assert again.id == "memory:low:2026-09-19T09:00:00Z"
+    # and a workspace no tend has recorded yet still has an id to ack
+    (fresh,) = memory_items(replace(result, memory=replace(memory(4), since=None)))
+    assert fresh.id == "memory:low:start"

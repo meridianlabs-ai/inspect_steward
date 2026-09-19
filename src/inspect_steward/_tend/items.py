@@ -1185,7 +1185,7 @@ def _memory(result: "TendResult") -> list[Item]:
 
     **The agent's, because the remedy is the agent's to try first.** On a Linux host the answer is swap, which comes online for the workers already running the moment `swapon` returns, and the runbook admits it without asking; where that cannot be done — no sudo, a pod, macOS — the agent lowers concurrency and raises the item with the commands ready. Neither is a question the operator has to be woken for, so the item is not theirs by default.
 
-    **The id is the tier.** `low` is a fact about now and `projected` a forecast, and crossing between them is what makes the item worth saying again: an acknowledgment of a forecast does not cover the host actually arriving there. A forecast clears itself once the slope flattens — which is what adding swap does — and a `low` clears when headroom returns, since swap counts toward it.
+    **The id is the tier and the episode.** `low` is a fact about now and `projected` a forecast, and crossing between them is what makes the item worth saying again: an acknowledgment of a forecast does not cover the host actually arriving there. The episode is when a tend last recorded the host as not short (`MemoryReport.since`), so an acknowledgment is permanent for *this* shortage and no further — a host that recovers and runs short again next week is heard again, where an id of the tier alone would have been silenced by the first ack forever. A forecast clears itself once the slope flattens — which is what adding swap does — and a `low` clears when headroom returns, since swap counts toward it.
 
     **The summary says what is short and by how much, and stops** (the rule `_tuning` states). Headroom rather than *used*, so an idle box whose page cache fills the figure never trips it (`_worker.usage.HostMemory`).
     """
@@ -1210,7 +1210,7 @@ def _memory(result: "TendResult") -> list[Item]:
         )
     return [
         Item(
-            id=f"{MEMORY}:{tier}",
+            id=f"{MEMORY}:{tier}:{memory.since or 'start'}",
             kind=MEMORY,
             owner=OWNERS[MEMORY],
             level=Level.ATTENTION,

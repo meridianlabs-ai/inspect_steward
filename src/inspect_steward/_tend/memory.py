@@ -98,6 +98,12 @@ class MemoryReport:
     projection: Projection | None
     """The trend, or `None` with fewer than `MIN_POINTS` readings behind this one."""
 
+    since: str | None = None
+    """When the host was last recorded with headroom to spare, or `None` where no tend has recorded one (`read_memory_since`).
+
+    What makes a shortage an *episode*: the item's id carries it, so an acknowledgment covers this shortage and not the next one after a recovery. `None` on a report assembled by hand, which claims nothing about earlier turns.
+    """
+
     @property
     def fraction(self) -> float:
         """Headroom as a share of physical memory. Zero on a host that reports no memory at all."""
@@ -162,6 +168,28 @@ class MemoryReport:
         """The figures, then the trend where there is one — one source for both renderings."""
         trend = self.trend
         return [self.figures] if trend is None else [self.figures, trend]
+
+
+def read_memory_since(events: Sequence[JournalEvent]) -> str | None:
+    """When a tend last recorded the host as not short, as the journal's timestamp.
+
+    The boundary of the current shortage. Read off the recorded **tier** rather than off the item list, and the difference is what an acknowledgment does: an acknowledged item leaves the list while the host stays short, and reading that as a recovery would mint a new episode — and a new id — the turn after somebody accepted the old one. A turn with nothing running recorded no reading, which is not a shortage either.
+
+    Args:
+        events: Events in file order, as `read_journal` returns them.
+
+    Returns:
+        The newest such observation's timestamp, or `None` where every recorded observation was short, or none exist.
+    """
+    for event in reversed(events):
+        if event.type != OBSERVATION:
+            continue
+        recorded = event.payload.get("memory")
+        if not isinstance(recorded, dict):
+            return event.ts
+        if cast(dict[str, Any], recorded).get("tier") is None:
+            return event.ts
+    return None
 
 
 def read_memory_history(
@@ -229,7 +257,12 @@ def project(series: Sequence[MemoryPoint]) -> Projection | None:
 
 
 def memory_report(
-    host: HostMemory, rss: int, history: Sequence[MemoryPoint], *, now: float
+    host: HostMemory,
+    rss: int,
+    history: Sequence[MemoryPoint],
+    *,
+    now: float,
+    since: str | None = None,
 ) -> MemoryReport:
     """This turn's report: the reading just taken, fitted with what the journal holds.
 
@@ -238,6 +271,7 @@ def memory_report(
         rss: The fleet's resident memory, summed once per process.
         history: Earlier readings, oldest first (`read_memory_history`).
         now: When the reading was taken, unix.
+        since: When the host was last recorded as not short (`read_memory_since`).
 
     Returns:
         The report. The reading itself is the newest point of the fit, so a `status` sees the freshest trend without recording anything.
@@ -250,13 +284,15 @@ def memory_report(
         swap_used=host.swap_used,
         rss=rss,
     )
-    return MemoryReport(host=host, rss=rss, projection=project([*history, latest]))
+    return MemoryReport(
+        host=host, rss=rss, projection=project([*history, latest]), since=since
+    )
 
 
-def memory_payload(report: MemoryReport | None) -> dict[str, int] | None:
+def memory_payload(report: MemoryReport | None) -> dict[str, Any] | None:
     """The `memory` an observation records, or `None` while nothing runs.
 
-    `None` is written rather than omitted: it is what tells the next reader that the episode ended here, so a fleet launched tomorrow is not fitted against tonight's readings.
+    `None` is written rather than omitted: it is what tells the next reader that the episode ended here, so a fleet launched tomorrow is not fitted against tonight's readings. The tier rides beside the figures so that `read_memory_since` can tell a turn that was not short from one whose item was merely acknowledged.
 
     Args:
         report: This turn's report.
@@ -273,6 +309,7 @@ def memory_payload(report: MemoryReport | None) -> dict[str, int] | None:
         "swap_total": host.swap_total,
         "swap_used": host.swap_used,
         "rss": report.rss,
+        "tier": report.tier,
     }
 
 
