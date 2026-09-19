@@ -1,3 +1,7 @@
+## Unreleased
+
+- Record host memory and swap each tend, show the figures and a two-hour trend under the resources table, hold the ramp while headroom is low, and raise a `memory` item for the agent when the host is short or on course to run out (the runbook's remedy is swap on Linux, or lower concurrency). A worker that died without a traceback now carries the host's headroom at the previous tend as evidence.
+
 ## 0.2.7 (13 September 2026)
 
 - Agent no longer makes proactive tuning proposals when the samples ramp reaches its maximum.

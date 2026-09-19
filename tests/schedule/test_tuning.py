@@ -27,6 +27,7 @@ from inspect_steward._tend import (
     read_ramp_record,
 )
 from inspect_steward._tend.items import tend_items
+from inspect_steward._tend.memory import MemoryReport
 from inspect_steward._tend.tuning import (
     CONNECTIONS_FLOOR,
     CPU_GATE,
@@ -34,7 +35,7 @@ from inspect_steward._tend.tuning import (
     STEP_SPACING,
 )
 from inspect_steward._tend.turn import _Acted, _retune
-from inspect_steward._worker import ConfigView
+from inspect_steward._worker import ConfigView, HostMemory
 from inspect_steward._workspace import (
     ACTION,
     OBSERVATION,
@@ -120,6 +121,7 @@ def plan(
     cpu: dict[int, float] | None = None,
     absent: tuple[str, ...] = (),
     propose: bool = False,
+    memory: MemoryReport | None = None,
 ) -> TuningPlan:
     return plan_tuning(
         list(tasks) or [sig()],
@@ -133,6 +135,7 @@ def plan(
         now=NOW,
         absent=absent,
         propose=propose,
+        memory=memory,
     )
 
 
@@ -208,6 +211,29 @@ def test_a_hot_worker_blocks_its_own_step() -> None:
 
     assert steps(plan(cpu={1: burned})) == []
     assert steps(plan(cpu={1: burned - 1.0})) != []
+
+
+def host(available: int, *, total: int = 64 * 1024**3) -> MemoryReport:
+    return MemoryReport(
+        host=HostMemory(total=total, available=available, swap_total=0, swap_used=0),
+        rss=0,
+        projection=None,
+    )
+
+
+def test_a_short_host_holds_the_climb_and_says_so() -> None:
+    # a machine that can start more samples is not a machine that can hold
+    # them: the sandbox budget binds the first and this binds the second. The
+    # gate refuses the step and names the figure, and steps nothing down --
+    # what to do about a short host is the agent's call, not the loop's
+    low = plan(memory=host(4 * 1024**3))
+
+    assert steps(low) == []
+    assert any("host memory headroom at 6%" in line for line in low.lines)
+    assert steps(plan(memory=host(20 * 1024**3))) != []
+    # a turn that read no host figures is judged on everything else: the
+    # reading is the kernel's and is only absent when nothing was running
+    assert steps(plan(memory=None)) != []
 
 
 def test_a_worker_with_no_cpu_baseline_waits() -> None:

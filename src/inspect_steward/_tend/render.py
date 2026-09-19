@@ -79,6 +79,7 @@ def status_markdown(result: "TendResult", *, header: bool = True) -> str:
     lines += _operator(result)
     lines += _outcomes(result)
     lines += _resources(result)
+    lines += _memory(result)
     return "\n".join(lines)
 
 
@@ -122,6 +123,7 @@ def collect_markdown(result: "TendResult", *, since: int = 0) -> str:
     lines += _anomalies(result)
     lines += _live(result)
     lines += _resources(result, width=0)
+    lines += _memory(result)
     lines += _tuning(result)
     lines += _policies(result)
     lines += _happened(result, since=since)
@@ -308,6 +310,21 @@ def _live(result: "TendResult") -> list[str]:
     # silent where nothing measured it, which is every manifest committed before
     # the measurement existed -- and a reader should see nothing rather than a zero
     return [bound[0].upper() + bound[1:], ""] if bound is not None else []
+
+
+def _memory(result: "TendResult") -> list[str]:
+    """The host's memory and where it is heading, while something runs.
+
+    Under the resources table on both pages, because it is the other half of the same question — the table says what each task costs, and this says what the machine has left. One source for the lines (`MemoryReport.lines`), for the reason the tuning block has one: the terminal and this document must not disagree about whether the host is short.
+    """
+    if (memory := result.memory) is None:
+        return []
+    lines = memory.lines
+    out = [f"**memory** · {lines[0]}", ""]
+    if len(lines) > 1:
+        out.extend(f"- {line}" for line in lines[1:])
+        out.append("")
+    return out
 
 
 def _tuning(result: "TendResult") -> list[str]:

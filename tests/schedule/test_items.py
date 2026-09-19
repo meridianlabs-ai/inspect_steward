@@ -14,15 +14,19 @@ run with a caveat and a stuck run with the same caveat must not read alike.
 
 import json
 import os
+from dataclasses import replace
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
 import pytest
+from inspect_steward._evalset.observe import ObservedTasks
+from inspect_steward._schedule import InFlight
 from inspect_steward._tend import (
     OBSERVATION,
     Level,
     Owner,
+    TendResult,
     Verdict,
     collect_markdown,
     status,
@@ -33,6 +37,7 @@ from inspect_steward._tend.items import (
     ACTION_FAILED,
     DEGRADED,
     DRIFT,
+    MEMORY,
     PARKED,
     SIGNOFF_READY,
     STALLED,
@@ -41,9 +46,12 @@ from inspect_steward._tend.items import (
     UNSUPERVISED,
     UNWRITTEN,
     Item,
+    tend_items,
 )
 from inspect_steward._tend.items import STUCK as STUCK_SAMPLE
+from inspect_steward._tend.memory import MemoryReport, Projection
 from inspect_steward._worker import (
+    HostMemory,
     LiveFleet,
     LiveParked,
     LiveSamples,
@@ -1406,3 +1414,99 @@ class TestWhenAWriteUpIsAskedFor:
         # and it still says which, because the count alone is not actionable
         assert "probe" in raised[0].summary
         assert "second" in raised[0].summary
+
+
+# --- the host running out of memory ------------------------------------------
+
+
+def memory(
+    available: int, projection: Projection | None = None, *, swap: int = 0
+) -> MemoryReport:
+    gib = 1024**3
+    return MemoryReport(
+        host=HostMemory(
+            total=64 * gib,
+            available=available * gib,
+            swap_total=swap * gib,
+            swap_used=0,
+        ),
+        rss=40 * gib,
+        projection=projection,
+    )
+
+
+def falling(exhausted_in: float) -> Projection:
+    return Projection(
+        slope=-(1024**3) / 3600, span=3600, points=7, exhausted_in=exhausted_in
+    )
+
+
+def memory_items(result: TendResult, **kwargs: Any) -> list[Item]:
+    return [
+        item
+        for item in tend_items(result, ObservedTasks(tasks=[]), InFlight(), **kwargs)
+        if item.kind == MEMORY
+    ]
+
+
+@pytest.mark.parametrize(
+    ("report", "ids", "said"),
+    [
+        pytest.param(
+            memory(4),
+            ["memory:low"],
+            "headroom is 4.0 GiB of 64.0 GiB (6%), no swap",
+            id="low",
+        ),
+        pytest.param(
+            memory(20, falling(1800)),
+            ["memory:projected"],
+            "falling 1.0 GiB/h — exhausted in ~30m",
+            id="projected",
+        ),
+        pytest.param(
+            memory(4, falling(1800)),
+            ["memory:low"],
+            "(6%)",
+            id="low wins over projected",
+        ),
+        pytest.param(memory(20), [], "", id="healthy"),
+        pytest.param(
+            memory(20, falling(3 * 3600)), [], "", id="exhaustion past the horizon"
+        ),
+        pytest.param(memory(4, swap=16), [], "", id="swap counts toward headroom"),
+    ],
+)
+def test_a_short_host_is_the_agents_item(
+    tmp_path: Path, report: MemoryReport, ids: list[str], said: str
+) -> None:
+    workspace, _ = prepared(tmp_path, [SynthTask("probe")])
+
+    items = memory_items(replace(turn(workspace), memory=report))
+
+    assert [item.id for item in items] == ids
+    for item in items:
+        assert item.owner is Owner.AGENT
+        assert item.level is Level.ATTENTION
+        assert item.acknowledgeable
+        assert said in item.summary
+        assert item.action is not None and "Memory" in item.action
+
+
+def test_an_acknowledged_forecast_does_not_cover_the_host_arriving_there(
+    tmp_path: Path,
+) -> None:
+    # the id is the tier: "I know it is heading there" is not "I know it is
+    # there", so the ack on the forecast stays quiet and the fact is heard
+    workspace, _ = prepared(tmp_path, [SynthTask("probe")])
+    result = turn(workspace)
+    (forecast,) = memory_items(replace(result, memory=memory(20, falling(1800))))
+    acknowledged = frozenset({forecast.id})
+
+    quiet = memory_items(
+        replace(result, memory=memory(20, falling(1800))), acknowledged=acknowledged
+    )
+    heard = memory_items(replace(result, memory=memory(4)), acknowledged=acknowledged)
+
+    assert [entry.id for entry in quiet] == []
+    assert [entry.id for entry in heard] == ["memory:low"]

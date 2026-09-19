@@ -24,6 +24,26 @@ _LINE = "__line__"
 """Extras key carrying an event's line number, set by the reader and never written to a file. Dunder-flanked because a file's own vocabulary must never collide with it."""
 
 
+def unix_time(ts: str) -> float | None:
+    """A recorded timestamp as unix seconds, or `None` where it will not parse.
+
+    The inverse of `utc_now` for every reader that measures an interval off an event: a window edge, a series point, a step's spacing. Refuses a naive timestamp rather than guessing its zone, since a workspace is read on a different machine than it was written on often enough for the guess to be wrong.
+
+    Args:
+        ts: An ISO-8601 timestamp, as `utc_now` writes them.
+
+    Returns:
+        Unix seconds, or `None` when the text is not a timestamp with an explicit offset.
+    """
+    try:
+        parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
+    except ValueError:
+        return None
+    if parsed.tzinfo is None:
+        return None
+    return parsed.timestamp()
+
+
 def utc_now() -> str:
     """Current time as a UTC ISO-8601 string.
 

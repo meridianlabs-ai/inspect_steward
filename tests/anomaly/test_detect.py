@@ -22,6 +22,7 @@ from inspect_steward._tend.detect import (
     scan_attempts,
     task_health,
 )
+from inspect_steward._tend.memory import MemoryPoint
 from inspect_steward._worker.live import LiveFleet
 
 from .._logs import SynthSample, SynthTask, synth_manifest, write_log
@@ -58,6 +59,7 @@ def run(
     inflight: InFlight | None = None,
     workers_dir: Path | None = None,
     findings: list[Instance] | None = None,
+    memory_before: MemoryPoint | None = None,
 ):  # noqa: ANN201 -- the Detection type is the assertion surface
     logs = observe_logs(log_dir)
     return detect(
@@ -68,7 +70,22 @@ def run(
         workers_dir=workers_dir or (log_dir / "workers"),
         cache=ClassedCache(),
         findings=findings,
+        memory_before=memory_before,
     )
+
+
+SHORT_HOST = MemoryPoint(
+    ts=0.0,
+    total=64 * 1024**3,
+    available=2 * 1024**3,
+    swap_total=0,
+    swap_used=0,
+    rss=50 * 1024**3,
+)
+"""The previous tend's reading of a host with a thirtieth of its memory left."""
+
+HEADROOM_CLAUSE = " · host memory headroom was 3% at the previous tend"
+"""What a traceback-less death carries when the turn before it read the host."""
 
 
 class TestTaskError:
@@ -111,6 +128,17 @@ class TestVanished:
         write_log(tmp_path, task, status="started")
 
         assert census(tmp_path, [task]) == ["task:vanished"]
+
+    def test_a_vanished_worker_carries_the_hosts_memory_as_evidence(
+        self, tmp_path: Path
+    ) -> None:
+        task = SynthTask("probe")
+        write_log(tmp_path, task, status="started")
+
+        detection = run(tmp_path, [task], memory_before=SHORT_HOST)
+
+        assert [b.class_key for b in detection.batches] == ["task:vanished"]
+        assert detection.batches[0].instances[0].message.endswith(HEADROOM_CLAUSE)
 
     def test_a_started_log_whose_worker_lives_is_just_running(
         self, tmp_path: Path
@@ -203,6 +231,32 @@ class TestNoLog:
 
         assert [b.class_key for b in detection.batches] == ["task:no-log"]
         assert detection.batches[0].instances[0].message == "no output at all"
+
+    def test_a_silent_death_carries_the_hosts_memory_as_evidence(
+        self, tmp_path: Path
+    ) -> None:
+        # an OOM kill is the one death that leaves no traceback, and the number
+        # that explains it was visible a turn earlier. It rides in the message
+        # and never in the key: the class still does not claim to know
+        task = SynthTask("probe")
+        inflight = InFlight(
+            departed=[
+                DepartedWorker(
+                    worker="w1",
+                    identifiers=(task.identifier,),
+                    host="here",
+                    started="2026-08-30T10:00:00Z",
+                )
+            ]
+        )
+
+        detection = run(tmp_path, [task], inflight=inflight, memory_before=SHORT_HOST)
+
+        assert [b.class_key for b in detection.batches] == ["task:no-log"]
+        assert (
+            detection.batches[0].instances[0].message
+            == "no output at all" + HEADROOM_CLAUSE
+        )
 
     def test_a_departure_that_landed_a_log_is_not_no_log(self, tmp_path: Path) -> None:
         # the log it landed reads as the errored/vanished case instead; here it

@@ -63,7 +63,7 @@ from .stop import (
     StopRequest,
     stop_workers,
 )
-from .usage import ProcessUsage, process_usage
+from .usage import HostMemory, ProcessUsage, host_memory, process_usage
 
 __all__ = [
     "ABSENT",
@@ -82,6 +82,7 @@ __all__ = [
     "CancelView",
     "ConfigView",
     "Fleet",
+    "HostMemory",
     "Interim",
     "InterimEntry",
     "Knob",
@@ -109,6 +110,7 @@ __all__ = [
     "list_tasks",
     "cancel_sample",
     "cancel_task",
+    "host_memory",
     "process_usage",
     "read_fleet",
     "read_interim",

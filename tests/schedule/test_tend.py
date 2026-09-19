@@ -1368,3 +1368,18 @@ def test_the_agent_page_gains_an_errored_column_only_where_something_errored(
     write_log(quiet.logs, clean, total=10, completed=10)
 
     assert "| errored |" not in collect_markdown(turn(quiet))
+
+
+def test_a_turn_with_nothing_running_records_no_host_reading(tmp_path: Path) -> None:
+    # written as null rather than left out: it is what ends the series, so a
+    # fleet launched tomorrow is not fitted against tonight's readings
+    done = SynthTask("done")
+    workspace, _ = prepared(tmp_path, [done])
+    write_log(workspace.logs, done)
+
+    result = turn(workspace)
+
+    assert result.memory is None
+    (observation,) = observations(workspace)
+    assert "memory" in observation
+    assert observation["memory"] is None
