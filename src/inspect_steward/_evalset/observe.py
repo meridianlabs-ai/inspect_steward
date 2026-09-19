@@ -547,8 +547,14 @@ def _reshaped(
         if name == "sample_id" and wanted is not None:
             # a `task:id` selector belongs to one task, and `eval_run` strips it
             # per task before the log records what ran -- so an unresolved list
-            # compares against a resolved one and never matches
-            wanted = resolve_task_sample_ids(task.name, wanted)
+            # compares against a resolved one and never matches. Pass every task
+            # name in the run, as `eval_run` does: a `prefix:` counts as a task
+            # selector only when it names one of them, so a namespaced id like
+            # `user:cybergym/arvo_6008` (no such task) passes through whole
+            # rather than being mistaken for a selector and dropped.
+            wanted = resolve_task_sample_ids(
+                task.name, wanted, [row.name for row in manifest.tasks]
+            )
         if _selection(wanted) != _selection(attempt.selection.get(name)):
             return IncompleteReason.RESHAPED
     return None

@@ -1817,11 +1817,11 @@ wheels = [
 
 [[package]]
 name = "inspect-ai"
-version = "0.3.263"
+version = "0.3.266"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "agent-client-protocol" },
-    { name = "aioboto3" },
+    { name = "aiobotocore" },
     { name = "anyio" },
     { name = "beautifulsoup4" },
     { name = "boto3" },
@@ -1861,14 +1861,14 @@ dependencies = [
     { name = "zipp" },
     { name = "zstandard" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/92/03/3bd61990e197e6e0a68ebd7f1496d0b80af6c1966eea0e48fcfc1ed3b793/inspect_ai-0.3.263.tar.gz", hash = "sha256:54553ca8bfe711853414b49d962e492a60fd4cac8df935be47287a4b719f92b1", size = 35796833, upload-time = "2026-09-04T01:38:04.104Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/5a/5b/2bb88d9bae363c613f64d1f9592ea93920c4a75da52669a18198a4b8d3fc/inspect_ai-0.3.266.tar.gz", hash = "sha256:07b26e1d197f22bf5d512f96e1790dc6130208eac4eafce6c170edd632856f0f", size = 35718190, upload-time = "2026-09-19T13:11:08.176Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/5a/c0/c12e505462462d5cc2b3fa98b6b2142c9589ebc0308144498f6e9de0c70c/inspect_ai-0.3.263-py3-none-any.whl", hash = "sha256:503e7ff509d77fcdf65989027a19fea966fb668deb88a234468c3290964fd86a", size = 34294681, upload-time = "2026-09-04T01:37:58.013Z" },
+    { url = "https://files.pythonhosted.org/packages/2f/c4/296659a1907e6b7179b44034a501d4919a757246a5f2feaa7433547208c6/inspect_ai-0.3.266-py3-none-any.whl", hash = "sha256:e30e1c2abf2844a9db221d5307b9b380e2da5fb1d29a9f2bff9094262c1044e6", size = 34697788, upload-time = "2026-09-19T13:11:02.102Z" },
 ]
 
 [[package]]
 name = "inspect-flow"
-version = "0.12.0"
+version = "0.13.1"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "click" },
@@ -1883,9 +1883,9 @@ dependencies = [
     { name = "python-dotenv" },
     { name = "typing-extensions" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/42/25/3a994b8ffca8dae10efff4b1d9e8ad5323599b6be16188e62f0da85e8bd1/inspect_flow-0.12.0.tar.gz", hash = "sha256:961059829d12b4ee024682a1ca82b2a8ebbcf7025c36817f7ebab5d9244aa426", size = 138837, upload-time = "2026-08-05T01:10:06.778Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/d6/6c/74d7da05dc2ecac7491c25cdd534b9055b821632a96ae24b84c8f15eb06f/inspect_flow-0.13.1.tar.gz", hash = "sha256:64f3ead78b4d770966aedbad6acf82ff8ed6b40962cabfd5018b2349f3fe3817", size = 141480, upload-time = "2026-09-19T13:52:31.932Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/e3/17/11608c6e5e683f54853dbeac28c8ac1ee6c2af621530feb86e5e218018b3/inspect_flow-0.12.0-py3-none-any.whl", hash = "sha256:e1a0f9ddf25c2f404e02b17e2f51e2d76a70350236761e71a77f53ce36bed8a8", size = 174371, upload-time = "2026-08-05T01:10:05.228Z" },
+    { url = "https://files.pythonhosted.org/packages/3c/8f/4e2eb949c5643f35d372628f6b3ea21708910bf53c72aa402d5af5dab6e7/inspect_flow-0.13.1-py3-none-any.whl", hash = "sha256:5bd8f6670fea4b52cba765858a558868861d79a43f5de42613ee15cfb03b4cfd", size = 177065, upload-time = "2026-09-19T13:52:30.411Z" },
 ]
 
 [[package]]
@@ -2040,8 +2040,8 @@ requires-dist = [
     { name = "click", specifier = ">=8.0" },
     { name = "hawk", extras = ["cli", "runner"], marker = "python_full_version >= '3.13' and extra == 'hawk'", specifier = ">=2.4.0" },
     { name = "httpx", specifier = ">=0.27" },
-    { name = "inspect-ai", specifier = ">=0.3.263" },
-    { name = "inspect-flow", marker = "extra == 'flow'", specifier = ">=0.12.0" },
+    { name = "inspect-ai", specifier = ">=0.3.266" },
+    { name = "inspect-flow", marker = "extra == 'flow'", specifier = ">=0.13.1" },
     { name = "inspect-scout", specifier = ">=0.5.1" },
     { name = "platformdirs", specifier = ">=4.0" },
     { name = "psutil", specifier = ">=5.9" },
@@ -2056,7 +2056,7 @@ dev = [
     { name = "anthropic", specifier = ">=1.0.0" },
     { name = "griffe", specifier = ">=2" },
     { name = "hawk", extras = ["cli", "runner"], marker = "python_full_version >= '3.13'", specifier = ">=2.4.0" },
-    { name = "inspect-flow", specifier = ">=0.12.0" },
+    { name = "inspect-flow", specifier = ">=0.13.1" },
     { name = "inspect-harbor", git = "https://github.com/meridianlabs-ai/inspect_harbor?branch=main" },
     { name = "inspect-sandboxes" },
     { name = "jupyter" },
