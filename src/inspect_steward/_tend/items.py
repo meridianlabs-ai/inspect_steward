@@ -34,6 +34,7 @@ from .._evalset.classify import kind_of, scan_task, short_token
 from .._evalset.observe import ObservedTasks, TaskObservation, TaskState
 from .._schedule import InFlight, Summary, attempts_made
 from .._util.duration import format_age, format_duration, is_after, seconds_since
+from .._util.size import format_bytes
 from .._worker import LiveParked, LiveStuck, acp_sockets
 from .._workspace import DEFAULT_TEND_INTERVAL, Ack, Armed, Signature
 from .progress import display_keys
@@ -104,6 +105,7 @@ JOURNAL_DAMAGE = "journal_damage"
 STATUS_UNWRITABLE = "status_unwritable"
 SYNC_FAILED = "sync_failed"
 KILL_LOOP = "kill_loop"
+MEMORY = "memory"
 ANOMALY = "anomaly"
 
 OWNERS = {
@@ -124,6 +126,7 @@ OWNERS = {
     STATUS_UNWRITABLE: Owner.OPERATOR,
     SYNC_FAILED: Owner.OPERATOR,
     KILL_LOOP: Owner.OPERATOR,
+    MEMORY: Owner.AGENT,
     ANOMALY: Owner.AGENT,
 }
 """Default owner per kind. Policy may move some of these once `_steward.yaml` can say so (step 23); a kind absent from the table is the agent's, since an unrouted item is an investigation rather than a question."""
@@ -273,6 +276,7 @@ def tend_items(
         *_status_unwritable(result),
         *_sync_failed(result),
         *_kill_loop(result),
+        *_memory(result),
         *_anomalies(
             result.anomalies,
             landed=frozenset(
@@ -697,6 +701,8 @@ def _tuning(result: "TendResult", lookup: dict[str, TaskObservation]) -> list[It
     """Capacity tend has no authority to take, put in front of the one who could grant it.
 
     Two conditions with one shape (`_tend.tuning.Proposal`): a pinned setpoint holding a clean, saturated window, and a ramp at its ceiling with pushback still absent. Both mean the binding constraint is a number an operator chose, so the owner is the operator — and the agent's part is to relay it (`raise`) and to record the ruling for them (`ack`): "seen, happy at 60" is an acknowledgment, and the next level up would be a different item.
+
+    **No proposal reaches here by default** (`_tend.tuning.PROPOSE_CAPACITY`), so this builds nothing: an ask repeated every clean window walked operators up an envelope the ratchet makes expensive to walk back down. What a bound is holding back still shows in the tuning block, which carries no question. Kept whole against wanting the item back.
 
     **The summary says what is binding and at what number, and stops.** That it is the operator's to decide is what the item's owner already means, and *how* to decide it is the runbook's — repeating either in a sentence that appears in every post and every `status.md` costs a line each time to say something that never varies.
 
@@ -1170,6 +1176,47 @@ def _kill_loop(result: "TendResult") -> list[Item]:
                 f"wedged predecessor to take the claim ({result.breaks} in a "
                 f"row) — the tend is wedging deterministically, not recovering"
             ),
+        )
+    ]
+
+
+def _memory(result: "TendResult") -> list[Item]:
+    """The host is short of memory, or on course to run out.
+
+    **The agent's, because the remedy is the agent's to try first.** On a Linux host the answer is swap, which comes online for the workers already running the moment `swapon` returns, and the runbook admits it without asking; where that cannot be done — no sudo, a pod, macOS — the agent lowers concurrency and raises the item with the commands ready. Neither is a question the operator has to be woken for, so the item is not theirs by default.
+
+    **The id is the tier and the episode.** `low` is a fact about now and `projected` a forecast, and crossing between them is what makes the item worth saying again: an acknowledgment of a forecast does not cover the host actually arriving there. The episode is when a tend last recorded the host as not short (`MemoryReport.since`), so an acknowledgment is permanent for *this* shortage and no further — a host that recovers and runs short again next week is heard again, where an id of the tier alone would have been silenced by the first ack forever. A forecast clears itself once the slope flattens — which is what adding swap does — and a `low` clears when headroom returns, since swap counts toward it.
+
+    **The summary says what is short and by how much, and stops** (the rule `_tuning` states). Headroom rather than *used*, so an idle box whose page cache fills the figure never trips it (`_worker.usage.HostMemory`).
+    """
+    if (memory := result.memory) is None or (tier := memory.tier) is None:
+        return []
+    host = memory.host
+    of = f"{format_bytes(host.headroom)} of {format_bytes(host.total)}"
+    if tier == "low":
+        swap = (
+            f", swap {format_bytes(host.swap_used)} of {format_bytes(host.swap_total)} used"
+            if host.swap_total > 0
+            else ", no swap"
+        )
+        summary = f"host memory headroom is {of} ({memory.fraction:.0%}){swap}"
+    else:
+        projection = memory.projection
+        assert projection is not None and projection.exhausted_in is not None
+        rate = format_bytes(int(-projection.slope * 3600))
+        summary = (
+            f"host memory headroom is {of}, falling {rate}/h — exhausted in "
+            f"~{format_age(int(projection.exhausted_in))}"
+        )
+    return [
+        Item(
+            id=f"{MEMORY}:{tier}:{memory.since or 'start'}",
+            kind=MEMORY,
+            owner=OWNERS[MEMORY],
+            level=Level.ATTENTION,
+            subject="host",
+            summary=summary,
+            action="add swap, or lower max_samples; see Memory in the runbook",
         )
     ]
 

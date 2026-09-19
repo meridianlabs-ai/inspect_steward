@@ -1,6 +1,16 @@
 ## Unreleased
 
 - Interim scoring: keep each interim metric's originating scorer, so a running task's headline resolves correctly when two dict-valued scorers emit the same score name (e.g. both a deterministic and an adjudicated scorer reporting `hijack`). Reads the `scorer`/`name` pair from Inspect's interim response (0.3.266+), falling back to the pre-0.3.266 single field for an older worker; the `.steward/interim.json` cache version is bumped, so a stale cache is discarded and re-harvested rather than migrated.
+- Record host memory and swap each tend, show the figures and a two-hour trend under the resources table, hold the ramp while headroom is low, and raise a `memory` item for the agent when the host is short or on course to run out (the runbook's remedy is swap on Linux, or lower concurrency). A worker that died without a traceback now carries the host's headroom at the previous tend as evidence.
+
+## 0.2.7 (13 September 2026)
+
+- Agent no longer makes proactive tuning proposals when the samples ramp reaches its maximum.
+- Lower the default `samples_ramp` ceiling from 200 to 150.
+
+## 0.2.6 (10 September 2026)
+
+- Land `zero` rulings on corpora whose sample ids contain a colon (work around inspect_ai reading the id's prefix as a task name); a side run that lands no usable log now fails rather than deferring forever, and the sign-off failure points at a run log with content and at the side worker logs.
 
 ## 0.2.5 (09 September 2026)
 

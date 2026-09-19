@@ -28,9 +28,11 @@ from inspect_steward._evalset.observe import (
     TaskState,
     UnreadableLog,
 )
+from inspect_steward._marks import MarkRun
 from inspect_steward._schedule import InFlight
 from inspect_steward._tend import collect_markdown, status
 from inspect_steward._tend.rulings import (
+    _diagnostic_output,
     apply_rulings,
     dispositions,
     policy_rulings,
@@ -1092,3 +1094,57 @@ def test_the_table_counts_per_task_and_only_the_current_attempt() -> None:
     )
 
     assert fold.outcomes == {IDENT: {"errored": 2}, "task-two": {"errored": 1}}
+
+
+# --- where a used-up ruling's failure points -----------------------------
+
+
+def _spent(workspace: Workspace, outputs: dict[str, str | None]) -> list[MarkRun]:
+    """Finished runs in attempt order, each with the `run.log` content given — or no file for `None`."""
+    spent: list[MarkRun] = []
+    for attempt, (run, content) in enumerate(outputs.items(), start=1):
+        directory = workspace.marks_run(run)
+        directory.mkdir(parents=True, exist_ok=True)
+        if content is not None:
+            (directory / "run.log").write_text(content)
+        spent.append(
+            MarkRun(
+                run=run,
+                class_key="c",
+                ruling_ts="T0",
+                disposition=Disposition.ZERO,
+                targets=(),
+                started=f"2026-09-0{attempt}T00:00:00Z",
+                exited=True,
+                status=1,
+            )
+        )
+    return spent
+
+
+def test_the_failure_points_at_the_newest_run_log_with_content(tmp_path: Path) -> None:
+    workspace = workspace_at(tmp_path)
+    spent = _spent(
+        workspace, {"abc-1": "first attempt's error", "abc-2": "error", "abc-3": ""}
+    )
+
+    output = _diagnostic_output(workspace, spent, Disposition.ZERO)
+
+    assert output == str(workspace.marks_run("abc-2") / "run.log")
+
+
+@pytest.mark.parametrize(
+    ("disposition", "names_workers"),
+    [(Disposition.ZERO, True), (Disposition.EXCLUDE, False)],
+)
+def test_when_no_run_wrote_a_zero_also_names_the_side_worker_logs(
+    tmp_path: Path, disposition: Disposition, names_workers: bool
+) -> None:
+    """A zero's side workers keep the only copy of why nothing landed; an exclude has none to read."""
+    workspace = workspace_at(tmp_path)
+    spent = _spent(workspace, {"abc-1": None, "abc-2": ""})
+
+    output = _diagnostic_output(workspace, spent, disposition)
+
+    assert output.startswith(str(workspace.marks_run("abc-2") / "run.log"))
+    assert (str(workspace.marks_workers) in output) is names_workers

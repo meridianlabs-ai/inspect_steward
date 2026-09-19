@@ -93,3 +93,47 @@ def process_usage(pids: Iterable[int]) -> ProcessUsage:
         rss_by_pid=rss_by_pid,
         cores_by_pid=cores_by_pid,
     )
+
+
+@dataclass(frozen=True)
+class HostMemory:
+    """What the machine has left, as the kernel accounts for it.
+
+    **`available`, never `used`.** A kernel keeps page caches and buffers resident as long as nothing else wants the memory, so *used* on a healthy box reads as nearly everything while nothing is short; *available* is the kernel's own estimate of what can be handed out without swapping, and it is the figure that falls as a fleet actually grows. The host's view rather than a cgroup's: inside a memory-limited container the limit binds first and is not read here (the same caveat `_evalset.cost.projection` carries).
+    """
+
+    total: int
+    """Physical memory, in bytes."""
+
+    available: int
+    """What can be claimed without swapping, in bytes."""
+
+    swap_total: int
+    """Swap configured, in bytes. Zero on a host with none."""
+
+    swap_used: int
+    """Swap in use, in bytes."""
+
+    @property
+    def headroom(self) -> int:
+        """Available memory plus free swap.
+
+        The one figure a fleet's growth is judged against, because adding swap is the remedy and it has to show: available memory barely moves when swap comes online, while headroom rises by the whole of it.
+        """
+        return self.available + max(0, self.swap_total - self.swap_used)
+
+
+def host_memory() -> HostMemory:
+    """Read the machine's memory and swap.
+
+    Returns:
+        The host's figures. One read each of `virtual_memory` and `swap_memory`, neither of which raises on a supported platform.
+    """
+    memory = psutil.virtual_memory()
+    swap = psutil.swap_memory()
+    return HostMemory(
+        total=int(memory.total),
+        available=int(memory.available),
+        swap_total=int(swap.total),
+        swap_used=int(swap.used),
+    )

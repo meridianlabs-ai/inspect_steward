@@ -97,7 +97,7 @@ def test_a_saturated_worker_with_no_pushback_earns_a_step(
     # the connection ceiling is set once at spawn -- the worker starts with the
     # adaptive range (20, DEFAULT_SAMPLES_RAMP[1]), so inspect's own controllers
     # climb inside it and the tuning loop never has to. Near the floor the fifty
-    # samples never saturate a 200 pool, and mockllm never pushes back, so no
+    # samples never saturate a 150 pool, and mockllm never pushes back, so no
     # `max_connections` move -- raise or cut -- should ever fire
     assert not [
         payload

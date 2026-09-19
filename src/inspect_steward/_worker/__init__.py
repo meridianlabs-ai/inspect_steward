@@ -47,9 +47,11 @@ from .live import (
 )
 from .spawn import (
     MAX_KEY_LENGTH,
+    TAIL_BYTES,
     Fleet,
     SpawnedWorker,
     resolve_eval_set_id,
+    tail,
     worker_selection,
     worker_stem,
 )
@@ -61,7 +63,7 @@ from .stop import (
     StopRequest,
     stop_workers,
 )
-from .usage import ProcessUsage, process_usage
+from .usage import HostMemory, ProcessUsage, host_memory, process_usage
 
 __all__ = [
     "ABSENT",
@@ -75,10 +77,12 @@ __all__ = [
     "MAX_KEY_LENGTH",
     "STEWARD_TASK",
     "STEWARD_WORKER",
+    "TAIL_BYTES",
     "TERM_GRACE",
     "CancelView",
     "ConfigView",
     "Fleet",
+    "HostMemory",
     "Interim",
     "InterimEntry",
     "Knob",
@@ -106,6 +110,7 @@ __all__ = [
     "list_tasks",
     "cancel_sample",
     "cancel_task",
+    "host_memory",
     "process_usage",
     "read_fleet",
     "read_interim",
@@ -117,6 +122,7 @@ __all__ = [
     "resolve_inflight",
     "scan_processes",
     "stop_workers",
+    "tail",
     "task_config",
     "worker_selection",
     "worker_stem",

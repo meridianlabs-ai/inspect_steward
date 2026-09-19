@@ -2,6 +2,8 @@
 
 The invalidate-and-resume cycle needs a failure that is real on the first run and gone on the re-run — a provider outage, as a fixture. Samples whose input starts with `fail` raise until the test touches `<dir>/healed`; the healthy samples pass either way, which is what lets the re-run prove it reused them.
 
+The sample ids carry a colon, as a corpus id can (`user:cybergym/arvo_1`): a `zero` ruling selects ids by name in its side run, and an id with a colon is the shape that selection once dropped.
+
 The marker directory arrives in `ERRORING_EVALSET_DIR` — this fixture's own protocol with the test driving it, outside the `STEWARD_*` namespace Steward polices (the same argument `faulty_evalset.py` records). The capture executes this module too, but no sample runs there, so the fault costs it nothing.
 """
 
@@ -32,10 +34,10 @@ def outage():
 def probe() -> Task:
     return Task(
         dataset=[
-            Sample(input="1+1", target="2"),
-            Sample(input="2+2", target="4"),
-            Sample(input="fail-1", target="fail-1"),
-            Sample(input="fail-2", target="fail-2"),
+            Sample(id="user:cybergym/arvo_1", input="1+1", target="2"),
+            Sample(id="user:cybergym/arvo_2", input="2+2", target="4"),
+            Sample(id="user:cybergym/arvo_3", input="fail-1", target="fail-1"),
+            Sample(id="user:cybergym/arvo_4", input="fail-2", target="fail-2"),
         ],
         solver=[outage(), generate()],
         scorer=exact(),

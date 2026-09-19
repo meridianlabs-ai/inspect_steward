@@ -86,6 +86,7 @@ from .._worker import (
     LiveFleet,
     LiveTarget,
     Unavailable,
+    host_memory,
     read_fleet,
     read_interim,
     record_exited,
@@ -151,6 +152,14 @@ from .items import (
     tend_items,
     unfinished,
     verdict,
+)
+from .memory import (
+    MemoryPoint,
+    MemoryReport,
+    memory_payload,
+    memory_report,
+    read_memory_history,
+    read_memory_since,
 )
 from .notify import held_tasks, notify_turn
 from .progress import Progress, display_keys, live_totals, task_progress
@@ -319,6 +328,12 @@ class TendResult:
     """What this turn's window supports retuning, and the account of why.
 
     Computed for both dispositions and executed by one, exactly like the actions: a `status` shows the step a clean window has earned without taking it, which is the preview contract everything else here honours.
+    """
+
+    memory: MemoryReport | None = None
+    """The host's memory this turn and where it is heading (`_tend.memory`).
+
+    Read while something runs, because the series is *what the fleet is doing to the host* and a reading with nothing running would fit tomorrow's fleet against last night's idle box. `None` on a result assembled by hand, and while nothing runs.
     """
 
     log_dir: str | None = None
@@ -728,6 +743,12 @@ class _History:
     """Seconds since the timer in force was armed, or `None` where none is."""
 
     baseline: Baseline = field(default_factory=Baseline)
+
+    memory: list[MemoryPoint] = field(default_factory=list["MemoryPoint"])
+    """The host's recent readings, oldest first — what this turn's reading is fitted against (`_tend.memory.read_memory_history`)."""
+
+    memory_since: str | None = None
+    """When a tend last recorded the host as not short — the boundary a `memory` item's id carries (`_tend.memory.read_memory_since`)."""
     """The previous turn's tuning record — the window's left edge (`_tend.tuning`)."""
 
     ramp_holds: dict[str, RampHold] = field(default_factory=dict[str, "RampHold"])
@@ -837,6 +858,8 @@ def _history(workspace: Workspace) -> _History:
         since_tend=since,
         since_armed=_elapsed(armed.ts) if armed is not None else None,
         baseline=read_baseline(events),
+        memory=read_memory_history(events, now=time.time()),
+        memory_since=read_memory_since(events),
         ramp_holds=read_ramp_holds(events),
         ramp_levels=ramp_levels,
         last_step=last_step,
@@ -1182,6 +1205,7 @@ def _turn(
         workers_dir=workspace.workers,
         cache=classed,
         findings=found.instances,
+        memory_before=history.memory[-1] if history.memory else None,
     )
     if detection.unreadable or found.unreadable:
         # summaries damage joins the header damage on the item surface; the
@@ -1237,6 +1261,21 @@ def _turn(
         # machine memory right now and neither appears in `fleet` as answered
         live=live_totals(fleet, [worker.pid for worker in inflight.running]),
     )
+    now = datetime.now(timezone.utc).timestamp()
+    # the host's reading rides with the fleet's: taken only while something is
+    # running, so the series the next turn fits against is what the fleet is
+    # doing to the machine, and never an idle box between runs
+    memory = (
+        memory_report(
+            host_memory(),
+            progress.live.usage.rss,
+            history.memory,
+            now=now,
+            since=history.memory_since,
+        )
+        if progress.live is not None
+        else None
+    )
     answered = _signals(observed, fleet)
     plan = plan_tuning(
         answered,
@@ -1247,8 +1286,9 @@ def _turn(
         last_step=history.last_step,
         last_conn_step=history.last_conn_step,
         cpu=progress.live.usage.seconds if progress.live is not None else {},
-        now=datetime.now(timezone.utc).timestamp(),
+        now=now,
         absent=inflight.running_identifiers - {task.identifier for task in answered},
+        memory=memory,
     )
     if history.paused is not None:
         # a paused run makes no changes to itself, and a retune is a change --
@@ -1291,6 +1331,7 @@ def _turn(
         executed=execute,
         progress=progress,
         tuning=plan,
+        memory=memory,
         log_dir=log_dir,
         notification=notification,
         scan=manifest.scan,
@@ -2216,6 +2257,9 @@ def _record(
         },
         # what the next turn's window measures against (`_tend.tuning.Baseline`)
         tuning=tuning,
+        # the host's reading, for the series the next turn fits (`_tend.memory`);
+        # `None` while nothing runs, which is what ends an episode
+        memory=memory_payload(result.memory),
     )
 
 

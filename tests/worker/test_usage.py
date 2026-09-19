@@ -13,7 +13,7 @@ definitely has a resident set is the one thing a test can count on.
 
 import os
 
-from inspect_steward._worker import process_usage
+from inspect_steward._worker import host_memory, process_usage
 
 
 def test_a_pid_repeated_is_a_process_counted_once() -> None:
@@ -44,3 +44,18 @@ def test_a_process_that_is_not_there_contributes_nothing() -> None:
     assert usage.rss > 0
     assert process_usage([0]).processes == 0
     assert process_usage([]) == process_usage([0])
+
+
+def test_the_host_reading_is_consistent_with_itself() -> None:
+    """One read of the machine, whose figures have to be a possible machine.
+
+    The values are whatever this box has, so the claim is about their shape:
+    available memory fits inside physical memory, used swap inside configured
+    swap, and headroom is the sum the item and the ramp's gate are judged on.
+    """
+    host = host_memory()
+
+    assert host.total > 0
+    assert 0 <= host.available <= host.total
+    assert 0 <= host.swap_used <= host.swap_total
+    assert host.headroom == host.available + (host.swap_total - host.swap_used)

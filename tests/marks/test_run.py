@@ -4,6 +4,7 @@ The suite stands in for the runner's launch (`conftest.py`), so a turn records a
 """
 
 import math
+from dataclasses import replace
 from pathlib import Path
 from typing import Any, cast
 
@@ -15,6 +16,7 @@ from inspect_steward._evalset.instances import Instance
 from inspect_steward._evalset.observe import ObservedTasks, TaskObservation, TaskState
 from inspect_steward._marks import MARK_ATTEMPTS, Target, read_runs, resolve_runs
 from inspect_steward._marks.edit import EXCLUDED
+from inspect_steward._marks.run import _collect_side_scores, _selectors, _Side
 from inspect_steward._marks.state import (
     record_exited,
     record_intent,
@@ -32,7 +34,7 @@ from inspect_steward._workspace import (
     read_journal,
 )
 
-from .._logs import SynthSample, write_log
+from .._logs import SynthSample, SynthTask, synth_manifest, write_log
 from ..anomaly.test_items import CLASS, erroring, ruling
 from ..anomaly.test_rulings import (
     IDENT,
@@ -451,3 +453,151 @@ def test_the_applied_fold_reads_what_a_run_wrote() -> None:
     assert fold.runs(CLASS, "T0") == {"abc-1"}
     assert fold.witness(CLASS, "T0", "t") == "2026-08-30T11:00:00Z"
     assert fold.edited_uuids(CLASS, "T1") == frozenset()
+
+
+# --- the side run's harvest ---------------------------------------------
+
+
+def _side_target(sample_id: str, location: str = "") -> Target:
+    return Target(
+        task=TASK.identifier,
+        location=location,
+        eval_id="e",
+        sample_id=sample_id,
+        epoch=1,
+        uuid=f"uuid-{sample_id}-1",
+    )
+
+
+SIDE_IDS = ["user:cybergym/arvo_1", "user:cybergym/arvo_2"]
+"""Ids with a colon, the shape the side run once dropped on the way to its worker."""
+
+
+def _side_run_scratch(
+    tmp_path: Path, landed: list[str], *, wrote: str | None
+) -> tuple[Path, dict[str, _Side]]:
+    """A side run's scratch: its log directory, holding a log of `landed`, and one worker whose output holds `wrote`."""
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    if landed:
+        write_log(log_dir, TASK, samples=[SynthSample(id, score=0.0) for id in landed])
+    workers = tmp_path / "workers"
+    workers.mkdir()
+    output = workers / "w1.log"
+    if wrote is not None:
+        output.write_text(wrote)
+    side = _Side(
+        row=synth_manifest([TASK]).tasks[0],
+        targets=[_side_target(id) for id in SIDE_IDS],
+        worker="w1",
+        output=output,
+    )
+    return log_dir, {TASK.identifier: side}
+
+
+def test_the_side_run_harvest_returns_every_target_it_ran(tmp_path: Path) -> None:
+    log_dir, sides = _side_run_scratch(tmp_path, SIDE_IDS, wrote=None)
+
+    scored, locations = _collect_side_scores(
+        synth_manifest([TASK]), str(log_dir), sides
+    )
+
+    assert {target.sample_id for target in scored} == set(SIDE_IDS)
+    assert all(str(sample.id) == target.sample_id for target, sample in scored.items())
+    assert len(locations) == 1
+
+
+@pytest.mark.parametrize(
+    ("landed", "wrote", "expected"),
+    [
+        pytest.param(
+            [],
+            "No matches in dataset for sample_id filter ''",
+            [
+                "landed no log",
+                "worker w1 wrote:",
+                "No matches in dataset for sample_id filter ''",
+            ],
+            id="no-log-with-worker-output",
+        ),
+        pytest.param(
+            [],
+            None,
+            ["landed no log", "see the side worker logs in"],
+            id="no-log-no-output",
+        ),
+        pytest.param(
+            [SIDE_IDS[0]],
+            "Traceback",
+            [
+                f"holds no record of {SIDE_IDS[1]}:1 in {TASK.identifier}",
+                "worker w1 wrote:",
+                "Traceback",
+            ],
+            id="missing-sample",
+        ),
+    ],
+)
+def test_a_side_run_that_landed_nothing_usable_fails_with_the_workers_words(
+    tmp_path: Path, landed: list[str], wrote: str | None, expected: list[str]
+) -> None:
+    """Retrying an empty or partial side run will land it the same way, so it fails rather than defers — carrying the worker's own output, the only place a worker that wrote no log said why."""
+    log_dir, sides = _side_run_scratch(tmp_path, landed, wrote=wrote)
+
+    with pytest.raises(RuntimeError) as raised:
+        _collect_side_scores(synth_manifest([TASK]), str(log_dir), sides)
+
+    for fragment in expected:
+        assert fragment in str(raised.value)
+    for id in landed:
+        assert f"no record of {id}" not in str(raised.value)
+
+
+def test_a_task_whose_worker_landed_nothing_is_missing_even_beside_one_that_did(
+    tmp_path: Path,
+) -> None:
+    """Judged across every task, not only those with a log: the caller commits per log and journals at the end, so a partial map would edit one log and record nothing."""
+    other = SynthTask("other", samples=4)
+    manifest = synth_manifest([TASK, other])
+    log_dir = tmp_path / "logs"
+    log_dir.mkdir()
+    write_log(log_dir, TASK, samples=[SynthSample(SIDE_IDS[0], score=0.0)])
+    sides = {
+        TASK.identifier: _Side(
+            row=manifest.tasks[0], targets=[_side_target(SIDE_IDS[0])]
+        ),
+        other.identifier: _Side(
+            row=manifest.tasks[1],
+            targets=[replace(_side_target(SIDE_IDS[1]), task=other.identifier)],
+        ),
+    }
+
+    with pytest.raises(RuntimeError) as raised:
+        _collect_side_scores(manifest, str(log_dir), sides)
+
+    assert f"no record of {SIDE_IDS[1]}:1 in {other.identifier}" in str(raised.value)
+    assert f"no record of {SIDE_IDS[0]}" not in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("name", "registry_name"),
+    [
+        pytest.param("pkg/probe", "pkg/probe", id="registered"),
+        pytest.param("renamed", "pkg/probe", id="registered-with-explicit-name"),
+        pytest.param("task", None, id="ad-hoc"),
+    ],
+)
+def test_side_run_selectors_carry_the_task_name_the_runtime_resolves_against(
+    name: str, registry_name: str | None
+) -> None:
+    """The effective name, whatever the registry calls the task: a colon in the id is read upstream as a task prefix unless the task's own name precedes it."""
+    row = (
+        synth_manifest([TASK])
+        .tasks[0]
+        .model_copy(update={"name": name, "registry_name": registry_name})
+    )
+
+    assert _selectors(row, [3, "user:cybergym/arvo_1"]) == [
+        f"{name}:3",
+        f"{name}:user:cybergym/arvo_1",
+    ]

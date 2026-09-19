@@ -2,7 +2,7 @@
 
 Two control loops share the throughput problem and must not fight, and the discipline that keeps them apart is one sentence: **inspect's adaptive controllers move within bounds; tend moves the bounds.** The controllers discover a provider's level minute by minute — additive increase, multiplicative decrease — and nothing here second-guesses that. What they cannot do is see the fleet, raise a task's sample setpoint, or escape a retry storm that independent controllers keep probing back into. Those three are this module's, at tend cadence.
 
-**Up is gated on everything; down is gated on nothing.** A step up happens only inside a *clean window* — the sample limiter saturated (headroom nobody is using is not capacity), zero scale-downs, no new sample errors, HTTP retries below a surge, CPU under the gate, spacing since the last step, the sandbox budget holding, no hold in force. A cut happens the moment pushback is *sustained* — two consecutive windows, because a single episode is the controllers' own job — and ignores holds entirely, since the cut exists precisely for when nobody is watching. That asymmetry is the ratchet the design promises (workflow.md §10.5), expressed as code rather than a comment.
+**Up is gated on everything; down is gated on nothing.** A step up happens only inside a *clean window* — the sample limiter saturated (headroom nobody is using is not capacity), zero scale-downs, no new sample errors, HTTP retries below a surge, CPU under the gate, the host's memory headroom above the low mark, spacing since the last step, the sandbox budget holding, no hold in force. A cut happens the moment pushback is *sustained* — two consecutive windows, because a single episode is the controllers' own job — and ignores holds entirely, since the cut exists precisely for when nobody is watching. That asymmetry is the ratchet the design promises (workflow.md §10.5), expressed as code rather than a comment.
 
 **Pure, for the same reason `reconcile` is.** Signals in, moves out; no clock beyond the `now` it is handed, no filesystem, no sockets. Every gate is a table a test can drive without a live worker — which matters doubly here, because the one signal a test cannot manufacture is a real provider's 429 (`mockllm` never sends one), so the ramp-down path lives or dies by these tables.
 
@@ -13,16 +13,25 @@ See scheduling.md §3.4–3.5 and workflow.md §10 (the tuning loop, as rewritte
 
 from collections.abc import Collection, Mapping, Sequence
 from dataclasses import dataclass, field
-from datetime import datetime
 from typing import Any, cast
 
+from .._util.jsonl import unix_time
 from .._worker import LiveTask
 from .._workspace import ACTION, OBSERVATION, JournalEvent, RampHold
+from .memory import MemoryReport
 
 RAMP_STEP = 20
 """How much one clean window buys.
 
-Fixed rather than proportional: the default range climbs 50→200 in eight steps, each one small enough that the drain back out of it is minutes rather than hours (the ratchet: lowering a limit never preempts, it waits for holders to finish).
+Fixed rather than proportional: the default range climbs 50→150 in five steps, each one small enough that the drain back out of it is minutes rather than hours (the ratchet: lowering a limit never preempts, it waits for holders to finish).
+"""
+
+PROPOSE_CAPACITY = False
+"""Whether a bound the loop cannot move is put to the operator as an item.
+
+Off, because the ask is one-directional: raising a limit takes effect at once and lowering one only stops new acquires and waits for in-flight samples to drain, so an item every clean window walks an operator up an envelope they chose and cannot cheaply walk back down. The envelope is the standing judgement (`samples_ramp`), and discovering a setpoint inside it is the whole of this loop's authority. Someone who wants more says so, and the range is theirs to widen.
+
+Retained rather than deleted: the signal is still measured and still recorded, so flipping this to `True` restores the item with its two-turn history intact.
 """
 
 STEP_SPACING = 20 * 60.0
@@ -193,6 +202,8 @@ class Proposal:
     """Capacity somebody chose not to authorize, surfaced to the one who could.
 
     Two shapes with one meaning — *the binding constraint is yours*. A pinned setpoint showing a clean, saturated window for two turns running; a ramp at its ceiling with pushback still absent. In both, tend has no authority left to spend, so the item's owner is the operator whose number binds (scheduling.md §3.3).
+
+    **Not raised by default** (`PROPOSE_CAPACITY`). Steward reports where a bound binds and stops there; asking to move it is the operator's to start. The shape is retained against wanting it back.
     """
 
     identifier: str
@@ -242,6 +253,8 @@ def plan_tuning(
     cpu: Mapping[int, float],
     now: float,
     absent: Collection[str] = (),
+    propose: bool = PROPOSE_CAPACITY,
+    memory: MemoryReport | None = None,
 ) -> TuningPlan:
     """Decide this turn's retunes.
 
@@ -256,6 +269,8 @@ def plan_tuning(
         cpu: Cumulative CPU seconds per pid, read this turn.
         now: The turn's clock, unix — passed in so the policy stays pure.
         absent: Running tasks whose worker did not answer, which have no window this turn but are still holding whatever the last turn left them at. Charged against the sandbox budget at that level, because a worker too busy to serve its socket is running samples exactly as hard as one that answered — and *busy* is the ordinary state of a fleet mid-generate, not a failure. Charged whether or not it was sandboxed, since the reading that would say is the one that did not arrive: the error is then a step declined, which costs a tend, rather than a host over-committed, which costs the run.
+        propose: Whether a bound this loop may not move is surfaced as a `Proposal` for the operator. Off (`PROPOSE_CAPACITY`); the signal is measured and recorded either way, so turning it on is the only step in restoring the item.
+        memory: The host's memory this turn, or `None` where nothing read it. A host short of memory is a gate on every task's window: the sandbox budget says what the machine can *start*, and this is what it can still *hold*.
 
     Returns:
         The plan. Empty moves under a pinned setpoint, always.
@@ -309,7 +324,7 @@ def plan_tuning(
     share = _share(sandboxed, tasks, absent) if sandboxed is not None and over else None
 
     for task in tasks:
-        blocked = _window(task, baseline, cpu, now)
+        blocked = _window(task, baseline, cpu, now, memory)
         storm = task.identifier in storms
         held = "" in holds or task.identifier in holds
 
@@ -317,7 +332,11 @@ def plan_tuning(
             # pinned mode: the signal still runs, the authority does not
             if blocked is None and not held and not _at_every_sample(task, task.level):
                 capacity.add(task.identifier)
-                if task.identifier in baseline.capacity and task.level is not None:
+                if (
+                    propose
+                    and task.identifier in baseline.capacity
+                    and task.level is not None
+                ):
                     proposals.append(
                         Proposal(
                             identifier=task.identifier,
@@ -435,7 +454,7 @@ def plan_tuning(
                 continue
             if blocked is None and not held:
                 capacity.add(task.identifier)
-                if task.identifier in baseline.capacity:
+                if propose and task.identifier in baseline.capacity:
                     proposals.append(
                         Proposal(
                             identifier=task.identifier,
@@ -531,11 +550,17 @@ def plan_tuning(
 
 
 def _window(
-    task: TaskSignals, baseline: Baseline, cpu: Mapping[int, float], now: float
+    task: TaskSignals,
+    baseline: Baseline,
+    cpu: Mapping[int, float],
+    now: float,
+    memory: MemoryReport | None = None,
 ) -> str | None:
     """Why this task's window is not clean, or `None` where it is.
 
     Every early return is a gate, every gate is a sentence a reader sees in the tuning block, and *unknown* always reads as *not clean* — a window with no baseline, a counter that went backwards (the worker respawned), a pid the CPU read missed, are all windows that measured nothing, and a step is only ever bought with a measurement.
+
+    The memory gate is the one exception to *unknown is not clean*: a turn that read no host figures passes `None`, and the window is judged on everything else. The reading is the kernel's and cannot be missed the way a pid can, so `None` means nothing was running to read it against rather than a measurement that failed — and the memory gate is a **fleet** gate, not a window one: it steps nothing down, since what to do about a short host is the agent's call (`items.MEMORY`), and only refuses to climb further into it.
     """
     if task.level is None:
         return "sample concurrency is not retunable here"
@@ -571,6 +596,8 @@ def _window(
     utilization = (spent - was) / (now - baseline.ts)
     if utilization >= CPU_GATE:
         return f"CPU at {utilization:.0%} of a core"
+    if memory is not None and memory.low:
+        return f"host memory headroom at {memory.fraction:.0%}"
     return None
 
 
@@ -750,7 +777,7 @@ def read_baseline(events: list[JournalEvent]) -> Baseline:
         recorded = cast(dict[str, Any], tuning)
         budget = recorded.get("budget")
         return Baseline(
-            ts=_unix(event.ts),
+            ts=unix_time(event.ts),
             levels=_ints(recorded.get("levels")),
             cpu=_cpu(recorded.get("cpu")),
             retries=_ints(recorded.get("retries")),
@@ -791,7 +818,7 @@ def read_ramp_record(
             continue
         if isinstance(to, int) and not isinstance(to, bool) and to > 0:
             levels[identifier] = to
-        if (when := _unix(event.ts)) is not None:
+        if (when := unix_time(event.ts)) is not None:
             steps[identifier] = when
     return levels, steps
 
@@ -822,20 +849,9 @@ def read_conn_steps(events: list[JournalEvent]) -> dict[str, float]:
         was = at if isinstance(at, int) and not isinstance(at, bool) else 0
         if to <= was:
             continue
-        if (when := _unix(event.ts)) is not None:
+        if (when := unix_time(event.ts)) is not None:
             steps[identifier] = when
     return steps
-
-
-def _unix(ts: str) -> float | None:
-    """A journal timestamp as unix seconds, or `None` where it will not parse."""
-    try:
-        parsed = datetime.fromisoformat(ts.replace("Z", "+00:00"))
-    except ValueError:
-        return None
-    if parsed.tzinfo is None:
-        return None
-    return parsed.timestamp()
 
 
 def _ints(value: object) -> dict[str, int]:
