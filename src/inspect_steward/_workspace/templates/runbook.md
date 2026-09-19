@@ -162,7 +162,7 @@ Record the answer with the verb the item names, then `steward tend` so it takes 
 
 ### What you may do
 
-**Without asking.** `launch --smoke` and `launch`. `tend`, `status`, `collect`. `schedule arm` and `schedule disarm`, to arm and take down your own return. `raise`, `investigate`, `propose`, `notify`, `note`. `ramp hold` and `ramp resume`. Every `inspect ctl` read, and lowering a worker's concurrency through `inspect ctl config` while containing an incident. `ack --by agent` for an item you resolved yourself, when nobody else would need to know. Writing `analysis.md`.
+**Without asking.** `launch --smoke` and `launch`. `tend`, `status`, `collect`. `schedule arm` and `schedule disarm`, to arm and take down your own return. `raise`, `investigate`, `propose`, `notify`, `note`. `ramp hold` and `ramp resume`. Every `inspect ctl` read, and lowering a worker's concurrency through `inspect ctl config` while containing an incident. `ack --by agent` for an item you resolved yourself, when nobody else would need to know. Writing `analysis.md`. Adding swap on a Linux host when a `memory` item asks for it (see Memory), then telling the operator what you added.
 
 **Only with an operator's answer, recorded in `--by`.** `ack --by operator`. `rule`, except `dismiss` and a scan finding's `score` (see Anomalies). `signoff`. `pause` and `resume`, except during a stop (see Stopping). `launch --accept CHECK` and `launch --accept-archive`. Writing `_steward.yaml`. Any `inspect ctl` mutation of a sample or task; a pre-authorization in `_steward.yaml` is an answer already given.
 
@@ -241,6 +241,7 @@ A smoke that fails twice is a stop. Notify it explicitly: nothing posts before t
 | `action_failed` | you | something a tend tried to do failed | do it by hand, or find out why |
 | `unwritten` | you | a task has no write-up in `analysis.md` | write the section |
 | `journal_damage` | you | journal lines could not be read | read them; ack with what they held |
+| `memory` | you | the host is short of memory, or on course to run out | see Memory |
 
 ### Dispositions
 
@@ -273,6 +274,22 @@ Tend ramps sample concurrency on its own, one step per clean window, and steps b
 - **Never propose more concurrency than the range allows.** A task sitting at the top of `samples_ramp`, or at a pinned `max_samples`, with no pushback is reported in the tuning block and left there. The ceiling is the operator's standing judgement about their infrastructure, and raising it is cheap where lowering it is not: a limit goes up at once and comes down only as in-flight samples drain. Do not offer it, do not hint at it, and do not read a clean window as an argument for it.
 - When the operator asks for more, write the range they name into `samples_ramp` and say what you wrote. Theirs to raise, yours to type.
 - Never lower a pinned setpoint. The one downward retune that is yours is under A running worker.
+- A host short of memory holds the climb the way a hot CPU does, and the tuning block names it. Nothing steps down for it; what to do about the host is yours (see Memory).
+
+### Memory
+
+Every tend reads the host beside the fleet: `memory:` in a status, `**memory**` in a collect. Headroom is available RAM plus free swap, which is what a growing fleet draws down and what adding swap raises; `available` rather than `used`, since a healthy box keeps its page cache resident and reads as nearly full while nothing is short. The second line is a straight line through the last two hours of tends, and says when headroom reaches zero at that rate. A `memory` item arrives when headroom is under a tenth of RAM, or the line reaches zero inside an hour. Left alone, the kernel kills a worker, the task respawns into the same wall, and it reaches `stalled` with no traceback to say why; this is the item you act on before that.
+
+- **On a Linux host, add swap.** It reaches the workers already running the moment `swapon` returns; nothing restarts and nothing is lost. `sudo -n true` first, so you never block on a password, then `df -h` for room. Size it to what the line projects the fleet still needs, or to physical RAM, whichever is smaller. Then:
+
+  ```bash
+  sudo fallocate -l 32G /swapfile && sudo chmod 600 /swapfile && sudo mkswap /swapfile && sudo swapon /swapfile
+  ```
+
+  Use `dd if=/dev/zero of=/swapfile bs=1M count=32768` in place of `fallocate` where the filesystem refuses it. `swapon --show` confirms it, and the next tend's line carries it in the headroom. Yours without asking: `steward notify` what you added, its size and path. The item clears itself once headroom returns; ack it only when the operator has accepted running short, and say so in the reason.
+- **Where swap cannot be added**: no sudo, or a container or pod, which dies at its cgroup limit whatever the host has. Lower concurrency instead: `steward ramp hold --reason "host memory"`, then `inspect ctl config TASK --max-samples N` down on the heaviest tasks, the downward retune that is already yours. In-flight samples drain rather than stop, so it takes minutes. The item is yours, so `raise` refuses it: reach the operator with `steward notify --kind attention`, the swap commands, size and path ready to paste, and leave the item open until the next tend's line shows headroom back. A pinned setpoint is not yours to lower; there swap is the only lever, so notify with `--kind stopped` and wait.
+- **On macOS** swap is the system's and there is nothing to add. Lower concurrency.
+- **Never raise `max_samples` back by hand.** Low headroom holds the climb (see Tuning), and once headroom returns the ramp climbs back one step per clean window. `steward ramp resume` if you held it.
 
 ### Standing rules
 

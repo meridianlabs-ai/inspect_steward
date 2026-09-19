@@ -47,6 +47,7 @@ from .._schedule.reconcile import InFlight
 from .._worker import TAIL_BYTES
 from .._worker import tail as read_tail
 from .._worker.live import LiveFleet
+from .memory import MemoryPoint
 
 UNIFORM_ZERO_MIN = 10
 """Samples a log must hold before a zero headline is worth confirming. Below this, one task of a handful of hard samples trips the detector more often than a broken grader does."""
@@ -72,6 +73,7 @@ def detect(
     workers_dir: Path,
     cache: ClassedCache,
     findings: list[Instance] | None = None,
+    memory_before: MemoryPoint | None = None,
 ) -> Detection:
     """Compose the turn's anomaly census.
 
@@ -83,6 +85,7 @@ def detect(
         workers_dir: `.steward/workers/`, where a departed worker's output tail lives.
         cache: What previous turns classified. Filled in as this turn reads; the caller prunes and writes it back on execute.
         findings: Flagged samples read off the folded scan rows (`_scan.findings.scan_findings`), or `None` for a run that scans nothing. Composed by the caller because the read needs the scan directory, which is the manifest's to name and not this module's to resolve.
+        memory_before: The host's memory as the previous tend recorded it, or `None` where none did. A worker that died without a traceback is classed the same either way; the reading rides in the evidence, because an OOM kill is the one death that leaves nothing else behind, and the number that explains it was visible a turn earlier.
 
     Returns:
         One batch per class, and what could not be read.
@@ -93,8 +96,11 @@ def detect(
     )
 
     instances = list(classed.instances)
-    instances.extend(_task_failures(tracked, inflight))
-    instances.extend(_departed_without_logs(observed, logs, inflight, workers_dir))
+    context = _memory_context(memory_before)
+    instances.extend(_task_failures(tracked, inflight, context))
+    instances.extend(
+        _departed_without_logs(observed, logs, inflight, workers_dir, context)
+    )
     instances.extend(_uniform_zeros(observed, classed.zero))
     instances.extend(findings or [])
 
@@ -173,7 +179,20 @@ def _errored_running(logs: ObservedLogs, fleet: LiveFleet) -> set[str]:
     return gated
 
 
-def _task_failures(logs: ObservedLogs, inflight: InFlight) -> list[Instance]:
+def _memory_context(before: MemoryPoint | None) -> str:
+    """The evidence clause a traceback-less death carries, or nothing where no turn read the host.
+
+    Display only and never in the class key: the reading says what the host looked like, not what killed the worker, and the class does not pretend to know (module docstring, `task:vanished`).
+    """
+    if before is None or before.total <= 0:
+        return ""
+    fraction = before.headroom / before.total
+    return f" · host memory headroom was {fraction:.0%} at the previous tend"
+
+
+def _task_failures(
+    logs: ObservedLogs, inflight: InFlight, context: str = ""
+) -> list[Instance]:
     """`task:error` for halted logs, `task:vanished` for abandoned ones."""
     running = inflight.running_identifiers
     instances: list[Instance] = []
@@ -198,7 +217,7 @@ def _task_failures(logs: ObservedLogs, inflight: InFlight) -> list[Instance]:
                         identifier,
                         attempt,
                         class_key=VANISHED,
-                        message="the log is mid-write and its worker is gone",
+                        message="the log is mid-write and its worker is gone" + context,
                         flagged=False,
                     )
                 )
@@ -230,6 +249,7 @@ def _departed_without_logs(
     logs: ObservedLogs,
     inflight: InFlight,
     workers_dir: Path,
+    context: str = "",
 ) -> list[Instance]:
     """`task:no-log` — a worker died and its task has no log at all to say why.
 
@@ -256,7 +276,8 @@ def _departed_without_logs(
                     class_key=no_log_class(tail),
                     ref=f"{identifier}@{worker.worker}",
                     task=identifier,
-                    message=tail[-MESSAGE_CAP:] if tail else "no output at all",
+                    message=(tail[-MESSAGE_CAP:] if tail else "no output at all")
+                    + context,
                     attempt_created=worker.started,
                     substrate=flagged,
                 )

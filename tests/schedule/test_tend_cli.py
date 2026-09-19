@@ -18,7 +18,9 @@ from inspect_steward._cli.main import steward
 from inspect_steward._cli.turn import echo_turn
 from inspect_steward._evalset.manifest import write_manifest
 from inspect_steward._tend import Live, collect_markdown, status_markdown
+from inspect_steward._tend.memory import MemoryReport, Projection
 from inspect_steward._tend.progress import TaskResources
+from inspect_steward._worker import HostMemory
 from inspect_steward._workspace import Claim, Workspace, acquire, create_workspace
 
 from .._logs import SynthTask, write_log
@@ -559,3 +561,48 @@ def test_an_interim_score_renders_like_a_final_one(
     (line,) = [one for one in text.splitlines() if one.startswith("✓ done")]
     assert line.split()[-1] == "0.50"
     assert "0.50*" not in markdown and "0.50*" not in text
+
+
+def test_the_host_memory_block_says_the_same_thing_on_every_surface(
+    workspace: Workspace, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """The host's reading is one source rendered three ways, and absent when nothing read it.
+
+    A real turn, then the report substituted, because no synthesized state can
+    put a worker on the machine for the turn to read the host against.
+    """
+    result = turn(workspace)
+    gib = 1024**3
+    report = MemoryReport(
+        host=HostMemory(
+            total=64 * gib, available=12 * gib, swap_total=8 * gib, swap_used=2 * gib
+        ),
+        rss=41 * gib,
+        projection=Projection(
+            slope=-1.3 * gib / 3600, span=6000, points=11, exhausted_in=7800
+        ),
+    )
+    running = replace(result, memory=report)
+
+    page = status_markdown(running, header=False)
+    collect = collect_markdown(running)
+    echo_turn(running)
+    text = capsys.readouterr().out
+
+    assert report.lines == [
+        "available 12.0 GiB of 64.0 GiB · swap 2.0 GiB of 8.0 GiB used · "
+        "headroom 18.0 GiB (28%) · fleet 41.0 GiB resident",
+        "headroom falling 1.3 GiB/h over 1h40m (11 points) · exhausted in ~2h10m",
+    ]
+    assert f"**memory** · {report.lines[0]}" in page
+    assert f"- {report.lines[1]}" in page
+    assert f"**memory** · {report.lines[0]}" in collect
+    assert f"memory: {report.lines[0]}" in text
+    assert f"  {report.lines[1]}" in text
+
+    # and a turn that read nothing says nothing, on all three
+    echo_turn(result)
+    quiet = capsys.readouterr().out
+    assert "**memory**" not in status_markdown(result, header=False)
+    assert "**memory**" not in collect_markdown(result)
+    assert "memory:" not in quiet
