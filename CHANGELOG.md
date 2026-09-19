@@ -2,6 +2,7 @@
 
 - Interim scoring: keep each interim metric's originating scorer, so a running task's headline resolves correctly when two dict-valued scorers emit the same score name (e.g. both a deterministic and an adjudicated scorer reporting `hijack`). Reads the `scorer`/`name` pair from Inspect's interim response (0.3.266+), falling back to the pre-0.3.266 single field for an older worker; the `.steward/interim.json` cache version is bumped, so a stale cache is discarded and re-harvested rather than migrated.
 - Record host memory and swap each tend, show the figures and a two-hour trend under the resources table, hold the ramp while headroom is low, and raise a `memory` item for the agent when the host is short or on course to run out (the runbook's remedy is swap on Linux, or lower concurrency). A worker that died without a traceback now carries the host's headroom at the previous tend as evidence.
+- Raised the `inspect-ai` floor to 0.3.266 (for the interim-scoring `scorer`/`name` split above) and the `inspect_flow` extra to 0.13.1 (the first release that handles Inspect's 3-tuple `eval_resolve_tasks` return, added with review policies in 0.3.266). Task-qualified `--sample-id` selectors are now resolved against every task name in the run when a log is compared to the manifest, matching `eval_run`, so a namespaced id whose prefix is not a task in the run (e.g. `user:cybergym/arvo_6008`) is no longer mistaken for a selector and dropped.
 
 ## 0.2.7 (13 September 2026)
 

@@ -22,9 +22,13 @@ dependencies = [
     # the released wheels carry what this project needs since 2026-09-04 --
     # record-only selection scanning, the ambient scan-model default, the
     # `log_dir` default for `eval_set()`, scout's unique summary tmp names --
-    # so this floor is the whole story for inspect-ai; `inspect-harbor` still
-    # resolves through `[tool.uv.sources]` below, for the reason given there.
-    "inspect-ai>=0.3.263",
+    # and 0.3.266 is where the interim-scoring control response reports each
+    # metric's originating `scorer` apart from its `name`, which the interim
+    # harvest reads to keep dict-valued scorers' scores distinct (see
+    # `_worker/interim.py`). So this floor is the whole story for inspect-ai;
+    # `inspect-harbor` still resolves through `[tool.uv.sources]` below, for
+    # the reason given there.
+    "inspect-ai>=0.3.266",
     # inspect-scout 0.5.1 (2026-09-07) is the first release carrying what this
     # project needs, so this is a plain PyPI floor. It was a git direct
     # reference before that; if scout ever needs tracking ahead of a release
@@ -68,7 +72,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-flow = ["inspect_flow>=0.12.0"]
+# 0.13.1 is the first release that handles inspect-ai's 3-tuple
+# `eval_resolve_tasks` return (added with review policies in 0.3.266); an
+# earlier flow unpacks it into two and raises at task resolution.
+flow = ["inspect_flow>=0.13.1"]
 # cli: the `python -m hawk` click entry point Steward invokes.
 # runner: hawk.runner.run_eval_set imports k8s_sandbox at module scope.
 # uv: hawk shells out to `uv pip install` on every invocation but does not
@@ -117,7 +124,7 @@ dev = [
     "pytest-dotenv",
     "pytest-timeout>=2.4.0",
     "types-psutil", # psutil ships no inline types and pyright runs strict
-    "inspect_flow>=0.12.0", # for the flow definition tests
+    "inspect_flow>=0.13.1", # for the flow definition tests (0.3.266-compatible)
     # for the hawk definition tests; 3.13+ only, so those tests skip on 3.12
     "hawk[cli,runner]>=2.4.0; python_version >= '3.13'",
     "uv>=0.5; python_version >= '3.13'",

@@ -375,20 +375,29 @@ def test_a_task_qualified_sample_id_is_resolved_before_it_is_compared(
 ) -> None:
     """`eval_run` strips the qualifier per task before the log records what ran.
 
-    So `--sample-id probe:a,other:b` reaches the manifest whole and the log as
-    `["a"]`. Compared unresolved the two never match, and a task that ran
-    exactly what was asked of it is re-run every tend until the attempt budget
-    is spent.
+    So `--sample-id probe:a,other:b` reaches the manifest whole and each task's
+    log as its own id: `probe` runs `["a"]`, `other` runs `["b"]`. Compared
+    unresolved the two never match, and a task that ran exactly what was asked
+    of it is re-run every tend until the attempt budget is spent. A `prefix:`
+    counts as a selector only when it names a task in the run, so the resolution
+    is passed every task name -- `other:b` belongs to `other` here, and is
+    dropped for `probe` rather than mistaken for one of its ids.
     """
-    # one sample, because capture counts the selection too -- the manifest a
-    # real run commits asks for exactly the sample the log holds
-    task = SynthTask("probe", samples=1)
-    write_log(tmp_path, task, total=1, selection={"sample_id": ["a"]})
-    manifest = synth_manifest([task], sample_id=["probe:a", "other:b"])
+    # one sample each, because capture counts the selection too -- the manifest
+    # a real run commits asks for exactly the sample each log holds
+    probe = SynthTask("probe", samples=1)
+    other = SynthTask("other", samples=1)
+    write_log(tmp_path, probe, total=1, selection={"sample_id": ["a"]})
+    write_log(tmp_path, other, total=1, selection={"sample_id": ["b"]})
+    manifest = synth_manifest([probe, other], sample_id=["probe:a", "other:b"])
 
-    (only,) = observe_tasks(manifest, observe_logs(tmp_path)).tasks
+    observed = {
+        task.identifier: task
+        for task in observe_tasks(manifest, observe_logs(tmp_path)).tasks
+    }
 
-    assert only.reason is None
+    assert observed[probe.identifier].reason is None
+    assert observed[other.identifier].reason is None
 
 
 REDIRECTION: list[tuple[str, dict[str, Any], dict[str, Any], bool]] = [
