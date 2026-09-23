@@ -1,4 +1,4 @@
-## Unreleased
+## 0.2.8 (23 September 2026)
 
 - Interim scoring: keep each interim metric's originating scorer, so a running task's headline resolves correctly when two dict-valued scorers emit the same score name (e.g. both a deterministic and an adjudicated scorer reporting `hijack`). Reads the `scorer`/`name` pair from Inspect's interim response (0.3.266+), falling back to the pre-0.3.266 single field for an older worker; the `.steward/interim.json` cache version is bumped, so a stale cache is discarded and re-harvested rather than migrated.
 - Record host memory and swap each tend, show the figures and a two-hour trend under the resources table, hold the ramp while headroom is low, and raise a `memory` item for the agent when the host is short or on course to run out (the runbook's remedy is swap on Linux, or lower concurrency). A worker that died without a traceback now carries the host's headroom at the previous tend as evidence.
