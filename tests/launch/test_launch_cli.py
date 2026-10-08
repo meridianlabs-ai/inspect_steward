@@ -479,6 +479,35 @@ def test_an_operator_scanner_colliding_with_the_builtin_refuses_before_anything_
     assert launched(workspace) == []
 
 
+def test_a_launch_with_the_builtin_off_and_nothing_else_scans_nothing(
+    workspace: Workspace, capture: FakeCapture
+) -> None:
+    """With nothing left to scan the manifest says so, no scan directory is laid down for workers to record into, and the journal names no scanners."""
+    workspace.directives.write_text("integrity_scanner: false\n")
+
+    result = run("--no-timer")
+
+    assert result.exit_code == 0
+    assert committed(workspace).scan is None
+    assert not (workspace.logs / "scans").exists()
+    assert "scanning online" not in result.output
+    assert launched(workspace)[-1]["scanners"] == []
+
+
+def test_turning_the_builtin_off_over_rows_it_recorded_refuses(
+    workspace: Workspace, capture: FakeCapture
+) -> None:
+    """The built-in's rows already on disk would be finalized as belonging to nothing, so this is refused like any other removed scanner."""
+    assert run("--no-timer").exit_code == 0
+    workspace.directives.write_text("integrity_scanner: false\n")
+
+    result = run("--no-timer")
+
+    assert result.exit_code == 1
+    assert "removed: scoring_integrity" in result.output
+    assert committed(workspace).scan is not None
+
+
 def test_a_relaunch_admits_added_scanners_and_refuses_changed_ones(
     workspace: Workspace, capture: FakeCapture
 ) -> None:

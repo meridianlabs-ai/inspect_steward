@@ -104,6 +104,11 @@ REJECTED: list[tuple[str, str, str]] = [
     ("an empty scan model", 'scan_model: ""\n', "not an empty value"),
     ("scanners that are not a mapping", "scanners: [echo]\n", "scanners"),
     ("a scanner spec that is not one", "scanners:\n  mine: echo\n", "`mine` is str"),
+    (
+        "the built-in switch as a string",
+        'integrity_scanner: "false"\n',
+        "integrity_scanner",
+    ),
     ("a typo", "max_wokrers: 8\n", "not a setting Steward knows"),
     ("a meaningless ceiling", "max_workers: 0\n", "greater than 0"),
     ("a ceiling that is not a number", "max_workers: lots\n", "max_workers"),

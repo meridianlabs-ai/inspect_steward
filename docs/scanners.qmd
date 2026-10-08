@@ -9,7 +9,7 @@ A sample can run, score cleanly, and still be untrustworthy: the model read the 
 
 Scanners review transcripts for these problems. Under Steward they run as the samples they review complete, so the transcripts are already scanned by the time the run finishes.
 
-Steward runs a scoring integrity scanner over every sample of every run. It requires no configuration.
+Steward runs a scoring integrity scanner over every sample of every run. It requires no configuration, and can be [turned off](#turning-off-the-built-in-scanner).
 
 ## Scan Model
 
@@ -32,6 +32,18 @@ eval_set(
     scanner=[my_scanner()],
 )
 ```
+
+## Disabling the Scanner
+
+To run without the built-in scanner, set `integrity_scanner` in `_steward.yaml` or `STEWARD_INTEGRITY_SCANNER` in your `.env`:
+
+```{.yaml filename="_steward.yaml"}
+integrity_scanner: false
+```
+
+Scanners declared in your definition and in `scanners` still run. With nothing left, the run scans nothing.
+
+Like any change of scanners, this takes effect at launch and is checked against what the run has already recorded: turning the built-in off on a run where it has already reviewed samples is refused.
 
 ## Findings
 

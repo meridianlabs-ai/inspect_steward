@@ -159,6 +159,7 @@ def prepare(
     cap: int = DEFAULT_CAP,
     max_workers: int | None = None,
     scanners: dict[str, dict[str, Any]] | None = None,
+    integrity_scanner: bool = True,
     satisfied: Mapping[str, str] | None = None,
     store: str | None = None,
 ) -> Plan:
@@ -202,7 +203,7 @@ def prepare(
     # operator about a file they just edited -- the same refusal `_launch` turns
     # this into, arriving through the same exception the CLI already prints
     try:
-        material = scan_material(manifest.scan, scanners)
+        material = scan_material(manifest.scan, scanners, builtin=integrity_scanner)
     except ScanError as ex:
         raise LaunchError(str(ex)) from ex
 
@@ -211,7 +212,8 @@ def prepare(
     scan_id = resolve_eval_set_id(log_dir)
     scan_dir: str | None = None
     try:
-        scan_dir = initialize_scan(material, log_dir=log_dir, scan_id=scan_id)
+        if material is not None:
+            scan_dir = initialize_scan(material, log_dir=log_dir, scan_id=scan_id)
     except ScanError as ex:
         # reported rather than raised: a rehearsal that cannot bracket its scan
         # is still worth running for everything else it catches, and *the scan
@@ -544,11 +546,13 @@ def fold(plan: Plan, logs: ObservedLogs) -> Folded:
 
     **Coverage is folded here and not left to the findings**, because the two answer different questions and only one of them is *did the scanners run*. Through the tend's own `coverage` — with no `reused` and nothing `unverified`, since a rehearsal spawns once and never resumes, which is the one shape that function's three states exist to separate.
     """
+    if plan.manifest.scan is None:
+        return Folded()
     if plan.scan_dir is None:
         return Folded(errors=["scanning never started, so nothing was reviewed"])
     errors: list[str] = []
     scan_id = plan.scan_id
-    scans = plan.manifest.scan.scans if plan.manifest.scan is not None else None
+    scans = plan.manifest.scan.scans
     try:
         sync_scan(log_dir=plan.log_dir, scan_id=scan_id, scans=scans)
         finalize_scan(log_dir=plan.log_dir, scan_id=scan_id, scans=scans)
@@ -1027,6 +1031,7 @@ def smoke(
                 max_workers if max_workers is not None else directives.max_workers
             ),
             scanners=directives.scanners,
+            integrity_scanner=directives.integrity_scanner,
             satisfied=_matches(workspace, manifest, store),
             store=store,
         )

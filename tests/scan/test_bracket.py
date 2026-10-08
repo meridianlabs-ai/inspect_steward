@@ -28,23 +28,53 @@ def definition_scan(scanners: dict[str, dict[str, Any]]) -> ManifestScan:
     return ManifestScan(spec={"scan_name": "eval_set", "scanners": scanners})
 
 
+def merge(
+    captured: ManifestScan | None, scanners: dict[str, dict[str, Any]] | None
+) -> ManifestScan:
+    """`scan_material` with the built-in on, where there is always something to scan."""
+    material = scan_material(captured, scanners)
+    assert material is not None
+    return material
+
+
 def test_the_builtin_scanner_rides_every_merge() -> None:
-    material = scan_material(None, None)
+    material = merge(None, None)
     assert material.injected == builtin_scanners()
     assert set(merged_scanners(material)) == {INTEGRITY_SCANNER}
     assert material.spec is None
 
 
 def test_operator_scanners_join_the_injection_beside_the_builtin() -> None:
-    material = scan_material(None, {"mine": MINE})
+    material = merge(None, {"mine": MINE})
     assert material.injected is not None
     assert set(material.injected) == {INTEGRITY_SCANNER, "mine"}
 
 
 def test_the_definitions_own_scanners_survive_the_merge_untouched() -> None:
-    material = scan_material(definition_scan({"declared": MINE}), {"mine": MINE})
+    material = merge(definition_scan({"declared": MINE}), {"mine": MINE})
     assert set(merged_scanners(material)) == {"declared", INTEGRITY_SCANNER, "mine"}
     assert material.spec == definition_scan({"declared": MINE}).spec
+
+
+@pytest.mark.parametrize(
+    ("captured", "scanners", "merged"),
+    [
+        (definition_scan({"declared": MINE}), None, {"declared"}),
+        (None, {"mine": MINE}, {"mine"}),
+        (definition_scan({"declared": MINE}), {"mine": MINE}, {"declared", "mine"}),
+    ],
+)
+def test_turning_the_builtin_off_leaves_every_other_scanner(
+    captured: ManifestScan | None,
+    scanners: dict[str, dict[str, Any]] | None,
+    merged: set[str],
+) -> None:
+    material = scan_material(captured, scanners, builtin=False)
+    assert set(merged_scanners(material)) == merged
+
+
+def test_with_the_builtin_off_and_nothing_else_the_run_scans_nothing() -> None:
+    assert scan_material(None, None, builtin=False) is None
 
 
 def test_an_invalid_scanner_reference_is_refused_by_name() -> None:
@@ -88,11 +118,11 @@ def prior_scan_dir(
 
 
 def test_verification_passes_where_no_fleet_has_run(tmp_path: Path) -> None:
-    verify_scan(scan_material(None, None), log_dir=str(tmp_path), eval_set_id=None)
+    verify_scan(merge(None, None), log_dir=str(tmp_path), eval_set_id=None)
 
 
 def test_an_unchanged_set_verifies_against_its_own_directory(tmp_path: Path) -> None:
-    material = scan_material(None, {"mine": MINE})
+    material = merge(None, {"mine": MINE})
     prior_scan_dir(tmp_path, merged_scanners(material))
     verify_scan(material, log_dir=str(tmp_path), eval_set_id=None)
 
@@ -113,7 +143,28 @@ def test_a_changed_scanner_refuses(tmp_path: Path) -> None:
 def test_a_removed_scanner_refuses(tmp_path: Path) -> None:
     prior_scan_dir(tmp_path, {**builtin_scanners(), "mine": MINE})
     with pytest.raises(ScanError, match="removed: mine"):
-        verify_scan(scan_material(None, None), log_dir=str(tmp_path), eval_set_id=None)
+        verify_scan(merge(None, None), log_dir=str(tmp_path), eval_set_id=None)
+
+
+@pytest.mark.parametrize("redirect", [False, True])
+def test_turning_the_builtin_off_over_its_recorded_rows_refuses(
+    tmp_path: Path, redirect: bool
+) -> None:
+    """A launch that scans nothing removes every scanner, wherever the committed run recorded them."""
+    scans = tmp_path / "elsewhere" if redirect else None
+    committed = merge(None, None).model_copy(
+        update={"scans": str(scans) if scans is not None else None}
+    )
+    prior_scan_dir(tmp_path, merged_scanners(committed), scans=scans)
+    with pytest.raises(ScanError, match=f"removed: {INTEGRITY_SCANNER}"):
+        verify_scan(None, log_dir=str(tmp_path), eval_set_id=None, committed=committed)
+
+
+def test_a_run_that_never_scanned_verifies_with_nothing_scanning(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / ".eval-set-id").write_text("run-1")
+    verify_scan(None, log_dir=str(tmp_path), eval_set_id=None)
 
 
 def test_an_added_scanner_is_admitted(tmp_path: Path) -> None:
@@ -140,14 +191,14 @@ def wrapped_scan(hash: str) -> ManifestScan:
 
 def test_a_changed_config_wrapper_refuses(tmp_path: Path) -> None:
     """The filter, scan model, and generation settings live in no scanner's own spec — the hash capture stamped into the metadata is what carries them here."""
-    material = scan_material(wrapped_scan("aaa"), None)
+    material = merge(wrapped_scan("aaa"), None)
     prior_scan_dir(tmp_path, merged_scanners(material), metadata={HASH_KEY: "before"})
     with pytest.raises(ScanError, match="configuration"):
         verify_scan(material, log_dir=str(tmp_path), eval_set_id=None)
 
 
 def test_an_unchanged_config_wrapper_passes(tmp_path: Path) -> None:
-    material = scan_material(wrapped_scan("aaa"), None)
+    material = merge(wrapped_scan("aaa"), None)
     prior_scan_dir(tmp_path, merged_scanners(material), metadata={HASH_KEY: "aaa"})
     verify_scan(material, log_dir=str(tmp_path), eval_set_id=None)
 
@@ -164,7 +215,7 @@ def test_a_wrapper_arriving_with_first_scanners_is_admitted(tmp_path: Path) -> N
 
 def test_a_moved_redirect_with_recorded_rows_refuses(tmp_path: Path) -> None:
     """A redirect change lands verification on an empty location, so only the committed manifest's answer can surface the rows the move would strand."""
-    committed = scan_material(None, None)
+    committed = merge(None, None)
     prior_scan_dir(tmp_path, merged_scanners(committed))
     moved = committed.model_copy(update={"scans": str(tmp_path / "elsewhere")})
     with pytest.raises(ScanError) as err:
@@ -177,14 +228,14 @@ def test_a_moved_redirect_with_recorded_rows_refuses(tmp_path: Path) -> None:
 def test_a_moved_redirect_with_nothing_recorded_passes(tmp_path: Path) -> None:
     """A fleet ran (the id is stamped) but never scanned at the committed location — there is nothing a new redirect could strand."""
     (tmp_path / ".eval-set-id").write_text("run-1")
-    committed = scan_material(None, None)
+    committed = merge(None, None)
     moved = committed.model_copy(update={"scans": str(tmp_path / "elsewhere")})
     verify_scan(moved, log_dir=str(tmp_path), eval_set_id=None, committed=committed)
 
 
 def test_moving_the_rows_to_the_new_redirect_is_the_remedy(tmp_path: Path) -> None:
     """With the directory moved where the new redirect points, the same launch passes — the refusal is escapable by exactly the action it names."""
-    committed = scan_material(None, None)
+    committed = merge(None, None)
     moved = committed.model_copy(update={"scans": str(tmp_path / "elsewhere")})
     prior_scan_dir(tmp_path, merged_scanners(moved), scans=tmp_path / "elsewhere")
     verify_scan(moved, log_dir=str(tmp_path), eval_set_id=None, committed=committed)
@@ -196,7 +247,7 @@ def test_the_committed_redirect_resolves_against_the_committed_log_dir(
     """When the log directory moved too, the recorded scan is beside the *old* logs — the committed redirect must resolve there, not against the new `log_dir`."""
     old_logs = tmp_path / "old"
     old_logs.mkdir()
-    committed = scan_material(None, None)
+    committed = merge(None, None)
     prior_scan_dir(old_logs, merged_scanners(committed))
     moved = committed.model_copy(update={"scans": str(tmp_path / "elsewhere")})
     with pytest.raises(ScanError) as err:
@@ -217,12 +268,12 @@ def test_package_version_drift_is_provenance_not_identity(tmp_path: Path) -> Non
         for name, entry in builtin_scanners().items()
     }
     prior_scan_dir(tmp_path, aged)
-    verify_scan(scan_material(None, None), log_dir=str(tmp_path), eval_set_id=None)
+    verify_scan(merge(None, None), log_dir=str(tmp_path), eval_set_id=None)
 
 
 def test_initialize_lays_the_directory_down_and_stamps_the_id(tmp_path: Path) -> None:
     """The merged set — injection included, definition or not — is what the directory records, because finalize derives its orphan-cleanup names from exactly this file."""
-    material = scan_material(None, {"mine": MINE})
+    material = merge(None, {"mine": MINE})
     scan_dir = initialize_scan(material, log_dir=str(tmp_path), scan_id="run-9")
 
     spec = json.loads((Path(scan_dir) / "_scan.json").read_text())

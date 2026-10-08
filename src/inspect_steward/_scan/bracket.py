@@ -43,22 +43,25 @@ class ScanError(Exception):
 def scan_material(
     captured: ManifestScan | None,
     scanners: dict[str, dict[str, Any]] | None,
-) -> ManifestScan:
+    *,
+    builtin: bool = True,
+) -> ManifestScan | None:
     """Settle what this run scans with: capture's word plus Steward's injection.
 
-    Always returns material, because the built-in scanner rides every run — a scanner that names no model scans with the sample's own model under evaluation, so there is no configuration in which it could not run (`builtin.py`). The caller records the result as `Manifest.scan` unconditionally.
+    The built-in scanner rides every run unless the operator turned it off (`integrity_scanner: false`) — a scanner that names no model scans with the sample's own model under evaluation, so there is no configuration in which it could not run (`builtin.py`). With it off, a run whose definition declares no scanners and whose operator adds none scans nothing, and the answer is `None`: `Manifest.scan`'s own spelling of *this run does not scan*, which every later reader already takes to mean nothing to inject, fold, or finalize.
 
     Args:
         captured: What capture serialized (`read_eval_set`), or `None` where the definition declares no scanners.
         scanners: The operator's `scanners` key — scout `ScannerSpec` dicts keyed by merge name — or `None`.
+        builtin: Whether Steward's built-in scanners join the merge (`Directives.integrity_scanner`).
 
     Returns:
-        The material a launch commits: the captured spec and location untouched, with the injection settled.
+        The material a launch commits — the captured spec and location untouched, with the injection settled — or `None` where nothing scans.
 
     Raises:
         ScanError: An operator scanner reference is invalid, or a name collides — with the built-in or with the definition's own scanners.
     """
-    injected: dict[str, dict[str, Any]] = builtin_scanners()
+    injected: dict[str, dict[str, Any]] = builtin_scanners() if builtin else {}
     for name, entry in (scanners or {}).items():
         if name in injected:
             raise ScanError(
@@ -83,15 +86,19 @@ def scan_material(
             "resolved without silently changing what one of the two records"
         )
 
+    if captured is None and not injected:
+        return None
     return ManifestScan(
         spec=captured.spec if captured is not None else None,
         scans=captured.scans if captured is not None else None,
-        injected=injected,
+        injected=injected or None,
     )
 
 
-def merged_scanners(material: ManifestScan) -> dict[str, dict[str, Any]]:
-    """Every scanner this run records, keyed by name: the definition's own plus the injected."""
+def merged_scanners(material: ManifestScan | None) -> dict[str, dict[str, Any]]:
+    """Every scanner this run records, keyed by name: the definition's own plus the injected — none where nothing scans."""
+    if material is None:
+        return {}
     return {**_definition_scanners(material), **(material.injected or {})}
 
 
@@ -110,7 +117,7 @@ def scan_dir_location(*, log_dir: str, scan_id: str, scans: str | None) -> str:
 
 
 def verify_scan(
-    material: ManifestScan,
+    material: ManifestScan | None,
     *,
     log_dir: str,
     eval_set_id: str | None,
@@ -123,10 +130,12 @@ def verify_scan(
 
     **The `scans` redirect is verified against the committed manifest, read back rather than recomputed** — the `Manifest.log_dir` argument, one directory over. Checking only the *requested* location would compare a fresh directory against itself: a definition that moves its redirect lands on an empty location, verifies trivially, and strands every recorded row where nothing will look. So a changed redirect refuses while the committed location still holds a scan — and moving the directory to the new location is the remedy, after which the same check passes. A moved `log_dir` under an unchanged redirect is deliberately not this check's business: that relocation strands the logs too, and the launch's delta already gates it.
 
+    **A launch that scans nothing is a launch that removed every scanner.** With the built-in turned off over a run that has already recorded rows, the comparison is against an empty set, so it refuses on the removed scanners' account — looked for at the committed redirect, since a launch that scans nothing requests no location of its own.
+
     Read-only, because it runs before the archive gate. Where the log directory has no eval set id and the manifest names none, no fleet has run and there is nothing to verify.
 
     Args:
-        material: The merge as this launch settled it.
+        material: The merge as this launch settled it, or `None` where nothing scans.
         log_dir: The run's log directory, as this launch resolved it.
         eval_set_id: The manifest's eval set id, if the definition named one.
         committed: The committed manifest's scan material, or `None` where this workspace has not launched (or predates scanning) — the redirect check needs the previous answer, and only the committed manifest remembers it.
@@ -137,7 +146,11 @@ def verify_scan(
         OSError: The scan directory exists but its spec cannot be read.
     """
     scan_id = existing_eval_set_id(log_dir) or eval_set_id
-    if committed is not None and committed.scans != material.scans:
+    if (
+        material is not None
+        and committed is not None
+        and committed.scans != material.scans
+    ):
         previous_dir = committed_log_dir or log_dir
         previous_id = existing_eval_set_id(previous_dir) or eval_set_id
         if previous_id is not None:
@@ -158,8 +171,12 @@ def verify_scan(
                 )
     if scan_id is None:
         return
+    if material is not None:
+        scans = material.scans
+    else:
+        scans = committed.scans if committed is not None else None
     scan_json = (
-        f"{scan_location(material, log_dir=log_dir, scan_id=scan_id)}/_scan.json"
+        f"{scan_dir_location(log_dir=log_dir, scan_id=scan_id, scans=scans)}/_scan.json"
     )
     if not exists(scan_json):
         return
@@ -198,7 +215,8 @@ def verify_scan(
     # with a definition's first scanners is those scanners arriving, which is
     # the admitted case
     prior_metadata: dict[str, Any] = prior_spec.get("metadata") or {}
-    new_metadata: dict[str, Any] = (material.spec or {}).get("metadata") or {}
+    new_spec = material.spec if material is not None else None
+    new_metadata: dict[str, Any] = (new_spec or {}).get("metadata") or {}
     prior_hash = prior_metadata.get(_INSPECT_CONFIG_HASH_KEY)
     new_hash = new_metadata.get(_INSPECT_CONFIG_HASH_KEY)
     if prior_hash is not None and new_hash is not None and prior_hash != new_hash:

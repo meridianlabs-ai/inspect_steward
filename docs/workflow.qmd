@@ -212,8 +212,9 @@ See [Codify](errors.qmd#codify) and [Stuck Samples](errors.qmd#stuck-samples) fo
 |------------------|------------------|------------------|------------------|
 | `scan_model` | `STEWARD_SCAN_MODEL` | eval model | The model scanners use. `false` ignores a `SCOUT_SCAN_MODEL` in the environment and scans with the eval model. |
 | `scanners` | `STEWARD_SCANNERS` | none | Scanners run in addition to the definition's. |
+| `integrity_scanner` | `STEWARD_INTEGRITY_SCANNER` | `true` | Whether Steward's built-in scoring integrity scanner runs. `false` leaves the definition's scanners and `scanners`. |
 
-See [Scan Model](scanners.qmd#scan-model) and [Adding Scanners](scanners.qmd#adding-scanners) for additional details.
+See [Scan Model](scanners.qmd#scan-model), [Adding Scanners](scanners.qmd#adding-scanners) and [Turning Off the Built-In Scanner](scanners.qmd#turning-off-the-built-in-scanner) for additional details.
 
 ## Advanced {#advanced}
 

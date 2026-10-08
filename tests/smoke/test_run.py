@@ -304,6 +304,28 @@ class TestWhereTheRehearsalsScanRowsGo:
         assert (Path(plan.log_dir) / ".eval-set-id").read_text().strip() == plan.scan_id
 
 
+class TestARehearsalThatScansNothing:
+    """With the built-in off and no scanners anywhere, there is nothing to bracket and nothing for coverage to count."""
+
+    def test_no_scan_is_laid_down_and_the_fold_reports_no_scanning(
+        self, tmp_path: Path
+    ) -> None:
+        create_workspace(tmp_path, git=False)
+
+        plan = prepare(
+            Workspace.at(tmp_path),
+            synth_manifest([ADDITION]),
+            cap=0,
+            integrity_scanner=False,
+        )
+        folded = fold(plan, observe_logs(plan.log_dir))
+
+        assert plan.manifest.scan is None
+        assert plan.scan_dir is None
+        assert not folded.scanning
+        assert folded.errors == []
+
+
 class TestTheRetryBudgetTheWorkersGet:
     """A rehearsal at no retries is a rehearsal of something the launch will not do.
 

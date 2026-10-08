@@ -274,6 +274,7 @@ def launch(
             # value that is no longer `None` wins its own precedence check
             scan_model=scan_model if scan_model is not None else directives.scan_model,
             scanners=directives.scanners,
+            integrity_scanner=directives.integrity_scanner,
         )
 
 
@@ -300,6 +301,7 @@ def _launch(
     notification: str | bool | None,
     scan_model: str | bool | None,
     scanners: dict[str, Any] | None,
+    integrity_scanner: bool,
 ) -> Launch:
     """The launch itself, with the claim in hand for the whole of it."""
     committed = committed_manifest(workspace)
@@ -316,7 +318,7 @@ def _launch(
     # operator's are both in hand, and committed with the manifest: every
     # later tend injects exactly these (`Manifest.scan`)
     try:
-        scan = scan_material(manifest.scan, scanners)
+        scan = scan_material(manifest.scan, scanners, builtin=integrity_scanner)
     except ScanError as ex:
         raise LaunchError(str(ex)) from ex
     manifest = manifest.model_copy(update={"scan": scan})
@@ -403,7 +405,11 @@ def _launch(
     # rather than every worker identically
     scan_id = resolve_eval_set_id(log_dir, manifest.eval_set_id)
     try:
-        scan_dir = initialize_scan(scan, log_dir=log_dir, scan_id=scan_id)
+        scan_dir = (
+            initialize_scan(scan, log_dir=log_dir, scan_id=scan_id)
+            if scan is not None
+            else None
+        )
     except OSError as ex:
         raise LaunchError(
             f"the manifest is committed but the scan directory could not be "

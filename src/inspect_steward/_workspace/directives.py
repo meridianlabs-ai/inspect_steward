@@ -473,6 +473,14 @@ class Directives(BaseModel):
                 )
         return entries or None
 
+    integrity_scanner: bool = Field(default=True)
+    """Whether Steward's built-in scoring integrity scanner (`scoring_integrity`) runs, `true` unless turned off.
+
+    Turning it off leaves the definition's own scanners and the `scanners` key untouched; with nothing left, the run scans nothing (`scan_material`).
+
+    Admitted by the same test as `scanners`: *not the scanner Steward adds* is a sentence no `eval_set()` argument can say, since the injection is Steward's invention. Like any change of scanners, it is settled at launch and verified against what the run has recorded, so turning it off over rows the built-in already wrote refuses (`verify_scan`).
+    """
+
     log_root: str | bool | None = Field(default=None)
     """The root this machine keeps eval logs under, `false` for none, or `None` for no preference.
 
