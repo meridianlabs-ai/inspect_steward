@@ -7,6 +7,8 @@ from inspect_steward._cli.main import steward
 from inspect_steward._cli.tasks import parse_args
 from inspect_steward._evalset.manifest import Manifest
 
+from ._hawk import requires_hawk
+
 FIXTURES = Path(__file__).parent / "fixtures"
 
 
@@ -55,6 +57,7 @@ def test_cli_tasks_args(fixture: str) -> None:
     assert manifest.tasks[0].args == {"difficulty": "hard"}
 
 
+@requires_hawk
 def test_cli_tasks_args_refused_for_hawk() -> None:
     result = CliRunner().invoke(
         steward,
