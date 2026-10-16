@@ -260,6 +260,16 @@ def test_a_worker_stem_separates_what_a_display_key_would_merge() -> None:
     )
 
 
+def test_a_stem_stays_under_the_name_cap_whatever_the_key_holds() -> None:
+    # a dot in the key (a float argument, a versioned model) is not an
+    # extension; a long run after it once defeated the key's own truncation and
+    # the stem ran past the filesystem's 255-byte name limit
+    key = "task@model?" + "a" * 200 + "=0." + "b" * 200
+    stem = worker_stem(action("a", key=key))
+
+    assert len(f"{stem}.json") <= 255
+
+
 def test_a_second_worker_never_takes_a_stem_already_in_use(tmp_path: Path) -> None:
     """The attempt number is a decision-layer estimate; the stem cannot be.
 

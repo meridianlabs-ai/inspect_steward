@@ -384,7 +384,14 @@ def worker_stem(action: SpawnWorker, attempt: int | None = None) -> str:
         # a hyphen rather than a `+`, which `safe_filename` rewrites to the
         # underscore the stem already uses as its field separator
         name = f"{name}-plus{len(action.tasks) - 1}"
-    key = safe_filename(name, max_length=MAX_KEY_LENGTH)
+    # `safe_filename` does not keep the promise `max_length` makes: it runs
+    # `os.path.splitext` first and refuses to cut into what it reads as the
+    # extension — everything past the last dot. A display key's dots are not
+    # extensions (a float-valued argument, a versioned model), and when the run
+    # past the last one is itself longer than the limit the function returns a
+    # string *longer* than it was asked for. The digest and attempt go on after,
+    # so the stem sails past the filesystem's name cap. Bound it ourselves.
+    key = safe_filename(name, max_length=MAX_KEY_LENGTH)[:MAX_KEY_LENGTH].rstrip("._-")
     number = (
         attempt if attempt is not None else max(task.attempt for task in action.tasks)
     )
