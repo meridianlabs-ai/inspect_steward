@@ -124,6 +124,7 @@ dev = [
     "pytest-dotenv",
     "pytest-timeout>=2.4.0",
     "types-psutil", # psutil ships no inline types and pyright runs strict
+    "types-PyYAML", # likewise for pyyaml; `doc` lists it too, but CI leaves `doc` out
     "inspect_flow>=0.13.1", # for the flow definition tests (0.3.266-compatible)
     # for the hawk definition tests; 3.13+ only, so those tests skip on 3.12
     "hawk[cli,runner]>=2.4.0; python_version >= '3.13'",
@@ -139,8 +140,10 @@ dev = [
     "anthropic>=1.0.0",
     "inspect_harbor",
     "inspect-sandboxes",
-    {include-group = "doc"},
 ]
+# Kept out of `dev` so CI can leave it out (`UV_NO_GROUP=doc` in build.yaml):
+# quarto-cli ships no wheel and its sdist downloads the Quarto binary at build
+# time. A local `uv sync` still installs it through `default-groups` below.
 doc = [
     "jupyter",
     "panflute",
@@ -169,6 +172,7 @@ local_scheme = "no-local-version" # Important for PyPI compatibility
 
 [tool.uv]
 managed = true
+default-groups = ["dev", "doc"]
 # openai, for a conflict that has no satisfying resolution: harbor depends on
 # litellm, which caps `openai>=2.20.0,<3.0.0`, while inspect-ai's OpenAI
 # provider gates on `openai>=3.1.0`. Left alone uv resolves it the only way it

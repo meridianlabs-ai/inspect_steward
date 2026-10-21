@@ -1,5 +1,5 @@
 version = 1
-revision = 3
+revision = 5
 requires-python = ">=3.12"
 resolution-markers = [
     "python_full_version >= '3.14' and sys_platform == 'win32'",
@@ -1973,6 +1973,7 @@ wheels = [
 [[package]]
 name = "inspect-steward"
 source = { editable = "." }
+default-groups = ["dev", "doc"]
 dependencies = [
     { name = "apprise" },
     { name = "click" },
@@ -1997,23 +1998,16 @@ hawk = [
 [package.dev-dependencies]
 dev = [
     { name = "anthropic" },
-    { name = "griffe" },
     { name = "hawk", extra = ["cli", "runner"], marker = "python_full_version >= '3.13'" },
     { name = "inspect-flow" },
     { name = "inspect-harbor" },
     { name = "inspect-sandboxes" },
-    { name = "jupyter" },
-    { name = "markdown" },
     { name = "openai" },
-    { name = "panflute" },
     { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-dotenv" },
     { name = "pytest-timeout" },
     { name = "pytest-xdist" },
-    { name = "pyyaml" },
-    { name = "quarto-cli" },
-    { name = "rich" },
     { name = "ruff" },
     { name = "types-psutil" },
     { name = "types-pyyaml" },
@@ -2054,23 +2048,16 @@ provides-extras = ["flow", "hawk"]
 [package.metadata.requires-dev]
 dev = [
     { name = "anthropic", specifier = ">=1.0.0" },
-    { name = "griffe", specifier = ">=2" },
     { name = "hawk", extras = ["cli", "runner"], marker = "python_full_version >= '3.13'", specifier = ">=2.4.0" },
     { name = "inspect-flow", specifier = ">=0.13.1" },
     { name = "inspect-harbor", git = "https://github.com/meridianlabs-ai/inspect_harbor?branch=main" },
     { name = "inspect-sandboxes" },
-    { name = "jupyter" },
-    { name = "markdown" },
     { name = "openai", specifier = ">=3.1.0" },
-    { name = "panflute" },
     { name = "pyright" },
     { name = "pytest" },
     { name = "pytest-dotenv" },
     { name = "pytest-timeout", specifier = ">=2.4.0" },
     { name = "pytest-xdist" },
-    { name = "pyyaml" },
-    { name = "quarto-cli", specifier = ">=1.9.36" },
-    { name = "rich" },
     { name = "ruff" },
     { name = "types-psutil" },
     { name = "types-pyyaml" },
