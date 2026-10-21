@@ -68,7 +68,9 @@ The venv must be activated (not just `uv run quarto`) so the reference-page filt
 To pull a newer version:
 
 ```bash
+uv sync --group doc
 cd docs
+source ../.venv/bin/activate
 mv _quarto.yml _quarto.yml.bak
 quarto update meridianlabs-ai/inspect-docs --no-prompt
 mv _quarto.yml.bak _quarto.yml
