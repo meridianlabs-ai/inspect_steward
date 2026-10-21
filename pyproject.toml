@@ -124,6 +124,7 @@ dev = [
     "pytest-dotenv",
     "pytest-timeout>=2.4.0",
     "types-psutil", # psutil ships no inline types and pyright runs strict
+    "types-PyYAML", # likewise for pyyaml; `doc` lists it too, but is not a default group
     "inspect_flow>=0.13.1", # for the flow definition tests (0.3.266-compatible)
     # for the hawk definition tests; 3.13+ only, so those tests skip on 3.12
     "hawk[cli,runner]>=2.4.0; python_version >= '3.13'",
@@ -139,8 +140,10 @@ dev = [
     "anthropic>=1.0.0",
     "inspect_harbor",
     "inspect-sandboxes",
-    {include-group = "doc"},
 ]
+# Not in `dev` or the default groups, so a plain `uv sync` or `uv run` leaves it
+# out: quarto-cli ships no wheel and its sdist downloads the Quarto binary at
+# build time. Ask for it where the docs are built: `uv sync --group doc`.
 doc = [
     "jupyter",
     "panflute",
