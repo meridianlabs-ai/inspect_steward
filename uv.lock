@@ -1973,7 +1973,6 @@ wheels = [
 [[package]]
 name = "inspect-steward"
 source = { editable = "." }
-default-groups = ["dev", "doc"]
 dependencies = [
     { name = "apprise" },
     { name = "click" },

@@ -49,10 +49,10 @@ See [`CLAUDE.md`](CLAUDE.md) for the full conventions used in this repo.
 
 ## Building the docs
 
-Docs live in `docs/` and are built with [Quarto](https://quarto.org). The Quarto CLI and the doc-build dependencies are in the `doc` group. `uv sync` installs it by default; CI leaves it out.
+Docs live in `docs/` and are built with [Quarto](https://quarto.org). The Quarto CLI and the doc-build dependencies are in the `doc` group, which a plain `uv sync` leaves out (and removes):
 
 ```bash
-uv sync
+uv sync --group doc
 cd docs
 source ../.venv/bin/activate
 quarto render        # outputs to docs/_site/
