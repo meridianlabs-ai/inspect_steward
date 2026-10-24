@@ -16,6 +16,7 @@ import pytest
 from inspect_steward._notify import (
     Bullets,
     Dialect,
+    Field,
     Kind,
     Post,
     Table,
@@ -43,7 +44,7 @@ POST = Post(
 
 def servers(instance: Any) -> list[Any]:
     """An instance's targets, typed. Apprise ships no annotations."""
-    return list(instance.servers)
+    return list(instance.services)
 
 
 class Sent:
@@ -73,6 +74,8 @@ FAMILIES = [
     ("slack", SLACK, Dialect.MRKDWN),
     ("email", MAIL, Dialect.HTML),
     ("a json webhook", JSON, Dialect.TEXT),
+    # a `?format=` picks among the formats a plugin declares
+    ("a json webhook asked for markdown", f"{JSON}?format=markdown", Dialect.MARKDOWN),
 ]
 
 
@@ -127,6 +130,26 @@ def test_nothing_is_converted_on_the_way_out(
     assert "<code>" not in sent.bodies["NotifyEmail"]
 
 
+def test_slack_is_handed_its_mrkdwn_untranslated(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # Apprise translates a body declared as markdown into mrkdwn, and read as
+    # CommonMark, mrkdwn's `*bold*` is italic -- every heading and label would
+    # arrive as `_label_`
+    instance = apprise.Apprise(SLACK)
+    sent = Sent()
+    sent.intercept(instance, monkeypatch)
+    post = Post(
+        kind=Kind.ATTENTION,
+        title="the grader is failing",
+        blocks=(Field("the run", "smoke"), Bullets(("4 samples",), heading="where")),
+    )
+
+    send_post(instance, post, workspace_at(tmp_path).log)
+
+    assert sent.bodies["NotifySlack"] == "*the run* smoke\n\n*where*\n• 4 samples"
+
+
 def test_a_channel_that_will_not_send_costs_a_line_and_not_the_turn(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:
@@ -155,6 +178,33 @@ def test_an_instance_that_cannot_even_be_read_is_reported(tmp_path: Path) -> Non
     assert delivery.reached_nobody
     assert delivery.failures and "notification targets" in delivery.failures[0]
     assert workspace.log.exists()
+
+
+def test_a_channel_named_by_a_config_file_goes_out_as_text(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    # the instance lists the config rather than the targets in it, and a
+    # config declares no format -- so the whole of it is sent the one dialect
+    # every target renders, rather than costing the turn
+    config = tmp_path / "apprise.yml"
+    config.write_text(f"urls:\n  - {JSON}\n", encoding="utf-8")
+    loaded: Any = apprise.AppriseConfig()
+    loaded.add(str(config))
+    instance: Any = apprise.Apprise()
+    instance.add(loaded)
+    bodies: list[str] = []
+
+    def send(body: str, **kwargs: Any) -> bool:
+        bodies.append(body)
+        return True
+
+    for server in instance:
+        monkeypatch.setattr(server, "send", send)
+
+    delivery = send_post(instance, POST, workspace_at(tmp_path).log)
+
+    assert delivery.failures == []
+    assert bodies and "```" not in bodies[0]
 
 
 def test_a_channel_with_no_usable_targets_is_a_failure(tmp_path: Path) -> None:

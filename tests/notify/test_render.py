@@ -145,17 +145,17 @@ def test_html_escapes_what_a_task_name_might_contain() -> None:
 FORMATS = [
     (Dialect.TEXT, "text"),
     (Dialect.MARKDOWN, "markdown"),
-    # mrkdwn claims markdown, which is what the Slack plugin declares -- so the
-    # conversion layer sees input and output agreeing and passes the body
-    # through untouched, which is the whole point of rendering per dialect
-    (Dialect.MRKDWN, "markdown"),
+    # mrkdwn declares nothing: Apprise reads `markdown` as CommonMark and
+    # translates it for Slack, so claiming it would turn `*bold*` into italics.
+    # No declaration is a body already written for its target, passed through
+    (Dialect.MRKDWN, None),
     (Dialect.HTML, "html"),
 ]
 
 
 @pytest.mark.parametrize(("dialect", "declared"), FORMATS)
 def test_apprise_is_told_the_body_is_already_what_it_is(
-    dialect: Dialect, declared: str
+    dialect: Dialect, declared: str | None
 ) -> None:
     assert body_format(dialect) == declared
 

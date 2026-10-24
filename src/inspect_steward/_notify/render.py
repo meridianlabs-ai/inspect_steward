@@ -32,17 +32,17 @@ def render(post: Post, dialect: Dialect) -> str:
     return _body(post, dialect)
 
 
-def body_format(dialect: Dialect) -> str:
+def body_format(dialect: Dialect) -> str | None:
     """What to tell Apprise the body already is, so that it converts nothing.
 
     Args:
         dialect: What was rendered.
 
     Returns:
-        Apprise's name for that format. `mrkdwn` claims `markdown`, which is what the Slack plugin declares — so the conversion layer sees input and output agreeing and passes the body through untouched.
+        Apprise's name for that format, or `None` for `mrkdwn`. Apprise has no name for Slack's dialect, and `markdown` would be read as CommonMark and translated — `*bold*` arriving as `_italic_` — so `mrkdwn` declares nothing, which Apprise takes as a body already written for its target and passes through.
     """
     if dialect is Dialect.MRKDWN:
-        return "markdown"
+        return None
     return str(dialect)
 
 

@@ -62,7 +62,7 @@ def send_post(instance: Any, post: Post, log: Path) -> Delivery:
     landed = 0
     failures: list[str] = []
     try:
-        servers = list(instance.servers)
+        servers = list(instance.services)
     except Exception as ex:
         return Delivery(
             failures=[_failed(log, f"could not read the notification targets: {ex!r}")]
@@ -107,7 +107,9 @@ def send_post(instance: Any, post: Post, log: Path) -> Delivery:
     return Delivery(landed=landed, failures=failures)
 
 
-async def _dispatch(instance: Any, title: str, body: str, format: str) -> str | None:
+async def _dispatch(
+    instance: Any, title: str, body: str, format: str | None
+) -> str | None:
     """One bounded, best-effort dispatch.
 
     Apprise's API is synchronous, so it goes to a worker thread — `abandon_on_cancel` because a notifier that has stopped answering must not hold the turn open past the deadline it already missed.
