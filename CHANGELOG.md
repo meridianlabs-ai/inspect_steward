@@ -1,3 +1,7 @@
+## Unreleased
+
+- Requires `apprise>=2`. Apprise 2.0 renamed `Apprise.servers` to `services`, so with a fresh install every post failed with `AttributeError: 'Apprise' object has no attribute 'servers'` and was recorded in `steward.log` as undelivered. Two quieter 2.0 changes are handled as well: a plugin may now declare several formats, which had routed email to plain text instead of the `<pre>` HTML body, and Apprise now translates any body declared as markdown for Slack, which would have turned every bold heading and label in a Slack post into italics.
+
 ## 0.2.10 (16 October 2026)
 
 - `integrity_scanner: false` (or `STEWARD_INTEGRITY_SCANNER=false`) turns off the built-in `scoring_integrity` scanner. The definition's own scanners and the `scanners` key are unaffected; with nothing left to scan, the launch lays down no scan directory and the smoke reports `scan_coverage` as unexercised. Turning it off over rows the built-in already recorded is refused at launch, like any removed scanner.
