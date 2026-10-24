@@ -1,4 +1,4 @@
-## Unreleased
+## 0.2.11 (24 October 2026)
 
 - Requires `apprise>=2`. Apprise 2.0 renamed `Apprise.servers` to `services`, so with a fresh install every post failed with `AttributeError: 'Apprise' object has no attribute 'servers'` and was recorded in `steward.log` as undelivered. Two quieter 2.0 changes are handled as well: a plugin may now declare several formats, which had routed email to plain text instead of the `<pre>` HTML body, and Apprise now translates any body declared as markdown for Slack, which would have turned every bold heading and label in a Slack post into italics.
 
