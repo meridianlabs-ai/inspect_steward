@@ -14,10 +14,11 @@ See execution.md, *Supervising workers*.
 import json
 import subprocess
 import sys
-from collections.abc import Collection
+from collections.abc import Collection, Mapping
 from dataclasses import dataclass
 from typing import Any, cast
 
+from inspect_ai._util.file import local_path
 from pydantic import BaseModel, ConfigDict
 
 CTL = (sys.executable, "-m", "inspect_ai._cli.main", "ctl")
@@ -84,7 +85,7 @@ class TaskRow(BaseModel):
     status: str
 
     log_location: str | None = None
-    """The log this task is writing, which is how a row correlates to what `observe_logs` will later read."""
+    """The log this task is writing, which is how a row correlates to what `observe_logs` will later read — once the observed location is in the form this reports (`by_log_path`)."""
 
     model: str | None = None
     solver: str | None = None
@@ -101,6 +102,20 @@ class TaskRow(BaseModel):
     paused_now: list[str] | None = None
     total_tokens: int = 0
     api_version: int = 0
+
+
+def by_log_path[T](locations: Mapping[str, T]) -> dict[str, T]:
+    """Re-key observed log locations by the path the control channel reports for each.
+
+    Observation reports a local log as a `file://` URI, and the control channel reports the same log as a plain path — the server applies `local_path` to every `log_location` it sends. A remote location is the same string on both sides. Compared as written, no task of a packed worker writing to a local log directory could be told from its siblings, so every reader that names a worker's rows by the log they are writing looks them up here.
+
+    Args:
+        locations: Keyed by log location as observation reported it, typically to the task identifier writing that log.
+
+    Returns:
+        The same mapping, keyed by the form `TaskRow.log_location` and the live `/tasks` rows take.
+    """
+    return {local_path(location): value for location, value in locations.items()}
 
 
 class Knob(BaseModel):

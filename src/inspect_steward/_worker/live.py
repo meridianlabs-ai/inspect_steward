@@ -22,7 +22,8 @@ from statistics import median
 from typing import cast
 
 import httpx
-from inspect_ai._util.file import local_path
+
+from .ctl import by_log_path
 
 TIMEOUT = 2.0
 """Seconds to wait for one worker's reads.
@@ -312,13 +313,9 @@ async def read_fleet_async(
     # one clock reading for the whole fleet, so two workers' idle times are
     # measured against the same instant rather than drifting with read order
     now = time.time()
-    # keyed by the path the control channel reports, which is the observed
-    # location with any `file://` dropped (`local_path`, as the server applies
-    # it): observation reports a local log as a URI, and compared as written
-    # no row of a packed worker writing to a local log directory was ever named
-    paths = {
-        local_path(location): identifier for location, identifier in locations.items()
-    }
+    # keyed by the path the control channel reports rather than the location
+    # observation reports, which differ for a local log (`by_log_path`)
+    paths = by_log_path(locations)
     read = await asyncio.gather(
         *(
             _read(target, timeout, paths, stuck_after, now, known or {})
@@ -475,12 +472,12 @@ def _identify(
 ) -> str | None:
     """Which of a worker's tasks this row is.
 
-    A worker holding one task needs no correlation and gets none, which keeps the default width free of a lookup that can fail. Beyond that the log a task is writing is what names it, since that is the only field the control channel and Steward's own observation both hold — compared as a local path (`paths` is keyed by one), because the channel reports one and observation reports a local log as a `file://` URI.
+    A worker holding one task needs no correlation and gets none, which keeps the default width free of a lookup that can fail. Beyond that the log a task is writing is what names it, since that is the only field the control channel and Steward's own observation both hold — looked up in `paths`, which is keyed by the form the channel reports (`by_log_path`).
     """
     if (only := target.only) is not None:
         return only
     location = _text(row.get("log_location"))
-    identifier = paths.get(local_path(location)) if location else None
+    identifier = paths.get(location) if location else None
     return identifier if identifier in target.identifiers else None
 
 
