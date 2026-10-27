@@ -137,3 +137,35 @@ def host_memory() -> HostMemory:
         swap_total=int(swap.total),
         swap_used=int(swap.used),
     )
+
+
+@dataclass(frozen=True)
+class HostDisk:
+    """What the filesystem under a path has left, as the kernel accounts for it.
+
+    The host's view rather than a cgroup's or a quota's: a path inside a bind mount or an overlay reads the backing filesystem, which is the one that fills as a fleet writes its logs. There is no swap analogue — free space is free space — so `headroom` is simply `free`, named to match `HostMemory` for the one report that fits either.
+    """
+
+    total: int
+    """The filesystem's size, in bytes."""
+
+    free: int
+    """What can be written without deleting anything, in bytes."""
+
+    @property
+    def headroom(self) -> int:
+        """Free space, named for symmetry with `HostMemory.headroom` — the figure a growing fleet draws down and the one the item and the fit are judged on."""
+        return self.free
+
+
+def host_disk(path: str) -> HostDisk:
+    """Read the filesystem that holds `path`.
+
+    Args:
+        path: A directory on the filesystem to measure — the run's log directory, where the `.eval` files are written.
+
+    Returns:
+        The filesystem's figures. One `disk_usage` read, which does not raise on a path that exists.
+    """
+    usage = psutil.disk_usage(path)
+    return HostDisk(total=int(usage.total), free=int(usage.free))

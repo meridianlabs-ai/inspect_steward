@@ -148,6 +148,11 @@ def echo_turn(result: TendResult, *, table: bool = True) -> None:
         for index, line in enumerate(result.memory.lines):
             click.echo(f"memory: {line}" if index == 0 else f"  {line}")
 
+    if result.disk is not None:
+        # one source with the markdown block (`DiskReport.lines`), the same
+        for index, line in enumerate(result.disk.lines):
+            click.echo(f"disk: {line}" if index == 0 else f"  {line}")
+
     for index, line in enumerate(result.tuning.lines):
         # one source with the markdown block (`TuningPlan.lines`), so the two
         # renderings cannot disagree about what the window supported
