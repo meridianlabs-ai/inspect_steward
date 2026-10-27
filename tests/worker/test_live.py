@@ -607,6 +607,46 @@ def test_each_task_of_a_packed_worker_is_named_by_the_log_it_is_writing(
     assert fleet.unavailable == []
 
 
+@pytest.mark.parametrize(
+    ("observed", "reported"),
+    [
+        pytest.param(
+            {
+                "file:///runs/logs/one.eval": "task-1",
+                "file:///runs/logs/two.eval": "task-2",
+            },
+            ("/runs/logs/one.eval", "/runs/logs/two.eval"),
+            id="local_log_dir",
+        ),
+        pytest.param(
+            {
+                "s3://bucket/logs/one.eval": "task-1",
+                "s3://bucket/logs/two.eval": "task-2",
+            },
+            ("s3://bucket/logs/one.eval", "s3://bucket/logs/two.eval"),
+            id="remote_log_dir",
+        ),
+    ],
+)
+def test_a_packed_worker_s_rows_are_named_whatever_form_its_log_dir_takes(
+    observed: dict[str, str], reported: tuple[str, str], sockets: Path
+) -> None:
+    """Observation reports a local log as a `file://` URI and the control channel reports it as a path.
+
+    Compared as written, no row of a packed worker writing to a local log directory was ever named: every row was dropped and every task read `finished`. A remote location is the same string on both sides and must stay so.
+    """
+    rows: list[object] = [
+        {**cast(dict[str, object], row), "log_location": location}
+        for row, location in zip(PACKED_ROWS, reported, strict=True)
+    ]
+    with worker(sockets / "w.sock", {**PACKED, "/tasks": rows}) as target:
+        fleet = read_packed(target.socket, observed)
+
+    assert fleet.unavailable == []
+    assert fleet.tasks["task-1"].total_tokens == 4096
+    assert fleet.tasks["task-2"].total_tokens == 8192
+
+
 def test_a_packed_worker_read_without_the_correlation_reports_nothing(
     sockets: Path,
 ) -> None:

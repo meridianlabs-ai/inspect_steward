@@ -1,3 +1,8 @@
+## Unreleased
+
+- A packed worker (one process running several tasks) writing to a local log directory had none of its live readings attributed: Steward names a worker's control-channel rows by the log each is writing, and observation reports a local log as a `file://` URI while the control channel reports a plain path, so no row ever matched. Every task of such a worker read as finished and not answering, with no live sample counts, limit usage, parked or stuck samples, and nothing for the tuning loop to act on. Locations are now compared as local paths. Single-task workers and remote log directories were unaffected.
+- A launch that removed one task from a packed worker writing to a local log directory never cancelled it: the partial stop names the worker's tasks the same way, by the log each is writing, so it matched none of them, reported the worker as left running, and the task went on writing into `logs/` against a manifest that no longer named it. Locations are now compared as local paths here too. Stopping every task of a worker, and remote log directories, were unaffected.
+
 ## 0.2.11 (24 October 2026)
 
 - Requires `apprise>=2`. Apprise 2.0 renamed `Apprise.servers` to `services`, so with a fresh install every post failed with `AttributeError: 'Apprise' object has no attribute 'servers'` and was recorded in `steward.log` as undelivered. Two quieter 2.0 changes are handled as well: a plugin may now declare several formats, which had routed email to plain text instead of the `<pre>` HTML body, and Apprise now translates any body declared as markdown for Slack, which would have turned every bold heading and label in a Slack post into italics.

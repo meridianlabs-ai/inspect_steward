@@ -23,6 +23,8 @@ from typing import cast
 
 import httpx
 
+from .ctl import by_log_path
+
 TIMEOUT = 2.0
 """Seconds to wait for one worker's reads.
 
@@ -311,9 +313,12 @@ async def read_fleet_async(
     # one clock reading for the whole fleet, so two workers' idle times are
     # measured against the same instant rather than drifting with read order
     now = time.time()
+    # keyed by the path the control channel reports rather than the location
+    # observation reports, which differ for a local log (`by_log_path`)
+    paths = by_log_path(locations)
     read = await asyncio.gather(
         *(
-            _read(target, timeout, locations, stuck_after, now, known or {})
+            _read(target, timeout, paths, stuck_after, now, known or {})
             for target in targets
         ),
     )
@@ -323,7 +328,7 @@ async def read_fleet_async(
 async def _read(
     target: LiveTarget,
     timeout: float,
-    locations: Mapping[str, str],
+    paths: Mapping[str, str],
     stuck_after: float = DEFAULT_STUCK_AFTER,
     now: float = 0.0,
     known: Mapping[str, Interim] | None = None,
@@ -421,7 +426,7 @@ async def _read(
     live: list[LiveTask] = []
     claimed = frozenset(model for row in rows if (model := _text(row.get("model"))))
     for row in rows:
-        identifier = _identify(row, target, locations)
+        identifier = _identify(row, target, paths)
         if identifier is None:
             # a row this worker is running that nothing can name. Dropped
             # rather than guessed at: the cost is one row's live columns for
@@ -463,16 +468,16 @@ async def _read(
 
 
 def _identify(
-    row: dict[str, object], target: LiveTarget, locations: Mapping[str, str]
+    row: dict[str, object], target: LiveTarget, paths: Mapping[str, str]
 ) -> str | None:
     """Which of a worker's tasks this row is.
 
-    A worker holding one task needs no correlation and gets none, which keeps the default width free of a lookup that can fail. Beyond that the log a task is writing is what names it, since that is the only field the control channel and Steward's own observation both hold.
+    A worker holding one task needs no correlation and gets none, which keeps the default width free of a lookup that can fail. Beyond that the log a task is writing is what names it, since that is the only field the control channel and Steward's own observation both hold — looked up in `paths`, which is keyed by the form the channel reports (`by_log_path`).
     """
     if (only := target.only) is not None:
         return only
     location = _text(row.get("log_location"))
-    identifier = locations.get(location) if location else None
+    identifier = paths.get(location) if location else None
     return identifier if identifier in target.identifiers else None
 
 

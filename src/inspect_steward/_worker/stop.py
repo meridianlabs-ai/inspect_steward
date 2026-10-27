@@ -26,7 +26,7 @@ import psutil
 
 from .._schedule import RunningWorker
 from .._util.process import UNREADABLE
-from .ctl import TaskRow, Unavailable, cancel_task, list_tasks
+from .ctl import TaskRow, Unavailable, by_log_path, cancel_task, list_tasks
 from .inflight import STEWARD_WORKER
 
 TERM_GRACE = 5.0
@@ -126,9 +126,10 @@ def stop_workers(
         for row in listing:
             rows.setdefault(row.pid, []).append(row)
     unreadable = listing.detail if isinstance(listing, Unavailable) else ""
+    paths = by_log_path(locations or {})
 
     return [
-        _stop(request, rows.get(request.worker.pid, []), unreadable, locations or {})
+        _stop(request, rows.get(request.worker.pid, []), unreadable, paths)
         for request in requests
     ]
 
@@ -137,9 +138,12 @@ def _stop(
     request: StopRequest,
     rows: list[TaskRow],
     unreadable: str,
-    locations: Mapping[str, str],
+    paths: Mapping[str, str],
 ) -> Stop:
-    """Stop one worker's share, asking first and signalling only if there is nobody to ask."""
+    """Stop one worker's share, asking first and signalling only if there is nobody to ask.
+
+    `paths` maps a log, in the form the control channel reports it, to the task writing it (`by_log_path`).
+    """
     worker = request.worker
     if not request.whole:
         # a packed worker holding work that is still wanted. Its tasks have to
@@ -150,7 +154,7 @@ def _stop(
         matched = [
             row
             for row in rows
-            if row.log_location and locations.get(row.log_location) in wanted
+            if row.log_location and paths.get(row.log_location) in wanted
         ]
         if len(matched) != len(wanted):
             return Stop(
