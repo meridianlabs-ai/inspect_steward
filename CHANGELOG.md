@@ -1,5 +1,6 @@
 ## 0.2.11 (24 October 2026)
 
+- Record the free space on the filesystem the run's `.eval` logs are written to, each tend while something runs, show the figures and a two-hour trend beside the host memory block, and raise a `disk` item for the agent when the filesystem is under a twentieth free or on course to fill within the hour (the runbook's remedy is pruning old logs, growing the volume, or lowering concurrency). A remote log store has no local disk and raises no item.
 - Requires `apprise>=2`. Apprise 2.0 renamed `Apprise.servers` to `services`, so with a fresh install every post failed with `AttributeError: 'Apprise' object has no attribute 'servers'` and was recorded in `steward.log` as undelivered. Two quieter 2.0 changes are handled as well: a plugin may now declare several formats, which had routed email to plain text instead of the `<pre>` HTML body, and Apprise now translates any body declared as markdown for Slack, which would have turned every bold heading and label in a Slack post into italics.
 
 ## 0.2.10 (16 October 2026)

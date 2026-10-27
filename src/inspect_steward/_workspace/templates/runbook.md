@@ -242,6 +242,7 @@ A smoke that fails twice is a stop. Notify it explicitly: nothing posts before t
 | `unwritten` | you | a task has no write-up in `analysis.md` | write the section |
 | `journal_damage` | you | journal lines could not be read | read them; ack with what they held |
 | `memory` | you | the host is short of memory, or on course to run out | see Memory |
+| `disk` | you | the log disk is low on space, or on course to fill | see Disk |
 
 ### Dispositions
 
@@ -290,6 +291,15 @@ Every tend reads the host beside the fleet: `memory:` in a status, `**memory**` 
 - **Where swap cannot be added**: no sudo, or a container or pod, which dies at its cgroup limit whatever the host has. Lower concurrency instead: `steward ramp hold --reason "host memory"`, then `inspect ctl config TASK --max-samples N` down on the heaviest tasks, the downward retune that is already yours. In-flight samples drain rather than stop, so it takes minutes. The item is yours, so `raise` refuses it: reach the operator with `steward notify --kind attention`, the swap commands, size and path ready to paste, and leave the item open until the next tend's line shows headroom back. A pinned setpoint is not yours to lower; there swap is the only lever, so notify with `--kind stopped` and wait.
 - **On macOS** swap is the system's and there is nothing to add. Lower concurrency.
 - **Never raise `max_samples` back by hand.** Low headroom holds the climb (see Tuning), and once headroom returns the ramp climbs back one step per clean window. `steward ramp resume` if you held it.
+
+### Disk
+
+Every tend also reads the free space on the filesystem your `.eval` logs land on: `disk:` in a status, `**disk**` in a collect. The second line is a straight line through the last two hours of tends, and says when the filesystem fills at that rate. A `disk` item arrives when free space is under a twentieth of the filesystem, or the line reaches zero inside an hour. Left alone, a write fails, the worker dies with no traceback, the task respawns into the same full disk, and it reaches `stalled` with nothing to say why; this is the item you act on before that. A remote log store has no local disk and raises no item.
+
+- **Free space first, where the space is yours to reclaim.** `df -h` on the log directory for the picture. Old runs under `logs-archive/` are the usual weight; compress or delete what a completed run no longer needs, and say what you removed. A `.eval` file for a run still in flight is not yours to touch.
+- **Grow the volume where you can**, the disk twin of adding swap: it reaches the running workers at once and clears the item without lowering anything. Whether there is room to grow — a resizable volume, an attached disk — is the operator's to know, so where it is not plainly yours, notify with the figures and ask.
+- **Where neither is possible**, lower concurrency: `steward ramp hold --reason "log disk"`, then `inspect ctl config TASK --max-samples N` down on the heaviest tasks, the downward retune that is already yours. It slows the fill rather than stopping it, so reach the operator with `steward notify --kind attention` and leave the item open until the next tend's line shows space returning.
+- **Never raise `max_samples` back by hand.** Once space returns the ramp climbs back one step per clean window; `steward ramp resume` if you held it.
 
 ### Standing rules
 
