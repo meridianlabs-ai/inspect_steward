@@ -26,9 +26,16 @@ what keeps a fifteen-task fixture affordable.
 from pathlib import Path
 
 import pytest
+from inspect_ai._eval.eval_set_overrides import EvalSetOverrides
+from inspect_ai._eval.eval_set_selection import (
+    EVAL_SET_SELECTION_VERSION,
+    EvalSetSelection,
+    EvalSetSelectionTask,
+)
 from inspect_ai._eval.evalset import task_identifier
-from inspect_ai.log import EvalLog
+from inspect_ai.log import EvalLog, read_eval_log
 from inspect_steward import Manifest, read_eval_set
+from inspect_steward._evalset.observe import observe_logs, observe_tasks
 
 from ._hawk import requires_hawk
 from ._worker import landed_logs, run_workers, selection
@@ -100,3 +107,44 @@ def test_identifier_correlates_by_definition_type(fixture: str, tmp_path: Path) 
     other.mkdir()
     manifest, logs = run_whole_definition(fixture, tmp_path, cwd=other)
     assert_correlates(manifest, logs)
+
+
+def test_a_task_a_worker_s_task_creates_runs_and_names_its_creator(
+    tmp_path: Path,
+) -> None:
+    """A real worker, selected the way Steward spawns one, whose task adds another with `enqueue_task()`.
+
+    The selection carries the pruning facets, as `_worker.spawn` writes them, so the child — built by calling its `@task` function inside the running eval — must run its own body rather than an empty placeholder. Its log records its creator's task id (`eval.origin`), and carries the worker's one `run_id` (execution.md, *One `eval_set()` call per worker*), which is how a live worker's discovery entry vouches for it.
+    """
+    manifest = read_eval_set(FIXTURES / "runtime_evalset.py", cwd=tmp_path)
+    logs = tmp_path / "logs"
+    steward_selection = EvalSetSelection(
+        version=EVAL_SET_SELECTION_VERSION,
+        eval_set_id="steward-test-eval-set",
+        tasks=[
+            EvalSetSelectionTask(
+                identifier=task.identifier,
+                registry_name=task.registry_name,
+                args_hash=task.args_hash,
+            )
+            for task in manifest.tasks
+        ],
+        overrides=EvalSetOverrides(log_dir=str(logs)),
+    )
+
+    (result,) = run_workers(
+        FIXTURES / "runtime_evalset.py", [steward_selection], cwd=tmp_path
+    )
+    assert result.ok, result.stdout + result.stderr
+
+    landed = {log.eval.task: log for log in landed_logs(logs)}
+    assert sorted(landed) == ["child", "creator"]
+    child = read_eval_log(landed["child"].location)
+    assert [sample.input for sample in child.samples or []] == ["hello"]
+    assert child.eval.origin is not None
+    assert child.eval.origin.task_id == landed["creator"].eval.task_id
+    assert len({log.eval.run_id for log in landed.values()}) == 1
+    observed = observe_tasks(manifest, observe_logs(logs))
+    assert [(task.log.task, task.created_by) for task in observed.runtime] == [
+        ("child", manifest.tasks[0].identifier)
+    ]

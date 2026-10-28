@@ -27,8 +27,10 @@ from inspect_steward._cli.launch import delta_lines
 from inspect_steward._cli.main import steward
 from inspect_steward._cli.options import PASSTHROUGH
 from inspect_steward._evalset.manifest import Manifest, read_manifest, write_manifest
+from inspect_steward._evalset.observe import observe_logs
 from inspect_steward._launch import Delta, Reshaped
 from inspect_steward._launch.launch import _pool_advice
+from inspect_steward._tend import status
 from inspect_steward._workspace import (
     ALIASED,
     LAUNCHED,
@@ -367,6 +369,56 @@ def test_the_archive_gate_refuses_and_accept_archive_proceeds(
     assert accepted.exit_code == 0, accepted.output
     assert committed(workspace).tasks[0].identifier == SCALED.identifier
     assert [path.name for path in workspace.logs_archive.iterdir()] != []
+
+
+CHILD = SynthTask("child", samples=3)
+"""A task no definition names, which a task of the packed worker enqueued while it ran."""
+
+
+@pytest.mark.parametrize(
+    ("relaunches", "departed"),
+    [
+        pytest.param([[ECHO]], [ADDITION], id="removal"),
+        pytest.param([[SCALED, ECHO]], [ADDITION], id="args_edit"),
+    ],
+)
+def test_a_task_leaving_a_packed_worker_is_archived_beside_a_runtime_task_that_stays(
+    relaunches: list[list[SynthTask]],
+    departed: list[SynthTask],
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The archive the delta asked consent for happens, even where the departed task shared its worker's run with one that stayed.
+
+    A packed worker runs `addition` and `echo` under one `run_id`, and `echo` adds `child` with `enqueue_task()`. A departed task's own log names no creator, so it is an orphan whatever run it shared, and `child`, whose log names `echo`, stays as `echo`'s runtime task.
+    """
+    create_workspace(tmp_path, git=False)
+    (tmp_path / DEFINITION).write_text("", encoding="utf-8")
+    monkeypatch.chdir(tmp_path)
+    workspace = Workspace.at(tmp_path)
+    for task in (ADDITION, ECHO):
+        write_log(workspace.logs, task, run_id="packed")
+    write_log(workspace.logs, CHILD, run_id="packed", created_by=ECHO.task_id)
+    capture = fake_capture(monkeypatch, synth_manifest([ADDITION, ECHO]))
+    assert run("--no-timer").exit_code == 0
+
+    for n, tasks in enumerate(relaunches):
+        # a task the edit added has already run in a worker of its own, so
+        # the launch's own turn has nothing to spawn
+        for task in tasks:
+            if task not in (ADDITION, ECHO):
+                write_log(workspace.logs, task, run_id=f"later-{n}")
+        capture.manifest = synth_manifest(tasks)
+        result = run("--no-timer", "--accept-archive")
+        assert result.exit_code == 0, result.output
+
+    archived = observe_logs(workspace.logs_archive).attempts
+    assert sorted(archived) == sorted(task.identifier for task in departed)
+    (kept,) = observe_logs(workspace.logs).created
+    assert kept.task == "child"
+    reported = status(workspace)
+    assert reported.summary.orphans == []
+    assert [row.created_by for row in reported.progress.runtime] == [ECHO.identifier]
 
 
 def test_the_refused_preview_names_the_fleet_a_reshape_would_stop() -> None:

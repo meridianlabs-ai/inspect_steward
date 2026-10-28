@@ -39,6 +39,7 @@ from inspect_steward._tend import (
     status,
     tend,
 )
+from inspect_steward._tend.progress import RuntimeState
 from inspect_steward._worker import ConfigView, resolve_inflight
 from inspect_steward._workspace import (
     ACTION,
@@ -786,12 +787,14 @@ def test_status_md_clips_a_long_key_and_the_agent_s_page_keeps_it_whole(
     result = turn(workspace)
     rendered = workspace.status.read_text(encoding="utf-8")
 
-    assert "| `cais_swebenchpr…iku-4-5-20251001` |" in rendered
-    assert "| `cais_swebenchpr…nai/gpt-5.6-luna` |" in rendered
+    assert "| ✓ | `cais_swebenchpr…iku-4-5-20251001` |" in rendered
+    assert "| ✓ | `cais_swebenchpr…nai/gpt-5.6-luna` |" in rendered
     assert (
-        "| `cais_swebenchpro@anthropic/claude-haiku-4-5-20251001` |"
+        "| ✓ | `cais_swebenchpro@anthropic/claude-haiku-4-5-20251001` |"
         in collect_markdown(result)
     )
+    # a run that created nothing at runtime has no column to say who did
+    assert "created by" not in rendered
 
 
 def test_a_finished_run_asks_to_be_accepted_rather_than_reading_as_all_clear(
@@ -813,6 +816,91 @@ def test_a_finished_run_asks_to_be_accepted_rather_than_reading_as_all_clear(
     rendered = workspace.status.read_text(encoding="utf-8")
     assert "waiting to be accepted" in rendered
     assert "Nothing needs attention." not in rendered
+
+
+def test_a_runtime_task_is_a_row_of_its_own_and_asks_nothing(
+    tmp_path: Path,
+) -> None:
+    """A task a manifest task added with `enqueue_task()` is observed, never acted on.
+
+    Its identifier is in no manifest, so it used to be an orphan: archived on the turn that met it, and — left `started` by a worker that is gone — a vanished task asking for a ruling nobody could give. Its log names its creator, so it is a task of the run with a row of its own, and the only items are the ones the creator itself is owed.
+    """
+    creator, child = SynthTask("creator"), SynthTask("child", samples=4)
+    other = SynthTask("other")
+    workspace, _ = prepared(tmp_path, [creator, other])
+    write_log(workspace.logs, creator)
+    write_log(workspace.logs, other)
+    write_log(
+        workspace.logs, child, task_id="c1", completed=3, created_by=creator.task_id
+    )
+    write_log(
+        workspace.logs,
+        child,
+        task_id="c2",
+        status="started",
+        created_by=creator.task_id,
+    )
+
+    result = turn(workspace)
+
+    assert result.archived == []
+    assert (result.summary.tasks, result.summary.orphans) == (2, [])
+    assert list(result.anomalies.open) == []
+    assert not any(child.identifier in item.subject for item in result.items)
+    # on the operator's page and the agent's alike: a state glyph on every
+    # row, and the creator in the last column, empty on a manifest row
+    for document in (
+        workspace.status.read_text(encoding="utf-8"),
+        collect_markdown(result),
+    ):
+        piped = [
+            [cell.strip() for cell in line.strip("|").split("|")]
+            for line in document.splitlines()
+            if line.startswith("| ")
+        ]
+        assert [cells[-1] for cells in piped if cells[1] == "task"] == ["created by"]
+        table = [[*cells[:3], cells[-1]] for cells in piped if cells[1].startswith("`")]
+        assert table == [
+            ["✓", "`creator`", "10/10", ""],
+            ["✓", "`other`", "10/10", ""],
+            ["✓", "`child#c1`", "3/4", "creator"],
+            ["✗", "`child#c2`", "0/0", "creator"],
+        ]
+
+
+def test_a_task_that_left_a_packed_worker_is_archived_with_what_it_created(
+    tmp_path: Path,
+) -> None:
+    """A departed task's log is an orphan however it shares a run with a task that stayed, with no record of what Steward launched needed to say so — and the task it created goes with it, while the one its sibling created stays."""
+    alpha, beta = SynthTask("alpha"), SynthTask("beta")
+    workspace, _ = prepared(tmp_path, [beta])
+    names = {
+        write_log(workspace.logs, task, run_id="packed").name: task.name
+        for task in (alpha, beta)
+    }
+    for creator in (alpha, beta):
+        location = write_log(
+            workspace.logs,
+            SynthTask(f"from_{creator.name}"),
+            run_id="packed",
+            created_by=creator.task_id,
+        )
+        names[location.name] = f"from_{creator.name}"
+
+    result = turn(workspace)
+
+    assert sorted(names[Path(location).name] for location in result.archived) == [
+        "alpha",
+        "from_alpha",
+    ]
+    # the turn that archives an orphan still shows it, on its way out
+    assert [
+        (row.name.split("#")[0], row.created_by, row.state)
+        for row in result.progress.runtime
+    ] == [
+        ("from_beta", beta.identifier, RuntimeState.SUCCEEDED),
+        ("from_alpha", None, RuntimeState.ORPHANED),
+    ]
 
 
 def test_status_md_is_quiet_when_there_is_nothing_to_say(tmp_path: Path) -> None:

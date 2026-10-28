@@ -1144,3 +1144,88 @@ class TestAConfiguredScanWithNoIdentity:
 
         observed = turn(workspace).observed
         assert observed is not None and observed.unreadable == []
+
+
+# --- a finding on a task created at runtime --------------------------------
+
+CHILD = SynthTask("child", samples=3)
+"""A task no definition names, which `TASK` adds with `enqueue_task()`."""
+
+CHILD_ID = "child-task-1"
+
+CHILD_CLASS = scan_class(
+    SCANNER, "reward_hacking", task=CHILD.name, identifier=CHILD_ID
+)
+
+
+def runtime_flagged(root: Path) -> Workspace:
+    """`TASK` landed clean, and the task it created at runtime landed with one flagged sample."""
+    workspace = scanning(root, land=False)
+    creator = write_log(workspace.logs, TASK)
+    record(workspace, str(creator), uuid="clean", value=False, label=None)
+    child = write_log(workspace.logs, CHILD, task_id=CHILD_ID, created_by=TASK.task_id)
+    record(workspace, str(child), uuid="c0", value=True, label="reward_hacking")
+    record(workspace, str(child), uuid="c1", value=False, label=None)
+    sync_scan(log_dir=str(workspace.logs), scan_id=SCAN_ID)
+    return workspace
+
+
+def test_a_finding_on_a_task_created_at_runtime_needs_a_ruling(
+    tmp_path: Path,
+) -> None:
+    """Its samples are part of what a signature covers, so what a scanner flags in them is a finding like any other: a window filed under the runtime task, an item for the agent once the task's log has finished, a refusal at the gate until somebody rules, and its samples in the coverage count."""
+    workspace = runtime_flagged(tmp_path)
+
+    result = turn(workspace)
+
+    (window,) = result.anomalies.open
+    assert (window.class_key, window.evidence.tasks) == (CHILD_CLASS, (CHILD_ID,))
+    # its log has finished, so the finding is the agent's to investigate now
+    assert [item.subject for item in result.items if item.kind == ANOMALY] == [
+        CHILD_CLASS
+    ]
+    assert OPEN_WINDOW in [blocker.kind for blocker in check(result, None)]
+    assert result.coverage.by_task[CHILD_ID] == TaskCoverage(scanned=2, landed=3)
+
+    rule(workspace, "dismiss", class_key=CHILD_CLASS)
+    assert turn(workspace).anomalies.open == ()
+
+
+@pytest.mark.parametrize(
+    ("disposition", "refused"),
+    [
+        pytest.param("rerun", True, id="rerun"),
+        pytest.param("exclude", True, id="exclude"),
+        pytest.param("zero", True, id="zero"),
+        pytest.param("dismiss", False, id="dismiss"),
+        pytest.param("score", False, id="score"),
+    ],
+)
+def test_a_finding_on_a_task_created_at_runtime_refuses_what_steward_cannot_carry_out(
+    disposition: str,
+    refused: bool,
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Steward never re-runs a runtime task and does not rewrite its log, so a ruling that would need either is refused rather than recorded and left forever unapplied."""
+    create_workspace(tmp_path, git=False)
+    workspace = runtime_flagged(tmp_path)
+    turn(workspace)
+    monkeypatch.chdir(workspace.root)
+
+    ruled = CliRunner().invoke(
+        steward,
+        [
+            "rule",
+            CHILD_CLASS,
+            "--disposition",
+            disposition,
+            "--reason",
+            "looked at it",
+            "--by",
+            "kaia",
+        ],
+    )
+
+    assert (ruled.exit_code != 0) is refused, ruled.output
+    assert ("created at runtime" in ruled.output) is refused

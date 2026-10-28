@@ -604,3 +604,155 @@ def test_a_changed_slice_is_still_reshaped_rather_than_redirected(
     (only,) = observe_tasks(manifest, observe_logs(tmp_path)).tasks
 
     assert only.reason is IncompleteReason.RESHAPED
+
+
+# --- tasks created at runtime -------------------------------------------
+
+CHILD = SynthTask("child", samples=4)
+"""A task the manifest does not name, which a manifest task adds with `enqueue_task()`."""
+
+Written = tuple[SynthTask, str, str | None]
+"""A log to write: its task, its task id, and the task id of its creator (`None` for a task its run was given)."""
+
+
+@pytest.mark.parametrize(
+    ("logs", "runtime", "runtime_orphans", "states"),
+    [
+        pytest.param(
+            [(TASK, "t", None), (CHILD, "c", "t")],
+            [("c", TASK.identifier)],
+            [],
+            [TaskState.INCOMPLETE],
+            id="created_by_a_manifest_task",
+        ),
+        pytest.param(
+            [(TASK, "t", None), (CHILD, "c", "elsewhere")],
+            [],
+            ["c"],
+            [TaskState.INCOMPLETE],
+            id="creator_in_no_log_is_an_orphan",
+        ),
+        pytest.param(
+            [(TASK, "t", None), (CHILD, "c", None)],
+            [],
+            [],
+            [TaskState.INCOMPLETE, TaskState.ORPHANED],
+            id="no_origin_is_never_a_runtime_task",
+        ),
+        pytest.param(
+            [(TASK, "t", None), (CHILD, "c", "t"), (CHILD, "g", "c")],
+            [("c", TASK.identifier), ("g", TASK.identifier)],
+            [],
+            [TaskState.INCOMPLETE],
+            id="created_by_a_runtime_task_belongs_to_its_manifest_task",
+        ),
+        pytest.param(
+            [(CHILD, "c", "gone"), (CHILD, "g", "c")],
+            [],
+            ["c", "g"],
+            [TaskState.MISSING],
+            id="a_chain_reaching_no_manifest_task_is_orphaned_whole",
+        ),
+        pytest.param(
+            [(TASK, "t", None), (TASK, "r", "t")],
+            [("r", TASK.identifier)],
+            [],
+            [TaskState.INCOMPLETE],
+            id="same_identifier_as_a_manifest_task_is_still_runtime",
+        ),
+        pytest.param(
+            [(CHILD, "a", "b"), (CHILD, "b", "a")],
+            [],
+            ["a", "b"],
+            [TaskState.MISSING],
+            id="a_cycle_reaches_nothing",
+        ),
+    ],
+)
+def test_a_runtime_task_is_a_log_whose_creator_chain_reaches_a_manifest_task(
+    logs: list[Written],
+    runtime: list[tuple[str, str]],
+    runtime_orphans: list[str],
+    states: list[TaskState],
+    tmp_path: Path,
+) -> None:
+    """Provenance is read from `eval.origin`, never inferred: a log is a runtime task exactly when the task ids of its creators lead to a manifest task's attempt.
+
+    A log with a creator is never a manifest task's attempt, whatever its identifier — the identifier says what is evaluated, not who started it — so one built exactly like a manifest task neither completes it nor stands as its result.
+    """
+    for task, task_id, created_by in logs:
+        write_log(
+            tmp_path, task, task_id=task_id, created_by=created_by, status="started"
+        )
+
+    observed = observe_tasks(synth_manifest([TASK]), observe_logs(tmp_path))
+
+    assert [(task.task_id, task.created_by) for task in observed.runtime] == runtime
+    assert sorted(log.task_id for log in observed.runtime_orphans) == runtime_orphans
+    assert [task.state for task in observed.tasks] == states
+
+
+def test_a_runtime_task_keeps_its_creator_through_a_resume_and_curation(
+    tmp_path: Path,
+) -> None:
+    """Inspect keeps a task's id when it resumes it, so the resumed creator's attempts all name the runtime tasks of every earlier attempt — and nothing has to remember the first attempt once signoff has curated it out."""
+    manifest = synth_manifest([TASK])
+    first = write_log(tmp_path, TASK, status="error", error="killed", created=EARLIER)
+    write_log(tmp_path, TASK, created=LATER)
+    write_log(tmp_path, CHILD, task_id="first", created_by=TASK.task_id)
+    write_log(tmp_path, CHILD, task_id="second", created_by=TASK.task_id)
+
+    present = observe_tasks(manifest, observe_logs(tmp_path))
+    first.unlink()
+    curated = observe_tasks(manifest, observe_logs(tmp_path))
+
+    for observed in (present, curated):
+        assert sorted(task.task_id for task in observed.runtime) == ["first", "second"]
+        assert {task.chain for task in observed.runtime} == {TASK.task_id}
+        assert observed.runtime_orphans == []
+
+
+def test_a_fresh_start_supersedes_the_runtime_tasks_of_the_execution_it_replaced(
+    tmp_path: Path,
+) -> None:
+    """A creator started afresh gets a new task id, and the runtime tasks of the execution it abandoned are superseded with the attempts that created them: still the manifest task's, and no part of its results."""
+    write_log(tmp_path, TASK, task_id="stale", created=EARLIER)
+    write_log(tmp_path, TASK, task_id="fresh", created=LATER)
+    write_log(tmp_path, CHILD, task_id="from-stale", created_by="stale")
+    write_log(tmp_path, CHILD, task_id="from-fresh", created_by="fresh")
+
+    observed = observe_tasks(synth_manifest([TASK]), observe_logs(tmp_path))
+
+    assert [task.task_id for task in observed.runtime] == ["from-fresh"]
+    assert [task.task_id for task in observed.runtime_superseded] == ["from-stale"]
+    assert observed.runtime_orphans == []
+
+
+def test_a_packed_worker_s_runtime_task_names_exactly_its_creator(
+    tmp_path: Path,
+) -> None:
+    """Every task of a packed worker shares its run, and the runtime task's origin still names the one that created it."""
+    other = SynthTask("other")
+    write_log(tmp_path, TASK)
+    write_log(tmp_path, other)
+    write_log(tmp_path, CHILD, task_id="c", created_by=other.task_id)
+
+    observed = observe_tasks(synth_manifest([TASK, other]), observe_logs(tmp_path))
+
+    assert [task.created_by for task in observed.runtime] == [other.identifier]
+
+
+def test_a_task_that_left_the_definition_takes_its_runtime_tasks_with_it(
+    tmp_path: Path,
+) -> None:
+    """A departed task's own log is an orphan as it always was, and the tasks it created at runtime have no manifest task to belong to — whatever run they shared with the task that stayed."""
+    removed = SynthTask("removed")
+    write_log(tmp_path, TASK)
+    write_log(tmp_path, removed)
+    write_log(tmp_path, CHILD, task_id="c", created_by=removed.task_id)
+
+    observed = observe_tasks(synth_manifest([TASK]), observe_logs(tmp_path))
+
+    assert [task.key for task in observed.by_state(TaskState.ORPHANED)] == ["removed"]
+    assert observed.runtime == []
+    assert [log.task_id for log in observed.runtime_orphans] == ["c"]

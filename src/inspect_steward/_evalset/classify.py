@@ -167,7 +167,7 @@ def scan_class(scanner: str, label: str | None, *, task: str, identifier: str) -
         scanner: The scanner's merge name, as the run committed it.
         label: The result's own label — `scoring_integrity`'s issue category — or `None` for a scanner that sets none.
         task: The task's name, for a key a person can read.
-        identifier: The task identifier, which the digest separates two models of one task by.
+        identifier: The task identifier, which the digest separates two models of one task by — or, for a task created at runtime, its task id, which separates two such tasks of one name.
 
     Returns:
         `scan:{scanner}:{label}:{task}:{digest}`, or `scan:{scanner}:{task}:{digest}` for a scanner that sets no label.
@@ -261,6 +261,10 @@ def _segment(value: str) -> str:
 def kind_of(class_key: str) -> str:
     """A class key's kind — its first segment: `error`, `limit`, `task`, `score`, `scan`, or `scanerror`."""
     return class_key.partition(":")[0]
+
+
+KINDS = frozenset({"error", "limit", "task", "score", "scan", "scanerror"})
+"""Every class key's possible kind (`kind_of`) — what tells a class key from the other things a signature can name as an exception, which are sentences."""
 
 
 def matching_keys(keys: Sequence[str], token: str) -> list[str]:

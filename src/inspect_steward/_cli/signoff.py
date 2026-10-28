@@ -14,6 +14,7 @@ from typing import NoReturn
 import click
 
 from .._anomaly.model import Disposition
+from .._evalset.classify import KINDS, kind_of
 from .._evalset.manifest import ManifestError
 from .._signoff import Signoff, SignoffError, committed_manifest, signoff
 from .._tend.anomalies_md import outcomes_table
@@ -151,7 +152,14 @@ def _echo_signoff(result: Signoff, root: Path) -> None:
         count = len(signature.exceptions)
         click.echo(f"  {count} accepted exception{'s' if count != 1 else ''}:")
         for key in signature.exceptions:
-            click.echo(f"    {finding_label(key)} · `{key}`")
+            # a class key is named in the eval's words; anything else a
+            # signature names -- scan coverage, a task created at runtime that
+            # did not finish -- is already a sentence
+            click.echo(
+                f"    {finding_label(key)} · `{key}`"
+                if kind_of(key) in KINDS
+                else f"    {key}"
+            )
     else:
         click.echo("  no accepted exceptions")
     # the same table `anomalies.md` opens on: what did not take the normal

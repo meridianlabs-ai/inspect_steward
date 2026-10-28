@@ -15,10 +15,12 @@ from inspect_steward._cli.main import steward
 from inspect_steward._evalset.archive import archive_dir
 from inspect_steward._evalset.manifest import write_manifest
 from inspect_steward._scan import initialize_scan, scan_dir_location
+from inspect_steward._schedule import InFlight
 from inspect_steward._signoff import (
     EMPTY,
     FAILED,
     OPEN_WINDOW,
+    RUNNING,
     STANDING,
     UNDECIDED,
     UNFINALIZED,
@@ -31,7 +33,7 @@ from inspect_steward._signoff import (
     signoff,
 )
 from inspect_steward._tend import Verdict, collect_markdown, status
-from inspect_steward._tend.items import UNREADABLE
+from inspect_steward._tend.items import SIGNOFF_READY, UNREADABLE, tend_items
 from inspect_steward._tend.turn import SCAN_FOLD_FAILED
 from inspect_steward._workspace import (
     ACKNOWLEDGED,
@@ -414,6 +416,136 @@ def test_curation_archives_the_superseded_attempt_and_keeps_the_current_one(
     archived = list(Path(archive_dir(str(workspace.logs))).iterdir())
     assert len(archived) == 1
     assert logs(workspace) == [current]
+
+
+CHILD = SynthTask("child", samples=4)
+"""A task no definition names, which `TASK` adds with `enqueue_task()`."""
+
+
+def test_curation_keeps_a_runtime_task_whose_creator_was_resumed(
+    tmp_path: Path,
+) -> None:
+    """The case that lost results in a real campaign, and the caveat it is owed.
+
+    A creator's worker is killed mid-run, leaving its runtime task's log at `started` with the samples it had finished; Steward resumes the creator, which keeps its task id, carries those samples forward and adds a fresh runtime task. Curation archives the killed creator attempt and keeps both runtime logs — the resumed attempt names them through its task id, so nothing has to remember the attempt that went. The one left unfinished is named in the signature, not refused over: nothing Steward can do would finish it.
+    """
+    workspace, _ = prepared(tmp_path, [TASK])
+    # cancelled rather than left `started`, so the only thing between this run
+    # and a signature is curation -- a vanished attempt would open a window
+    killed = write_log(
+        workspace.logs,
+        TASK,
+        status="cancelled",
+        total=2,
+        created="2026-01-01T00:00:00Z",
+        run_id="a",
+    )
+    unfinished = write_log(
+        workspace.logs,
+        CHILD,
+        task_id="first1",
+        status="started",
+        created="2026-01-01T00:00:01Z",
+        run_id="a",
+        created_by=TASK.task_id,
+    )
+    resumed = write_log(
+        workspace.logs, TASK, created="2026-01-02T00:00:00Z", run_id="b"
+    )
+    fresh = write_log(
+        workspace.logs,
+        CHILD,
+        task_id="second",
+        created="2026-01-02T00:00:01Z",
+        run_id="b",
+        created_by=TASK.task_id,
+    )
+
+    result = sign(workspace)
+    after = turn(workspace)
+
+    assert result.signature is not None and result.curated is not None
+    assert [Path(entry.location).name for entry, _ in result.curated.moved] == [
+        killed.name
+    ]
+    assert result.signature.exceptions == (
+        "task created at runtime: child#first1 (created by probe) stopped before "
+        "it finished",
+    )
+    assert after.archived == []
+    assert after.summary.orphans == []
+    assert logs(workspace) == sorted([unfinished, resumed, fresh])
+
+
+def test_a_runtime_task_that_failed_is_an_exception_and_one_that_succeeded_is_not(
+    tmp_path: Path,
+) -> None:
+    """Nobody rules on a runtime task's failure — it is for the task that created it — so the signature names it, without refusing over it."""
+    workspace = done(tmp_path)
+    write_log(
+        workspace.logs,
+        CHILD,
+        task_id="failed",
+        status="error",
+        error="boom",
+        completed=3,
+        created_by=TASK.task_id,
+    )
+    write_log(workspace.logs, CHILD, task_id="worked", created_by=TASK.task_id)
+
+    result = sign(workspace)
+
+    assert result.signature is not None
+    assert result.signature.exceptions == (
+        "task created at runtime: child#failed (created by probe) ended without "
+        "its result, 3 of 4 samples complete",
+    )
+
+
+def test_the_runtime_tasks_of_an_abandoned_execution_are_curated_and_not_signed_over(
+    tmp_path: Path,
+) -> None:
+    """A creator started afresh — a changed sandbox or gateway makes every answer it had stale — gets a new task id, and the runtime tasks of the execution it abandoned are superseded with it: archived with the attempts that created them, and neither named in the signature nor published, though one of them failed."""
+    workspace = done(tmp_path)
+    (stale,) = logs(workspace)
+    write_log(workspace.logs, TASK, task_id="fresh", created="2026-08-23T20:00:00Z")
+    from_stale = write_log(
+        workspace.logs,
+        CHILD,
+        task_id="from-stale",
+        status="error",
+        error="boom",
+        created_by=TASK.task_id,
+    )
+    from_fresh = write_log(
+        workspace.logs, CHILD, task_id="from-fresh", created_by="fresh"
+    )
+    store = tmp_path / "store"
+    workspace.directives.write_text(f"log_store: {store}\n", encoding="utf-8")
+
+    result = sign(workspace, publish=True)
+
+    assert result.signature is not None and result.curated is not None
+    assert sorted(Path(entry.location).name for entry, _ in result.curated.moved) == (
+        sorted([stale.name, from_stale.name])
+    )
+    assert result.signature.exceptions == ()
+    assert from_fresh.name in {one.name for one in store.iterdir()}
+    assert from_stale.name not in {one.name for one in store.iterdir()}
+
+
+@pytest.mark.parametrize("workers", [1, 2])
+def test_a_live_worker_refuses_the_signature(workers: int, tmp_path: Path) -> None:
+    """Every manifest task can be complete while a worker runs on — a task one of them created at runtime, or one queued behind it with no log yet — so a live worker is the one refusal that covers them all, and the run does not read as ready to sign while it stands."""
+    workspace = done(tmp_path)
+    reported = status(workspace)
+    still = replace(reported, summary=replace(reported.summary, workers=workers))
+
+    assert [blocker.kind for blocker in check(still, None)] == [RUNNING]
+    assert still.observed is not None
+    assert SIGNOFF_READY not in {
+        item.kind for item in tend_items(still, still.observed, InFlight())
+    }
 
 
 def test_an_accepted_short_task_keeps_its_errored_current_log(

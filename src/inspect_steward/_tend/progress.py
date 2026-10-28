@@ -8,7 +8,9 @@ The counts a turn already computes answer *what is Steward doing* — two to spa
 """
 
 from collections.abc import Iterable, Mapping
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
+from enum import StrEnum
 
 from inspect_ai.log import EvalMetric, EvalResults, EvalScore, HeadlineMetric
 
@@ -24,6 +26,7 @@ from .._evalset.observe import (
     ObservedTasks,
     TaskObservation,
     TaskState,
+    runtime_name,
 )
 from .._util.size import format_bytes
 from .._worker import (
@@ -179,6 +182,158 @@ class TaskProgress:
     @property
     def fraction(self) -> float:
         return self.completed / self.total if self.total else 0.0
+
+
+class RuntimeState(StrEnum):
+    """Where a task created at runtime stands.
+
+    Not a `TaskState`, because none of those actions applies: Steward never spawns, resumes or respawns a runtime task (`RuntimeTask`). These describe it for a reader, and say which ones a signature has to name.
+    """
+
+    RUNNING = "running"
+    """Its log is still being written, by a worker that is alive."""
+
+    SUCCEEDED = "succeeded"
+    """Its log reached the final status `success`."""
+
+    ERRORED = "errored"
+    """Its log reached a final status other than `success` — `error`, or `cancelled`. A cancelled task did not produce its result any more than an errored one did, so a reader is owed the same warning about both."""
+
+    DEAD = "dead"
+    """Its log never finished, and no live worker is in the run that was writing it. Nothing will finish it: whether the work is needed again is for the task that created it."""
+
+    ORPHANED = "orphaned"
+    """No manifest task owns it any more — its creator has left the definition — so it is on its way to the archive (`ObservedTasks.runtime_orphans`)."""
+
+
+@dataclass(frozen=True)
+class RuntimeProgress:
+    """One task created at runtime, as a row of its own.
+
+    A smaller shape than `TaskProgress` on purpose: a runtime task is observed and never steered (`RuntimeTask`), so it carries what a reader needs to see how it is going — its samples, its state, its score, who created it — and none of what the tuning loop or the parked and stuck items read. Kept out of `Progress.rows` for the same reason: everything that reads those rows to decide something — items, notifications of finished tasks, the resources table — is about tasks Steward schedules.
+    """
+
+    name: str
+    """How a reader tells it from every other task: its task name and the head of its task id, `child#Xy3k9a`. Also what `steward rule` takes for it."""
+
+    task_id: str
+    """What the turn's other folds file it under (`RuntimeTask.task_id`)."""
+
+    state: RuntimeState
+
+    created_by: str | None
+    """The task that added it: a manifest task's identifier, or another runtime task's task id — either is a key `display_keys` names. `None` for an orphan."""
+
+    completed: int = 0
+    total: int = 0
+    errored: int = 0
+    running: int = 0
+    queued: int = 0
+    """Samples not started yet, as its worker reports them. Zero where no worker is answering for it, because no manifest row says how big it is."""
+
+    headline: float | None = None
+    headline_name: str | None = None
+
+    live: bool = False
+    """Whether a worker answered for it this turn."""
+
+    scanned: TaskCoverage | None = None
+    """How many of its landed samples every scanner has answered for, or `None` where the run scans nothing — its samples are scanned like any other (`_tend.detect.scan_attempts`)."""
+
+    @property
+    def fraction(self) -> float:
+        return self.completed / self.total if self.total else 0.0
+
+
+def runtime_progress(
+    observed: ObservedTasks,
+    fleet: LiveFleet,
+    live_runs: AbstractSet[str],
+    coverage: Mapping[str, TaskCoverage],
+) -> list[RuntimeProgress]:
+    """One row per task created at runtime, in observation order, then one per runtime orphan.
+
+    Args:
+        observed: The log directory read against the manifest.
+        fleet: What the running workers reported, empty when none are.
+        live_runs: The runs a live worker is in (`InFlight.live_runs`): a log still `started` is running in one of these and dead otherwise.
+        coverage: Per task, how many of its landed samples the scanners reached — empty for a run that scans nothing.
+
+    Returns:
+        A row per runtime log.
+    """
+    return [
+        *(
+            _runtime_row(
+                task.log,
+                _runtime_state(task.log, fleet, live_runs),
+                # its direct creator: the manifest task where the chain is one
+                # step long, otherwise the runtime task that added it
+                task.created_by
+                if task.log.created_by == task.chain
+                else task.log.created_by,
+                fleet,
+                coverage,
+            )
+            for task in observed.runtime
+        ),
+        *(
+            _runtime_row(log, RuntimeState.ORPHANED, None, fleet, coverage)
+            for log in observed.runtime_orphans
+        ),
+    ]
+
+
+def _runtime_state(
+    log: LogAttempt, fleet: LiveFleet, live_runs: AbstractSet[str]
+) -> RuntimeState:
+    """Running while a worker answers for it or its log is unfinished in a live run; otherwise what its log's final status says, and dead where it never got one."""
+    live = fleet.runtime.get(log.task_id)
+    if live is not None and live.unavailable is None:
+        return RuntimeState.RUNNING
+    if log.status == "success":
+        return RuntimeState.SUCCEEDED
+    if log.status != "started":
+        return RuntimeState.ERRORED
+    return RuntimeState.RUNNING if log.run_id in live_runs else RuntimeState.DEAD
+
+
+def _runtime_row(
+    log: LogAttempt,
+    state: RuntimeState,
+    created_by: str | None,
+    fleet: LiveFleet,
+    coverage: Mapping[str, TaskCoverage],
+) -> RuntimeProgress:
+    """One runtime log's row: from its worker's row where it answered, from its log otherwise."""
+    live = fleet.runtime.get(log.task_id)
+    answered = live if live is not None and live.unavailable is None else None
+    headline, headline_name, _ = _headline(log, answered)
+    if answered is not None and answered.samples.total:
+        completed = answered.samples.completed
+        total = answered.samples.total
+        errored = answered.samples.errored
+    else:
+        completed, total, errored = (
+            log.completed_samples,
+            log.total_samples,
+            log.errored_samples,
+        )
+    return RuntimeProgress(
+        name=runtime_name(log),
+        task_id=log.task_id,
+        state=state,
+        created_by=created_by,
+        completed=completed,
+        total=total,
+        errored=errored,
+        running=answered.samples.in_flight if answered is not None else 0,
+        queued=answered.samples.queued if answered is not None else 0,
+        headline=headline,
+        headline_name=headline_name,
+        live=answered is not None,
+        scanned=coverage.get(log.task_id),
+    )
 
 
 def task_progress(
@@ -489,6 +644,9 @@ class Progress:
 
     rows: list[TaskProgress] = field(default_factory=list[TaskProgress])
 
+    runtime: list[RuntimeProgress] = field(default_factory=list[RuntimeProgress])
+    """The tasks created at runtime, rendered as rows after `rows` and counted in the totals — their samples are the run's samples. Apart from `rows` so nothing that decides from a row reads one (`RuntimeProgress`)."""
+
     live: Live | None = None
     """The live block, or `None` where nothing is running to have one.
 
@@ -497,23 +655,33 @@ class Progress:
 
     @property
     def completed(self) -> int:
-        return sum(row.completed for row in self.rows)
+        return sum(row.completed for row in self.rows) + sum(
+            row.completed for row in self.runtime
+        )
 
     @property
     def total(self) -> int:
-        return sum(row.total for row in self.rows)
+        return sum(row.total for row in self.rows) + sum(
+            row.total for row in self.runtime
+        )
 
     @property
     def running(self) -> int:
-        return sum(row.running for row in self.rows)
+        return sum(row.running for row in self.rows) + sum(
+            row.running for row in self.runtime
+        )
 
     @property
     def queued(self) -> int:
-        return sum(row.queued for row in self.rows)
+        return sum(row.queued for row in self.rows) + sum(
+            row.queued for row in self.runtime
+        )
 
     @property
     def errored(self) -> int:
-        return sum(row.errored for row in self.rows)
+        return sum(row.errored for row in self.rows) + sum(
+            row.errored for row in self.runtime
+        )
 
     @property
     def fraction(self) -> float:
@@ -525,7 +693,7 @@ def fleet_totals(progress: Progress) -> str | None:
 
     One source for the terminal's task-table footer (`_tend.table`) and the operator page's fleet line (`_tend.render`), so the two surfaces cannot disagree about where the run stands. `None` for a single-task run, where the totals only restate that task's own row.
     """
-    if len(progress.rows) < 2:
+    if len(progress.rows) + len(progress.runtime) < 2:
         return None
     parts = [f"{progress.completed}/{progress.total} samples"]
     if progress.total:
@@ -540,13 +708,17 @@ def fleet_totals(progress: Progress) -> str | None:
 
 
 def display_keys(progress: Progress) -> dict[str, str]:
-    """Task identifier to the key an operator reads — the table's own spelling, so a sentence about a task and the row about it agree.
+    """Task identifier to the key an operator reads — the table's own spelling, so a sentence about a task and the row about it agree — and a task created at runtime by task id to its name (`RuntimeProgress.name`).
 
     `cybench@openai/gpt-5`, never `cybench[default]@openai/gpt-5`: the shortening is the table's, and a proposal, a caveat or a `steward rule` token that spelled the task the long way would be naming something the operator has not seen.
     """
     short = short_keys(progress.rows)
     return {
-        row.identifier: key for row, key in zip(progress.rows, short.keys, strict=True)
+        **{
+            row.identifier: key
+            for row, key in zip(progress.rows, short.keys, strict=True)
+        },
+        **{row.task_id: row.name for row in progress.runtime},
     }
 
 

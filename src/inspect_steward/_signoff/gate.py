@@ -10,7 +10,7 @@
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
-from .._tend.items import ORPHAN_RUNNING, UNREADABLE, finding_label, unfinished
+from .._tend.items import UNREADABLE, finding_label, unfinished
 from .._workspace import Signature
 
 if TYPE_CHECKING:
@@ -20,7 +20,11 @@ EMPTY = "empty"
 """There are no results for a signature to be about — no tasks, or no samples under them."""
 
 UNSETTLED = "unsettled"
-ORPHANS = "orphans"
+RUNNING = "running"
+"""A worker is still running, so what is in the log directory can still change.
+
+The one condition that covers every way a run's results are still being written: a task the definition no longer names finishing in a packed worker, a task created at runtime still running, and one queued to start once the tasks beside it finish — which has no log yet and is visible only as the worker that will run it.
+"""
 OPEN_WINDOW = "open_window"
 UNREAD = "unread"
 UNFINALIZED = "unfinalized"
@@ -90,17 +94,18 @@ def check(result: "TendResult", signature: Signature | None) -> list[Blocker]:
                 ),
             )
         )
-    if orphans := [item for item in result.items if item.kind == ORPHAN_RUNNING]:
-        # curation needs a still directory, and this is the one condition that
-        # says it is not one -- a refusal none of the design documents named
+    if workers := result.summary.workers:
+        # curation needs a still directory, and a live worker says it is not
+        # one: whatever it is running -- its own tasks, one the definition no
+        # longer names, or a task one of them created at runtime and the ones
+        # still queued behind it -- lands in `logs/` after the signature
         blockers.append(
             Blocker(
-                kind=ORPHANS,
+                kind=RUNNING,
                 summary=(
-                    f"{len(orphans)} worker{'s' if len(orphans) != 1 else ''} "
-                    f"{'are' if len(orphans) != 1 else 'is'} still running a "
-                    f"task the definition no longer names, so which logs are "
-                    f"superseded is not yet settled"
+                    f"{workers} worker{'s' if workers != 1 else ''} "
+                    f"{'are' if workers != 1 else 'is'} still running, so the "
+                    f"logs a signature would cover are still being written"
                 ),
                 remedy="wait for them to exit, or stop them",
             )

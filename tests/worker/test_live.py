@@ -19,6 +19,7 @@ import threading
 import time
 from collections.abc import Generator
 from contextlib import contextmanager
+from dataclasses import replace
 from pathlib import Path
 from typing import cast
 
@@ -703,6 +704,88 @@ def test_a_worker_holding_one_task_still_sums_every_controller(
         (task,) = read_fleet([target], NO_PACKING).tasks.values()
 
     assert (task.connections.in_use, task.connections.limit) == (10, 30)
+
+
+# --- a task the worker created at runtime -------------------------------
+
+CREATOR_ROW: dict[str, object] = {**TASK, "log_location": "logs/one.eval"}
+CHILD_ROW: dict[str, object] = {
+    **TASK,
+    "eval_id": "E2",
+    "task_id": "T2",
+    "log_location": "logs/child.eval",
+    "total_tokens": 8192,
+}
+"""A task the worker's one task added with `enqueue_task()`: its own task id, its own log."""
+
+
+FRESH_ROW: dict[str, object] = {
+    **TASK,
+    "task_id": "T9",
+    "log_location": "logs/new.eval",
+}
+"""The worker's one task, started afresh under a new task id, before its log has been observed."""
+
+
+@pytest.mark.parametrize(
+    ("rows", "observed", "logged", "creator", "runtime"),
+    [
+        pytest.param(
+            [CREATOR_ROW, CHILD_ROW],
+            {"logs/one.eval": "task-1"},
+            True,
+            4096,
+            ["T2"],
+            id="creator_log_observed",
+        ),
+        pytest.param(
+            [CHILD_ROW],
+            {"logs/one.eval": "task-1"},
+            True,
+            None,
+            ["T2"],
+            id="creator_finished_and_the_child_runs_on",
+        ),
+        pytest.param(
+            [FRESH_ROW],
+            {},
+            False,
+            4096,
+            [],
+            id="its_log_not_observed_yet",
+        ),
+        pytest.param(
+            [CREATOR_ROW, CHILD_ROW],
+            {},
+            False,
+            None,
+            ["T1", "T2"],
+            id="two_rows_and_nothing_observed",
+        ),
+    ],
+)
+def test_a_runtime_task_s_row_is_its_own_and_never_its_creator_s(
+    rows: list[object],
+    observed: dict[str, str],
+    logged: bool,
+    creator: int | None,
+    runtime: list[str],
+    sockets: Path,
+) -> None:
+    """A worker at the default width falls back to its one task only in the window before that task's log is observed in the worker's run, and only for a lone unnamed row.
+
+    Once the task's log has been observed, a row it does not name is a task it added at runtime — even once the creator has finished and its child's row is the worker's only one, where the child's samples, usage, stuck and parked samples would otherwise have landed on the creator for the tuning loop and the items to act on. A task started afresh under a new task id is still found by the fallback, as before. Two unnamed rows are not guessed between.
+    """
+    routes: Routes = {**PACKED, "/tasks/T9/config": TWO_MODELS, "/tasks": rows}
+    with worker(sockets / "w.sock", routes) as target:
+        fleet = read_fleet([replace(target, logged=logged)], observed)
+
+    task = fleet.tasks["task-1"]
+    if creator is None:
+        assert task.unavailable == "finished"
+    else:
+        assert task.total_tokens == creator
+    assert sorted(fleet.runtime) == runtime
 
 
 # --- payloads this version has not seen ---------------------------------

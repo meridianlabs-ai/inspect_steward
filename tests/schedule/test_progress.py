@@ -14,13 +14,23 @@ import os
 import re
 from dataclasses import replace
 from pathlib import Path
+from typing import Literal
 
 import pytest
 from inspect_ai.log import HeadlineMetric
 from inspect_steward._evalset.observe import TaskState, observe_logs, observe_tasks
+from inspect_steward._notify import NARROW
 from inspect_steward._tend import Progress, progress_table, task_progress
-from inspect_steward._tend.progress import LIVE_ONLY, Live, TaskResources, live_totals
-from inspect_steward._tend.table import clip, resources_cells
+from inspect_steward._tend.progress import (
+    LIVE_ONLY,
+    Live,
+    RuntimeState,
+    TaskResources,
+    live_totals,
+    runtime_progress,
+    short_keys,
+)
+from inspect_steward._tend.table import clip, resources_cells, table_rows
 from inspect_steward._worker import (
     Interim,
     InterimEntry,
@@ -39,10 +49,18 @@ from .._logs import SynthTask, synth_manifest, write_log
 TASK = SynthTask("probe", samples=10, epochs=1)
 
 
-def rows(log_dir: Path, tasks: list[SynthTask], fleet: LiveFleet) -> Progress:
+def rows(
+    log_dir: Path,
+    tasks: list[SynthTask],
+    fleet: LiveFleet,
+    live_runs: frozenset[str] = frozenset(),
+) -> Progress:
     manifest = synth_manifest(tasks)
     observed = observe_tasks(manifest, observe_logs(log_dir))
-    return Progress(rows=task_progress(observed, fleet))
+    return Progress(
+        rows=task_progress(observed, fleet),
+        runtime=runtime_progress(observed, fleet, live_runs, {}),
+    )
 
 
 def live(
@@ -801,3 +819,182 @@ def test_the_declared_scorer_still_selects_after_a_cache_round_trip(
     (row,) = rows(tmp_path, [TASK], fleet).rows
 
     assert (row.headline, row.headline_name, row.interim) == (0.32, "hijack/mean", 5)
+
+
+# --- tasks created at runtime -------------------------------------------
+
+CHILD = SynthTask("child", samples=4)
+"""A task the manifest does not name, which `TASK` adds with `enqueue_task()`."""
+
+EARLIER = "2026-08-23T18:00:00+00:00"
+LATER = "2026-08-23T20:00:00+00:00"
+
+
+def created(log_dir: Path) -> None:
+    """`TASK` resumed into run `now` after an attempt in run `then`, with three runtime tasks.
+
+    One that a dead worker left `started` in the old run, one that errored in the live run, and one running in it.
+    """
+    write_log(log_dir, TASK, error="boom", created=EARLIER, run_id="then")
+    write_log(log_dir, TASK, status="started", created=LATER, run_id="now")
+    children: list[tuple[str, Literal["started", "error"], int, str]] = [
+        ("c-dead", "started", 0, "then"),
+        ("c-done", "error", 3, "now"),
+        ("c-live", "started", 0, "now"),
+    ]
+    for task_id, status, completed, run_id in children:
+        write_log(
+            log_dir,
+            CHILD,
+            task_id=task_id,
+            status=status,
+            error="boom" if status == "error" else None,
+            completed=completed,
+            run_id=run_id,
+            created_by=TASK.task_id,
+        )
+
+
+def runtime_fleet(*, live_row: bool) -> LiveFleet:
+    """`TASK`'s worker answering, and — where `live_row` — reporting `c-live` too."""
+    row = LiveTask(
+        pid=1,
+        identifier="",
+        task_id="c-live",
+        samples=LiveSamples(total=4, completed=1, in_flight=2, queued=1),
+    )
+    return replace(
+        live(TASK, completed=6, total=10), runtime={"c-live": row} if live_row else {}
+    )
+
+
+@pytest.mark.parametrize("live_row", [True, False], ids=["reported", "not_reported"])
+def test_runtime_tasks_are_rows_of_their_own(live_row: bool, tmp_path: Path) -> None:
+    """Each with its own samples, state and creator, counted in the run's totals: they are the run's samples. A running one takes its counts from its own control-channel row; one its worker did not report is still running while a live worker is in its run."""
+    created(tmp_path)
+
+    progress = rows(
+        tmp_path, [TASK], runtime_fleet(live_row=live_row), frozenset({"now"})
+    )
+
+    assert [
+        (row.name, row.state, row.completed, row.total, row.created_by)
+        for row in progress.runtime
+    ] == [
+        (name, state, *counts, TASK.identifier)
+        for name, state, counts in [
+            ("child#c-dead", RuntimeState.DEAD, (0, 0)),
+            ("child#c-done", RuntimeState.ERRORED, (3, 4)),
+            ("child#c-live", RuntimeState.RUNNING, (1, 4) if live_row else (0, 0)),
+        ]
+    ]
+    assert (progress.completed, progress.total) == ((10, 18) if live_row else (9, 14))
+
+
+def test_a_runtime_task_no_live_worker_is_writing_is_dead(tmp_path: Path) -> None:
+    created(tmp_path)
+
+    progress = rows(tmp_path, [TASK], LiveFleet())
+
+    assert [row.state for row in progress.runtime] == [
+        RuntimeState.DEAD,
+        RuntimeState.ERRORED,
+        RuntimeState.DEAD,
+    ]
+
+
+OTHER = SynthTask("other", samples=10)
+"""A second manifest task, which creates nothing."""
+
+
+def test_the_terminal_lists_runtime_tasks_after_the_manifest_s_naming_their_creator(
+    tmp_path: Path,
+) -> None:
+    """Each row leads with its state glyph; a runtime task's is named apart from every other of the same name, and ends with who created it."""
+    created(tmp_path)
+    write_log(tmp_path, OTHER)
+
+    lines = progress_table(
+        rows(tmp_path, [TASK, OTHER], runtime_fleet(live_row=True), frozenset({"now"}))
+    )
+
+    assert [line.split()[:2] for line in lines[:5]] == [
+        ["⚙", "probe"],
+        ["✓", "other"],
+        ["✗", "child#c-dead"],
+        ["✗", "child#c-done"],
+        ["⚙", "child#c-live"],
+    ]
+    assert [line.endswith("  by probe") for line in lines[:5]] == [
+        False,
+        False,
+        True,
+        True,
+        True,
+    ]
+    assert lines[4].split()[2:-2] == ["1/4", "25%", "2r", "1q"]
+    # the creator starts at one place down every runtime row
+    assert len({line.index(" by probe") for line in lines[2:5]}) == 1
+
+
+def test_a_task_created_by_a_runtime_task_names_that_task_and_an_orphan_names_none(
+    tmp_path: Path,
+) -> None:
+    write_log(tmp_path, TASK)
+    write_log(tmp_path, CHILD, task_id="first1", created_by=TASK.task_id)
+    write_log(tmp_path, CHILD, task_id="second", created_by="first1")
+    write_log(tmp_path, CHILD, task_id="stray1", created_by="departed")
+
+    lines = progress_table(rows(tmp_path, [TASK], LiveFleet()))
+
+    assert [(line.split()[:2], line.split(" by ")[1:]) for line in lines[:4]] == [
+        (["✓", "probe"], []),
+        (["✓", "child#first1"], ["probe"]),
+        (["✓", "child#second"], ["child#first1"]),
+        (["⌫", "child#stray1"], []),
+    ]
+
+
+def test_every_cell_of_a_runtime_row_fits_the_table_width(tmp_path: Path) -> None:
+    """A phone-width post clips its names to the width, the creator's included."""
+    creator = SynthTask("swe_bench_verified_task_number_one_with_a_long_name")
+    write_log(tmp_path, creator)
+    write_log(tmp_path, CHILD, task_id="c1", created_by=creator.task_id)
+    progress = rows(tmp_path, [creator], LiveFleet())
+
+    (manifest_row, runtime_row) = table_rows(
+        progress, short_keys(progress.rows), NARROW
+    )
+
+    assert len(manifest_row.name) <= NARROW
+    assert runtime_row.created_by == manifest_row.name
+
+
+@pytest.mark.parametrize(
+    ("status", "state", "glyph"),
+    [
+        ("success", RuntimeState.SUCCEEDED, "✓"),
+        ("error", RuntimeState.ERRORED, "✗"),
+        ("cancelled", RuntimeState.ERRORED, "✗"),
+    ],
+)
+def test_a_finished_runtime_task_succeeded_or_errored_by_its_log_status(
+    status: Literal["success", "error", "cancelled"],
+    state: RuntimeState,
+    glyph: str,
+    tmp_path: Path,
+) -> None:
+    write_log(tmp_path, TASK, run_id="now")
+    write_log(
+        tmp_path,
+        CHILD,
+        task_id="c1",
+        status=status,
+        run_id="now",
+        created_by=TASK.task_id,
+    )
+
+    progress = rows(tmp_path, [TASK], LiveFleet(), frozenset({"now"}))
+
+    assert [row.state for row in progress.runtime] == [state]
+    assert progress_table(progress)[1].split()[:2] == [glyph, "child#c1"]

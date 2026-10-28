@@ -54,15 +54,21 @@ def nothing_run(manifest: Manifest) -> ObservedTasks:
     return observe_tasks(manifest, ObservedLogs(log_dir="logs"))
 
 
-def live(identifier: str, *, pid: int = 4242) -> RunningWorker:
-    """A worker confirmed alive.
+def live(
+    identifier: str, *, pid: int = 4242, run_id: str | None = None
+) -> RunningWorker:
+    """A worker confirmed alive, in `run_id` where it has reported one.
 
     The stem and the socket are synthesized rather than passed: `reconcile`
     reads neither, and a test that supplied them would be asserting they are
     carried rather than that they matter.
     """
     return RunningWorker(
-        worker=f"w{pid}", identifiers=(identifier,), pid=pid, host="here"
+        worker=f"w{pid}",
+        identifiers=(identifier,),
+        pid=pid,
+        host="here",
+        run_id=run_id,
     )
 
 
@@ -1186,6 +1192,76 @@ def test_an_orphan_with_a_live_worker_is_left_entirely_alone(tmp_path: Path) -> 
     assert archives(result) == []
     assert result.summary.orphans_running == [removed.identifier]
     assert result.summary.archiving == 0
+
+
+CREATOR = SynthTask("creator")
+"""A manifest task that adds `CHILD` to its run with `enqueue_task()`."""
+
+CHILD = SynthTask("child")
+
+
+@pytest.mark.parametrize(
+    ("named", "running", "archived"),
+    [
+        pytest.param(True, True, set[str](), id="creator_running"),
+        pytest.param(True, False, set[str](), id="creator_finished"),
+        pytest.param(False, True, set[str](), id="creator_left_still_running"),
+        pytest.param(False, False, {"creator", "child"}, id="creator_left_and_stopped"),
+    ],
+)
+def test_a_runtime_task_s_log_is_archived_with_its_creator_and_not_before(
+    named: bool, running: bool, archived: set[str], tmp_path: Path
+) -> None:
+    """A runtime task's identifier is in no manifest, and on that alone it read as an orphan and was archived mid-write. It stays while its creator is in the manifest, and leaves with it once no live worker is in its run."""
+    manifest = synth_manifest([CREATOR if named else TASK])
+    creator = write_log(tmp_path, CREATOR, status="started", run_id="run-1")
+    child = write_log(
+        tmp_path,
+        CHILD,
+        status="started",
+        run_id="run-1",
+        created_by=CREATOR.task_id,
+    )
+    names = {creator.name: "creator", child.name: "child"}
+
+    result = reconcile(
+        manifest,
+        InFlight(running=[live(CREATOR.identifier, run_id="run-1")] if running else []),
+        observe_tasks(manifest, observe_logs(tmp_path)),
+        pool=POOL,
+    )
+
+    assert {
+        names[Path(action.location).name] for action in archives(result)
+    } == archived
+    assert CHILD.identifier not in result.summary.orphans
+
+
+@pytest.mark.parametrize(
+    ("worker_run", "archived"),
+    [
+        pytest.param("run-1", False, id="a_live_worker_in_its_run"),
+        pytest.param("run-2", True, id="a_live_worker_in_another_run"),
+        pytest.param(None, False, id="a_live_worker_that_reports_no_run"),
+    ],
+)
+def test_a_runtime_orphan_waits_exactly_for_a_live_worker_in_its_run(
+    worker_run: str | None, archived: bool, tmp_path: Path
+) -> None:
+    """Liveness comes from the run each live worker reports in its discovery entry, not from which logs look newest: a worker running another task, or a later attempt in a new run, is not writing this log. A live worker that reports no run might be — Inspect runs on when its control server fails to bind — so while one stands, nothing waits on a guess."""
+    manifest = synth_manifest([TASK])
+    write_log(tmp_path, CHILD, status="started", run_id="run-1", created_by="departed")
+
+    result = reconcile(
+        manifest,
+        InFlight(running=[live(TASK.identifier, run_id=worker_run)]),
+        observe_tasks(manifest, observe_logs(tmp_path)),
+        pool=POOL,
+    )
+
+    assert [action.identifier for action in archives(result)] == (
+        [CHILD.identifier] if archived else []
+    )
 
 
 def test_actions_are_ordered_reap_then_archive_then_spawn(tmp_path: Path) -> None:

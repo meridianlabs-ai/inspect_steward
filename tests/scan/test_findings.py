@@ -17,7 +17,7 @@ import pytest
 from inspect_steward._evalset.classify import scan_class
 from inspect_steward._evalset.observe import LogAttempt
 from inspect_steward._scan import scan_findings
-from inspect_steward._scan.findings import log_key
+from inspect_steward._scan.findings import ScanSubject, log_key
 
 SCANNERS = ("scoring_integrity", "quiet")
 
@@ -138,12 +138,16 @@ def attempt(location: str = LOG) -> LogAttempt:
         task="cybench",
         task_id="task-1",
         eval_id="eval-1",
+        run_id="run-1",
+        created_by=None,
         mtime=None,
     )
 
 
-def attempts(location: str = LOG) -> dict[str, LogAttempt]:
-    return {log_key(location): attempt(location)}
+def attempts(location: str = LOG, task: str | None = None) -> dict[str, ScanSubject]:
+    """The run's one log, filed under its identifier — or under `task`, as a task created at runtime is filed under its task id."""
+    log = attempt(location)
+    return {log_key(location): ScanSubject(task or log.identifier, log)}
 
 
 def found(tmp_path: Path, rows: list[dict[str, Any]]) -> list[Any]:
@@ -191,6 +195,27 @@ def test_a_finding_carries_the_class_the_label_names(tmp_path: Path) -> None:
         identifier="cybench@openai/gpt-5",
     )
     assert findings[0].kind == "scan"
+
+
+def test_a_finding_on_a_task_created_at_runtime_is_filed_under_that_task(
+    tmp_path: Path,
+) -> None:
+    """Two runtime tasks can share an identifier — a creator can add the same task twice — so a finding on one is filed, classed and counted under its task id, and a ruling on it touches no other."""
+    scanned = scan_findings(
+        scan_dir_with(tmp_path, [row(label="internet_egress")]),
+        scanners=SCANNERS,
+        attempts=attempts(task="runtime-task-id"),
+    )
+
+    (finding,) = scanned.instances
+    assert finding.task == "runtime-task-id"
+    assert finding.class_key == scan_class(
+        "scoring_integrity",
+        "internet_egress",
+        task="cybench",
+        identifier="runtime-task-id",
+    )
+    assert list(scanned.recorded) == ["runtime-task-id"]
 
 
 def test_a_scanner_that_sets_no_label_classes_on_its_own_name(tmp_path: Path) -> None:

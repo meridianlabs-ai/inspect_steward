@@ -40,7 +40,7 @@ class Coverage:
     """
 
     by_task: dict[str, TaskCoverage] = field(default_factory=dict[str, TaskCoverage])
-    """Task identifier to its own pair. A task with no current log is absent — there is nothing landed to be over."""
+    """Task identifier to its own pair, and a task created at runtime by its task id (`RuntimeTask.task_id`). A task with no current log is absent — there is nothing landed to be over."""
 
     scanned: int = 0
     landed: int = 0
@@ -109,6 +109,14 @@ def coverage(
         by_task[task.identifier] = TaskCoverage(
             scanned=min(scanned, landed), landed=landed, known=known
         )
+    for created in observed.runtime:
+        # one log, never resumed, so its rows and its log name the same file
+        # and counting the rows is exact
+        if (landed := created.log.total_samples) > 0:
+            answered = recorded.get(created.task_id, frozenset())
+            by_task[created.task_id] = TaskCoverage(
+                scanned=min(len(answered), landed), landed=landed
+            )
     counted = [entry for entry in by_task.values() if entry.known]
     return Coverage(
         by_task=by_task,

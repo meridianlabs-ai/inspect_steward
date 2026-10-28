@@ -276,6 +276,8 @@ def attempt(location: str = "logs/a.eval") -> LogAttempt:
         task="task-one",
         task_id="T1",
         eval_id="e1",
+        run_id="r1",
+        created_by=None,
         mtime=None,
     )
 
@@ -506,7 +508,9 @@ def absorbing(**kwargs: Any) -> Anomalies:
 
 
 def test_a_matching_pattern_becomes_an_ordinary_ruling_by_policy() -> None:
-    pending, notes = policy_rulings(absorbing(), {"error:*Timeout*": "rerun"})
+    pending, notes = policy_rulings(
+        absorbing(), {"error:*Timeout*": "rerun"}, runtime=frozenset()
+    )
 
     (entry,) = pending
     assert entry.type == RULING
@@ -519,7 +523,9 @@ def test_a_matching_pattern_becomes_an_ordinary_ruling_by_policy() -> None:
 
 def test_the_first_pattern_wins_in_file_order() -> None:
     pending, _ = policy_rulings(
-        absorbing(), {"error:*": "exclude", "error:*Timeout*": "rerun"}
+        absorbing(),
+        {"error:*": "exclude", "error:*Timeout*": "rerun"},
+        runtime=frozenset(),
     )
 
     (entry,) = pending
@@ -529,7 +535,9 @@ def test_the_first_pattern_wins_in_file_order() -> None:
 
 
 def test_a_substrate_class_is_never_rerun_by_a_standing_grant() -> None:
-    pending, notes = policy_rulings(absorbing(substrate=True), {"error:*": "rerun"})
+    pending, notes = policy_rulings(
+        absorbing(substrate=True), {"error:*": "rerun"}, runtime=frozenset()
+    )
 
     assert pending == []
     (note,) = notes
@@ -546,7 +554,7 @@ def test_a_failed_rerun_precedent_stops_the_pattern() -> None:
         ),
     )
 
-    pending, notes = policy_rulings(history, {"error:*": "rerun"})
+    pending, notes = policy_rulings(history, {"error:*": "rerun"}, runtime=frozenset())
 
     assert pending == []
     (note,) = notes
@@ -564,17 +572,44 @@ def test_a_pending_authorized_rerun_makes_the_pattern_wait_silently() -> None:
         )
     )
 
-    pending, notes = policy_rulings(both, {"error:*": "rerun"})
+    pending, notes = policy_rulings(both, {"error:*": "rerun"}, runtime=frozenset())
 
     assert (pending, notes) == ([], [])
 
 
 def test_a_grant_the_kind_cannot_honestly_carry_is_declined() -> None:
-    pending, notes = policy_rulings(absorbing(kind="task"), {"error:*": "exclude"})
+    pending, notes = policy_rulings(
+        absorbing(kind="task"), {"error:*": "exclude"}, runtime=frozenset()
+    )
 
     assert pending == []
     (note,) = notes
     assert "cannot mark" in note
+
+
+@pytest.mark.parametrize(
+    ("granted", "recorded"),
+    [
+        pytest.param("rerun", False, id="rerun"),
+        pytest.param("exclude", False, id="exclude"),
+        pytest.param("zero", False, id="zero"),
+        pytest.param("score", True, id="score"),
+        pytest.param("accept", True, id="accept"),
+        pytest.param("dismiss", True, id="dismiss"),
+    ],
+)
+def test_a_finding_on_a_task_created_at_runtime_takes_only_the_answers_that_leave_its_log(
+    granted: str, recorded: bool
+) -> None:
+    """Steward never re-runs a runtime task and does not rewrite its log, so a standing grant may give a finding on one only what an operator could (`RUNTIME_ANSWERS`)."""
+    pending, notes = policy_rulings(
+        absorbing(kind="scan", tasks=("runtime-task-id",)),
+        {"error:*": granted},
+        runtime={"runtime-task-id"},
+    )
+
+    assert bool(pending) is recorded
+    assert bool(notes) is not recorded
 
 
 def test_a_standing_grant_lands_and_applies_in_the_same_turn(

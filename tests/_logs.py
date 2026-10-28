@@ -29,6 +29,7 @@ from inspect_ai._eval.eval_set_manifest import task_args_hash
 from inspect_ai._eval.evalset import TASK_IDENTIFIER_VERSION, task_identifier
 from inspect_ai._util.file import clean_filename_component
 from inspect_ai.log import (
+    EnqueueTaskOrigin,
     EvalConfig,
     EvalDataset,
     EvalError,
@@ -185,6 +186,9 @@ def _eval_spec(
     sandbox: SandboxEnvironmentSpec | None = None,
     model_base_url: str | None = None,
     scorers: Sequence[str] | None = None,
+    run_id: str = "",
+    task_id: str | None = None,
+    created_by: str | None = None,
 ) -> EvalSpec:
     """The one place a synthetic task becomes an `EvalSpec`.
 
@@ -197,11 +201,22 @@ def _eval_spec(
     metric — what `recompute_metrics` resolves the results from after an edit.
     Not part of the identifier, so a log that declares them still pairs with
     the manifest row that does not.
+
+    `task_id` and `created_by` are what make a task created at runtime: its own
+    id among the tasks of one identifier, and the task id of the task that
+    added it (`EvalSpec.origin`). `run_id` is the run that wrote it, which a
+    live worker reports. None of them is part of the identifier.
     """
     return EvalSpec(
         created=created,
+        run_id=run_id,
+        origin=(
+            EnqueueTaskOrigin(eval_id=f"eval-of-{created_by}", task_id=created_by)
+            if created_by is not None
+            else None
+        ),
         task=task.name,
-        task_id=task.task_id,
+        task_id=task_id if task_id is not None else task.task_id,
         task_file=task.file,
         task_args=task.args,
         task_args_passed=task.args,
@@ -291,6 +306,9 @@ def write_log(
     samples: Sequence[SynthSample] | None = None,
     error_traceback: str | None = None,
     scorers: Sequence[str] | None = None,
+    run_id: str = "",
+    task_id: str | None = None,
+    created_by: str | None = None,
 ) -> Path:
     """Write one log for a task.
 
@@ -314,6 +332,9 @@ def write_log(
         samples: Sample records to embed, for readers that go below the header — anomaly classification's summaries and single-sample reads.
         error_traceback: Traceback for `error`, when a test cares what it parses to.
         scorers: Scorer names the log declares in its header, for a reader that recomputes its metrics. Defaults to the names in `scores`, or to `exact` — the one name `SynthSample` scores under — so a synthetic log declares a scorer the way a real one does; an empty sequence declares none.
+        run_id: `eval.run_id`, the run that wrote the log — what a live worker's discovery entry names. Empty by default, which no worker is in.
+        task_id: The log's own task id, defaulting to the task's stable one. Also names the file, so two runtime tasks of one identifier get two files.
+        created_by: The task id of the task that added this one with `enqueue_task()`, recorded as `eval.origin`; `None` for a task its run was given.
 
     Returns:
         Path the log was written to.
@@ -353,6 +374,9 @@ def write_log(
             sandbox=sandbox,
             model_base_url=model_base_url,
             scorers=scorers,
+            run_id=run_id,
+            task_id=task_id,
+            created_by=created_by,
         ),
         plan=EvalPlan(),
         results=results,
@@ -375,7 +399,7 @@ def write_log(
     if declared is not None:
         log.eval.headline_metric = declared
 
-    location = log_dir / f"{_file_stem(task, created)}.{format}"
+    location = log_dir / f"{_file_stem(task, created, task_id)}.{format}"
     log_dir.mkdir(parents=True, exist_ok=True)
     write_eval_log(log, str(location), format=format)
     return location
@@ -430,12 +454,13 @@ def write_unreadable(
     return location
 
 
-def _file_stem(task: SynthTask, created: str) -> str:
+def _file_stem(task: SynthTask, created: str, task_id: str | None = None) -> str:
     """`{created}_{task}_{id}`, as Inspect's recorders name logs.
 
     The timestamp prefix is not cosmetic: `is_log_file` will not list a `.json`
     file without it.
     """
     return "_".join(
-        clean_filename_component(part) for part in (created, task.name, task.task_id)
+        clean_filename_component(part)
+        for part in (created, task.name, task_id or task.task_id)
     )

@@ -11,7 +11,7 @@ A scanner result is a *reading*, and workflow.md §12.6 is right that no thresho
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
-from typing import Any
+from typing import Any, NamedTuple
 
 from upath import UPath
 
@@ -41,6 +41,15 @@ Deliberately not `input` / `input_data` / `scan_events` — scout calls those th
 """
 
 
+class ScanSubject(NamedTuple):
+    """A log whose scan rows are this run's, and the task its findings are filed under."""
+
+    task: str
+    """A manifest task's identifier, or the task id of a task one created at runtime (`_evalset.observe.RuntimeTask.task_id`)."""
+
+    attempt: LogAttempt
+
+
 @dataclass(frozen=True)
 class ScanFindings:
     """What one read of a scan directory produced, and what it could not read."""
@@ -52,7 +61,7 @@ class ScanFindings:
     """Scanners whose rows would not read. Merged into the turn's unreadable set, which is what makes them a blocker rather than a silence."""
 
     recorded: dict[str, set[str]] = field(default_factory=dict[str, set[str]])
-    """Per task identifier, the transcripts every scanner has recorded — coverage's numerator.
+    """Per task (`ScanSubject.task`), the transcripts every scanner has recorded — coverage's numerator.
 
     **A transcript counts once each scanner has answered for it**, which is upstream's own resume predicate (`all(tid in s for s in scanned_per_scanner.values())`) rather than a rule invented here: a sample two of three scanners reached is a sample the third will be sent back for. An **errored** row still counts as recorded, because coverage is *recorded rows against landed samples* and a scanner that threw is its own class — counting it here as well would report one failure twice.
     """
@@ -62,14 +71,14 @@ def scan_findings(
     scan_dir: str,
     *,
     scanners: tuple[str, ...],
-    attempts: Mapping[str, LogAttempt],
+    attempts: Mapping[str, ScanSubject],
 ) -> ScanFindings:
     """Every flagged sample the scan directory holds, as anomaly instances.
 
     Args:
         scan_dir: The run's scan directory.
         scanners: The scanner names this run records under, from the committed merge — so a scanner that has recorded nothing yet is absent rather than an error.
-        attempts: The run's own log attempts, keyed by log **basename**. A row naming a log this mapping does not hold is dropped: it belongs to an orphan on its way to the archive, and an orphan's findings are not this run's. A *superseded* attempt's rows are kept, exactly as `classed_instances` keeps a superseded log's errored samples — the census carries the run's whole history and the narrowing to what is in the results happens once, at the reporting layer (`rulings.affected_refs`).
+        attempts: The run's own logs, keyed by log **basename**, each with the task it is filed under. A row naming a log this mapping does not hold is dropped: it belongs to an orphan on its way to the archive, and an orphan's findings are not this run's. A *superseded* attempt's rows are kept, exactly as `classed_instances` keeps a superseded log's errored samples — the census carries the run's whole history and the narrowing to what is in the results happens once, at the reporting layer (`rulings.affected_refs`).
 
     Returns:
         The findings, the transcripts each task has recorded, and any scanner whose parquet would not read.
@@ -116,7 +125,7 @@ def scan_findings(
 
 
 def _answered(
-    rows: list[dict[str, Any]], *, attempts: Mapping[str, LogAttempt]
+    rows: list[dict[str, Any]], *, attempts: Mapping[str, ScanSubject]
 ) -> dict[str, set[str]]:
     """One scanner's transcripts, per task — read off the rows already in hand.
 
@@ -124,10 +133,10 @@ def _answered(
     """
     answered: dict[str, set[str]] = {}
     for row in rows:
-        attempt = attempts.get(log_key(row["transcript_source_uri"]))
-        if attempt is None:
+        subject = attempts.get(log_key(row["transcript_source_uri"]))
+        if subject is None:
             continue
-        answered.setdefault(attempt.identifier, set()).add(_text(row["transcript_id"]))
+        answered.setdefault(subject.task, set()).add(_text(row["transcript_id"]))
     return answered
 
 
@@ -154,7 +163,7 @@ def _instances(
     rows: list[dict[str, Any]],
     *,
     scanner: str,
-    attempts: Mapping[str, LogAttempt],
+    attempts: Mapping[str, ScanSubject],
 ) -> list[Instance]:
     """One scanner's parquet as instances — what it flagged, and what it could not read.
 
@@ -165,9 +174,10 @@ def _instances(
         errored = row["scan_error"] is not None
         if not errored and not flagged(row["value"], row["value_type"]):
             continue
-        attempt = attempts.get(log_key(row["transcript_source_uri"]))
-        if attempt is None:
+        subject = attempts.get(log_key(row["transcript_source_uri"]))
+        if subject is None:
             continue
+        task, attempt = subject
         eval_id = _text(row["transcript_source_id"])
         sample_id = _text(row["transcript_task_id"])
         epoch = row["transcript_task_repeat"]
@@ -181,7 +191,7 @@ def _instances(
                 scanner,
                 _text(row["label"]) or None,
                 task=attempt.task,
-                identifier=attempt.identifier,
+                identifier=task,
             )
             message = _text(row["explanation"])
         instances.append(
@@ -191,7 +201,7 @@ def _instances(
                 # for the same sample: the two are joined by nothing but this
                 # format, so they are pinned against each other by a test
                 ref=f"{eval_id}:{sample_id}:{epoch}:{uuid}",
-                task=attempt.identifier,
+                task=task,
                 location=attempt.location,
                 message=message[:MESSAGE_CAP],
                 attempt_created=attempt.created,
@@ -236,6 +246,7 @@ def _text(value: Any) -> str:
 __all__ = [
     "FINDING_COLUMNS",
     "ScanFindings",
+    "ScanSubject",
     "flagged",
     "log_key",
     "scan_findings",

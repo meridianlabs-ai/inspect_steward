@@ -10,6 +10,7 @@ Standing pre-authorizations (`preauthorized:` in `_steward.yaml`) become ordinar
 """
 
 from collections.abc import Mapping, Sequence
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from fnmatch import fnmatchcase
 from typing import Any, Protocol
@@ -27,6 +28,7 @@ from .._anomaly.applied import RULING_APPLIED, Applied
 from .._anomaly.fold import Pending, covered_refs, unapplied
 from .._anomaly.model import (
     ABSORBING,
+    RUNTIME_ANSWERS,
     SAMPLE_MARKED,
     Anomalies,
     Anomaly,
@@ -142,12 +144,16 @@ def policy_rulings(
     anomalies: Anomalies,
     preauthorized: Mapping[str, str] | None,
     affected: Mapping[str, frozenset[str]] | None = None,
+    *,
+    runtime: AbstractSet[str],
 ) -> tuple[list[Pending], list[str]]:
     """The rulings standing pre-authorizations grant this turn, and the grants declined.
 
     One pending `ruling` per absorbing window whose class matches a pattern — first match wins, in file order — worded `by: policy` with the pattern named in the reason and the effect composed exactly as `steward rule` would compose it. Once per generation by construction: the ruling closes the window, and a recurrence opens the next generation to be matched afresh, precedent accumulating.
 
-    Three grants are declined with a note rather than recorded. A disposition the class's kind cannot honestly carry (the `honest` matrix — a pattern must not grant what an operator could not type). A `rerun` of a substrate-flagged class (a standing pattern is not the operator look §9.1 requires before re-running into broken machinery). And a `rerun` of a class whose earlier re-run already failed — after a `reran_failed` an operator must look, or policy re-runs every fresh generation forever.
+    `runtime` is the task ids of the run's tasks created at runtime (`RuntimeTask.task_id`): a finding on one takes only `RUNTIME_ANSWERS`, as it would from an operator.
+
+    Four grants are declined with a note rather than recorded. A disposition the class's kind cannot honestly carry (the `honest` matrix — a pattern must not grant what an operator could not type). One a finding on a task created at runtime cannot take, for the same reason. A `rerun` of a substrate-flagged class (a standing pattern is not the operator look §9.1 requires before re-running into broken machinery). And a `rerun` of a class whose earlier re-run already failed — after a `reran_failed` an operator must look, or policy re-runs every fresh generation forever.
 
     Returns:
         The pending ruling events, and one note per declined grant for `steward.log`.
@@ -181,6 +187,15 @@ def policy_rulings(
             notes.append(
                 f"preauthorized pattern '{pattern}' grants {decided.value}, "
                 f"which cannot mark {key} (a {anomaly.kind} class) — skipped"
+            )
+            continue
+        if decided not in RUNTIME_ANSWERS and not runtime.isdisjoint(
+            anomaly.evidence.tasks
+        ):
+            notes.append(
+                f"preauthorized pattern '{pattern}' grants {decided.value}, and "
+                f"{key} is a finding on a task created at runtime, which Steward "
+                f"never re-runs and whose log it does not rewrite — skipped"
             )
             continue
         if decided is Disposition.RERUN:

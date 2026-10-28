@@ -98,3 +98,26 @@ def test_a_store_that_will_not_open_is_the_callers_to_explain(
     monkeypatch.setattr(module, "open_store", refuse)
     with pytest.raises(StoreError):
         ask(tmp_path, ADDITION, notes=[])
+
+
+def test_a_task_created_at_runtime_is_never_another_task_s_result(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A runtime task built exactly like a manifest task shares its identifier and is still nobody's answer to it — not from a directory store, which never lists it, and not from a table store that does."""
+    runtime = write_log(tmp_path / "store", ADDITION, created_by="some-creator")
+    notes: list[str] = []
+
+    assert ask(tmp_path, ADDITION, notes=notes) == {}
+
+    class Table:
+        def search(self, identifiers: set[str]) -> dict[str, list[str]]:
+            return {ADDITION.identifier: [str(runtime)]}
+
+    def table(location: str, *, root: Path) -> Table:
+        return Table()
+
+    module = importlib.import_module("inspect_steward._store.match")
+    monkeypatch.setattr(module, "open_store", table)
+
+    assert ask(tmp_path, ADDITION, notes=notes) == {}
+    assert any("created at runtime" in one for one in notes)

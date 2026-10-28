@@ -42,7 +42,7 @@ from .._evalset.observe import (
     TaskState,
     UnreadableLog,
 )
-from .._scan.findings import log_key
+from .._scan.findings import ScanSubject, log_key
 from .._schedule.reconcile import InFlight
 from .._worker import TAIL_BYTES
 from .._worker import tail as read_tail
@@ -107,17 +107,27 @@ def detect(
     return Detection(batches=_batched(instances), unreadable=classed.unreadable)
 
 
-def scan_attempts(observed: ObservedTasks, logs: ObservedLogs) -> dict[str, LogAttempt]:
-    """The run's log attempts keyed the way a scan row names them (`_scan.findings.log_key`).
+def scan_attempts(
+    observed: ObservedTasks, logs: ObservedLogs
+) -> dict[str, ScanSubject]:
+    """The run's logs keyed the way a scan row names them (`_scan.findings.log_key`), each with the task its findings are filed under.
 
     Narrowed through the same `_tracked` every other signature is narrowed through, so a row belonging to an orphan finds nothing here and is dropped — the exclusion arrived at through the join rather than through a second predicate that could come to disagree with the first.
 
     **Every attempt, superseded ones included**, which is what `classed_instances` does with a superseded log's errored samples and what `_task_failures` does with its header. The census is the run's whole failure history and the narrowing to *what is in the results* happens exactly once, at the reporting layer (`rulings.affected_refs`) — so a finding on an attempt a re-run replaced still asks for a ruling, exactly as that attempt's errors do, and neither is counted into the denominators.
+
+    **And every task the manifest's tasks created at runtime**, filed under its task id (`RuntimeTask.task_id`) — a superseded execution's too, for the reason a superseded attempt is here. Its samples are part of what a signature covers, so what a scanner flags in them needs a ruling like any other finding. It is the one signature a runtime task contributes: its errored samples and its own failure are for the task that created it, which Steward never re-runs on its behalf.
     """
     return {
-        log_key(attempt.location): attempt
-        for attempts in _tracked(observed, logs).attempts.values()
-        for attempt in attempts
+        **{
+            log_key(attempt.location): ScanSubject(identifier, attempt)
+            for identifier, attempts in _tracked(observed, logs).attempts.items()
+            for attempt in attempts
+        },
+        **{
+            log_key(task.log.location): ScanSubject(task.task_id, task.log)
+            for task in (*observed.runtime, *observed.runtime_superseded)
+        },
     }
 
 

@@ -27,6 +27,7 @@ from .anomalies import (
     persist_windows,
     precedent_lines,
     refuse_dishonest,
+    refuse_runtime,
     settled_ruling,
 )
 from .turn import TURN_ERRORS, find_workspace
@@ -81,6 +82,7 @@ def propose_command(
     # and because duplicates would shift the id's digest
     targets = list(dict.fromkeys(_matched(anomalies, token) for token in classes))
     _refused(anomalies, targets, decided)
+    refuse_runtime(result, targets, decided)
     _cautioned(targets, decided)
 
     # the generation is digest material: the same classes re-proposed after a

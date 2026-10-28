@@ -14,14 +14,17 @@ import click
 
 from .._anomaly.fold import Pending
 from .._anomaly.model import (
+    RUNTIME_ANSWERS,
     SAMPLE_MARKS,
     Anomalies,
     Anomaly,
     Disposition,
     Ruling,
     honest,
+    runtime_classes,
 )
 from .._evalset.classify import kind_of, matching_keys
+from .._tend import TendResult
 from .._tend.items import finding_label, precedent_line
 from .._workspace import INSTANCE, OPENED, append_event
 
@@ -29,6 +32,31 @@ DOCTRINE = (
     "an errored sample has exactly four honest answers — rerun, exclude, zero, "
     "or score (workflow.md §12)"
 )
+
+
+def refuse_runtime(
+    result: TendResult, targets: list[str], decided: Disposition
+) -> None:
+    """Refuse an answer a finding on a task created at runtime cannot take (`RUNTIME_ANSWERS`).
+
+    Steward never re-runs such a task and cannot rewrite its log, so a `rerun`, `exclude` or `zero` recorded against one would never be carried out — and the window it closed would stand applied in the record while the data said otherwise.
+
+    Raises:
+        click.ClickException: Naming each refused class.
+    """
+    if decided in RUNTIME_ANSWERS or result.observed is None:
+        return
+    runtime = runtime_classes(
+        result.anomalies, {task.task_id for task in result.observed.runtime}
+    )
+    if refused := [key for key in targets if key in runtime]:
+        raise click.ClickException(
+            f"{decided.value} is refused for {', '.join(refused)} — "
+            f"{'it is a finding' if len(refused) == 1 else 'they are findings'} "
+            f"on a task created at runtime, which Steward never re-runs and whose "
+            f"log it does not rewrite; score, accept (with --effect) and dismiss "
+            f"are the answers that fit"
+        )
 
 
 def refuse_dishonest(targets: list[str], decided: Disposition) -> None:
@@ -156,5 +184,6 @@ __all__ = [
     "persist_windows",
     "precedent_lines",
     "refuse_dishonest",
+    "refuse_runtime",
     "settled_ruling",
 ]

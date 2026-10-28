@@ -33,7 +33,7 @@ from inspect_steward._tend.notify import (
     SAID,
     UNATTENDED_INTERVALS,
 )
-from inspect_steward._tend.table import plain_table, task_table_cells
+from inspect_steward._tend.table import plain_table, task_table_cells, text_columns
 from inspect_steward._worker import LiveParked
 from inspect_steward._workspace import (
     ACKNOWLEDGED,
@@ -213,7 +213,7 @@ def test_the_post_table_is_the_operator_pages_cells(tmp_path: Path) -> None:
 
     assert post is not None
     header, rows = task_table_cells(result, width=NARROW)
-    assert task_table(post) == plain_table(header, rows)
+    assert task_table(post) == plain_table(header, rows, left=text_columns(header))
 
 
 def test_the_task_table_rides_in_the_post(tmp_path: Path) -> None:
@@ -227,8 +227,10 @@ def test_the_task_table_rides_in_the_post(tmp_path: Path) -> None:
 
     assert post is not None
     table = task_table(post)
-    assert table and table[0].startswith("task")
+    assert table and table[0].split()[0] == "task"
     assert any("done" in line for line in table)
+    # every row leads with its state glyph, in a column of its own
+    assert table[1].split()[:2] == ["✓", "done"]
 
 
 def test_a_long_list_says_what_it_left_out(tmp_path: Path) -> None:

@@ -13,6 +13,7 @@ from .._evalset.observe import (
     ObservedTasks,
     TaskObservation,
     TaskState,
+    runtime_name,
 )
 
 
@@ -44,6 +45,8 @@ def plan(observed: ObservedTasks) -> list[Superseded]:
 
     **An orphan is the exception, and its every attempt goes — the current one included.** Nothing belonging to an identifier the definition no longer names belongs in the directory a signature covers. A tend ordinarily archives those the moment it meets them (`_schedule.reconcile._archiving`), leaving nothing here to find; but a **paused** run makes no changes to itself, so reconcile archives nothing while the pause stands, and signoff permits a paused run to be signed. Between them that left orphan results sitting in `logs/` under a signature that does not cover them, the timer disarmed, and no turn ever coming to tidy up. So this takes whatever is left rather than assuming the other half ran — and the two cannot fight over a file, because the claim is held across both.
 
+    **A task created at runtime goes with the execution of its manifest task that created it** (`RuntimeTask.chain`). Every attempt of one execution shares a task id, across resumes, so a creator killed and resumed keeps every runtime task it created on the way — the resumed attempt is current and depends on what they landed — even though curation archives the attempt that created them. A creator that was started afresh (a changed sandbox or gateway, `IncompleteReason.REDIRECTED`) abandoned that execution and every answer in it, so the runtime tasks it created are superseded with it (`ObservedTasks.runtime_superseded`) and archived here. A runtime log no manifest task owns any more is an orphan, and goes as one.
+
     Pure — no filesystem, no clock.
 
     Args:
@@ -52,10 +55,24 @@ def plan(observed: ObservedTasks) -> list[Superseded]:
     Returns:
         The logs to move, in the order they were created.
     """
+    created = [
+        *(task.log for task in observed.runtime_superseded),
+        *observed.runtime_orphans,
+    ]
     return [
-        Superseded(location=attempt.location, identifier=task.identifier, key=task.key)
-        for task in observed.tasks
-        for attempt in sorted(_leaving(task), key=lambda attempt: attempt.created)
+        *(
+            Superseded(
+                location=attempt.location, identifier=task.identifier, key=task.key
+            )
+            for task in observed.tasks
+            for attempt in sorted(_leaving(task), key=lambda attempt: attempt.created)
+        ),
+        *(
+            Superseded(
+                location=log.location, identifier=log.identifier, key=runtime_name(log)
+            )
+            for log in sorted(created, key=lambda log: log.created)
+        ),
     ]
 
 

@@ -418,6 +418,26 @@ def test_a_worker_before_its_eval_is_visible_only_to_the_scan(
         kill(worker)
 
 
+def test_a_running_worker_reports_the_run_its_logs_carry(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """The discovery entry's `run_id` is the run of every log the worker writes — what lets a turn tell a log a live worker may still be writing from one whose worker is gone, without inferring it from which logs look newest."""
+    workers, held = held_fleet(tmp_path, monkeypatch, "run")
+    manifest = read_eval_set(workers.definition, cwd=tmp_path)
+    task = manifest.tasks[0]
+    worker = workers.spawn(action(task.identifier, key=task.key))
+
+    try:
+        held.reached()
+        (running,) = resolve_inflight(workers.inflight, workers.workers_dir).running
+        (attempts,) = observe_logs(str(tmp_path / "logs")).attempts.values()
+
+        assert running.socket is not None
+        assert running.run_id == attempts[0].run_id
+    finally:
+        kill(worker)
+
+
 def test_a_worker_that_finished_is_reaped_and_not_run_again(
     tmp_path: Path, monkeypatch: pytest.MonkeyPatch
 ) -> None:

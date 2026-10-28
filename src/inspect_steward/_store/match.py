@@ -71,6 +71,16 @@ def _chosen(
         except Exception as ex:
             log(f"{source} would not read from the store: {ex}")
             continue
+        if candidate.created_by is not None:
+            # a task some run created at runtime, published with the run that
+            # created it: its identifier says what it evaluated and nothing
+            # about whether it is anybody's answer to this task (observation
+            # never takes one as a task's attempt either)
+            log(
+                f"{source} matches {task.key} by identifier and was created at "
+                f"runtime by another task, so it is not this task's result"
+            )
+            continue
         if (reason := incomplete_reason(manifest, task, candidate)) is None:
             return source
         # quietly, and to the log rather than to the launch: a store holding a
