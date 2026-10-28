@@ -163,7 +163,13 @@ from .memory import (
     read_memory_since,
 )
 from .notify import held_tasks, notify_turn
-from .progress import Progress, display_keys, live_totals, task_progress
+from .progress import (
+    Progress,
+    display_keys,
+    live_totals,
+    runtime_progress,
+    task_progress,
+)
 from .render import marks_note, status_markdown
 from .rulings import (
     Dispositions,
@@ -1258,7 +1264,12 @@ def _turn(
     # the narrowed per-class counts, so a policy's composed effect sentence
     # says what an operator's would (`rulings.affected_refs`)
     affected = affected_refs(detection.batches, _current_locations(observed), reused)
-    policy, declined = policy_rulings(anomalies, settings.preauthorized, affected)
+    policy, declined = policy_rulings(
+        anomalies,
+        settings.preauthorized,
+        affected,
+        runtime={task.task_id for task in observed.runtime},
+    )
     if policy:
         anomalies = read_anomalies(
             [
@@ -1269,6 +1280,7 @@ def _turn(
         )
     progress = Progress(
         rows=task_progress(observed, fleet, scanned.by_task),
+        runtime=runtime_progress(observed, fleet, inflight.live_runs, scanned.by_task),
         # the pids come from the in-flight record rather than from the fleet,
         # because they answer a different question: a worker too busy to serve
         # its socket, and one that has not bound one yet, are both costing the
@@ -2477,7 +2489,17 @@ def _live(
     The observation comes along because a packed worker reports a row per task and names each one only by the log it is writing. That mapping is a by-product of a read this turn has already done, so correlation costs nothing beyond the dictionary; without it every row of a packed worker is unnameable, and each of its tasks reads `finished` while it is still running.
     """
     targets = [
-        LiveTarget(identifiers=worker.identifiers, pid=worker.pid, socket=worker.socket)
+        LiveTarget(
+            identifiers=worker.identifiers,
+            pid=worker.pid,
+            socket=worker.socket,
+            logged=worker.run_id is not None
+            and any(
+                attempt.run_id == worker.run_id
+                for identifier in worker.identifiers
+                for attempt in logs.attempts.get(identifier, [])
+            ),
+        )
         for worker in inflight.running
         if worker.socket is not None
     ]
@@ -2620,11 +2642,14 @@ def _findings(
 
 
 def _current_locations(observed: ObservedTasks) -> dict[str, str]:
-    """Task identifier to its current attempt's location, for the dispositions fold."""
+    """Each task to the log that is in its results, for the dispositions fold: a manifest task by identifier to its current attempt, and a task created at runtime by task id to its one log (`RuntimeTask.task_id`)."""
     return {
-        task.identifier: task.current.location
-        for task in observed.tasks
-        if task.current is not None
+        **{
+            task.identifier: task.current.location
+            for task in observed.tasks
+            if task.current is not None
+        },
+        **{task.task_id: task.log.location for task in observed.runtime},
     }
 
 

@@ -32,6 +32,7 @@ from .._scan import finalize_scan, scan_dir_location
 from .._store import Published, StoreError, open_store, store_location
 from .._tend import TendError, TendResult, tend
 from .._tend.anomalies_md import outcomes_grid
+from .._tend.progress import RuntimeState, display_keys
 from .._tend.table import plain_table
 from .._tend.turn import SCAN_FOLD_RESTORED
 from .._timer import TimerError, disarm, disarm_agent
@@ -234,6 +235,11 @@ def _signoff(
     # sentence this whole verb exists to make impossible
     if uncovered := _uncovered_exception(result, folded):
         exceptions = sorted({*exceptions, uncovered})
+    # **and every task created at runtime that did not produce its result**,
+    # for the same reason: nobody rules on one -- its failure is for the task
+    # that created it -- so without this its hole would reach the record as
+    # silence
+    exceptions = sorted({*exceptions, *_runtime_exceptions(result)})
     append_event(
         workspace.journal,
         SIGNOFF,
@@ -606,15 +612,25 @@ def _publications(events: list[JournalEvent]) -> dict[str, set[str]]:
 
 
 def _publishable(result: TendResult, moved: Set[str]) -> list[str]:
-    """The current logs a signature covers: a manifest row each, and none just archived."""
+    """The current logs a signature covers: a manifest row each, every finished task created at runtime, and none just archived.
+
+    A runtime task of the current execution (`ObservedTasks.runtime`) stays in `logs/` at signoff — curation moves only superseded and orphaned ones — so it is part of what the signature covers and goes to the store with the rest, once it has finished. One still `started` was left unfinished by a worker that is gone (the gate refuses while any worker runs), and a log nobody finished is never exported into a cache other projects read.
+    """
     if result.observed is None:
         return []
     return [
-        task.current.location
-        for task in result.observed.tasks
-        if task.task is not None
-        and task.current is not None
-        and task.current.location not in moved
+        *(
+            task.current.location
+            for task in result.observed.tasks
+            if task.task is not None
+            and task.current is not None
+            and task.current.location not in moved
+        ),
+        *(
+            task.log.location
+            for task in result.observed.runtime
+            if task.log.status != "started"
+        ),
     ]
 
 
@@ -906,6 +922,42 @@ def _uncovered_exception(result: TendResult, folded: ScanSummary | None) -> str 
         return None
     said = ", ".join(f"{name} reviewed {scans}" for name, scans in short)
     return f"scan coverage: of {landed} transcripts, {said}"
+
+
+def _runtime_exceptions(result: TendResult) -> list[str]:
+    """One line per task created at runtime that died or failed, among those the signature covers.
+
+    **A caveat rather than a refusal.** Steward cannot re-run a runtime task, and whether its work is needed again is for the task that created it, so there is nothing a refusal could send the signer to do. But a signature reading *no accepted exceptions* over a run where part of the work never finished would be the silence this verb exists to prevent, so each one is named in the signature and in what the signer is told. Its rows say the same in every table (`RuntimeState`).
+
+    The rows are the current execution's runtime tasks and the orphans (`runtime_progress`); curation archives the orphans, so they are not named.
+
+    Args:
+        result: The turn signed over.
+
+    Returns:
+        One line per dead or errored runtime task the signature covers.
+    """
+    keys = display_keys(result.progress)
+    lines: list[str] = []
+    for row in result.progress.runtime:
+        if row.created_by is None or row.state not in (
+            RuntimeState.DEAD,
+            RuntimeState.ERRORED,
+        ):
+            continue
+        # an unfinished log carries no sample counts, so a dead task's line
+        # says what is known about it and no number its header cannot give
+        how = (
+            "stopped before it finished"
+            if row.state is RuntimeState.DEAD
+            else f"ended without its result, {row.completed} of {row.total} "
+            f"samples complete"
+        )
+        lines.append(
+            f"task created at runtime: {row.name} (created by "
+            f"{keys[row.created_by]}) {how}"
+        )
+    return lines
 
 
 def scanned(result: TendResult) -> bool:

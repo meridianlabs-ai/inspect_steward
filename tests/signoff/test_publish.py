@@ -20,7 +20,7 @@ from inspect_steward._workspace import Workspace, create_workspace, read_journal
 from .._logs import SynthTask, write_log
 from ..anomaly.test_items import CLASS, erroring
 from ..marks._runner import apply_marks
-from ..schedule.test_tend import turn
+from ..schedule.test_tend import prepared, turn
 from .test_signoff import TASK, done, logs, ruling, sign
 
 OTHER = SynthTask("second", samples=2)
@@ -205,6 +205,37 @@ class TestOnlyWhatTheSignatureCovers:
         assert [one.name for one in store.iterdir() if one.is_file()] == [
             Path(logs(workspace)[0]).name
         ]
+
+    def test_a_finished_task_created_at_runtime_is_published_and_an_unfinished_one_is_not(
+        self, tmp_path: Path
+    ) -> None:
+        """A runtime log stays in `logs/` at signoff, so the signature covers it and it goes to the store with its creator's — once it has finished. One its worker left `started` is named in the signature and never exported."""
+        create_workspace(tmp_path, git=False)
+        workspace, _ = prepared(tmp_path, [TASK])
+        creator = write_log(workspace.logs, TASK)
+        child = SynthTask("child", samples=2)
+        finished = write_log(
+            workspace.logs, child, task_id="done", created_by=TASK.task_id
+        )
+        write_log(
+            workspace.logs,
+            child,
+            task_id="dead",
+            status="started",
+            created_by=TASK.task_id,
+        )
+        store = tmp_path / "store"
+        configured(workspace, store)
+
+        result = sign(workspace, publish=True)
+
+        assert result.signature is not None
+        assert len(result.signature.exceptions) == 1
+        assert result.published is not None
+        assert result.published.count == 2
+        assert sorted(one.name for one in store.iterdir() if one.is_file()) == sorted(
+            [creator.name, finished.name]
+        )
 
     def test_a_failed_withdrawal_does_not_erase_a_publication_that_worked(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch

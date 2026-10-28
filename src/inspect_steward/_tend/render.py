@@ -28,6 +28,7 @@ from .items import (
     answer_command,
     by_owner,
     class_summary,
+    landed_tasks,
     precedent_line,
     proposal_summary,
     verdict_line,
@@ -41,11 +42,11 @@ from .progress import (
     short_keys,
 )
 from .table import (
-    budget_cell,
     pipe_table,
     resources_table,
-    score_cell,
+    table_rows,
     task_table_cells,
+    text_columns,
 )
 
 if TYPE_CHECKING:
@@ -235,15 +236,15 @@ def signature_field(result: "TendResult") -> tuple[str, str] | None:
 def _tasks(result: "TendResult") -> list[str]:
     """The operator's task table: where each task stands, and nothing it would have to ask about.
 
-    The cells come from `task_table_cells`, shared with the notification so the page and a post cannot disagree about what a turn found. Here they are wrapped in backticks and laid out as a pipe table; a post fences the same cells as a plain table (`_tend.notify._page`).
+    The cells come from `task_table_cells`, shared with the notification so the page and a post cannot disagree about what a turn found. Here the task column is wrapped in backticks and the rows laid out as a pipe table; a post fences the same cells as a plain table (`_tend.notify._page`).
 
     The key is clipped to `KEY_WIDTH` and the agent's table (`_progress`) is not: this one is read rendered, where a pipe table wraps its cells, and that one is read as text, where its keys are what the agent types back to `steward rule`.
     """
     header, rows = task_table_cells(result, width=KEY_WIDTH)
     if not rows:
         return []
-    backticked = [(f"`{row[0]}`", *row[1:]) for row in rows]
-    return pipe_table(header, backticked) + [""]
+    backticked = [(row[0], f"`{row[1]}`", *row[2:]) for row in rows]
+    return pipe_table(header, backticked, left=text_columns(header)) + [""]
 
 
 def _operator(result: "TendResult") -> list[str]:
@@ -402,11 +403,12 @@ def _progress(result: "TendResult") -> list[str]:
 
     The operator's columns (`_tasks`) plus the two the agent works from: errored, split by ruling, and scanned. Every column is present or absent for the whole table rather than per row, so a settled campaign renders four columns instead of eight.
     """
-    rows = result.progress.rows
-    if not rows:
+    progress = result.progress
+    if not progress.rows and not progress.runtime:
         return []
 
-    short = short_keys(rows)
+    short = short_keys(progress.rows)
+    rows = table_rows(progress, short, 0)
     live = any(row.live for row in rows)
     # not gated on `live` with the other two: what is still to run is known
     # whether or not a worker is answering, and most of a sweep has none
@@ -415,14 +417,15 @@ def _progress(result: "TendResult") -> list[str]:
     # the anomaly queue exists for (step 23), and it is per task -- the totals
     # line already carries the sum and cannot say which tasks it came from
     errored = any(row.errored for row in rows)
-    scored = any(row.headline is not None for row in rows)
-    budgeted = any(row.budget is not None for row in rows)
+    scored = any(row.score for row in rows)
+    budgeted = any(row.budget for row in rows)
     # a run that scans nothing has no column; a run that scanned everything has
     # one saying so, unlike the terminal's, because this document is what a
     # reader quotes and *48 of 48 scanned* is the sentence they need to quote
     scanned = any(row.scanned is not None for row in rows)
+    created = any(row.created_by for row in rows)
 
-    header = ["task", "samples", "done"]
+    header = ["", "task", "samples", "done"]
     if live:
         header += ["running"]
     if queued:
@@ -435,11 +438,14 @@ def _progress(result: "TendResult") -> list[str]:
         header += ["limit"]
     if scored:
         header += ["score"]
+    if created:
+        header += ["created by"]
 
     body: list[tuple[str, ...]] = []
-    for row, key in zip(rows, short.keys, strict=True):
+    for row in rows:
         cells = [
-            f"`{key}`",
+            row.glyph,
+            f"`{row.name}`",
             f"{row.completed}/{row.total}",
             f"{round(row.fraction * 100)}%",
         ]
@@ -449,28 +455,33 @@ def _progress(result: "TendResult") -> list[str]:
             cells += [str(row.queued) if row.queued else ""]
         if errored:
             cells += [
-                _errored_cell(
-                    row.errored, result.dispositions.by_task.get(row.identifier)
-                )
+                _errored_cell(row.errored, result.dispositions.by_task.get(row.key))
             ]
         if scanned:
             cells += [_scanned_cell(row.scanned)]
         if budgeted:
-            cells += [budget_cell(row)]
+            cells += [row.budget]
         if scored:
-            cells += [score_cell(row)]
+            cells += [row.score]
+        if created:
+            cells += [row.created_by]
         body.append(tuple(cells))
 
     # a sub-heading rather than a section of its own, because the document has
     # exactly three sections: a fourth `##` would read as a fourth thing to
     # attend to
-    lines = ["### tasks", "", *pipe_table(tuple(header), body)]
+    table = pipe_table(tuple(header), body, left=text_columns(tuple(header)))
+    lines = ["### tasks", "", *table]
 
     notes: list[str] = []
     if short.model is not None:
         notes.append(f"All tasks ran against `{short.model}`.")
     if scored:
-        named = {row.headline_name for row in rows if row.headline_name is not None}
+        named = {
+            row.headline_name
+            for row in (*progress.rows, *progress.runtime)
+            if row.headline_name is not None
+        }
         # which metric it is has to be legible whether the task declared one or
         # fell back to the first of the first score: a bare number in a column
         # is not self-describing, and two tasks can land on different metrics
@@ -606,7 +617,7 @@ def _anomalies(result: "TendResult") -> list[str]:
     lines = ["### anomalies", ""]
     if line is not None:
         lines += [line, ""]
-    landed = _landed(result)
+    landed = landed_tasks(result.observed, result.progress)
     named = display_keys(result.progress)
     # the finding first, in the eval's words, and the key last: the sentence is
     # what the agent says to an operator, the key is what it types to a verb
@@ -645,15 +656,6 @@ def _anomalies(result: "TendResult") -> list[str]:
     if table:
         lines += ["", *table]
     return lines + [""]
-
-
-def _landed(result: "TendResult") -> frozenset[str]:
-    """The tasks whose current log is complete — what a scan window waits on."""
-    if result.observed is None:
-        return frozenset()
-    return frozenset(
-        task.identifier for task in result.observed.by_state(TaskState.COMPLETE)
-    )
 
 
 def _window_line(anomaly: Anomaly, waiting: bool = False) -> str:

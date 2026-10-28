@@ -283,6 +283,24 @@ A purely additive delta is committed without comment. Anything that would move r
 
 An edit you have not launched is reported on every turn as drift.
 
+### Runtime Tasks
+
+A running task can add tasks to its own run with Inspect's `enqueue_task()`. Those tasks are not in the definition, so Steward cannot launch them, but it does observe them. Inspect records in each such task's log which task added it (`EvalSpec.origin`), and that record is all Steward goes by:
+
+- Status shows each one as a row of its own, with its sample counts and its state: running, succeeded, errored, or dead (its worker stopped before it finished). It is named by its task name and the start of its task id, such as `child#Xy3k9a`, so two tasks of the same name can be told apart. A "created by" column at the end of the table names the task that added it. The column appears only in runs that have runtime tasks. Runtime tasks' samples count in the run's totals.
+- A runtime task belongs to the task that added it for as long as that task is in the definition, including after that task was killed and resumed. Once it leaves the definition, its runtime tasks' logs are archived with its own, after the worker running them has stopped.
+- Its samples are scanned like any other task's, so a finding on one needs a ruling before signoff. The rulings that fit are `dismiss`, `score` and `accept`: Steward does not re-run a runtime task or rewrite its log, so `rerun`, `exclude` and `zero` are refused.
+- Signoff covers runtime tasks. It refuses while any worker is still running, which includes a runtime task that is running or still queued. A runtime task that died or failed is named in the signature as an exception, without blocking it. `--publish` sends finished runtime tasks' logs to the store with the rest, and never a log that did not finish. A runtime task added by an attempt of its task that was later abandoned by a fresh start (after a sandbox or gateway change) is archived with that attempt.
+- Steward never schedules, resumes, or restarts a runtime task, and asks for no decision about its errored samples or its own failure: what to do about a runtime task that failed is up to the task that created it.
+- A runtime task is never taken as the result of a task in the definition, even when it was built exactly like one, whether it is in the log directory, in `logs-archive/`, or in a log store.
+
+There are some known limitations:
+
+- When a launch removes a task, the archive prompt lists that task's logs but not the logs of the runtime tasks it created, which are archived with it.
+- Restoring a removed task brings back its own archived logs but not its runtime tasks' logs.
+- A runtime task whose log is unfinished shows 0/0 samples whenever its worker is not answering, which includes a worker that stopped before finishing it.
+- If the log of the task that added a runtime task cannot be read, the runtime task is read as an orphan and archived once its worker has stopped. The unreadable log blocks signoff until somebody acknowledges it.
+
 ### Pausing Runs
 
 `steward pause --reason "..."` stops new work from being scheduled. Workers already running finish normally, and every turn reports the run as paused and spawns nothing. `steward resume` starts scheduling again, and the next tend converges from whatever it finds by then.

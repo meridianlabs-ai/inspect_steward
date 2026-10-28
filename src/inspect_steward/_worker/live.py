@@ -237,6 +237,12 @@ class LiveFleet:
 
     tasks: dict[str, LiveTask] = field(default_factory=dict[str, LiveTask])
 
+    runtime: dict[str, LiveTask] = field(default_factory=dict[str, LiveTask])
+    """Rows for tasks a worker's tasks added at runtime (`_evalset.observe.RuntimeTask`), keyed by task id.
+
+    Apart from `tasks` because no worker was selected to run them: nothing that steers a worker — tuning, the stall guard, parked and stuck items — reads them. Keyed by task id, which is what names a runtime task, so their `identifier` is empty. A worker that could not be read has no rows here at all.
+    """
+
     @property
     def unavailable(self) -> list[LiveTask]:
         return [task for task in self.tasks.values() if task.unavailable is not None]
@@ -250,11 +256,14 @@ class LiveTarget:
     pid: int
     socket: Path
 
+    logged: bool = False
+    """Whether a log of the task it is running has been observed in the run it is in. Once one has, a row that log does not name is not that task: the task has finished, and the row is a task it added at runtime (`_identify`)."""
+
     @property
     def only(self) -> str | None:
         """The one task this worker is running, or `None` where it is running several.
 
-        What lets a worker at the default width skip correlation entirely: with one task there is nothing to tell apart, so a row is that task whatever it says its log is — which matters in the window where a task has begun but its log has not appeared in anyone's observation yet.
+        What a worker at the default width falls back to for a row whose log nothing has observed yet — the window where a task has begun but its log has not appeared in anyone's observation (`_identify`).
         """
         return self.identifiers[0] if len(self.identifiers) == 1 else None
 
@@ -322,7 +331,12 @@ async def read_fleet_async(
             for target in targets
         ),
     )
-    return LiveFleet(tasks={task.identifier: task for tasks in read for task in tasks})
+    return LiveFleet(
+        tasks={task.identifier: task for tasks, _ in read for task in tasks},
+        runtime={
+            task_id: task for _, runtime in read for task_id, task in runtime.items()
+        },
+    )
 
 
 async def _read(
@@ -332,17 +346,19 @@ async def _read(
     stuck_after: float = DEFAULT_STUCK_AFTER,
     now: float = 0.0,
     known: Mapping[str, Interim] | None = None,
-) -> list[LiveTask]:
+) -> tuple[list[LiveTask], dict[str, LiveTask]]:
     """One worker's reads, or why they did not happen.
 
     One entry per task the worker is running, because a packed process reports a row for each. A task the worker has already finished while its siblings run has no row and reads `finished` — which is true of it, and is exactly what the same word meant when a worker only ever held one.
+
+    Rows for tasks the worker's tasks added at runtime come back apart, keyed by task id (`LiveFleet.runtime`).
     """
 
-    def unavailable(reason: str) -> list[LiveTask]:
+    def unavailable(reason: str) -> tuple[list[LiveTask], dict[str, LiveTask]]:
         return [
             LiveTask(pid=target.pid, identifier=identifier, unavailable=reason)
             for identifier in target.identifiers
-        ]
+        ], {}
 
     try:
         transport = httpx.AsyncHTTPTransport(uds=str(target.socket))
@@ -424,39 +440,44 @@ async def _read(
         return unavailable(f"{type(ex).__name__}: {ex}")
 
     live: list[LiveTask] = []
+    runtime: dict[str, LiveTask] = {}
     claimed = frozenset(model for row in rows if (model := _text(row.get("model"))))
-    for row in rows:
-        identifier = _identify(row, target, paths)
-        if identifier is None:
-            # a row this worker is running that nothing can name. Dropped
-            # rather than guessed at: the cost is one row's live columns for
-            # one turn, and the alternative is attributing a task's numbers to
-            # a sibling that is not the one doing the work
+    for row, identifier in zip(rows, _identify(rows, target, paths), strict=True):
+        task_id = _text(row.get("task_id"))
+        if identifier is None and not task_id:
+            # a row nothing can name. Dropped rather than guessed at: the cost
+            # is one row's live columns for one turn, and the alternative is
+            # attributing a task's numbers to a task not doing the work
             continue
-        config = configs.get(_text(row.get("task_id")))
+        config = configs.get(task_id)
         model = _model(row, target)
-        live.append(
-            LiveTask(
-                pid=target.pid,
-                identifier=identifier,
-                task_id=_text(row.get("task_id")),
-                eval_id=_text(row.get("eval_id")),
-                interim=harvested.get(_text(row.get("task_id"))),
-                samples=_samples(row.get("samples")),
-                usage=_usage(samples.get(_text(row.get("eval_id")))),
-                parked=_parked(samples.get(_text(row.get("eval_id")))),
-                stuck=_stuck(samples.get(_text(row.get("eval_id"))), stuck_after, now),
-                connections=_connections(config, model),
-                max_samples=_sample_limit(config),
-                sandboxes=_sandboxes(config),
-                scale_downs=_scale_downs(config, model, claimed),
-                connections_ceiling=_connections_ceiling(config, model),
-                connections_limit=_connections_limit(config, model),
-                total_tokens=_number(row.get("total_tokens")),
-                refusals=_number(row.get("refusals")),
-                http_retries=_number(row.get("http_retries")),
-            )
+        task = LiveTask(
+            pid=target.pid,
+            identifier=identifier or "",
+            task_id=task_id,
+            eval_id=_text(row.get("eval_id")),
+            interim=harvested.get(task_id),
+            samples=_samples(row.get("samples")),
+            usage=_usage(samples.get(_text(row.get("eval_id")))),
+            parked=_parked(samples.get(_text(row.get("eval_id")))),
+            stuck=_stuck(samples.get(_text(row.get("eval_id"))), stuck_after, now),
+            connections=_connections(config, model),
+            max_samples=_sample_limit(config),
+            sandboxes=_sandboxes(config),
+            scale_downs=_scale_downs(config, model, claimed),
+            connections_ceiling=_connections_ceiling(config, model),
+            connections_limit=_connections_limit(config, model),
+            total_tokens=_number(row.get("total_tokens")),
+            refusals=_number(row.get("refusals")),
+            http_retries=_number(row.get("http_retries")),
         )
+        if identifier is not None:
+            live.append(task)
+        else:
+            # none of the worker's own tasks, so a task one of them added at
+            # runtime -- or one of its own whose log nothing has observed yet,
+            # which no runtime task's id will ever look up
+            runtime[task_id] = task
 
     named = {task.identifier for task in live}
     live.extend(
@@ -464,21 +485,29 @@ async def _read(
         for identifier in target.identifiers
         if identifier not in named
     )
-    return live
+    return live, runtime
 
 
 def _identify(
-    row: dict[str, object], target: LiveTarget, paths: Mapping[str, str]
-) -> str | None:
-    """Which of a worker's tasks this row is.
+    rows: list[dict[str, object]], target: LiveTarget, paths: Mapping[str, str]
+) -> list[str | None]:
+    """Which of the worker's own tasks each row is, index-aligned with `rows`; `None` for a row that is none of them.
 
-    A worker holding one task needs no correlation and gets none, which keeps the default width free of a lookup that can fail. Beyond that the log a task is writing is what names it, since that is the only field the control channel and Steward's own observation both hold — looked up in `paths`, which is keyed by the form the channel reports (`by_log_path`).
+    **The log a row is writing names it first**, since that is the only field the control channel and Steward's own observation both hold — looked up in `paths`, which is keyed by the form the channel reports (`by_log_path`). A worker's own task writes a log with no creator, which is all `paths` holds, so a task one of them added at runtime is never named by it, whatever its identifier.
+
+    **A worker holding one task falls back to that task** for the window where it has begun but its log has not appeared in anyone's observation — only then, and only for a row that can be nothing else: no log of the task has been observed in the worker's run yet (`LiveTarget.logged`), and exactly one row is unnamed. Once its log has been observed, a row that log does not name is a task it added at runtime, even after it has finished and left that row the worker's only one; and of two unnamed rows nothing says which is which, so neither is guessed at. A packed worker has no fallback: with several tasks there is nothing to fall back to.
     """
-    if (only := target.only) is not None:
-        return only
-    location = _text(row.get("log_location"))
-    identifier = paths.get(location) if location else None
-    return identifier if identifier in target.identifiers else None
+    named: list[str | None] = []
+    for row in rows:
+        location = _text(row.get("log_location"))
+        identifier = paths.get(location) if location else None
+        named.append(identifier if identifier in target.identifiers else None)
+    unnamed = [n for n, identifier in enumerate(named) if identifier is None]
+    only = target.only
+    if only is not None and only not in named and not target.logged:
+        if len(unnamed) == 1:
+            named[unnamed[0]] = only
+    return named
 
 
 async def _get(client: httpx.AsyncClient, path: str) -> object:

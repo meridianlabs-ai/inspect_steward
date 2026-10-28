@@ -13,11 +13,22 @@ The model-pool figure has since moved out of these tables into the `conn` column
 **Widths are computed per render rather than fixed.** Display keys vary from `addition` to a sweep entry with three arguments and a model, and a column padded for the worst case wastes the terminal on every other line.
 """
 
+from collections.abc import Collection
+from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
+from .._evalset.display import ShortKeys
 from .._evalset.observe import TaskState
 from .._util.size import format_bytes
-from .progress import Progress, TaskProgress, fleet_totals, short_keys
+from .coverage import TaskCoverage
+from .progress import (
+    Progress,
+    RuntimeProgress,
+    RuntimeState,
+    TaskProgress,
+    fleet_totals,
+    short_keys,
+)
 
 if TYPE_CHECKING:
     # `task_table_cells` reads a whole turn; the type it takes can only be named
@@ -32,9 +43,130 @@ GLYPH = {
 }
 """One character per state. `·` for a task not yet started reads as *nothing here yet* rather than as a problem, which is what it is."""
 
+RUNTIME_GLYPH = {
+    RuntimeState.RUNNING: "⚙",
+    RuntimeState.SUCCEEDED: "✓",
+    RuntimeState.ERRORED: "✗",
+    RuntimeState.DEAD: "✗",
+    RuntimeState.ORPHANED: "⌫",
+}
+"""One character per state of a task created at runtime, sharing `GLYPH`'s where the meaning is the same, so a column of glyphs reads alike down both kinds of row. A dead task gets the errored one: neither will produce its result, and Steward acts on neither."""
+
+
+@dataclass(frozen=True)
+class TableRow:
+    """One row of a task table, whichever kind of task it is: the cells every task table draws, decided once (`table_rows`).
+
+    One shape for a manifest task's row and a runtime task's, so no renderer branches on which it has: a cell that only a steered task has — the budget — is simply empty in a runtime task's row.
+    """
+
+    key: str
+    """What the turn's folds file the task under: a manifest task's identifier, or a runtime task's task id."""
+
+    glyph: str
+    name: str
+    """The task cell: a manifest task's display key, or a runtime task's name, clipped to the table's width."""
+
+    completed: int
+    total: int
+    running: int
+    queued: int
+    errored: int
+    live: bool
+
+    budget: str
+    """Usage against the per-sample limit, abbreviated — `45/100t` — or empty."""
+
+    score: str
+    scanned: TaskCoverage | None
+
+    created_by: str
+    """The display key of the task that created a runtime task, clipped like `name`; empty for a manifest task's row."""
+
+    @property
+    def fraction(self) -> float:
+        return self.completed / self.total if self.total else 0.0
+
+
+def table_rows(progress: Progress, short: ShortKeys, width: int) -> list[TableRow]:
+    """Every row of a task table: the manifest's tasks under their display keys, then the tasks created at runtime under their names.
+
+    A runtime task's creator is named by the key its own row is shown under, so the two can be matched by eye.
+
+    Args:
+        progress: The rows to draw.
+        short: The display keys of `progress.rows`, as `short_keys` shortened them.
+        width: Clip names to this many characters, or 0 for whole.
+
+    Returns:
+        One row per task, manifest rows first.
+    """
+    named = {
+        row.identifier: key for row, key in zip(progress.rows, short.keys, strict=True)
+    }
+    named.update({row.task_id: row.name for row in progress.runtime})
+    return [
+        *(_task_row(row, clip(named[row.identifier], width)) for row in progress.rows),
+        *(
+            _runtime_row(
+                row,
+                clip(row.name, width),
+                clip(named[row.created_by], width) if row.created_by else "",
+            )
+            for row in progress.runtime
+        ),
+    ]
+
+
+def _task_row(row: TaskProgress, name: str) -> TableRow:
+    return TableRow(
+        key=row.identifier,
+        glyph=GLYPH.get(row.state, "?"),
+        name=name,
+        completed=row.completed,
+        total=row.total,
+        running=row.running,
+        queued=row.queued,
+        errored=row.errored,
+        live=row.live,
+        budget=row.budget.text if row.budget is not None else "",
+        score=score_cell(row.headline),
+        scanned=row.scanned,
+        created_by="",
+    )
+
+
+def _runtime_row(row: RuntimeProgress, name: str, created_by: str) -> TableRow:
+    return TableRow(
+        key=row.task_id,
+        glyph=RUNTIME_GLYPH[row.state],
+        name=name,
+        completed=row.completed,
+        total=row.total,
+        running=row.running,
+        queued=row.queued,
+        errored=row.errored,
+        live=row.live,
+        budget="",
+        score=score_cell(row.headline),
+        scanned=row.scanned,
+        created_by=created_by,
+    )
+
+
+TEXT_COLUMNS = frozenset({"", "task", "created by"})
+"""The headings of a task table's columns that hold text and are left-aligned; every other column holds a figure and is right-aligned. By heading rather than by position, so a column added anywhere keeps every other column's alignment."""
+
+
+def text_columns(header: tuple[str, ...]) -> frozenset[int]:
+    """The indexes of `header`'s text columns (`TEXT_COLUMNS`), for `plain_table` and `pipe_table`."""
+    return frozenset(n for n, heading in enumerate(header) if heading in TEXT_COLUMNS)
+
 
 def progress_table(progress: Progress, *, width: int = 0) -> list[str]:
     """Render the rows.
+
+    A runtime task's row ends with who created it — `by generator` — after every other field, so a manifest row, which has no creator, renders as it would in a run with no runtime tasks.
 
     Args:
         progress: The rows to render.
@@ -43,14 +175,12 @@ def progress_table(progress: Progress, *, width: int = 0) -> list[str]:
     Returns:
         One string per row, plus a totals line when there is more than one row.
     """
-    if not progress.rows:
+    if not progress.rows and not progress.runtime:
         return []
 
     short = short_keys(progress.rows)
-    cells = [
-        _cells(row, key, width)
-        for row, key in zip(progress.rows, short.keys, strict=True)
-    ]
+    rows = table_rows(progress, short, width)
+    cells = [_cells(row) for row in rows]
     # a column empty in every row is dropped rather than padded: a settled
     # campaign has no running samples, no queue, and no budget in flight, and
     # holding their width open leaves the score stranded across a gap
@@ -58,25 +188,28 @@ def progress_table(progress: Progress, *, width: int = 0) -> list[str]:
     cells = [tuple(cell[n] for n in keep) for cell in cells]
     widths = [max(len(cell[n]) for cell in cells) for n in range(len(cells[0]))]
 
-    lines = [_line(cell, widths) for cell in cells]
+    lines = [
+        _line(cell, widths, row.created_by)
+        for cell, row in zip(cells, rows, strict=True)
+    ]
     if (footer := _footer(progress, short.model)) is not None:
         lines.append(footer)
     return lines
 
 
-def _cells(row: TaskProgress, key: str, width: int) -> tuple[str, ...]:
+def _cells(row: TableRow) -> tuple[str, ...]:
     """One row's columns, already formatted, before they are padded to a width.
 
-    The task cell is the display key alone: connections stand in the `conn` column of the `**resources**` table (`resources_cells`), beside the memory and CPU a reader scanning resource figures is already looking for, rather than riding in the name cell of the progress table.
+    The task cell is the state glyph and the name alone: connections stand in the `conn` column of the `**resources**` table (`resources_cells`), beside the memory and CPU a reader scanning resource figures is already looking for, rather than riding in the name cell of the progress table.
     """
     return (
-        f"{glyph(row)} {clip(key, width)}",
+        f"{row.glyph} {row.name}",
         f"{row.completed}/{row.total}",
         f"{round(row.fraction * 100)}%",
         f"{row.running}r" if row.running else "",
         f"{row.queued}q" if row.queued else "",
-        row.budget.text if row.budget is not None else "",
-        score_cell(row),
+        row.budget,
+        row.score,
     )
 
 
@@ -94,7 +227,7 @@ def clip(key: str, width: int) -> str:
     return f"{key[:head]}…{key[len(key) - tail :]}"
 
 
-def score_cell(row: TaskProgress) -> str:
+def score_cell(headline: float | None) -> str:
     """The score column's cell: the headline to two decimals, final or interim alike.
 
     **Two columns now, budget and score, because a running row has both.** The budget is usage against a limit and exists exactly while a task runs; the score used to exist exactly once it had finished, which is what let the two share a column. A running task's interim figure ended that: it is a score with a budget beside it. `progress_table` still drops a column empty in every row, so a settled campaign pays for the score alone and a run whose tasks declare no limit pays for nothing it did not use.
@@ -103,9 +236,9 @@ def score_cell(row: TaskProgress) -> str:
 
     An interim figure is not marked. A reader of a row that says `10/30` beside a score knows the score is over the ten, and a marker would be telling them what the row already says.
     """
-    if row.headline is None:
+    if headline is None:
         return ""
-    return f"{row.headline:.2f}"
+    return f"{headline:.2f}"
 
 
 def task_table_cells(
@@ -113,7 +246,9 @@ def task_table_cells(
 ) -> tuple[tuple[str, ...], list[tuple[str, ...]]]:
     """The operator task table's header and plain rows: where each task stands, and nothing a reader would have to ask about.
 
-    **One builder for two surfaces**, so the operator's `status.md` and a notification cannot disagree about what a turn found — only about how the cells are drawn. `status.md` wraps column zero in backticks and lays the rows out as a pipe table; a post fences them as a plain table. Both start here.
+    **One builder for two surfaces**, so the operator's `status.md` and a notification cannot disagree about what a turn found — only about how the cells are drawn. `status.md` wraps the task column in backticks and lays the rows out as a pipe table; a post fences them as a plain table. Both start here.
+
+    The state glyph leads every row in a column of its own, with an empty heading: the glyph says what it is. A `created by` column comes last where the run has tasks created at runtime, and is absent otherwise.
 
     Samples rather than task states, because *how is the run going* is a question about samples. No errored or scanned column: what errored is in the by-task table, and coverage is the agent's to read aloud at signoff. No connections either: they stand in the `**resources**` table's `conn` column (`resources_cells`), beside the memory and CPU a reader scanning resource figures is already looking for. Every column is present or absent for the whole table rather than per row.
 
@@ -122,18 +257,19 @@ def task_table_cells(
         width: Clip display keys to this many characters, or 0 for whole. The operator's page passes `KEY_WIDTH`; a post passes the narrower phone width.
 
     Returns:
-        The header and one plain row per task — column zero unadorned, for the caller to decorate in its own dialect — or `((), [])` where the run has no tasks.
+        The header and one plain row per task — the task column, at index 1, unadorned for the caller to decorate in its own dialect — or `((), [])` where the run has no tasks. `text_columns` says which columns to left-align.
     """
-    rows = result.progress.rows
-    if not rows:
+    progress = result.progress
+    if not progress.rows and not progress.runtime:
         return (), []
-    short = short_keys(rows)
+    rows = table_rows(progress, short_keys(progress.rows), width)
     live = any(row.live for row in rows)
     queued = any(row.queued for row in rows)
-    budgeted = any(row.budget is not None for row in rows)
-    scored = any(row.headline is not None for row in rows)
+    budgeted = any(row.budget for row in rows)
+    scored = any(row.score for row in rows)
+    created = any(row.created_by for row in rows)
 
-    header = ["task", "samples", "done"]
+    header = ["", "task", "samples", "done"]
     if live:
         header += ["running"]
     if queued:
@@ -142,11 +278,14 @@ def task_table_cells(
         header += ["limit"]
     if scored:
         header += ["score"]
+    if created:
+        header += ["created by"]
 
     body: list[tuple[str, ...]] = []
-    for row, key in zip(rows, short.keys, strict=True):
+    for row in rows:
         cells = [
-            clip(key, width),
+            row.glyph,
+            row.name,
             f"{row.completed}/{row.total}",
             f"{round(row.fraction * 100)}%",
         ]
@@ -155,27 +294,24 @@ def task_table_cells(
         if queued:
             cells += [str(row.queued) if row.queued else ""]
         if budgeted:
-            cells += [budget_cell(row)]
+            cells += [row.budget]
         if scored:
-            cells += [score_cell(row)]
+            cells += [row.score]
+        if created:
+            cells += [row.created_by]
         body.append(tuple(cells))
     return tuple(header), body
 
 
-def budget_cell(row: TaskProgress) -> str:
-    """The budget column: usage against the per-sample limit, abbreviated — `45/100t`, `1.1M/10Mtk`.
-
-    `Budget.text` rather than a spelled-out `45/100 turns`, so the operator's page, a post and the terminal all name a budget the same short way (`Budget.text`). The suffix is flush against the number, which is one quantity rather than two.
-    """
-    return row.budget.text if row.budget is not None else ""
-
-
-def _line(cells: tuple[str, ...], widths: list[int]) -> str:
+def _line(cells: tuple[str, ...], widths: list[int], created_by: str) -> str:
     name, *rest = cells
     padded = "  ".join(
         cell.rjust(width) for cell, width in zip(rest, widths[1:], strict=True)
     )
-    return f"{name.ljust(widths[0])}  {padded}".rstrip()
+    # after the padding rather than a column of its own, so it starts at one
+    # place down every runtime row and is left-aligned like the name it is
+    by = f"  by {created_by}" if created_by else ""
+    return f"{name.ljust(widths[0])}  {padded}{by}".rstrip()
 
 
 def _footer(progress: Progress, model: str | None) -> str | None:
@@ -194,11 +330,6 @@ def _footer(progress: Progress, model: str | None) -> str | None:
         return f"  {parts[0]}" if parts else None
     parts.append(totals)
     return "  " + " · ".join(parts)
-
-
-def glyph(row: TaskProgress) -> str:
-    """The state character a row leads with."""
-    return GLYPH.get(row.state, "?")
 
 
 RESOURCES_HEADER = ("task", "conn", "refusals", "retries", "memory", "cpu")
@@ -260,52 +391,59 @@ def resources_table(progress: Progress, *, width: int = 0) -> list[str]:
 
 
 def plain_table(
-    header: tuple[str, ...], rows: list[tuple[str, ...]], *, indent: str = ""
+    header: tuple[str, ...],
+    rows: list[tuple[str, ...]],
+    *,
+    indent: str = "",
+    left: Collection[int] = (0,),
 ) -> list[str]:
-    """A padded plain table: the first column left-aligned, every other right-aligned under its heading, two spaces between columns.
+    """A padded plain table: the columns at the indexes in `left` left-aligned, every other right-aligned under its heading, two spaces between columns.
 
     The one table layout, for a terminal, a post's fenced block, and a markdown document's — so no two surfaces disagree about a cell, only about what is drawn around it. Padded because these documents are read in an editor at least as often as they are rendered, and a column of numbers that lines up is a table before anything renders it.
     """
     widths = [max(len(row[n]) for row in (header, *rows)) for n in range(len(header))]
-    return [_plain_row(row, widths, indent) for row in (header, *rows)]
-
-
-def _plain_row(cells: tuple[str, ...], widths: list[int], indent: str) -> str:
-    name, *rest = cells
-    padded = [
-        name.ljust(widths[0]),
-        *(cell.rjust(width) for cell, width in zip(rest, widths[1:], strict=True)),
+    return [
+        (indent + "  ".join(_padded(row, widths, left))).rstrip()
+        for row in (header, *rows)
     ]
-    return (indent + "  ".join(padded)).rstrip()
 
 
-def pipe_table(header: tuple[str, ...], rows: list[tuple[str, ...]]) -> list[str]:
-    """A GitHub pipe table with its cells padded to their columns: the first column left-aligned, every other right-aligned, and the delimiter row carrying that alignment.
+def pipe_table(
+    header: tuple[str, ...],
+    rows: list[tuple[str, ...]],
+    *,
+    left: Collection[int] = (0,),
+) -> list[str]:
+    """A GitHub pipe table with its cells padded to their columns: the columns at the indexes in `left` left-aligned, every other right-aligned, and the delimiter row carrying that alignment.
 
     The same padding `plain_table` gives a fenced block, for the one table a reader meets rendered as often as raw. A pipe table wraps its cells when a renderer draws it and stacks its numbers when an editor shows the source, so a status.md read as plain text lines up its columns without a renderer to line them up.
     """
+    # a left-aligned column may be as narrow as one hyphen, which is what lets
+    # a glyph column stay one character wide; a right-aligned one keeps room
+    # for its colon and two hyphens besides
     widths = [
-        max(3, max(len(row[n]) for row in (header, *rows))) for n in range(len(header))
+        max(1 if n in left else 3, max(len(row[n]) for row in (header, *rows)))
+        for n in range(len(header))
     ]
-    return [
-        _pipe_row(header, widths),
-        _pipe_delimiter(widths),
-        *(_pipe_row(row, widths) for row in rows),
-    ]
-
-
-def _pipe_delimiter(widths: list[int]) -> str:
-    cells = (
-        "-" * widths[0],
-        *("-" * (width - 1) + ":" for width in widths[1:]),
+    delimiter = (
+        "-" * width if n in left else "-" * (width - 1) + ":"
+        for n, width in enumerate(widths)
     )
-    return "| " + " | ".join(cells) + " |"
-
-
-def _pipe_row(cells: tuple[str, ...], widths: list[int]) -> str:
-    name, *rest = cells
-    padded = [
-        name.ljust(widths[0]),
-        *(cell.rjust(width) for cell, width in zip(rest, widths[1:], strict=True)),
+    return [
+        _pipe_row(_padded(header, widths, left)),
+        _pipe_row(list(delimiter)),
+        *(_pipe_row(_padded(row, widths, left)) for row in rows),
     ]
-    return "| " + " | ".join(padded) + " |"
+
+
+def _padded(
+    cells: tuple[str, ...], widths: list[int], left: Collection[int]
+) -> list[str]:
+    return [
+        cell.ljust(width) if n in left else cell.rjust(width)
+        for n, (cell, width) in enumerate(zip(cells, widths, strict=True))
+    ]
+
+
+def _pipe_row(cells: list[str]) -> str:
+    return "| " + " | ".join(cells) + " |"

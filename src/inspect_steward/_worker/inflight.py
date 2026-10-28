@@ -157,7 +157,9 @@ def resolve_inflight(
     live: dict[Path, list[ScannedWorker]] = {}
     for found in scan(workers_dir):
         live.setdefault(found.selection, []).append(found)
-    sockets = {server.pid: server.socket_path for server in list_discovered_servers()}
+    # the socket to read the worker by, and the run it is in: one entry per
+    # live control server, bound inside the worker's one `eval()` call
+    servers = {server.pid: server for server in list_discovered_servers()}
 
     running: list[RunningWorker] = []
     departed: list[DepartedWorker] = []
@@ -181,13 +183,15 @@ def resolve_inflight(
             continue
         found = _worker_process(matched, entry.pid)
         if found is not None:
+            server = servers.get(found.pid)
             running.append(
                 RunningWorker(
                     worker=entry.worker,
                     identifiers=entry.identifiers,
                     pid=found.pid,
                     host=host,
-                    socket=sockets.get(found.pid),
+                    socket=server.socket_path if server is not None else None,
+                    run_id=server.run_id if server is not None else None,
                 )
             )
         else:
@@ -209,13 +213,15 @@ def resolve_inflight(
     for selection, matched in live.items():
         found = _worker_process(matched, None)
         if found is not None and found.identifiers:
+            server = servers.get(found.pid)
             running.append(
                 RunningWorker(
                     worker=found.worker or selection.stem,
                     identifiers=found.identifiers,
                     pid=found.pid,
                     host=host,
-                    socket=sockets.get(found.pid),
+                    socket=server.socket_path if server is not None else None,
+                    run_id=server.run_id if server is not None else None,
                 )
             )
 

@@ -5,7 +5,7 @@ Steward converges a log directory toward a manifest. This module is the read hal
 The work splits at the filesystem boundary rather than at the manifest:
 
 - `observe_logs` does the I/O. It groups attempts by `task_identifier` and knows nothing about what was *supposed* to run — which is what lets it serve `logs-archive/` and any other directory where there is no manifest to compare against (workflow.md, *Steward never destroys a result, but it does curate the directory*).
-- `observe_tasks` is pure. It answers completeness, which needs the manifest's per-task sample and epoch counts, and it names identifiers present in the directory but absent from the definition.
+- `observe_tasks` is pure. It answers completeness, which needs the manifest's per-task sample and epoch counts, it names identifiers present in the directory but absent from the definition, and it finds which manifest task created each log a running task added with Inspect's `enqueue_task()` (`RuntimeTask`).
 
 Two properties are borrowed from the journal, because they are properties of anything Steward reads on a schedule and cannot afford to choke on:
 
@@ -26,6 +26,7 @@ from inspect_ai._eval.evalset import task_identifier
 # the same per-task narrowing `eval_run` applies before a log records what ran
 from inspect_ai._eval.task.util import resolve_task_sample_ids
 from inspect_ai.log import (
+    EnqueueTaskOrigin,
     EvalLog,
     EvalLogInfo,
     headline_metric,
@@ -87,6 +88,18 @@ class LogAttempt:
     """The log's own task id. Unpredictable to Steward — each worker resolves its own — which is why it is carried rather than computed (execution.md, *`eval-set.json` must be written incrementally*)."""
 
     eval_id: str
+
+    run_id: str
+    """`eval.run_id`: the one `eval()` call that wrote this log.
+
+    A Steward worker makes exactly one, and its control-discovery entry carries the same id (`RunningWorker.run_id`), so a log whose run is live is one a running worker may still be writing (execution.md, *One `eval_set()` call per worker*).
+    """
+
+    created_by: str | None
+    """The `task_id` of the task that added this one to its run with Inspect's `enqueue_task()`, from `eval.origin`, or `None` for a task its run was given.
+
+    **Provenance, which the identifier is not.** An identifier says what is evaluated; this says who started it. Every log a Steward worker writes for a task it was selected to run has `None` here, so a log with a creator is never a manifest task's attempt, whatever its identifier (`ObservedLogs.created`).
+    """
 
     mtime: float | None
     """When the file was last written, in **milliseconds** since the epoch, as `EvalLogInfo` reports it.
@@ -170,7 +183,13 @@ class ObservedLogs:
     attempts: dict[str, list[LogAttempt]] = field(
         default_factory=dict[str, list[LogAttempt]]
     )
-    """Attempts per identifier, newest first by `created`."""
+    """Attempts per identifier, newest first by `created` — the logs of tasks their run was given."""
+
+    created: list[LogAttempt] = field(default_factory=list[LogAttempt])
+    """The logs of tasks a running task added with `enqueue_task()` (`LogAttempt.created_by`), oldest first.
+
+    **Apart from `attempts`, because a log's creator decides what it is and its identifier does not.** A runtime task can be built with the same file, name, arguments, solver and model as a task the definition names; grouped by identifier it would become that task's attempt, and could stand as its result, be resumed as it, or be offered for reuse in its place. Kept here, every reader that pairs logs with tasks by identifier — completeness, resume, restore, the log store — never sees one, and the readers that want them (`observe_tasks`, scanning, publication) ask for them by name.
+    """
 
     unreadable: list[UnreadableLog] = field(default_factory=list[UnreadableLog])
 
@@ -181,7 +200,9 @@ class ObservedLogs:
     @property
     def count(self) -> int:
         """Total logs read."""
-        return sum(len(attempts) for attempts in self.attempts.values())
+        return sum(len(attempts) for attempts in self.attempts.values()) + len(
+            self.created
+        )
 
     @property
     def locations(self) -> list[str]:
@@ -193,7 +214,7 @@ class ObservedLogs:
             attempt.location
             for attempts in self.attempts.values()
             for attempt in attempts
-        ] + [log.location for log in self.unreadable]
+        ] + [log.location for log in (*self.created, *self.unreadable)]
 
     def current(self, identifier: str) -> LogAttempt | None:
         """The attempt that counts for an identifier.
@@ -313,11 +334,58 @@ class TaskObservation:
 
 
 @dataclass(frozen=True)
+class RuntimeTask:
+    """A task a manifest task created while running, through Inspect's `enqueue_task()`, and so in no manifest.
+
+    **A task of the run in its own right**, observed beside the manifest's tasks rather than inside its creator: it has its own samples, its own state and its own log. Steward never spawns, resumes or respawns one — it cannot build it from the definition — so whatever is to be done about its failures is for the task that created it.
+
+    **Its creator is read from its log, never inferred.** Inspect records the creating task in `eval.origin` (`LogAttempt.created_by`), by `task_id`, which Inspect keeps across a resume. So a runtime task belongs to the manifest task whose attempts carry that `task_id`, however many times that task was killed and resumed, and whether or not the attempt that created it is still in the directory. A task created by a runtime task belongs to the manifest task at the head of that chain.
+
+    **One log per task.** Inspect gives every task `enqueue_task()` adds a fresh `task_id`, and a Steward worker runs with Inspect's task retries off, so each runtime task writes exactly one log.
+    """
+
+    log: LogAttempt
+    """Its one log."""
+
+    created_by: str
+    """Identifier of the manifest task it belongs to: its creator, or its creator's creator, up to the first manifest task."""
+
+    chain: str
+    """The `task_id` of that manifest task's attempts which the chain leads to: every attempt of one execution of a task shares it, across resumes, and a fresh start of the task mints a new one. A runtime task is part of the run's results while this names the execution its manifest task's current attempt belongs to (`ObservedTasks.runtime`), and superseded with that execution otherwise (`ObservedTasks.runtime_superseded`)."""
+
+    @property
+    def task_id(self) -> str:
+        """Its log's task id: what tells one runtime task from another, and what anomalies, coverage and rulings file it under, where a manifest task uses its identifier. An identifier will not do — a creator can add the same task twice."""
+        return self.log.task_id
+
+
+def runtime_name(log: LogAttempt) -> str:
+    """How a reader tells a task created at runtime from another of the same name: its task name and the head of its task id, `child#Xy3k9a`.
+
+    Six characters of a random id leave a collision between two tasks of one run vanishingly unlikely, and keep the cell short enough for a phone.
+    """
+    return f"{log.task}#{log.task_id[:6]}"
+
+
+@dataclass(frozen=True)
 class ObservedTasks:
     """A manifest read against a log directory."""
 
     tasks: list[TaskObservation]
     """One per manifest task, in manifest order, followed by orphans."""
+
+    runtime: list[RuntimeTask] = field(default_factory=list[RuntimeTask])
+    """The tasks the manifest's tasks created at runtime in the execution each manifest task's current attempt belongs to — part of the run's results — ordered by their manifest task's position, then by when they started.
+
+    Beside `tasks` rather than in it, because nothing that acts on `tasks` — spawning, resuming, the stall guard, the orphan archive — may act on one of these.
+    """
+
+    runtime_superseded: list[RuntimeTask] = field(default_factory=list[RuntimeTask])
+    """The tasks created at runtime by an execution of a manifest task that a fresh start has since replaced (a changed sandbox or gateway, `IncompleteReason.REDIRECTED`), oldest first. Superseded as the attempts that created them are: kept in `logs/` until signoff archives them with those attempts, scanned like them, and no part of the results.
+    """
+
+    runtime_orphans: list[LogAttempt] = field(default_factory=list[LogAttempt])
+    """Logs of tasks added at runtime whose chain of creators reaches no manifest task — their creator has left the definition — oldest first. Archived as orphans are, once no live worker can be writing them."""
 
     unreadable: list[UnreadableLog] = field(default_factory=list[UnreadableLog])
 
@@ -369,10 +437,13 @@ async def observe_logs_async(
     results = await asyncio.gather(*(read(info) for info in infos))
 
     attempts: dict[str, list[LogAttempt]] = {}
+    created: list[LogAttempt] = []
     unreadable: list[UnreadableLog] = []
     for result in results:
         if isinstance(result, UnreadableLog):
             unreadable.append(result)
+        elif result.created_by is not None:
+            created.append(result)
         else:
             attempts.setdefault(result.identifier, []).append(result)
 
@@ -382,6 +453,7 @@ async def observe_logs_async(
     return ObservedLogs(
         log_dir=log_dir,
         attempts=attempts,
+        created=sorted(created, key=lambda log: (log.created, log.task_id)),
         unreadable=sorted(unreadable, key=lambda log: log.location),
     )
 
@@ -417,7 +489,7 @@ def observe_tasks(manifest: Manifest, logs: ObservedLogs) -> ObservedTasks:
         logs: The log directory, as `observe_logs` read it.
 
     Returns:
-        One observation per manifest task, in manifest order, followed by one per identifier found in the directory that the manifest does not name.
+        One observation per manifest task, in manifest order, followed by one per identifier found in the directory that the manifest does not name; and, apart, the tasks the manifest's tasks created at runtime and the runtime logs no manifest task owns.
     """
     tasks = [_observe_task(manifest, task, logs) for task in manifest.tasks]
 
@@ -434,7 +506,62 @@ def observe_tasks(manifest: Manifest, logs: ObservedLogs) -> ObservedTasks:
         if identifier not in named
     )
 
-    return ObservedTasks(tasks=tasks, unreadable=logs.unreadable)
+    owned, runtime_orphans = _runtime_tasks(tasks, logs.created)
+    current = {
+        task.current.task_id
+        for task in tasks
+        if task.task is not None and task.current is not None
+    }
+    return ObservedTasks(
+        tasks=tasks,
+        runtime=[task for task in owned if task.chain in current],
+        runtime_superseded=sorted(
+            (task for task in owned if task.chain not in current),
+            key=lambda task: task.log.created,
+        ),
+        runtime_orphans=runtime_orphans,
+        unreadable=logs.unreadable,
+    )
+
+
+def _runtime_tasks(
+    tasks: list[TaskObservation], created: list[LogAttempt]
+) -> tuple[list[RuntimeTask], list[LogAttempt]]:
+    """Which manifest task each runtime log belongs to, by following its creators' `task_id`s.
+
+    A creator's `task_id` names a manifest task's attempts when that task created it, and another runtime log when a runtime task did. Followed until a manifest task is reached, or until the chain leaves what the directory holds — a creator that has left the definition, or a runtime creator archived with it — which makes the log an orphan.
+    """
+    order = {
+        task.identifier: n for n, task in enumerate(tasks) if task.task is not None
+    }
+    owners = {
+        attempt.task_id: task.identifier
+        for task in tasks
+        if task.task is not None
+        for attempt in (task.current, *task.superseded)
+        if attempt is not None
+    }
+    by_task_id = {log.task_id: log for log in created}
+
+    runtime: list[RuntimeTask] = []
+    orphans: list[LogAttempt] = []
+    for log in created:
+        creator = log.created_by
+        seen = {log.task_id}
+        while creator is not None and creator not in owners and creator not in seen:
+            seen.add(creator)
+            parent = by_task_id.get(creator)
+            creator = parent.created_by if parent is not None else None
+        if creator is not None and creator in owners:
+            runtime.append(
+                RuntimeTask(log=log, created_by=owners[creator], chain=creator)
+            )
+        else:
+            orphans.append(log)
+    runtime.sort(
+        key=lambda task: (order[task.created_by], task.log.created, task.task_id)
+    )
+    return runtime, orphans
 
 
 def _observe_task(
@@ -662,6 +789,8 @@ def _attempt(location: str, mtime: float | None, header: EvalLog) -> LogAttempt:
         task=header.eval.task,
         task_id=header.eval.task_id,
         eval_id=header.eval.eval_id,
+        run_id=header.eval.run_id,
+        created_by=_created_by(header),
         mtime=mtime,
         headline=headline,
         headline_name=headline_name,
@@ -683,6 +812,23 @@ def _attempt(location: str, mtime: float | None, header: EvalLog) -> LogAttempt:
         model_base_url=header.eval.model_base_url,
         limits=_limits(header),
     )
+
+
+def _created_by(header: EvalLog) -> str | None:
+    """The `task_id` of the task that added this log's task to its run, or `None` for a task the run was given."""
+    match header.eval.origin:
+        case EnqueueTaskOrigin(task_id=task_id):
+            return task_id
+        case None:
+            return None
+        # a kind of origin this version does not know. Unreachable while the
+        # union has one member, which is what the checker says; read as a task
+        # its run was given, the log would become a manifest task's attempt
+        case unknown:  # pyright: ignore[reportUnnecessaryComparison]
+            raise ValueError(
+                f"{header.location} records an origin this version of Steward "
+                f"does not know: {unknown!r}"
+            )
 
 
 def _sandbox(header: EvalLog) -> str | None:

@@ -10,6 +10,7 @@ Everything is frozen and pure: state is a fold over the journal (`fold.read_anom
 """
 
 from collections.abc import Mapping
+from collections.abc import Set as AbstractSet
 from dataclasses import dataclass, field
 from enum import StrEnum
 
@@ -105,6 +106,32 @@ def agent_may(disposition: Disposition, kind: str = "") -> bool:
     if disposition is Disposition.DISMISS:
         return True
     return disposition is Disposition.SCORE and kind == "scan"
+
+
+RUNTIME_ANSWERS = frozenset(
+    {Disposition.SCORE, Disposition.ACCEPT, Disposition.DISMISS}
+)
+"""The answers a finding on a task created at runtime can take: the three that leave its log as it is.
+
+Steward never re-runs such a task, since it cannot build it from the definition, so `rerun` names an act nobody would carry out. `exclude` and `zero` are written into a log by a side run that rebuilds the task's scoring from the definition, which a runtime task is not in. What is left is the record: looked and nothing to answer (`dismiss`), the mechanism confirmed and the scores stand (`score`), or the data stands with a caveat the report carries (`accept`). See `_evalset.observe.RuntimeTask`.
+"""
+
+
+def runtime_classes(anomalies: "Anomalies", runtime: AbstractSet[str]) -> set[str]:
+    """The classes with a finding filed under a task created at runtime — those whose answers are limited to `RUNTIME_ANSWERS`.
+
+    Args:
+        anomalies: The fold.
+        runtime: The task ids of the run's runtime tasks (`RuntimeTask.task_id`), which is what their findings are filed under.
+
+    Returns:
+        The class keys of every window, open or settled, whose evidence names one.
+    """
+    return {
+        anomaly.class_key
+        for anomaly in (*anomalies.open, *anomalies.settled)
+        if not runtime.isdisjoint(anomaly.evidence.tasks)
+    }
 
 
 def honest(kind: str, disposition: Disposition) -> bool:

@@ -65,7 +65,13 @@ from .render import (
     signature_field,
     status_headline_text,
 )
-from .table import RESOURCES_HEADER, plain_table, resources_cells, task_table_cells
+from .table import (
+    RESOURCES_HEADER,
+    plain_table,
+    resources_cells,
+    task_table_cells,
+    text_columns,
+)
 
 DEFAULT_HEARTBEAT = 60.0 * 60.0
 """The heartbeat interval where `_steward.yaml` names none: one hour.
@@ -419,7 +425,9 @@ def _page(result: "TendResult", *, width: int = NARROW) -> list[Block]:
     header, rows = task_table_cells(result, width=width)
     if rows:
         kept, more = _cap_rows(rows)
-        blocks.append(Table(tuple(plain_table(header, kept))))
+        blocks.append(
+            Table(tuple(plain_table(header, kept, left=text_columns(header))))
+        )
         if more:
             blocks.append(Text((more,)))
 

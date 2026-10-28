@@ -36,6 +36,7 @@ from .anomalies import (
     persist_windows,
     precedent_lines,
     refuse_dishonest,
+    refuse_runtime,
     settled_ruling,
 )
 from .turn import TURN_ERRORS, decided_by, find_workspace
@@ -121,6 +122,7 @@ def rule_command(
         ]
         _refuse_agent(decider, decided, keys)
         refuse_dishonest(keys, decided)
+        refuse_runtime(result, keys, decided)
         effects.update(
             _effects(anomalies, keys, decided, effect, result.dispositions.affected)
         )

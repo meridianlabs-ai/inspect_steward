@@ -37,7 +37,7 @@ from .._util.duration import format_age, format_duration, is_after, seconds_sinc
 from .._util.size import format_bytes
 from .._worker import LiveParked, LiveStuck, StuckSample, acp_sockets
 from .._workspace import DEFAULT_TEND_INTERVAL, Ack, Armed, Signature
-from .progress import display_keys
+from .progress import Progress, RuntimeState, display_keys
 
 if TYPE_CHECKING:
     # the turn assembles its result and then projects it, so the type it passes
@@ -279,11 +279,7 @@ def tend_items(
         *_memory(result),
         *_anomalies(
             result.anomalies,
-            landed=frozenset(
-                identifier
-                for identifier, task in lookup.items()
-                if task.state is TaskState.COMPLETE
-            ),
+            landed=landed_tasks(observed, result.progress),
             named=display_keys(result.progress),
         ),
         *_signoff(result),
@@ -1398,6 +1394,26 @@ def proposal_summary(
     )
 
 
+def landed_tasks(observed: ObservedTasks | None, progress: Progress) -> frozenset[str]:
+    """The tasks whose results will not change any more, which is what a scan window waits on: a manifest task once it is complete, and a task created at runtime once its log has finished or no live worker is left to finish it.
+
+    One set for the queue and the listings (`waiting_to_land`), keyed as findings are filed — a manifest task by identifier, a runtime task by task id.
+    """
+    complete = (
+        {task.identifier for task in observed.by_state(TaskState.COMPLETE)}
+        if observed is not None
+        else set[str]()
+    )
+    return frozenset(
+        complete
+        | {
+            row.task_id
+            for row in progress.runtime
+            if row.state is not RuntimeState.RUNNING
+        }
+    )
+
+
 def waiting_to_land(anomaly: Anomaly, landed: frozenset[str]) -> bool:
     """Whether a scan window's task is still running, which is what keeps the window out of the queue.
 
@@ -1683,7 +1699,9 @@ def _signoff(result: "TendResult") -> list[Item]:
 
     **A standing signature closes it, and nothing else does.** The `signed` argument is the whole of that: the run reads 🔒, the invitation is gone, and both come off together when a relaunch or a later finding un-signs (`signed_off`).
 
-    Fires on completeness alone rather than on *completeness and nothing else wrong* — a run that finished with an unreadable file beside it is still finished, and signoff accepts exceptions (workflow.md, *The attestation*) — **with one exception: an open anomaly**. Every anomaly resolved or accepted is workflow.md §12.2's definition of a resolvable run, so the readiness claim is simply false while a window is open, and a late finding un-readies the run for free: the window opens, this returns nothing, and the item disappears until somebody rules.
+    Fires on completeness alone rather than on *completeness and nothing else wrong* — a run that finished with an unreadable file beside it is still finished, and signoff accepts exceptions (workflow.md, *The attestation*) — **with two exceptions: an open anomaly, and a worker still running**. Every anomaly resolved or accepted is workflow.md §12.2's definition of a resolvable run, so the readiness claim is simply false while a window is open, and a late finding un-readies the run for free: the window opens, this returns nothing, and the item disappears until somebody rules.
+
+    **Nor while a worker is still running.** Every manifest task can be complete while a worker runs on: a task one of them created at runtime, or one queued to start once its creator finishes, is still writing results the signature would cover.
 
     An open `limit:` window deliberately does **not** hold this back. Operator kills are adjudication material — the very conversation this item invites — so gating the invitation on them would hide the one line that leads an operator to where they get ruled. The signoff verb itself still refuses while any window is open, which is the other half of the same split: the item invites the conversation, and the signature ends it.
 
@@ -1697,6 +1715,11 @@ def _signoff(result: "TendResult") -> list[Item]:
     if not summary.tasks or settled != summary.tasks:
         return []
     if any(anomaly.kind != "limit" for anomaly in result.anomalies.open):
+        return []
+    if summary.workers:
+        # a live worker is still writing logs the signature would cover -- a
+        # task created at runtime, or one queued to start once its creator
+        # finishes -- and the verb refuses for it (`_signoff.gate`)
         return []
     return [
         Item(

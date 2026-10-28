@@ -128,6 +128,9 @@ class RunningWorker:
     `None` means the process exists but has not reached its `eval_set()` boundary yet — the window where it has no log and no discovery entry either. That makes the window a state a summary can report rather than something inferred from absence (execution.md, *The in-flight record is an accelerator*).
     """
 
+    run_id: str | None = None
+    """The run the worker is in, from the same discovery entry as `socket`: the `run_id` of every log it writes, those of the tasks it was selected to run and those of the tasks they add at runtime (execution.md, *One `eval_set()` call per worker*). `None` exactly when `socket` is: ordinarily before the worker has written any log at all, and also, rarely, for a worker whose control server failed to bind, which Inspect runs on without one (`InFlight.unbound`)."""
+
 
 @dataclass(frozen=True)
 class DepartedWorker:
@@ -169,6 +172,22 @@ class InFlight:
         return {
             identifier for worker in self.running for identifier in worker.identifiers
         }
+
+    @property
+    def live_runs(self) -> set[str]:
+        """The runs a live worker is in, and so every log some worker may still be writing.
+
+        Exact rather than inferred from which logs look newest: a worker reports its run in its discovery entry, and every log it writes carries it.
+        """
+        return {worker.run_id for worker in self.running if worker.run_id is not None}
+
+    @property
+    def unbound(self) -> bool:
+        """Whether a live worker has reported no run, so `live_runs` may be missing one.
+
+        Ordinarily a worker in the seconds before its `eval_set()` boundary, which has written nothing. But Inspect runs on without a control server whose bind failed, and such a worker writes logs in a run nobody reports — so anything that would move a log a live worker may be writing waits while one stands.
+        """
+        return any(worker.run_id is None for worker in self.running)
 
     @property
     def running_tasks(self) -> int:
@@ -243,7 +262,7 @@ class ReapWorker:
 class ArchiveLog:
     """Move a log out of the run's directory, because nothing in the manifest claims it.
 
-    Never a delete. A log leaving `logs/` is always a move to the sibling archive — reversible, journaled with its reason, and restorable for free if the edit that orphaned it is reverted (workflow.md, *Steward never destroys a result, but it does curate the directory*).
+    Never a delete. A log leaving `logs/` is always a move to the sibling archive — reversible, journaled with its reason, and restorable for free if the edit that orphaned it is reverted (workflow.md, *Steward never destroys a result, but it does curate the directory*). The one exception to *for free* is the log of a task created at runtime: a launch restores what it brings back by identifier, which such a log is never matched by, so it stays in the archive until somebody moves it back.
 
     **Mechanical here because the gate is somewhere else.** Archiving is the one action that removes a result from view, and a one-character change to a task arg reads identically to a deliberate removal — so it is gated on explicit acceptance at the moment the manifest is *committed*, where an operator is present and the delta can be shown. Once desired state says a task is not in the eval set, converging toward it is bookkeeping.
     """
@@ -504,7 +523,13 @@ def reconcile(
 
     # a paused run makes no changes to itself, and a move is a change. Reaping
     # is not: it records what already happened, which stays true either way
-    archiving = [] if paused else _archiving(observed, running)
+    archiving = (
+        []
+        if paused
+        else _archiving(
+            observed, running, None if inflight.unbound else inflight.live_runs
+        )
+    )
 
     actions: list[Action] = [ReapWorker(worker) for worker in inflight.departed]
     actions.extend(archiving)
@@ -600,16 +625,27 @@ def pour(
     )
 
 
-def _archiving(observed: ObservedTasks, running: set[str]) -> list[ArchiveLog]:
+def _archiving(
+    observed: ObservedTasks, running: set[str], live_runs: AbstractSet[str] | None
+) -> list[ArchiveLog]:
     """Every log of every orphan, except the orphans something is still running.
 
     All of an orphan's attempts rather than only its current one: the identifier has left the definition entirely, so there is no attempt history left to reason about and leaving the superseded ones behind would defeat the point, which is that `logs/` holds the current definition's results and nothing else.
+
+    **A task created at runtime is not an orphan while a manifest task owns it**, so nothing here touches it (`RuntimeTask`). Once its creator has left the definition its log is an orphan too, and it waits until no live worker is in its run: the worker that was selected for its creator is still writing it until then, and that worker is not running anything the identifiers in `running` name. `live_runs` is `None` while some live worker has reported no run (`InFlight.unbound`), and then every such log waits.
     """
     return [
-        ArchiveLog(location=attempt.location, identifier=task.identifier)
-        for task in observed.tasks
-        if task.state == TaskState.ORPHANED and task.identifier not in running
-        for attempt in _attempts(task)
+        *(
+            ArchiveLog(location=attempt.location, identifier=task.identifier)
+            for task in observed.tasks
+            if task.state == TaskState.ORPHANED and task.identifier not in running
+            for attempt in _attempts(task)
+        ),
+        *(
+            ArchiveLog(location=log.location, identifier=log.identifier)
+            for log in observed.runtime_orphans
+            if live_runs is not None and log.run_id not in live_runs
+        ),
     ]
 
 
