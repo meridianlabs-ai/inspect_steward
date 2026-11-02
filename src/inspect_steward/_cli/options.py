@@ -25,7 +25,7 @@ from .._workspace import (
 )
 
 
-class Setting(click.ParamType):
+class Setting(click.ParamType):  # pyright: ignore[reportMissingTypeArgument]  # generic from click 8.4; hawk pins click<8.3, where subscripting it raises
     """A `_steward.yaml` value typed on the command line.
 
     Used where a setting is richer than an integer — a range, or a duration with a unit. Plain integer settings keep `click.IntRange`, which already produces the right refusal and needs no help from here.
@@ -118,7 +118,7 @@ def shape_options[F: Callable[..., Any]](f: F) -> F:
     return f
 
 
-class Override(click.ParamType):
+class Override(click.ParamType):  # pyright: ignore[reportMissingTypeArgument]  # see Setting
     """One of inspect's eval-set arguments typed on Steward's command line.
 
     `Setting`'s twin, one vocabulary over: the same `yaml.safe_load` plus the field's own validation, so `--epochs yes` is refused here rather than reaching a worker as `True`, and a value refused on the command line is refused identically in `STEWARD_EPOCHS`.
