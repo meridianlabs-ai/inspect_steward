@@ -152,7 +152,7 @@ def test_dated_entry_age(age: timedelta, caught: bool) -> None:
 def test_dependabot_cooldown_matches_pyproject() -> None:
     """Dependabot has the cooldown and the 6-hour list of pyproject.toml.
 
-    Dependabot's cooldown counts whole days, so it leaves the "6 hours" entries to uv. Dated entries are locked by hand.
+    Dependabot's cooldown counts whole days, so it leaves the "6 hours" entries to uv. Dated entries are locked by hand. Git sources are updated by hand.
     """
     dependabot = dependabot_uv()
     assert dependabot["cooldown"]["default-days"] == 7
@@ -163,6 +163,14 @@ def test_dependabot_cooldown_matches_pyproject() -> None:
     assert list(groups) == ["six-hour-cooldown", "python-packages"]
     assert sorted(groups["six-hour-cooldown"]["patterns"]) == exempt
     assert groups["python-packages"]["patterns"] == ["*"]
+    # Dependabot ignores exactly the git sources, whose locked commit it would compare with PyPI releases.
+    git_sources = sorted(
+        name for name, source in uv_config()["sources"].items() if "git" in source
+    )
+    assert (
+        sorted(ignore["dependency-name"] for ignore in dependabot.get("ignore", []))
+        == git_sources
+    )
 
 
 def test_python_comes_from_the_shared_actions() -> None:

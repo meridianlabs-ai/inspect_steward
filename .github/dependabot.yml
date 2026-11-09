@@ -20,8 +20,9 @@ updates:
   # counts whole days, so those packages' 6-hour cooldown is left to uv. They
   # get their own group, so a broken update elsewhere can't hold them up. It
   # comes first because a package that matches both groups goes to the first.
-  # inspect-harbor comes from git (`[tool.uv.sources]`), and Dependabot skips
-  # a git source that has no `tag`, so it does not update it.
+  # inspect-harbor comes from the main branch of its git repository
+  # (`[tool.uv.sources]`). Dependabot would compare the locked commit with
+  # PyPI releases, so it ignores the package.
   - package-ecosystem: "uv"
     versioning-strategy: "lockfile-only"
     directory: "/"
@@ -36,6 +37,8 @@ updates:
         - "inspect-sandboxes"
         - "inspect-scout"
         - "openai"
+    ignore:
+      - dependency-name: "inspect-harbor"
     groups:
       six-hour-cooldown:
         patterns:
