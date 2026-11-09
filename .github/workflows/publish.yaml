@@ -35,7 +35,7 @@ jobs:
       #     --python-platform x86_64-unknown-linux-gnu --exclude-newer "7 days" \
       #     --only-binary :all: --upgrade requirements.in -o requirements.txt
       - name: Install build toolchain
-        uses: meridianlabs-ai/actions/install-python-dependencies@3bc608093ab8b8dd7f82764a863d9d5f9dce61a5 # main
+        uses: meridianlabs-ai/actions/install-python-dependencies@330f3df6492418d6b25dc2631fc31143489f4674 # main
         with:
           versions: hashed-requirements
           python-version: "3.12"
@@ -55,4 +55,4 @@ jobs:
 
       - name: Publish to PyPI
         if: inputs.confirm == 'yes'
-        uses: pypa/gh-action-pypi-publish@dc37677b2e1c63e2034f94d8a5b11f265b73ba33 # v1.14.2
+        uses: pypa/gh-action-pypi-publish@7245906fb61fa33a13554f9d5fb856fe61758086 # v1.14.3
