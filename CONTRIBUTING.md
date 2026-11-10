@@ -32,7 +32,6 @@ For this repository:
 - Steward uses only released inspect_ai: `inspect-ai` comes from PyPI.
 - `inspect-harbor` comes from the `main` branch of its git repository (see `[tool.uv.sources]`). The cooldown applies only to releases on an index, so it does not apply to that commit. `uv.lock` keeps the locked commit until you run `uv lock --upgrade-package inspect-harbor`. Dependabot ignores it.
 - The 6-hour packages are in `[tool.uv.exclude-newer-package]` in `pyproject.toml`.
-- For editable installs with `uv sync`, uv resolves the build requirements (hatchling, hatch-vcs) without `uv.lock` or hashes, but within the cooldown.
 
 ## Checks and tests
 
