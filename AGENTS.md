@@ -51,6 +51,7 @@ Directory: `src/inspect_steward/`
 
 ### Common Pitfalls
 - Use the venv for all Python commands: either reference `.venv/bin/` directly or run `source .venv/bin/activate`
+- Set up the venv with `uv sync --locked --extra dev`. How dependencies are installed and changed (the lock file, the cooldown) is in [DEPENDENCIES.md](https://github.com/meridianlabs-ai/actions/blob/main/DEPENDENCIES.md) in meridianlabs-ai/actions
 
 ## Reviewing other people's pull requests
 
