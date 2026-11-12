@@ -25,9 +25,7 @@ dependencies = [
     # and 0.3.266 is where the interim-scoring control response reports each
     # metric's originating `scorer` apart from its `name`, which the interim
     # harvest reads to keep dict-valued scorers' scores distinct (see
-    # `_worker/interim.py`). So this floor is the whole story for inspect-ai;
-    # `inspect-harbor` still resolves through `[tool.uv.sources]` below, for
-    # the reason given there.
+    # `_worker/interim.py`). So this floor is the whole story for inspect-ai.
     "inspect-ai>=0.3.266",
     # inspect-scout 0.5.1 (2026-09-07) is the first release carrying what this
     # project needs, so this is a plain PyPI floor. It was a git direct
@@ -124,7 +122,9 @@ dev = [
     # (`validate_openai_client`, `validate_anthropic_client`), not guesses.
     "openai>=3.1.0",
     "anthropic>=1.0.0",
-    "inspect_harbor",
+    # 1.0.0 carries the registry tasks the runs/ definitions name
+    # (cais/swebenchpro, datacurve/deep-swe).
+    "inspect_harbor>=1.0.0",
     "inspect-sandboxes",
 ]
 
@@ -197,25 +197,16 @@ exclude-newer = "7 days"
 # widens the cap; the pin can go the day `litellm` accepts openai 3.x.
 override-dependencies = ["openai"]
 
-# 6 hours only for direct dependencies that are a model provider SDK or an
-# Inspect package; see CONTRIBUTING.md.
+# No cooldown for in-house packages and 6 hours for direct dependencies that are
+# a model provider SDK; see CONTRIBUTING.md.
 [tool.uv.exclude-newer-package]
 anthropic = "6 hours"
-inspect-ai = "6 hours"
-inspect-flow = "6 hours"
-inspect-sandboxes = "6 hours"
-inspect-scout = "6 hours"
+inspect-ai = false
+inspect-flow = false
+inspect-harbor = false
+inspect-sandboxes = false
+inspect-scout = false
 openai = "6 hours"
-
-[tool.uv.sources]
-
-# inspect-harbor from git rather than PyPI, because the registry tasks the
-# runs/ definitions name (cais/swebenchpro, datacurve/deep-swe) reach the
-# generated `_tasks.py` ahead of a release: the logs of the last clean run
-# record `inspect_harbor: 0.7.6.dev1`, a commit past the 0.7.5 wheel. A run
-# resolved to the wheel is a different eval, and the task identifier hash says
-# so.
-inspect-harbor = { git = "https://github.com/meridianlabs-ai/inspect_harbor", branch = "main" }
 
 [tool.ruff]
 extend-exclude = ["docs"]
