@@ -199,7 +199,8 @@ openai = "6 hours"
 # runs/ definitions name (cais/swebenchpro, datacurve/deep-swe) are regenerated
 # in `_tasks.py` on main between releases: the locked 1.0.1.dev29 is 29 commits
 # past the 1.0.0 wheel, 11 of them registry task updates. A run resolved to the
-# wheel is a different eval, and the task identifier hash says so.
+# wheel is a different eval, but its task identifiers match, because
+# `task_identifier` hashes neither the dataset nor the scorer.
 inspect-harbor = { git = "https://github.com/meridianlabs-ai/inspect_harbor", branch = "main" }
 
 [tool.ruff]
