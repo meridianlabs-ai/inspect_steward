@@ -2016,6 +2016,16 @@ dev = [
     { name = "types-pyyaml" },
     { name = "uv", marker = "python_full_version >= '3.13'" },
 ]
+doc = [
+    { name = "griffe" },
+    { name = "jupyter" },
+    { name = "markdown" },
+    { name = "panflute" },
+    { name = "pyyaml" },
+    { name = "quarto-cli" },
+    { name = "rich" },
+    { name = "types-pyyaml" },
+]
 flow = [
     { name = "inspect-flow" },
 ]
@@ -2032,22 +2042,13 @@ dist = [
     { name = "build" },
     { name = "twine" },
 ]
-doc = [
-    { name = "griffe" },
-    { name = "jupyter" },
-    { name = "markdown" },
-    { name = "panflute" },
-    { name = "pyyaml" },
-    { name = "quarto-cli" },
-    { name = "rich" },
-    { name = "types-pyyaml" },
-]
 
 [package.metadata]
 requires-dist = [
     { name = "anthropic", marker = "extra == 'dev'", specifier = ">=1.0.0" },
     { name = "apprise", specifier = ">=2" },
     { name = "click", specifier = ">=8.0" },
+    { name = "griffe", marker = "extra == 'doc'", specifier = ">=2" },
     { name = "hawk", extras = ["cli", "runner"], marker = "python_full_version >= '3.13' and extra == 'dev'", specifier = ">=2.4.0" },
     { name = "hawk", extras = ["cli", "runner"], marker = "python_full_version >= '3.13' and extra == 'hawk'", specifier = ">=2.4.0" },
     { name = "httpx", specifier = ">=0.27" },
@@ -2057,7 +2058,10 @@ requires-dist = [
     { name = "inspect-harbor", marker = "extra == 'dev'", git = "https://github.com/meridianlabs-ai/inspect_harbor?branch=main" },
     { name = "inspect-sandboxes", marker = "extra == 'dev'" },
     { name = "inspect-scout", specifier = ">=0.5.1" },
+    { name = "jupyter", marker = "extra == 'doc'" },
+    { name = "markdown", marker = "extra == 'doc'" },
     { name = "openai", marker = "extra == 'dev'", specifier = ">=3.1.0" },
+    { name = "panflute", marker = "extra == 'doc'" },
     { name = "platformdirs", specifier = ">=4.0" },
     { name = "psutil", specifier = ">=5.9" },
     { name = "pyright", marker = "extra == 'dev'" },
@@ -2067,29 +2071,23 @@ requires-dist = [
     { name = "pytest-xdist", marker = "extra == 'dev'" },
     { name = "python-dotenv", specifier = ">=1.0" },
     { name = "pyyaml", specifier = ">=6.0" },
+    { name = "pyyaml", marker = "extra == 'doc'" },
+    { name = "quarto-cli", marker = "extra == 'doc'", specifier = ">=1.9.36" },
+    { name = "rich", marker = "extra == 'doc'" },
     { name = "ruff", marker = "extra == 'dev'" },
     { name = "types-psutil", marker = "extra == 'dev'" },
     { name = "types-pyyaml", marker = "extra == 'dev'" },
+    { name = "types-pyyaml", marker = "extra == 'doc'" },
     { name = "uv", marker = "python_full_version >= '3.13' and extra == 'dev'", specifier = ">=0.13.4" },
     { name = "uv", marker = "python_full_version >= '3.13' and extra == 'hawk'", specifier = ">=0.5" },
 ]
-provides-extras = ["dev", "flow", "hawk"]
+provides-extras = ["dev", "doc", "flow", "hawk"]
 
 [package.metadata.requires-dev]
 dev = [{ name = "inspect-steward", extras = ["dev"] }]
 dist = [
     { name = "build" },
     { name = "twine" },
-]
-doc = [
-    { name = "griffe", specifier = ">=2" },
-    { name = "jupyter" },
-    { name = "markdown" },
-    { name = "panflute" },
-    { name = "pyyaml" },
-    { name = "quarto-cli", specifier = ">=1.9.36" },
-    { name = "rich" },
-    { name = "types-pyyaml" },
 ]
 
 [[package]]
