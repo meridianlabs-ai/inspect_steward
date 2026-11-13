@@ -104,6 +104,17 @@ memory: available 12.0 GiB of 64.0 GiB · swap 2.0 GiB of 8.0 GiB used · headro
 
 While headroom is under 10% of RAM the ramp does not climb. At that point, or when headroom is projected to run out within an hour, a `memory` item goes to the agent. On Linux the agent adds a swap file, which takes effect for running workers immediately. Where it can't (no `sudo`, containers, macOS) it lowers `max_samples` and gives you the commands to run. See [Memory](runbook.qmd#memory) in the runbook.
 
+## Host Disk
+
+Each `steward tend` also records the free space on the filesystem your `.eval` logs are written to, and the same two-hour trend over it:
+
+```
+disk: free 44.0 GiB of 500.0 GiB (9%)
+  free falling 6.2 GiB/h over 1h40m (11 points) · full in ~7h
+```
+
+When free space falls under 5% of the filesystem, or is projected to run out within an hour, a `disk` item goes to the agent. The agent prunes or compresses old logs, grows the volume where it can, and otherwise lowers `max_samples`. A remote log store (`s3://…`) has no local disk to measure and records nothing. See [Disk](runbook.qmd#disk) in the runbook.
+
 ## Docker Configuration
 
 Docker has a ceiling on concurrent sandboxes that has nothing to do with the size of your machine. Every sandboxed sample gets its own compose project, and every compose project gets its own bridge network, allocated from Docker's `default-address-pools`. The built-in value carves two ranges into sixteen networks each, so a host runs about thirty sandboxes however many cores it has. Samples past that fail with:
