@@ -184,6 +184,7 @@ managed = true
 required-version = ">=0.13.4"
 # Only resolve releases at least 7 days old (see CONTRIBUTING.md).
 exclude-newer = "7 days"
+
 # No cooldown for in-house packages and 6 hours for direct dependencies that are
 # a model provider SDK; see CONTRIBUTING.md.
 [tool.uv.exclude-newer-package]
