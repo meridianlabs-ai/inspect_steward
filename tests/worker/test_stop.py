@@ -29,7 +29,7 @@ WORKER = RunningWorker(
 LOCATIONS = {"logs/leaving.eval": "leaving", "logs/staying.eval": "staying"}
 
 
-def rows(*identifiers: str) -> list[TaskRow]:
+def rows(*identifiers: str, log_dir: str = "logs") -> list[TaskRow]:
     """What the fleet listing reports for the worker, one row per named task."""
     return [
         TaskRow(
@@ -37,7 +37,7 @@ def rows(*identifiers: str) -> list[TaskRow]:
             task_id=f"id-{identifier}",
             task=identifier,
             status="running",
-            log_location=f"logs/{identifier}.eval",
+            log_location=f"{log_dir}/{identifier}.eval",
         )
         for identifier in identifiers
     ]
@@ -65,14 +65,32 @@ def fake_listing(
     monkeypatch.setattr("inspect_steward._worker.stop.list_tasks", list_tasks)
 
 
+@pytest.mark.parametrize(
+    ("log_dir", "observed_dir"),
+    [
+        pytest.param("logs", "logs", id="relative"),
+        pytest.param("/runs/logs", "file:///runs/logs", id="local_log_dir"),
+        pytest.param("s3://bucket/logs", "s3://bucket/logs", id="remote_log_dir"),
+    ],
+)
 def test_a_partial_stop_cancels_only_its_own_task(
-    monkeypatch: pytest.MonkeyPatch, cancelled: list[str]
+    monkeypatch: pytest.MonkeyPatch,
+    cancelled: list[str],
+    log_dir: str,
+    observed_dir: str,
 ) -> None:
-    """The point of the whole partial path: the sibling is not touched."""
-    fake_listing(monkeypatch, rows("leaving", "staying"))
+    """The point of the whole partial path: the sibling is not touched.
+
+    Whatever form the log directory takes. Observation reports a local log as a `file://` URI and the control channel reports it as a path, and compared as written no task of a packed worker writing to a local log directory could be told apart from its siblings — so a task leaving such a worker was never cancelled and went on running.
+    """
+    fake_listing(monkeypatch, rows("leaving", "staying", log_dir=log_dir))
 
     (stop,) = stop_workers(
-        [StopRequest(worker=WORKER, identifiers=("leaving",))], locations=LOCATIONS
+        [StopRequest(worker=WORKER, identifiers=("leaving",))],
+        locations={
+            f"{observed_dir}/{identifier}.eval": identifier
+            for identifier in WORKER.identifiers
+        },
     )
 
     assert cancelled == ["id-leaving"]
