@@ -184,18 +184,6 @@ managed = true
 required-version = ">=0.13.4"
 # Only resolve releases at least 7 days old (see CONTRIBUTING.md).
 exclude-newer = "7 days"
-# openai, for a conflict that has no satisfying resolution: harbor depends on
-# litellm, which caps `openai>=2.20.0,<3.0.0`, while inspect-ai's OpenAI
-# provider gates on `openai>=3.1.0`. Left alone uv resolves it the only way it
-# can — by walking inspect-harbor back to 0.4.17 and harbor to 0.2.0, which
-# predate the registry tasks the runs/ definitions name, so the lock "succeeds"
-# and the eval set then fails to import its own tasks. The override says take
-# inspect's floor and let litellm's cap go unmet. That is a real claim, not a
-# formality: it ships a combination litellm declares unsupported. It holds
-# because nothing on the inspect path calls litellm — harbor's use of it is in
-# its own orchestrators, which Steward's runs never enter. Revisit when litellm
-# widens the cap; the pin can go the day `litellm` accepts openai 3.x.
-override-dependencies = ["openai"]
 
 # No cooldown for in-house packages and 6 hours for direct dependencies that are
 # a model provider SDK; see CONTRIBUTING.md.

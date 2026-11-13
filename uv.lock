@@ -26,9 +26,6 @@ inspect-sandboxes = false
 inspect-scout = false
 openai = { timestamp = "0001-01-01T00:00:00Z", span = "PT6H" }
 
-[manifest]
-overrides = [{ name = "openai" }]
-
 [[package]]
 name = "agent-client-protocol"
 version = "0.12.1"
