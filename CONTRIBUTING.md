@@ -30,8 +30,8 @@ This installs Steward in editable mode along with the dev tools (ruff, pyright, 
 For this repository:
 
 - Steward uses only released inspect_ai: `inspect-ai` comes from PyPI.
-- `inspect-harbor` comes from the `main` branch of its git repository (see `[tool.uv.sources]`). The cooldown applies only to releases on an index, so it does not apply to that commit. `uv.lock` keeps the locked commit until you run `uv lock --upgrade-package inspect-harbor`. Dependabot ignores it.
-- The 6-hour packages are in `[tool.uv.exclude-newer-package]` in `pyproject.toml`.
+- `inspect-harbor` comes from PyPI at `>=1.0.0`, like `inspect-ai` and `inspect-scout`.
+- In-house packages have no uv cooldown (`false`) and provider SDKs have 6 hours. Both are in `[tool.uv.exclude-newer-package]` in `pyproject.toml`.
 
 ## Checks and tests
 
@@ -59,10 +59,10 @@ See [`CLAUDE.md`](CLAUDE.md) for the full conventions used in this repo.
 
 ## Building the docs
 
-Docs live in `docs/` and are built with [Quarto](https://quarto.org). The Quarto CLI and the doc-build dependencies are in the `doc` group, which a plain `uv sync` leaves out (and removes):
+Docs live in `docs/` and are built with [Quarto](https://quarto.org). The Quarto CLI and the doc-build dependencies are in the `doc` extra, which a plain `uv sync` leaves out (and removes):
 
 ```bash
-uv sync --group doc
+uv sync --extra doc
 cd docs
 source ../.venv/bin/activate
 quarto render        # outputs to docs/_site/
@@ -78,7 +78,7 @@ The venv must be activated (not just `uv run quarto`) so the reference-page filt
 To pull a newer version:
 
 ```bash
-uv sync --group doc
+uv sync --extra doc
 cd docs
 source ../.venv/bin/activate
 mv _quarto.yml _quarto.yml.bak

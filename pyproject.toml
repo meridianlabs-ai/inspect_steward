@@ -25,9 +25,7 @@ dependencies = [
     # and 0.3.266 is where the interim-scoring control response reports each
     # metric's originating `scorer` apart from its `name`, which the interim
     # harvest reads to keep dict-valued scorers' scores distinct (see
-    # `_worker/interim.py`). So this floor is the whole story for inspect-ai;
-    # `inspect-harbor` still resolves through `[tool.uv.sources]` below, for
-    # the reason given there.
+    # `_worker/interim.py`). So this floor is the whole story for inspect-ai.
     "inspect-ai>=0.3.266",
     # inspect-scout 0.5.1 (2026-09-07) is the first release carrying what this
     # project needs, so this is a plain PyPI floor. It was a git direct
@@ -108,7 +106,7 @@ dev = [
     "pytest-dotenv",
     "pytest-timeout>=2.4.0",
     "types-psutil", # psutil ships no inline types and pyright runs strict
-    "types-PyYAML", # likewise for pyyaml; `doc` lists it too, but is not a default group
+    "types-PyYAML", # likewise for pyyaml; `doc` lists it too, but is not installed by default
     "inspect_flow>=0.13.1", # for the flow definition tests (0.3.266-compatible)
     # for the hawk definition tests; 3.13+ only, so those tests skip on 3.12
     "hawk[cli,runner]>=2.4.0; python_version >= '3.13'",
@@ -124,8 +122,24 @@ dev = [
     # (`validate_openai_client`, `validate_anthropic_client`), not guesses.
     "openai>=3.1.0",
     "anthropic>=1.0.0",
-    "inspect_harbor",
+    # 1.0.0 carries the registry tasks the runs/ definitions name
+    # (cais/swebenchpro, datacurve/deep-swe).
+    "inspect_harbor>=1.0.0",
     "inspect-sandboxes",
+]
+
+# Not in `dev`, so a plain `uv sync` or `uv run` leaves it out: quarto-cli ships
+# no wheel and its sdist downloads the Quarto binary at build time. Ask for it
+# where the docs are built: `uv sync --extra doc`.
+doc = [
+    "jupyter",
+    "panflute",
+    "markdown",
+    "griffe>=2",
+    "rich",
+    "pyyaml",
+    "types-PyYAML",
+    "quarto-cli>=1.9.36",
 ]
 
 [project.urls]
@@ -146,19 +160,6 @@ steward = "inspect_steward._cli.main:main"
 [dependency-groups]
 # Keeps a plain `uv sync` or `uv run` (the Makefile) pulling the dev tools.
 dev = ["inspect_steward[dev]"]
-# Not in `dev` or the default groups, so a plain `uv sync` or `uv run` leaves it
-# out: quarto-cli ships no wheel and its sdist downloads the Quarto binary at
-# build time. Ask for it where the docs are built: `uv sync --group doc`.
-doc = [
-    "jupyter",
-    "panflute",
-    "markdown",
-    "griffe>=2",
-    "rich",
-    "pyyaml",
-    "types-PyYAML",
-    "quarto-cli>=1.9.36",
-]
 dist = ["twine", "build"]
 
 [tool.hatch.build]
@@ -183,25 +184,16 @@ managed = true
 required-version = ">=0.13.4"
 # Only resolve releases at least 7 days old (see CONTRIBUTING.md).
 exclude-newer = "7 days"
-# 6 hours only for direct dependencies that are a model provider SDK or an
-# Inspect package; see CONTRIBUTING.md.
+# No cooldown for in-house packages and 6 hours for direct dependencies that are
+# a model provider SDK; see CONTRIBUTING.md.
 [tool.uv.exclude-newer-package]
 anthropic = "6 hours"
-inspect-ai = "6 hours"
-inspect-flow = "6 hours"
-inspect-sandboxes = "6 hours"
-inspect-scout = "6 hours"
+inspect-ai = false
+inspect-flow = false
+inspect-harbor = false
+inspect-sandboxes = false
+inspect-scout = false
 openai = "6 hours"
-
-[tool.uv.sources]
-
-# inspect-harbor from git rather than PyPI, because the registry tasks the
-# runs/ definitions name (cais/swebenchpro, datacurve/deep-swe) are regenerated
-# in `_tasks.py` on main between releases: the locked 1.0.1.dev29 is 29 commits
-# past the 1.0.0 wheel, 11 of them registry task updates. A run resolved to the
-# wheel is a different eval, but its task identifiers match, because
-# `task_identifier` hashes neither the dataset nor the scorer.
-inspect-harbor = { git = "https://github.com/meridianlabs-ai/inspect_harbor", branch = "main" }
 
 [tool.ruff]
 extend-exclude = ["docs"]
