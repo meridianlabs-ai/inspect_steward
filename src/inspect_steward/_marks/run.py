@@ -4,7 +4,7 @@ Spawned by the tend's executor with a run id (`spawn.py`), it reads everything e
 
 **The capture guard goes on before anything of the eval's is touched.** A definition that calls `eval_set()` at module level would run the eval if anything here imported it — in a process meant to edit one file. With `INSPECT_EVAL_SET_CAPTURE` set, an inline `eval_set()` enumerates into a scratch path instead, which is the launch's own guard (`_evalset.read`). The fleet strips the variable from the side workers it spawns, so they run.
 
-**A zero is the scorer's verdict on an empty attempt, obtained by running it.** The side run spawns the definition into `.steward/marks/<run>/logs`, one log directory per task, selecting just the ruled sample ids and asking Inspect to run them with its `empty_attempt()` solver: `Task.setup` runs, the task's own solver does not, and the task's scorer scores the untouched state. Inspect's `zero_samples` then copies those verdicts into the main log (`edit.zero_targets`), history and provenance intact.
+**A zero is the scorer's verdict on an empty attempt, obtained by running it.** The side run spawns the definition into `.steward/marks/<run>/logs`, one log directory per task, selecting just the ruled sample ids and asking Inspect to run them with its `empty_attempt()` solver: `Task.setup` runs, the task's own solver does not, and the task's scorer scores the untouched state. Inspect's `zero_samples` then copies those verdicts into the main log (`edit.zero_targets`), history and provenance intact. Samples whose log already carries this ruling (a run that crashed before its journal line) are booked first, so the side run covers only the samples still to edit.
 
 **The main log is read and written under the workspace claim**, both halves inside it. A tend rewrites the same file for a re-run's invalidation or an acceptance, and a log read before the claim and written after it would put back what the tend changed in between.
 """
@@ -12,6 +12,7 @@ Spawned by the tend's executor with a run id (`spawn.py`), it reads everything e
 import os
 import time
 from collections.abc import Mapping, Sequence
+from contextlib import nullcontext
 from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
@@ -51,7 +52,15 @@ from .._workspace import (
     read_journal,
     steward_log,
 )
-from .edit import Marked, Target, commit, exclude_targets, zero_targets
+from .edit import (
+    Marked,
+    Target,
+    commit,
+    exclude_targets,
+    locate,
+    marked_by,
+    zero_targets,
+)
 from .state import read_runs, record_exited
 
 MARK_POLL = 0.5
@@ -112,18 +121,28 @@ def _carry_out(workspace: Workspace, run: str, directory: Path) -> str:
     if not targets:
         return "nothing left to write"
 
-    empty: dict[str, EvalLog] = {}
-    side_run: dict[str, Any] | None = None
-    if recorded.disposition is Disposition.ZERO:
-        empty, side_run = _side_run(workspace, directory, targets)
-
-    by_location: dict[str, list[Target]] = {}
-    for target in targets:
-        by_location.setdefault(target.location, []).append(target)
     edited: list[dict[str, Any]] = []
     deferred: list[dict[str, Any]] = []
     failure: Exception | None = None
-    with _claim(workspace):
+    empty: dict[str, EvalLog] = {}
+    side_run: dict[str, Any] | None = None
+    if recorded.disposition is Disposition.ZERO:
+        # a zero a crashed run wrote is booked before the side run, which only
+        # the samples still to edit need: it may refuse them (an integer id)
+        # or fail, and either would leave a written zero reported unwritten
+        edited, targets = _found_written(targets, ruling)
+        if targets:
+            try:
+                empty, side_run = _side_run(workspace, directory, targets)
+            except Exception as ex:
+                failure = ex
+
+    by_location: dict[str, list[Target]] = {}
+    if failure is None:
+        for target in targets:
+            by_location.setdefault(target.location, []).append(target)
+    # nothing left to write takes no claim
+    with _claim(workspace) if by_location else nullcontext():
         for location, group in by_location.items():
             log = read_eval_log(location)
             if log.status == "started":
@@ -180,6 +199,35 @@ def _carry_out(workspace: Workspace, run: str, directory: Path) -> str:
         )
         summary += f", deferred {len(deferred)}: {reasons}"
     return summary
+
+
+def _found_written(
+    targets: Sequence[Target], ruling: Ruling
+) -> tuple[list[dict[str, Any]], list[Target]]:
+    """Split off the targets whose log already carries this ruling.
+
+    Read without the claim, since nothing is written here: a sample only gains a ruling's mark, so one found now is still found when the claim is held. A log still being written is left to the claimed pass, which defers it.
+
+    Returns:
+        The application entries for the targets found written, one per log, and the targets left.
+    """
+    entries: list[dict[str, Any]] = []
+    left: list[Target] = []
+    by_location: dict[str, list[Target]] = {}
+    for target in targets:
+        by_location.setdefault(target.location, []).append(target)
+    for location, group in by_location.items():
+        log = read_eval_log(location)
+        found: list[Target] = []
+        for target in group:
+            sample = locate(log, target) if log.status != "started" else None
+            if sample is not None and marked_by(sample, ruling.ts):
+                found.append(target)
+            else:
+                left.append(target)
+        if found:
+            entries.append(_entry(found[0], Marked(found=found)))
+    return entries, left
 
 
 def _decision(

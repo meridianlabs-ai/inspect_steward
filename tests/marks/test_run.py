@@ -11,14 +11,18 @@ from typing import Any, Literal, cast
 
 import pytest
 from inspect_ai._eval.eval_set_manifest import INSPECT_EVAL_SET_CAPTURE
-from inspect_ai.log import read_eval_log
+from inspect_ai.log import edit_score, read_eval_log, write_eval_log
+from inspect_ai.scorer import ScoreEdit
 from inspect_steward._anomaly.applied import RULING_APPLIED, read_applied
+from inspect_steward._anomaly.fold import read_anomalies
 from inspect_steward._anomaly.model import Anomalies, AnomalyState, Disposition
 from inspect_steward._evalset.instances import Instance
 from inspect_steward._evalset.observe import ObservedTasks, TaskObservation, TaskState
 from inspect_steward._marks import MARK_ATTEMPTS, Target, read_runs, resolve_runs
+from inspect_steward._marks.edit import provenance
 from inspect_steward._marks.run import (
     _collect_empty_attempts,
+    _decision,
     _selectors,
     _Side,
     run_mark,
@@ -284,6 +288,73 @@ def test_a_zero_of_integer_ids_fails_before_any_side_worker_starts(
     assert "cannot zero samples with integer ids" in ended.detail
     assert f"{task.identifier} 0" in ended.detail and "Exclude" in ended.detail
     assert applications(workspace) == []
+
+
+@pytest.mark.parametrize("pending", [False, True], ids=["all-found", "one-pending"])
+def test_a_zero_written_before_a_crash_is_booked_before_the_side_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pending: bool
+) -> None:
+    """A zero the previous Steward wrote into integer-id samples, its journal line lost, is recovered: booked without a side run or a second edit, even when the side run for the samples still to edit fails."""
+    task = SynthTask("probe", samples=5)
+    workspace, _ = prepared(tmp_path, [task])
+    location = write_log(
+        workspace.logs,
+        task,
+        completed=2,
+        samples=[
+            *(replace(errored(str(n)), id=n, score=0.0) for n in range(2)),
+            *([errored("s2")] if pending else [SynthSample("c2", score=1.0)]),
+            *(SynthSample(f"c{n}", score=1.0) for n in range(3, 5)),
+        ],
+    )
+    turn(workspace)
+    ruling(workspace, "zero", effect="samples scored zero")
+    turn(workspace)
+    (run,) = read_runs(workspace.marks_runs).values()
+    # the crash: the previous Steward's zero landed in the log, and the
+    # journal line did not
+    anomaly, decided = _decision(
+        read_anomalies(read_journal(workspace.journal).events),
+        run.class_key,
+        run.ruling_ts,
+    )
+    log = read_eval_log(str(location))
+    for sample_id in range(2):
+        edit_score(
+            log,
+            sample_id,
+            "exact",
+            ScoreEdit(
+                value=0.0,
+                reason="zeroed",
+                provenance=provenance(anomaly, decided, Disposition.ZERO),
+            ),
+        )
+    write_eval_log(log, str(location))
+    side_runs: list[list[str]] = []
+
+    def stood_in(workspace: Workspace, directory: Path, targets: list[Target]) -> None:
+        side_runs.append([target.sample_id for target in targets])
+        raise RuntimeError("the side run failed")
+
+    monkeypatch.setattr("inspect_steward._marks.run._side_run", stood_in)
+    # the runner sets the capture guard in this process's environment
+    monkeypatch.setenv(INSPECT_EVAL_SET_CAPTURE, "")
+
+    status = run_mark(workspace, run.run)
+
+    assert side_runs == ([["s2"]] if pending else [])
+    assert status == (1 if pending else 0)
+    (event,) = applications(workspace)
+    (entry,) = edited(event)
+    assert entry["found"] == 2
+    assert sorted(entry["uuids"]) == ["uuid-0-1", "uuid-1-1"]
+    histories = {
+        sample.id: len((sample.scores or {})["exact"].history)
+        for sample in read_eval_log(str(location)).samples or []
+        if isinstance(sample.id, int)
+    }
+    assert histories == {0: 2, 1: 2}
 
 
 def test_a_scan_finding_is_written_into_the_sample_its_row_names(
