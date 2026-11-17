@@ -1,6 +1,7 @@
 ## Unreleased
 
 - `exclude` and `zero` rulings are now written with Inspect's own `exclude_samples()` and `zero_samples()`. A zero's side run now runs the ruled samples with Inspect's `empty_attempt()` solver, so the task's solver never runs, where before each sample was cancelled and scored as it started. An excluded score's explanation is now the ruling's reason alone. A zero whose empty attempt gives no counted verdict (no score, an unscored or dict value, an errored sample) now fails with Inspect's reason instead of being deferred, and a zero of a sample with an integer id fails before its side run starts; exclude such samples instead. A log whose metric or epoch reducer is defined only in the task file now fails to edit, because Inspect no longer imports the task file to recompute metrics. Logs Steward marked before read the same: `excluded` and `zeroed` are now Inspect's standard score reasons.
+- Raised the `inspect-ai` floor to 0.3.291, the first release whose eval-set selections can run with `empty_attempt()`, and the `inspect-scout` floor to 0.5.5, which inspect-ai 0.3.291 requires for scanning.
 
 ## 0.2.11 (24 October 2026)
 

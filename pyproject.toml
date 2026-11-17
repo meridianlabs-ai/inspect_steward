@@ -25,8 +25,12 @@ dependencies = [
     # and 0.3.266 is where the interim-scoring control response reports each
     # metric's originating `scorer` apart from its `name`, which the interim
     # harvest reads to keep dict-valued scorers' scores distinct (see
-    # `_worker/interim.py`). So this floor is the whole story for inspect-ai.
-    "inspect-ai>=0.3.266",
+    # `_worker/interim.py`). 0.3.291 is where an eval-set selection can run
+    # its tasks with `empty_attempt()` (UKGovernmentBEIS/inspect_ai#6605),
+    # which a zero's side run uses before `zero_samples` copies the verdicts
+    # in (see `_marks/run.py`). So this floor is the whole story for
+    # inspect-ai.
+    "inspect-ai>=0.3.291",
     # inspect-scout 0.5.1 (2026-09-07) is the first release carrying what this
     # project needs, so this is a plain PyPI floor. It was a git direct
     # reference before that; if scout ever needs tracking ahead of a release
@@ -196,14 +200,6 @@ inspect-harbor = false
 inspect-sandboxes = false
 inspect-scout = false
 openai = "6 hours"
-
-# Temporary, for development, review and CI only: inspect_ai's main at the
-# commit that lets an eval-set selection run its tasks with `empty_attempt()`
-# (UKGovernmentBEIS/inspect_ai#6605), which the marking runner needs. Before
-# merge this source goes and the `inspect-ai` floor above moves to the first
-# release containing it.
-[tool.uv.sources]
-inspect-ai = { git = "https://github.com/UKGovernmentBEIS/inspect_ai", rev = "2dada8174ba768669ee0561e7c1f393fd3640bd8" }
 
 [tool.ruff]
 extend-exclude = ["docs"]

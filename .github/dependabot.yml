@@ -37,11 +37,6 @@ updates:
         - "inspect-sandboxes"
         - "inspect-scout"
         - "openai"
-    # inspect-ai comes from a git source in `[tool.uv.sources]` until its next
-    # release; Dependabot would compare the locked commit with PyPI releases.
-    # This goes with the source.
-    ignore:
-      - dependency-name: "inspect-ai"
     groups:
       six-hour-cooldown:
         patterns:
