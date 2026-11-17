@@ -5,10 +5,12 @@ The suite stands in for the runner's launch (`conftest.py`), so a turn records a
 
 import math
 import os
+from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import pytest
+from inspect_ai._eval.eval_set_manifest import INSPECT_EVAL_SET_CAPTURE
 from inspect_ai.log import read_eval_log
 from inspect_steward._anomaly.applied import RULING_APPLIED, read_applied
 from inspect_steward._anomaly.model import Anomalies, AnomalyState, Disposition
@@ -28,6 +30,7 @@ from inspect_steward._marks.state import (
 )
 from inspect_steward._scan import sync_scan
 from inspect_steward._signoff import FAILED, UNWRITTEN, check
+from inspect_steward._worker import Fleet
 from inspect_steward._workspace import (
     ACTION,
     PAUSED,
@@ -244,6 +247,43 @@ def test_a_log_written_before_another_is_refused_is_still_journaled(
     (event,) = applications(workspace)
     (entry,) = edited(event)
     assert entry["task"] == written.identifier and entry["uuids"] == ["uuid-s0-1"]
+
+
+def test_a_zero_of_integer_ids_fails_before_any_side_worker_starts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Inspect zeroes only string ids, so running the side run for an integer id would spend its setup and scorer for nothing."""
+    task = SynthTask("probe", samples=4)
+    workspace, _ = prepared(tmp_path, [task])
+    write_log(
+        workspace.logs,
+        task,
+        completed=2,
+        samples=[
+            *(replace(errored(str(n)), id=n) for n in range(2)),
+            *(SynthSample(n, score=1.0) for n in range(2, 4)),
+        ],
+    )
+    turn(workspace)
+    ruling(workspace, "zero", effect="2 samples scored zero")
+    turn(workspace)
+    (run,) = read_runs(workspace.marks_runs).values()
+
+    def no_worker(self: Fleet, request: object) -> None:
+        raise AssertionError("a side worker was started")
+
+    monkeypatch.setattr(Fleet, "spawn", no_worker)
+    # the runner sets the capture guard in this process's environment
+    monkeypatch.setenv(INSPECT_EVAL_SET_CAPTURE, "")
+
+    status = run_mark(workspace, run.run)
+
+    assert status == 1
+    ended = read_runs(workspace.marks_runs)[run.run]
+    assert ended.detail is not None
+    assert "cannot zero samples with integer ids" in ended.detail
+    assert f"{task.identifier} 0" in ended.detail and "Exclude" in ended.detail
+    assert applications(workspace) == []
 
 
 def test_a_scan_finding_is_written_into_the_sample_its_row_names(
@@ -524,14 +564,24 @@ SIDE_IDS = ["user:cybergym/arvo_1", "user:cybergym/arvo_2"]
 
 
 def _side(
-    tmp_path: Path, task: SynthTask, *, landed: bool, wrote: str | None = None
+    tmp_path: Path,
+    task: SynthTask,
+    *,
+    landed: bool,
+    wrote: str | None = None,
+    status: Literal["success", "cancelled", "error"] = "success",
+    error: str | None = None,
 ) -> _Side:
-    """One task's share of a side run: its own log directory, holding a log when `landed`, and a worker whose output holds `wrote`."""
+    """One task's share of a side run: its own log directory, holding a log with `status` and `error` when `landed`, and a worker whose output holds `wrote`."""
     log_dir = tmp_path / "logs" / task.name
     log_dir.mkdir(parents=True)
     if landed:
         write_log(
-            log_dir, task, samples=[SynthSample(id, score=0.0) for id in SIDE_IDS]
+            log_dir,
+            task,
+            status=status,
+            error=error,
+            samples=[SynthSample(id, score=0.0) for id in SIDE_IDS],
         )
     output = tmp_path / "workers" / f"{task.name}.log"
     output.parent.mkdir(exist_ok=True)
@@ -593,6 +643,49 @@ def test_a_task_whose_worker_landed_no_log_fails_with_the_workers_words(
     assert TASK.identifier not in str(raised.value)
     for fragment in expected:
         assert fragment in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("status", "error", "wrote", "expected"),
+    [
+        pytest.param(
+            "error",
+            "RuntimeError('the sandbox would not start')",
+            None,
+            "the sandbox would not start",
+            id="log-error",
+        ),
+        pytest.param(
+            "cancelled",
+            None,
+            "the worker was interrupted",
+            "the worker was interrupted",
+            id="worker-output",
+        ),
+    ],
+)
+def test_a_task_whose_worker_landed_an_unsuccessful_log_fails_with_its_cause(
+    tmp_path: Path,
+    status: Literal["cancelled", "error"],
+    error: str | None,
+    wrote: str | None,
+    expected: str,
+) -> None:
+    """Inspect would refuse the log by its status alone; the cause is what the operator needs to repair the run."""
+    other = SynthTask("other", samples=4)
+    sides = {
+        TASK.identifier: _side(tmp_path, TASK, landed=True),
+        other.identifier: _side(
+            tmp_path, other, landed=True, status=status, error=error, wrote=wrote
+        ),
+    }
+
+    with pytest.raises(RuntimeError) as raised:
+        _collect_empty_attempts(sides)
+
+    assert f"log for {other.identifier} has status '{status}'" in str(raised.value)
+    assert expected in str(raised.value)
+    assert TASK.identifier not in str(raised.value)
 
 
 @pytest.mark.parametrize(

@@ -293,6 +293,21 @@ def _side_run(
         side.ids = _typed_ids(side.targets)
         side.selectors = _selectors(side.row, side.ids)
         side.log_dir = str(log_dir / digest8(side.row.identifier))
+    # Inspect zeroes only samples with string ids, so a side run for an
+    # integer id would spend its setup and scorer on a verdict that cannot be
+    # copied in
+    integer = [
+        f"{identifier} {id}"
+        for identifier, side in sides.items()
+        for id in side.ids
+        if isinstance(id, int)
+    ]
+    if integer:
+        raise RuntimeError(
+            f"cannot zero samples with integer ids ({', '.join(integer)}): an "
+            f"integer id need not name the same sample in another run. Exclude "
+            f"them instead."
+        )
 
     definition = Path(manifest.source.path)
     if not definition.is_absolute():
@@ -378,7 +393,7 @@ def _side_run(
 def _collect_empty_attempts(
     sides: Mapping[str, _Side],
 ) -> tuple[dict[str, EvalLog], list[str]]:
-    """Read each task's empty-attempt log back, or raise where a worker left none.
+    """Read each task's empty-attempt log back, or raise where a worker left none or an unsuccessful one.
 
     A side run that lands no log will land the same way next time: the selection or the definition is wrong, not the moment. Raising here is what makes the run fail rather than defer, so the attempts run out and the failure reaches the report — carrying the workers' own last words, since a worker that never got as far as a log said why only there. Whether the log holds a verdict for every target is `zero_samples`'s to check.
 
@@ -388,6 +403,7 @@ def _collect_empty_attempts(
     empty: dict[str, EvalLog] = {}
     locations: list[str] = []
     missing: list[str] = []
+    unsuccessful: list[str] = []
     for identifier, side in sides.items():
         # not recursive: the scan directory lives beside the log
         landed = list_eval_logs(side.log_dir, recursive=False)
@@ -395,13 +411,29 @@ def _collect_empty_attempts(
             missing.append(identifier)
             continue
         newest = max(landed, key=lambda info: info.mtime or 0.0)
-        empty[identifier] = read_eval_log(newest.name)
+        log = read_eval_log(newest.name)
+        if log.status != "success":
+            # `zero_samples` would refuse it by its status alone; the cause is
+            # in the log's error, or else in the worker's output
+            cause = (
+                log.error.message
+                if log.error is not None
+                else _worker_tails({identifier: side})
+            )
+            unsuccessful.append(
+                f"the side run's log for {identifier} has status "
+                f"'{log.status}' ({newest.name}): {cause}"
+            )
+            continue
+        empty[identifier] = log
         locations.append(newest.name)
     if missing:
         raise RuntimeError(
             f"the side run landed no log for {', '.join(missing)} — its "
             f"workers exited without writing one. {_worker_tails(sides)}"
         )
+    if unsuccessful:
+        raise RuntimeError("\n\n".join(unsuccessful))
     return empty, locations
 
 

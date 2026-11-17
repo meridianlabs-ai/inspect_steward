@@ -121,7 +121,7 @@ class SynthSample:
     Only what anomaly classification reads: the error (message and traceback), the limit, and the scores. Everything else gets a placeholder.
     """
 
-    id: str
+    id: int | str
     epoch: int = 1
     error: str | None = None
     traceback: str | None = None
