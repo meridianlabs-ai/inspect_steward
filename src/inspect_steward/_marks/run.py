@@ -2,9 +2,9 @@
 
 Spawned by the tend's executor with a run id (`spawn.py`), it reads everything else from the runs record and the journal, does its work, journals the application, and records how it ended. Its posture is a worker's: nothing tends it, it leaves a record of every step so that the next turn can retry exactly what did not land, and a failure costs this run and never the tend.
 
-**The capture guard goes on before anything of the eval's is touched.** Recomputing a log's metrics can import the task's module, and a definition that calls `eval_set()` at module level would then run the eval — here, in a process meant to edit one file. With `INSPECT_EVAL_SET_CAPTURE` set, an inline `eval_set()` enumerates into a scratch path instead, which is the launch's own guard (`_evalset.read`). The fleet strips the variable from the side workers it spawns, so they run.
+**The capture guard goes on before anything of the eval's is touched.** A definition that calls `eval_set()` at module level would run the eval if anything here imported it — in a process meant to edit one file. With `INSPECT_EVAL_SET_CAPTURE` set, an inline `eval_set()` enumerates into a scratch path instead, which is the launch's own guard (`_evalset.read`). The fleet strips the variable from the side workers it spawns, so they run.
 
-**A zero is the scorer's verdict on an empty attempt, obtained by running it.** The side run spawns the definition into `.steward/marks/<run>/logs` selecting just the ruled sample ids, watches the worker's control channel, and cancel-scores each sample the moment it is running — so the task's solver stops as it starts and the task's scorer scores what it finds. What the scratch log records for each sample is then copied into the main log's sample by `harvest_scores`, history and provenance intact. Nothing checks that the attempt did no work: an agentic sample takes minutes and is interrupted within a second of starting, and the operator declined a guard for the remainder.
+**A zero is the scorer's verdict on an empty attempt, obtained by running it.** The side run spawns the definition into `.steward/marks/<run>/logs`, one log directory per task, selecting just the ruled sample ids and asking Inspect to run them with its `empty_attempt()` solver: `Task.setup` runs, the task's own solver does not, and the task's scorer scores the untouched state. Inspect's `zero_samples` then copies those verdicts into the main log (`edit.zero_targets`), history and provenance intact.
 
 **The main log is read and written under the workspace claim**, both halves inside it. A tend rewrites the same file for a re-run's invalidation or an acceptance, and a log read before the claim and written after it would put back what the tend changed in between.
 """
@@ -14,33 +14,29 @@ import time
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, cast
+from typing import Any
 
-import httpx
 from inspect_ai._eval.eval_set_manifest import INSPECT_EVAL_SET_CAPTURE
 from inspect_ai._eval.eval_set_overrides import (
     EvalSetOverrides,
     merge_eval_set_overrides,
 )
-from inspect_ai.log import EvalSample, read_eval_log
+from inspect_ai.log import EvalLog, list_eval_logs, read_eval_log
 
 from .._anomaly.applied import RULING_APPLIED, read_applied
 from .._anomaly.fold import read_anomalies
 from .._anomaly.model import Anomalies, Anomaly, Disposition, Ruling
+from .._evalset.classify import digest8
 from .._evalset.manifest import (
-    Manifest,
     ManifestTask,
     read_manifest,
     worker_overrides,
 )
-from .._evalset.observe import observe_logs, observe_tasks
 from .._scan import ScanError, initialize_scan
 from .._schedule import SpawnTask, SpawnWorker
 from .._smoke.run import reap
 from .._worker import (
     Fleet,
-    Unavailable,
-    cancel_sample,
     resolve_eval_set_id,
     resolve_inflight,
     tail,
@@ -55,17 +51,14 @@ from .._workspace import (
     read_journal,
     steward_log,
 )
-from .edit import Marked, Target, commit, harvest_scores, mark_unscored
+from .edit import Marked, Target, commit, exclude_targets, zero_targets
 from .state import read_runs, record_exited
 
 MARK_POLL = 0.5
-"""Seconds between looks at a side run's control channel.
-
-Short, because the whole point is to reach a sample between its starting and its doing anything: the poll is the ceiling on how much of an attempt the scorer sees.
-"""
+"""Seconds between looks at whether a side run's workers have exited."""
 
 MARK_CAP = 30
-"""Minutes a side run may take before it is reaped and the run fails. A sample cancel-scored as it starts lands in seconds; what this bounds is a worker that never binds a socket or never lands a log."""
+"""Minutes a side run may take before it is reaped and the run fails. An empty attempt runs only the task's setup and scorer; what this bounds is a worker that hangs or never lands a log."""
 
 CLAIM_WAIT = 120.0
 """Seconds to wait for the workspace claim. A tend holds it for seconds; a launch or a smoke for longer, and those are worth failing this run over rather than editing beside."""
@@ -119,16 +112,17 @@ def _carry_out(workspace: Workspace, run: str, directory: Path) -> str:
     if not targets:
         return "nothing left to write"
 
-    scored: dict[Target, EvalSample] = {}
+    empty: dict[str, EvalLog] = {}
     side_run: dict[str, Any] | None = None
     if recorded.disposition is Disposition.ZERO:
-        scored, side_run = _side_run(workspace, directory, targets)
+        empty, side_run = _side_run(workspace, directory, targets)
 
     by_location: dict[str, list[Target]] = {}
     for target in targets:
         by_location.setdefault(target.location, []).append(target)
     edited: list[dict[str, Any]] = []
     deferred: list[dict[str, Any]] = []
+    failure: Exception | None = None
     with _claim(workspace):
         for location, group in by_location.items():
             log = read_eval_log(location)
@@ -138,15 +132,22 @@ def _carry_out(workspace: Workspace, run: str, directory: Path) -> str:
                     for target in group
                 )
                 continue
-            if recorded.disposition is Disposition.EXCLUDE:
-                marked = mark_unscored(log, group, anomaly, ruling)
-            else:
-                # `_side_run` holds every target, or has raised
-                marked = harvest_scores(
-                    log, {target: scored[target] for target in group}, anomaly, ruling
-                )
-            if marked.edited:
-                commit(log, location)
+            try:
+                if recorded.disposition is Disposition.EXCLUDE:
+                    marked = exclude_targets(log, group, anomaly, ruling)
+                else:
+                    # `_side_run` holds every target's task, or has raised
+                    marked = zero_targets(
+                        log, empty[group[0].task], group, anomaly, ruling
+                    )
+                if marked.edited:
+                    commit(log, location)
+            except Exception as ex:
+                # Inspect refuses a log whole, before any edit. The logs
+                # already written are journaled below before this run fails,
+                # so the report does not call a written log unwritten
+                failure = ex
+                break
             if marked.done:
                 edited.append(_entry(group[0], marked))
             deferred.extend(_deferral(target, why) for target, why in marked.deferred)
@@ -168,6 +169,8 @@ def _carry_out(workspace: Workspace, run: str, directory: Path) -> str:
             # turn as census-minus-applied
             fields["deferred"] = deferred
         append_event(workspace.journal, ACTION, **fields)
+    if failure is not None:
+        raise failure
     written = sum(len(entry["uuids"]) for entry in edited)
     summary = f"wrote {written} sample{'s' if written != 1 else ''}"
     if deferred:
@@ -256,6 +259,9 @@ class _Side:
     selectors: list[str] = field(default_factory=list[str])
     """The same ids as the worker's `sample_id` override must spell them (see `_selectors`)."""
 
+    log_dir: str = ""
+    """This task's own log directory under the run's scratch. An empty-attempt log has an identifier of its own, so a directory per task is what pairs the log with its task."""
+
     worker: str | None = None
     output: Path | None = None
     """The worker's merged output, once spawned."""
@@ -263,13 +269,13 @@ class _Side:
 
 def _side_run(
     workspace: Workspace, directory: Path, targets: Sequence[Target]
-) -> tuple[dict[Target, EvalSample], dict[str, Any]]:
-    """Score an empty attempt at each target in a scratch run, and read the verdicts back.
+) -> tuple[dict[str, EvalLog], dict[str, Any]]:
+    """Run an empty attempt at each target in a scratch run, and read its logs back.
 
-    One worker per task, selecting exactly the ruled sample ids and running them all at once, so every target leaves the queue together and the watcher reaches each as it starts. The scratch run is the definition's own — its solver, its limits, its scorer — under `worker_overrides`, exactly as the fleet runs it; only where it writes and which samples it runs differ.
+    One worker per task, selecting exactly the ruled sample ids and running them with Inspect's `empty_attempt()` solver (the selection's `empty_attempt`). The scratch run is otherwise the definition's own — its setup, its limits, its scorer — under `worker_overrides`, exactly as the fleet runs it; only where it writes, which samples it runs and the solver differ.
 
     Returns:
-        Each target the side run scored, with the scratch sample carrying that score, and the record the application event carries about the run.
+        Each task's empty-attempt log, read whole and keyed by task identifier, and the record the application event carries about the run.
     """
     manifest = read_manifest(workspace.manifest)
     rows = {row.identifier: row for row in manifest.tasks}
@@ -282,19 +288,12 @@ def _side_run(
                 f"can run its scorer"
             )
         sides.setdefault(target.task, _Side(row=row, targets=[])).targets.append(target)
+    log_dir = directory / "logs"
     for side in sides.values():
         side.ids = _typed_ids(side.targets)
         side.selectors = _selectors(side.row, side.ids)
+        side.log_dir = str(log_dir / digest8(side.row.identifier))
 
-    log_dir = str(directory / "logs")
-    eval_set_id = resolve_eval_set_id(log_dir)
-    if manifest.scan is not None:
-        # workers require the scan directory to exist and record into it; a
-        # fresh id under the scratch directory keeps their rows off the run's
-        try:
-            initialize_scan(manifest.scan, log_dir=log_dir, scan_id=eval_set_id)
-        except ScanError as ex:
-            steward_log(workspace.log, f"the side run could not bracket its scan: {ex}")
     definition = Path(manifest.source.path)
     if not definition.is_absolute():
         definition = workspace.root / definition
@@ -303,10 +302,24 @@ def _side_run(
     started = time.monotonic()
     try:
         for side in sides.values():
+            eval_set_id = resolve_eval_set_id(side.log_dir)
+            if manifest.scan is not None:
+                # workers require the scan directory to exist and record into
+                # it; a fresh id under the scratch directory keeps their rows
+                # off the run's
+                try:
+                    initialize_scan(
+                        manifest.scan, log_dir=side.log_dir, scan_id=eval_set_id
+                    )
+                except ScanError as ex:
+                    steward_log(
+                        workspace.log,
+                        f"the side run could not bracket its scan: {ex}",
+                    )
             fleet = Fleet(
                 definition=definition,
                 type=manifest.source.type,
-                log_dir=log_dir,
+                log_dir=side.log_dir,
                 eval_set_id=eval_set_id,
                 workers_dir=workspace.marks_workers,
                 inflight=workspace.marks_inflight,
@@ -319,6 +332,7 @@ def _side_run(
                     EvalSetOverrides(sample_id=side.selectors),
                 ),
                 scanners=None,
+                empty_attempt=True,
             )
             spawned_worker = fleet.spawn(
                 SpawnWorker(
@@ -339,7 +353,7 @@ def _side_run(
             side.worker = spawned_worker.worker
             side.output = spawned_worker.output
             spawned.append(side.worker)
-        capped = _watch(workspace, spawned, started)
+        capped = _wait(workspace, spawned, started)
     finally:
         lingering = reap(
             workspace,
@@ -357,61 +371,38 @@ def _side_run(
             f"being cancelled"
         )
 
-    narrowed = manifest.model_copy(
-        update={"tasks": [side.row for side in sides.values()]}
-    )
-    scored, locations = _collect_side_scores(narrowed, log_dir, sides)
-    return scored, {"log_dir": log_dir, "locations": locations}
+    empty, locations = _collect_empty_attempts(sides)
+    return empty, {"log_dir": str(log_dir), "locations": locations}
 
 
-def _collect_side_scores(
-    narrowed: Manifest, log_dir: str, sides: Mapping[str, _Side]
-) -> tuple[dict[Target, EvalSample], list[str]]:
-    """Read the side run's verdicts back, or raise where it left nothing to read.
+def _collect_empty_attempts(
+    sides: Mapping[str, _Side],
+) -> tuple[dict[str, EvalLog], list[str]]:
+    """Read each task's empty-attempt log back, or raise where a worker left none.
 
-    A side run that lands no log, or a log without one of the samples it was told to run, will land the same way next time: the selection or the definition is wrong, not the moment. Raising here is what makes the run fail rather than defer, so the attempts run out and the failure reaches the report — carrying the workers' own last words, since a worker that never got as far as a log said why only there.
+    A side run that lands no log will land the same way next time: the selection or the definition is wrong, not the moment. Raising here is what makes the run fail rather than defer, so the attempts run out and the failure reaches the report — carrying the workers' own last words, since a worker that never got as far as a log said why only there. Whether the log holds a verdict for every target is `zero_samples`'s to check.
 
     Returns:
-        Each target with the scratch sample carrying its score, and the landed logs' locations, in observation order.
+        Each task's empty-attempt log, keyed by task identifier, and their locations.
     """
-    scored: dict[Target, EvalSample] = {}
+    empty: dict[str, EvalLog] = {}
     locations: list[str] = []
-    for observed in observe_tasks(narrowed, observe_logs(log_dir)).tasks:
-        current = observed.current
-        side = sides.get(observed.identifier)
-        if current is None or side is None:
+    missing: list[str] = []
+    for identifier, side in sides.items():
+        # not recursive: the scan directory lives beside the log
+        landed = list_eval_logs(side.log_dir, recursive=False)
+        if not landed:
+            missing.append(identifier)
             continue
-        locations.append(current.location)
-        log = read_eval_log(current.location)
-        by_key = {
-            (str(sample.id), sample.epoch): sample for sample in log.samples or []
-        }
-        for target in side.targets:
-            sample = by_key.get((target.sample_id, target.epoch))
-            if sample is not None:
-                scored[target] = sample
-    # every side's targets, so that a task whose worker landed nothing is
-    # missing too — `_carry_out` commits per log and journals at the end,
-    # and a KeyError between the two would leave an edit no event records
-    missing = [
-        target
-        for side in sides.values()
-        for target in side.targets
-        if target not in scored
-    ]
-    if not locations:
-        raise RuntimeError(
-            "the side run landed no log — its workers exited without writing "
-            f"one. {_worker_tails(sides)}"
-        )
+        newest = max(landed, key=lambda info: info.mtime or 0.0)
+        empty[identifier] = read_eval_log(newest.name)
+        locations.append(newest.name)
     if missing:
-        named = ", ".join(
-            f"{target.sample_id}:{target.epoch} in {target.task}" for target in missing
-        )
         raise RuntimeError(
-            f"the side run's log holds no record of {named}. {_worker_tails(sides)}"
+            f"the side run landed no log for {', '.join(missing)} — its "
+            f"workers exited without writing one. {_worker_tails(sides)}"
         )
-    return scored, locations
+    return empty, locations
 
 
 def _worker_tails(sides: Mapping[str, _Side]) -> str:
@@ -450,90 +441,21 @@ def _typed_ids(targets: Sequence[Target]) -> list[int | str]:
     return ids
 
 
-def _watch(workspace: Workspace, spawned: Sequence[str], started: float) -> bool:
-    """Cancel-score every sample the side workers start, until they have all gone.
-
-    Each poll reads every live worker's control channel over its own socket — the reads `live.py` makes, made synchronously — and asks `inspect ctl` to end each running sample with `--action score`. A sample not yet running is a 409 and is asked again next poll; one already finished answers `changed: false`. The watch ends when no spawned worker is left in the process table — a worker that has landed its log has exited — or when the cap fires.
+def _wait(workspace: Workspace, spawned: Sequence[str], started: float) -> bool:
+    """Wait until no spawned side worker is left in the process table — a worker that has landed its log has exited — or the cap fires.
 
     Returns:
         Whether the cap fired.
     """
     deadline = started + MARK_CAP * 60
-    asked: set[tuple[str, str, int]] = set()
     wanted = set(spawned)
     while True:
         inflight = resolve_inflight(workspace.marks_inflight, workspace.marks_workers)
-        running = [worker for worker in inflight.running if worker.worker in wanted]
-        if not running:
+        if not any(worker.worker in wanted for worker in inflight.running):
             return False
-        for worker in running:
-            if worker.socket is None:
-                continue
-            for task_id, eval_id in _live_tasks(worker.socket):
-                for sample_id, epoch in _running_samples(worker.socket, eval_id):
-                    key = (task_id, sample_id, epoch)
-                    if key in asked:
-                        continue
-                    outcome = cancel_sample(task_id, sample_id, epoch, action="score")
-                    if isinstance(outcome, Unavailable):
-                        # still initializing, or the worker is busy: next poll
-                        continue
-                    asked.add(key)
         if time.monotonic() >= deadline:
             return True
         time.sleep(MARK_POLL)
-
-
-def _live_tasks(socket: Path) -> list[tuple[str, str]]:
-    """`(task_id, eval_id)` for every task a worker reports, or nothing where it does not answer."""
-    payload = _get(socket, "/tasks")
-    if not isinstance(payload, list):
-        return []
-    found: list[tuple[str, str]] = []
-    for row in cast(list[object], payload):
-        if not isinstance(row, dict):
-            continue
-        entry = cast(dict[str, object], row)
-        task_id, eval_id = entry.get("task_id"), entry.get("eval_id")
-        if isinstance(task_id, str) and task_id and isinstance(eval_id, str):
-            found.append((task_id, eval_id))
-    return found
-
-
-def _running_samples(socket: Path, eval_id: str) -> list[tuple[str, int]]:
-    """`(sample_id, epoch)` for every running sample of one eval."""
-    payload = _get(socket, f"/evals/{eval_id}/samples?all=true")
-    if not isinstance(payload, dict):
-        return []
-    rows = cast(dict[str, object], payload).get("samples")
-    if not isinstance(rows, list):
-        return []
-    found: list[tuple[str, int]] = []
-    for row in cast(list[object], rows):
-        if not isinstance(row, dict):
-            continue
-        entry = cast(dict[str, object], row)
-        if entry.get("status") != "running":
-            continue
-        sample_id, epoch = entry.get("sample_id"), entry.get("epoch")
-        if sample_id is not None and isinstance(epoch, int):
-            found.append((str(sample_id), epoch))
-    return found
-
-
-def _get(socket: Path, path: str) -> object:
-    """One read over a worker's socket, or `None` where it did not answer."""
-    try:
-        with httpx.Client(
-            transport=httpx.HTTPTransport(uds=str(socket)),
-            base_url="http://localhost",
-            timeout=MARK_POLL * 4,
-        ) as client:
-            response = client.get(path)
-            response.raise_for_status()
-            return cast(object, response.json())
-    except (httpx.HTTPError, OSError, ValueError):
-        return None
 
 
 __all__ = [

@@ -1,10 +1,10 @@
 """Writing a marking ruling into a landed log.
 
-`exclude` and `zero` used to be journal marks: the tend folded them into the by-task table and the *Scores are over N of M* note, and the log kept whatever score the sample had. Upstream's landed-log edit — `edit_score` applying a `ScoreEdit` with history and provenance, `Score.unscored` as the NaN every metric and reducer skips, `recompute_metrics` rebuilding `results` — is what lets the decision travel inside the file, so every reader of the directory sees the result the operator signed rather than the wreckage under it.
+`exclude` and `zero` used to be journal marks: the tend folded them into the by-task table and the *Scores are over N of M* note, and the log kept whatever score the sample had. Writing the decision into the file means every reader of the directory sees the result the operator signed rather than the wreckage under it.
 
-**Exclusion is a value Steward can write; zero is not.** An excluded sample becomes unscored on each of its scores, with the ruling's reason. What a *zero* is depends on the task's scorer — `I` for `exact`, `0` for `match`, a grader's own word for a rubric — so the runner obtains it by scoring an empty attempt in a scratch side run (`run.py`), and this module copies that verdict in.
+**Inspect does the edit.** `exclude_samples` makes each score unscored with the reason `excluded`; `zero_samples` copies the verdicts of an empty attempt (the side run, `run.py`) with the reason `zeroed`. Both record a score edit with history and provenance and recompute the metrics. Steward adds the ruling to the provenance, finds a ruling already written after a crash, and defers a target whose sample has moved.
 
-**Every function here is pure over an `EvalLog` read whole.** `edit_score` needs the samples and inserts a `ScoreEditEvent` into the sample's events, so a header-only read has nothing to edit and an `exclude_fields` read would write back a truncated transcript. `commit` is the one write, and it is the runner's to call under the workspace claim.
+**Every function here is pure over an `EvalLog` read whole.** A score edit inserts a `ScoreEditEvent` into the sample's events, so a header-only read has nothing to edit and an `exclude_fields` read would write back a truncated transcript. `commit` is the one write, and it is the runner's to call under the workspace claim.
 """
 
 from collections.abc import Mapping, Sequence
@@ -15,20 +15,13 @@ from inspect_ai.log import (
     EvalLog,
     EvalSample,
     ProvenanceData,
-    edit_score,
-    recompute_metrics,
+    exclude_samples,
     write_eval_log,
+    zero_samples,
 )
-from inspect_ai.scorer import ScoreEdit
 
 from .._anomaly.model import Anomaly, Disposition, Ruling
 from .._evalset.instances import Instance
-
-EXCLUDED = "excluded"
-"""The `Score.reason` an exclusion writes. A custom word beside inspect's own `ScoreReason` vocabulary, which the field admits."""
-
-ZEROED = "zeroed"
-"""The `Score.reason` a harvested zero writes."""
 
 STEWARD = "steward"
 """The provenance metadata key under which the ruling travels — the shape the acceptance amendment records (`_tend.rulings._flip`)."""
@@ -182,14 +175,12 @@ def locate(log: EvalLog, target: Target) -> EvalSample | None:
     return None
 
 
-def mark_unscored(
+def exclude_targets(
     log: EvalLog, targets: Sequence[Target], anomaly: Anomaly, ruling: Ruling
 ) -> Marked:
-    """Write an exclusion: every score of every target becomes unscored, with the reason.
+    """Write an exclusion with Inspect's `exclude_samples`.
 
-    Each of a sample's scores is edited rather than one of them, because a multi-scorer task's metrics are per scorer and an exclusion is of the sample. An errored sample that was never scored gets an unscored score named after the task's first scorer, so the exclusion is visible where a reader looks for a score; a log that names no scorer has nowhere to record it, and the target is deferred with that said.
-
-    The scorer's own metadata is left as it stands rather than replaced: a grader's transcript is evidence about the sample, and an exclusion is a decision about it, not a correction of it. The pre-edit score is `history[0]`.
+    Every score of each target becomes unscored with the reason `excluded`, and an errored sample that was never scored gets one under the log's first scorer. A target Inspect finds already excluded, by this ruling or another, is booked as found.
 
     Args:
         log: The task's current log, read whole.
@@ -199,133 +190,107 @@ def mark_unscored(
 
     Returns:
         What was edited, found already edited, and deferred. Nothing is written.
+
+    Raises:
+        ValueError: Inspect refused the exclusion, for example a sample with no score in a log that names no scorer. Nothing is edited.
+        LookupError: A metric or epoch reducer of the log is not registered. Nothing is edited.
     """
+    marked, pending = _pending(log, targets, ruling)
+    if not pending:
+        return marked
+    result = exclude_samples(
+        log, list(pending), provenance(anomaly, ruling, Disposition.EXCLUDE)
+    )
+    _book(marked, pending, result.applied)
+    marked.found.extend(pending[key][0] for key in result.unchanged)
+    return marked
+
+
+def zero_targets(
+    log: EvalLog,
+    empty: EvalLog,
+    targets: Sequence[Target],
+    anomaly: Anomaly,
+    ruling: Ruling,
+) -> Marked:
+    """Write a zero with Inspect's `zero_samples`, from the side run's empty-attempt log.
+
+    Each target takes the scores its sample was given in the empty attempt, with the reason `zeroed`; the transcript stays where it is. Inspect zeroes a sample again if asked, so the record that this ruling is already written is Steward's own (`marked_by`).
+
+    Args:
+        log: The task's current log, read whole.
+        empty: The side run's log of this task, run with `empty_attempt()` and read whole.
+        targets: The ruled samples in `log`.
+        anomaly: The window the ruling closed.
+        ruling: The zero ruling.
+
+    Returns:
+        What was edited, found already edited, and deferred. Nothing is written.
+
+    Raises:
+        ValueError: Inspect refused the zero: the empty-attempt log does not match, or a target has no counted verdict in it. Nothing is edited.
+        LookupError: A metric or epoch reducer of the log is not registered. Nothing is edited.
+    """
+    marked, pending = _pending(log, targets, ruling)
+    if not pending:
+        return marked
+    result = zero_samples(
+        log, empty, list(pending), provenance(anomaly, ruling, Disposition.ZERO)
+    )
+    _book(marked, pending, result.applied)
+    return marked
+
+
+def _pending(
+    log: EvalLog, targets: Sequence[Target], ruling: Ruling
+) -> tuple[Marked, dict[tuple[int | str, int], tuple[Target, EvalSample]]]:
+    """Sort the targets into those still to edit, keyed as Inspect selects them, and those found or deferred."""
     marked = Marked()
-    stamp = provenance(anomaly, ruling, Disposition.EXCLUDE)
+    pending: dict[tuple[int | str, int], tuple[Target, EvalSample]] = {}
     for target in targets:
         sample = locate(log, target)
         if sample is None:
             marked.deferred.append(
                 (target, "the log no longer holds it under that uuid")
             )
-            continue
-        if marked_by(sample, ruling.ts):
+        elif marked_by(sample, ruling.ts):
             marked.found.append(target)
-            continue
-        names = list(sample.scores or {}) or _first_scorer(log)
-        if not names:
-            marked.deferred.append((target, "the log names no scorer to record it on"))
-            continue
-        for name in names:
-            edit_score(
-                log,
-                sample.id,
-                name,
-                ScoreEdit(
-                    value=float("nan"),
-                    explanation=f"{ruling.reason} — excluded by {ruling.by or 'steward'}",
-                    reason=EXCLUDED,
-                    provenance=stamp,
-                ),
-                recompute_metrics=False,
-                epoch=sample.epoch,
-            )
-            marked.scores.add(name)
+        else:
+            pending[(sample.id, sample.epoch)] = (target, sample)
+    return marked, pending
+
+
+def _book(
+    marked: Marked,
+    pending: Mapping[tuple[int | str, int], tuple[Target, EvalSample]],
+    applied: Sequence[tuple[int | str, int]],
+) -> None:
+    """Record the targets Inspect edited, and the score names each now holds."""
+    for key in applied:
+        target, sample = pending[key]
         marked.edited.append(target)
-    return marked
-
-
-def harvest_scores(
-    log: EvalLog,
-    scored: Mapping[Target, EvalSample],
-    anomaly: Anomaly,
-    ruling: Ruling,
-) -> Marked:
-    """Write a zero: each target takes the scores its side-run sample was given.
-
-    Value, answer, explanation and metadata are copied as the scorer produced them over the empty attempt, so the log reads exactly as it would had the sample done nothing — which is what the ruling decided it should read as. The transcript stays where it is; only the scores move, with their history.
-
-    Args:
-        log: The task's current log, read whole.
-        scored: Each ruled sample, paired with the side run's record of it.
-        anomaly: The window the ruling closed.
-        ruling: The zero ruling.
-
-    Returns:
-        What was edited, found already edited, and deferred. Nothing is written.
-    """
-    marked = Marked()
-    stamp = provenance(anomaly, ruling, Disposition.ZERO)
-    for target, side in scored.items():
-        sample = locate(log, target)
-        if sample is None:
-            marked.deferred.append(
-                (target, "the log no longer holds it under that uuid")
-            )
-            continue
-        if marked_by(sample, ruling.ts):
-            marked.found.append(target)
-            continue
-        if not side.scores:
-            marked.deferred.append((target, "the side run recorded no score for it"))
-            continue
-        for name, score in side.scores.items():
-            edit_score(
-                log,
-                sample.id,
-                name,
-                ScoreEdit(
-                    value=score.value,
-                    answer=score.answer,
-                    explanation=score.explanation,
-                    reason=ZEROED,
-                    metadata=score.metadata or {},
-                    provenance=stamp,
-                ),
-                recompute_metrics=False,
-                epoch=sample.epoch,
-            )
-            marked.scores.add(name)
-        marked.edited.append(target)
-    return marked
+        marked.scores.update(sample.scores or {})
 
 
 def commit(log: EvalLog, location: str) -> None:
-    """Recompute the metrics over what the log now holds, and write it back whole.
+    """Write the edited log back whole.
 
-    The one write. Whole rather than header-only, because the edits are in the samples. The etag is populated by a read from S3 and a documented no-op elsewhere, so this is a compare-and-swap remotely and best-effort locally — where the runner's workspace claim is what serializes it against a tend rewriting the same file for a re-run or an acceptance.
+    Whole rather than header-only, because the edits are in the samples; Inspect has already recomputed the metrics. The etag is populated by a read from S3 and a documented no-op elsewhere, so this is a compare-and-swap remotely and best-effort locally — where the runner's workspace claim is what serializes it against a tend rewriting the same file for a re-run or an acceptance.
 
     Raises:
-        ValueError: The log names no scorer, so there is nothing to recompute the metrics from — refused rather than written with empty results.
         WriteConflictError: The log changed on S3 since it was read. Propagates to the runner, which exits without a record so the tend retries.
     """
-    if not log.eval.scorers:
-        raise ValueError(
-            "the log names no scorer, so its metrics cannot be recomputed after "
-            "the edit"
-        )
-    recompute_metrics(log)
     write_eval_log(log, location, if_match_etag=log.etag)
 
 
-def _first_scorer(log: EvalLog) -> list[str]:
-    """The name to record an unscored score under, for a sample that was never scored."""
-    for scorer in log.eval.scorers or []:
-        if scorer.name:
-            return [scorer.name]
-    return []
-
-
 __all__ = [
-    "EXCLUDED",
     "STEWARD",
-    "ZEROED",
     "Marked",
     "Target",
     "commit",
-    "harvest_scores",
+    "exclude_targets",
     "locate",
-    "mark_unscored",
     "marked_by",
     "provenance",
+    "zero_targets",
 ]

@@ -1,3 +1,7 @@
+## Unreleased
+
+- `exclude` and `zero` rulings are now written with Inspect's own `exclude_samples()` and `zero_samples()`. A zero's side run now runs the ruled samples with Inspect's `empty_attempt()` solver, so the task's solver never runs, where before each sample was cancelled and scored as it started. An excluded score's explanation is now the ruling's reason alone. A zero whose empty attempt gives no counted verdict (no score, an unscored or dict value, an errored sample, or an integer sample id) now fails with Inspect's reason instead of being deferred; exclude such samples instead. A log whose metric or epoch reducer is defined only in the task file now fails to edit, because Inspect no longer imports the task file to recompute metrics. Logs Steward marked before read the same: `excluded` and `zeroed` are now Inspect's standard score reasons.
+
 ## 0.2.11 (24 October 2026)
 
 - Requires `apprise>=2`. Apprise 2.0 renamed `Apprise.servers` to `services`, so with a fresh install every post failed with `AttributeError: 'Apprise' object has no attribute 'servers'` and was recorded in `steward.log` as undelivered. Two quieter 2.0 changes are handled as well: a plugin may now declare several formats, which had routed email to plain text instead of the `<pre>` HTML body, and Apprise now translates any body declared as markdown for Slack, which would have turned every bold heading and label in a Slack post into italics.

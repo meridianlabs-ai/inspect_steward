@@ -1,6 +1,6 @@
 """Starting a marking run: what the tend's executor does about an unapplied `exclude` or `zero`.
 
-Detached, like a worker, and for a reason beyond a zero's side run needing minutes: `recompute_metrics` resolves the log's metrics through `resolve_scorers_info`, which imports the task's module when a metric is not already registered, and a definition that calls `eval_set()` at module level would then run the eval inside the tend. The runner sets the capture guard before it touches anything of the eval's (`run.py`), and it does so in a process the tend does not have to wait for.
+Detached, like a worker, because a zero's side run takes minutes and the tend does not wait for it. The runner sets the capture guard before it touches anything of the eval's (`run.py`).
 """
 
 import os
