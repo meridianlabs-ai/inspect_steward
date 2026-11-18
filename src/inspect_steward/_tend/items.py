@@ -106,6 +106,7 @@ STATUS_UNWRITABLE = "status_unwritable"
 SYNC_FAILED = "sync_failed"
 KILL_LOOP = "kill_loop"
 MEMORY = "memory"
+DISK = "disk"
 ANOMALY = "anomaly"
 
 OWNERS = {
@@ -127,6 +128,7 @@ OWNERS = {
     SYNC_FAILED: Owner.OPERATOR,
     KILL_LOOP: Owner.OPERATOR,
     MEMORY: Owner.AGENT,
+    DISK: Owner.AGENT,
     ANOMALY: Owner.AGENT,
 }
 """Default owner per kind. Policy may move some of these once `_steward.yaml` can say so (step 23); a kind absent from the table is the agent's, since an unrouted item is an investigation rather than a question."""
@@ -277,6 +279,7 @@ def tend_items(
         *_sync_failed(result),
         *_kill_loop(result),
         *_memory(result),
+        *_disk(result),
         *_anomalies(
             result.anomalies,
             landed=frozenset(
@@ -1284,6 +1287,38 @@ def _memory(result: "TendResult") -> list[Item]:
             subject="host",
             summary=summary,
             action="add swap, or lower max_samples; see Memory in the runbook",
+        )
+    ]
+
+
+def _disk(result: "TendResult") -> list[Item]:
+    """The log directory's filesystem is low on space, or on course to fill.
+
+    **The agent's, for the reason `_memory` is the agent's.** Pruning or compressing old logs, and lowering concurrency where the volume cannot grow, are the agent's to try first and are not questions the operator has to be woken for. The twin of memory in every other respect — the id is the tier and the episode (`_memory`), the summary says what is short and stops — read against the filesystem the `.eval` logs are written to (`_tend.disk`, `turn._log_dir`).
+    """
+    if (disk := result.disk) is None or (tier := disk.tier) is None:
+        return []
+    host = disk.host
+    of = f"{format_bytes(host.free)} of {format_bytes(host.total)}"
+    if tier == "low":
+        summary = f"log disk free is {of} ({disk.fraction:.0%})"
+    else:
+        projection = disk.projection
+        assert projection is not None and projection.exhausted_in is not None
+        rate = format_bytes(int(-projection.slope * 3600))
+        summary = (
+            f"log disk free is {of}, falling {rate}/h — full in "
+            f"~{format_age(int(projection.exhausted_in))}"
+        )
+    return [
+        Item(
+            id=f"{DISK}:{tier}:{disk.since or 'start'}",
+            kind=DISK,
+            owner=OWNERS[DISK],
+            level=Level.ATTENTION,
+            subject="host",
+            summary=summary,
+            action="free disk space (prune old logs, grow the volume), or lower max_samples; see Disk in the runbook",
         )
     ]
 

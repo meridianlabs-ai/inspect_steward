@@ -86,6 +86,7 @@ from .._worker import (
     LiveFleet,
     LiveTarget,
     Unavailable,
+    host_disk,
     host_memory,
     read_fleet,
     read_interim,
@@ -144,6 +145,14 @@ from .analysis_md import Section, analysis_sections, merge_analysis
 from .anomalies_md import Caveat, anomalies_markdown, caveats, outcomes_block
 from .coverage import Coverage, coverage
 from .detect import detect, scan_attempts, task_health
+from .disk import (
+    DiskPoint,
+    DiskReport,
+    disk_payload,
+    disk_report,
+    read_disk_history,
+    read_disk_since,
+)
 from .history import Happened, happened
 from .items import (
     Item,
@@ -335,6 +344,12 @@ class TendResult:
     """The host's memory this turn and where it is heading (`_tend.memory`).
 
     Read while something runs, because the series is *what the fleet is doing to the host* and a reading with nothing running would fit tomorrow's fleet against last night's idle box. `None` on a result assembled by hand, and while nothing runs.
+    """
+
+    disk: DiskReport | None = None
+    """The log directory's filesystem this turn and where it is heading (`_tend.disk`).
+
+    Read while something runs and the log directory is local, for the reason `memory` is: the series is *what the fleet is writing*, and a reading taken with nothing running, or against a remote log store that has no local disk to measure, would claim a trend there is none of. `None` on a result assembled by hand, while nothing runs, and against a remote log store.
     """
 
     log_dir: str | None = None
@@ -761,6 +776,12 @@ class _History:
     """When a tend last recorded the host as not short — the boundary a `memory` item's id carries (`_tend.memory.read_memory_since`)."""
     """The previous turn's tuning record — the window's left edge (`_tend.tuning`)."""
 
+    disk: list[DiskPoint] = field(default_factory=list["DiskPoint"])
+    """The log directory's recent readings, oldest first — what this turn's reading is fitted against (`_tend.disk.read_disk_history`)."""
+
+    disk_since: str | None = None
+    """When a tend last recorded the filesystem as not short — the boundary a `disk` item's id carries (`_tend.disk.read_disk_since`)."""
+
     ramp_holds: dict[str, RampHold] = field(default_factory=dict[str, "RampHold"])
     """The holds on the tuning loop, keyed by identifier with `""` for the fleet's."""
 
@@ -871,6 +892,8 @@ def _history(workspace: Workspace) -> _History:
         baseline=read_baseline(events),
         memory=read_memory_history(events, now=time.time()),
         memory_since=read_memory_since(events),
+        disk=read_disk_history(events, now=time.time()),
+        disk_since=read_disk_since(events),
         ramp_holds=read_ramp_holds(events),
         ramp_levels=ramp_levels,
         last_step=last_step,
@@ -1290,6 +1313,20 @@ def _turn(
         if progress.live is not None
         else None
     )
+    # the disk reading rides with the fleet's for the same reason, and only
+    # where the logs land on a local filesystem: a remote log store (`s3://…`)
+    # has no disk here to measure, so it records nothing and ends the episode,
+    # exactly as an idle turn does (`layout._remote` spells remoteness this way)
+    disk = (
+        disk_report(
+            host_disk(log_dir),
+            history.disk,
+            now=now,
+            since=history.disk_since,
+        )
+        if progress.live is not None and "://" not in log_dir
+        else None
+    )
     answered = _signals(observed, fleet)
     plan = plan_tuning(
         answered,
@@ -1346,6 +1383,7 @@ def _turn(
         progress=progress,
         tuning=plan,
         memory=memory,
+        disk=disk,
         log_dir=log_dir,
         notification=notification,
         scan=manifest.scan,
@@ -2278,6 +2316,9 @@ def _record(
         # the host's reading, for the series the next turn fits (`_tend.memory`);
         # `None` while nothing runs, which is what ends an episode
         memory=memory_payload(result.memory),
+        # the log directory's filesystem, the same (`_tend.disk`); `None` while
+        # nothing runs or the log store is remote
+        disk=disk_payload(result.disk),
     )
 
 

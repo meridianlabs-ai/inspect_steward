@@ -12,8 +12,9 @@ definitely has a resident set is the one thing a test can count on.
 """
 
 import os
+from pathlib import Path
 
-from inspect_steward._worker import host_memory, process_usage
+from inspect_steward._worker import host_disk, host_memory, process_usage
 
 
 def test_a_pid_repeated_is_a_process_counted_once() -> None:
@@ -59,3 +60,17 @@ def test_the_host_reading_is_consistent_with_itself() -> None:
     assert 0 <= host.available <= host.total
     assert 0 <= host.swap_used <= host.swap_total
     assert host.headroom == host.available + (host.swap_total - host.swap_used)
+
+
+def test_the_disk_reading_is_consistent_with_itself(tmp_path: Path) -> None:
+    """One read of the filesystem under a path, whose figures have to be possible.
+
+    The values are whatever this box's disk has, so the claim is about their
+    shape: free space fits inside the filesystem, and headroom is that free
+    space the item is judged on.
+    """
+    disk = host_disk(str(tmp_path))
+
+    assert disk.total > 0
+    assert 0 <= disk.free <= disk.total
+    assert disk.headroom == disk.free
