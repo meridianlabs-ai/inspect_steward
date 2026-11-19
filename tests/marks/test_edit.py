@@ -7,8 +7,15 @@ import math
 from dataclasses import replace
 from pathlib import Path
 
+import inspect_ai.log
 import pytest
-from inspect_ai.log import EvalLog, EvalSample, read_eval_log
+from inspect_ai.log import (
+    EvalLog,
+    EvalSample,
+    ProvenanceData,
+    SampleSelector,
+    read_eval_log,
+)
 from inspect_ai.scorer import Score
 from inspect_steward._anomaly.model import (
     Anomaly,
@@ -17,6 +24,7 @@ from inspect_steward._anomaly.model import (
     Evidence,
     Ruling,
 )
+from inspect_steward._marks import edit
 from inspect_steward._marks.edit import (
     STEWARD,
     Target,
@@ -92,7 +100,33 @@ def accuracy(log: EvalLog) -> float:
     return log.results.scores[0].metrics["accuracy"].value
 
 
+@pytest.fixture
+def inspect_6631(monkeypatch: pytest.MonkeyPatch) -> list[list[SampleSelector]]:
+    """Inspect's `exclude_samples` and `zero_samples` returning `None`, as they do from UKGovernmentBEIS/inspect_ai#6631, so the outcome is read from the log. Returns the samples each call selected."""
+    calls: list[list[SampleSelector]] = []
+
+    def exclude(
+        log: EvalLog, samples: list[SampleSelector], provenance: ProvenanceData
+    ) -> None:
+        calls.append(list(samples))
+        inspect_ai.log.exclude_samples(log, samples, provenance)
+
+    def zero(
+        log: EvalLog,
+        empty: EvalLog,
+        samples: list[SampleSelector],
+        provenance: ProvenanceData,
+    ) -> None:
+        calls.append(list(samples))
+        inspect_ai.log.zero_samples(log, empty, samples, provenance)
+
+    monkeypatch.setattr(edit, "exclude_samples", exclude)
+    monkeypatch.setattr(edit, "zero_samples", zero)
+    return calls
+
+
 class TestExclusion:
+    @pytest.mark.usefixtures("inspect_6631")
     def test_every_score_becomes_unscored_with_the_reason_and_provenance(
         self, tmp_path: Path
     ) -> None:
@@ -189,21 +223,43 @@ class TestExclusion:
         assert deferred.sample_id == "s2" and "uuid" in why
         assert (sample(log, "s2").scores or {})["exact"].history == []
 
-    def test_a_sample_another_ruling_excluded_is_found_not_edited_again(
-        self, tmp_path: Path
+    def test_a_sample_another_ruling_excluded_is_found_and_left_out_of_the_call(
+        self, tmp_path: Path, inspect_6631: list[list[SampleSelector]]
     ) -> None:
+        """Inspect excludes an excluded sample again if asked, so it is not asked."""
         location = landed(tmp_path)
         log = read_eval_log(location)
         anomaly, ruling = decision(Disposition.EXCLUDE)
         exclude_targets(log, [target(log, "s2")], anomaly, ruling)
         commit(log, location)
+        inspect_6631.clear()
 
         again = read_eval_log(location)
         later = replace(ruling, ts="2026-09-01T00:00:00Z")
-        marked = exclude_targets(again, [target(again, "s2")], anomaly, later)
+        marked = exclude_targets(
+            again, [target(again, "s2"), target(again, "s1")], anomaly, later
+        )
 
-        assert marked.edited == [] and [one.sample_id for one in marked.found] == ["s2"]
+        assert [one.sample_id for one in marked.found] == ["s2"]
+        assert [one.sample_id for one in marked.edited] == ["s1"]
+        assert inspect_6631 == [[("s1", 1)]]
         assert len((sample(again, "s2").scores or {})["exact"].history) == 2
+
+    def test_inspect_returning_without_an_edit_raises(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        location = landed(tmp_path)
+        log = read_eval_log(location)
+        anomaly, ruling = decision(Disposition.EXCLUDE)
+
+        def no_edit(
+            log: EvalLog, samples: list[SampleSelector], provenance: ProvenanceData
+        ) -> None:
+            return None
+
+        monkeypatch.setattr(edit, "exclude_samples", no_edit)
+        with pytest.raises(RuntimeError, match="without editing s2 \\(epoch 1\\)"):
+            exclude_targets(log, [target(log, "s2")], anomaly, ruling)
 
     def test_a_log_naming_no_scorer_refuses_and_edits_nothing(
         self, tmp_path: Path
@@ -248,6 +304,7 @@ EMPTY = Score(
 
 
 class TestZero:
+    @pytest.mark.usefixtures("inspect_6631")
     def test_the_empty_attempts_verdict_is_copied_in_with_its_history(
         self, tmp_path: Path
     ) -> None:

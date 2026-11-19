@@ -19,6 +19,7 @@ from inspect_ai.log import (
     write_eval_log,
     zero_samples,
 )
+from inspect_ai.scorer._metric import score_is_excluded
 
 from .._anomaly.model import Anomaly, Disposition, Ruling
 from .._evalset.instances import Instance
@@ -180,7 +181,7 @@ def exclude_targets(
 ) -> Marked:
     """Write an exclusion with Inspect's `exclude_samples`.
 
-    Every score of each target becomes unscored with the reason `excluded`, and an errored sample that was never scored gets one under the log's first scorer. A target Inspect finds already excluded, by this ruling or another, is booked as found.
+    Every score of each target becomes unscored with the reason `excluded`, and an errored sample that was never scored gets one under the log's first scorer. A target already excluded, by this ruling or another, is booked as found and left out of the call: Inspect excludes it again if asked.
 
     Args:
         log: The task's current log, read whole.
@@ -194,15 +195,21 @@ def exclude_targets(
     Raises:
         ValueError: Inspect refused the exclusion, for example a sample with no score in a log that names no scorer. Nothing is edited.
         LookupError: A metric or epoch reducer of the log is not registered. Nothing is edited.
+        RuntimeError: Inspect returned without editing a target it was asked to. The log is not to be committed.
     """
     marked, pending = _pending(log, targets, ruling)
+    for key, (target, sample) in list(pending.items()):
+        if sample.scores and all(
+            score_is_excluded(score) for score in sample.scores.values()
+        ):
+            marked.found.append(target)
+            del pending[key]
     if not pending:
         return marked
-    result = exclude_samples(
+    exclude_samples(
         log, list(pending), provenance(anomaly, ruling, Disposition.EXCLUDE)
     )
-    _book(marked, pending, result.applied)
-    marked.found.extend(pending[key][0] for key in result.unchanged)
+    _book(log, marked, pending, ruling)
     return marked
 
 
@@ -230,14 +237,15 @@ def zero_targets(
     Raises:
         ValueError: Inspect refused the zero: the empty-attempt log does not match, or a target has no counted verdict in it. Nothing is edited.
         LookupError: A metric or epoch reducer of the log is not registered. Nothing is edited.
+        RuntimeError: Inspect returned without editing a target it was asked to. The log is not to be committed.
     """
     marked, pending = _pending(log, targets, ruling)
     if not pending:
         return marked
-    result = zero_samples(
+    zero_samples(
         log, empty, list(pending), provenance(anomaly, ruling, Disposition.ZERO)
     )
-    _book(marked, pending, result.applied)
+    _book(log, marked, pending, ruling)
     return marked
 
 
@@ -261,15 +269,28 @@ def _pending(
 
 
 def _book(
+    log: EvalLog,
     marked: Marked,
     pending: Mapping[tuple[int | str, int], tuple[Target, EvalSample]],
-    applied: Sequence[tuple[int | str, int]],
+    ruling: Ruling,
 ) -> None:
-    """Record the targets Inspect edited, and the score names each now holds."""
-    for key in applied:
-        target, sample = pending[key]
+    """Record the targets Inspect edited, read back from the log, and the score names each now holds.
+
+    Raises:
+        RuntimeError: Inspect returned without editing a target it was asked to.
+    """
+    missing: list[str] = []
+    for target, _ in pending.values():
+        sample = locate(log, target)
+        if sample is None or not marked_by(sample, ruling.ts):
+            missing.append(f"{target.sample_id} (epoch {target.epoch})")
+            continue
         marked.edited.append(target)
         marked.scores.update(sample.scores or {})
+    if missing:
+        raise RuntimeError(
+            f"Inspect returned without editing {', '.join(missing)} in {log.location}."
+        )
 
 
 def commit(log: EvalLog, location: str) -> None:
