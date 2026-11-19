@@ -54,7 +54,7 @@ Agents will prompt you for a ruling with one of six answers:
 
 The next tend carries out a `rerun`. Samples in a running task are requeued in place, and a landed log has the ruled samples invalidated so the task re-runs them and reuses everything else. Authorized re-runs are scheduled ahead of ordinary queued work.
 
-The next tend carries out an `exclude` and a `zero` too, by writing them into the log: each edited score keeps its history and records who decided and why, and the log's metrics are recomputed over what remains. An exclusion lands within a turn. A zero needs the task's scorer, since what a zero is depends on it, so Steward runs the task on just those samples in a scratch directory under `.steward/`, stops each sample as it starts, and copies the scorer's verdict on that empty attempt into the log. Until a ruling is written the report's entry for it says *not yet written into the log*, and `steward signoff` refuses with the same words.
+The next tend carries out an `exclude` and a `zero` too, by writing them into the log: each edited score keeps its history and records who decided and why, and the log's metrics are recomputed over what remains. An exclusion lands within a turn. A zero needs the task's scorer, since what a zero is depends on it, so Steward runs the task on just those samples in a scratch directory under `.steward/`, with Inspect's `empty_attempt()` solver in place of the task's own, and copies the scorer's verdict into the log. Until a ruling is written the report's entry for it says *not yet written into the log*, and `steward signoff` refuses with the same words.
 
 If the same failure comes back after a ruling, it opens as a new question and carries the old decision with it.
 

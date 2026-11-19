@@ -13,7 +13,7 @@ from inspect_ai.log import list_eval_logs, read_eval_log
 from inspect_steward._anomaly.applied import read_applied
 from inspect_steward._launch import Launch, launch
 from inspect_steward._marks import read_runs
-from inspect_steward._marks.edit import EXCLUDED, STEWARD
+from inspect_steward._marks.edit import STEWARD
 from inspect_steward._signoff import UNWRITTEN, check
 from inspect_steward._workspace import (
     RULING,
@@ -98,7 +98,7 @@ def test_an_exclusion_lands_in_the_log_from_a_detached_runner(
         score = (by_id[sample_id].scores or {})["exact"]
         assert by_id[sample_id].uuid == uuid
         assert math.isnan(score.as_float())
-        assert score.reason == EXCLUDED
+        assert score.reason == "excluded"
         assert score.history[-1].provenance is not None
         assert score.history[-1].provenance.metadata[STEWARD]["class"] == (
             window.class_key

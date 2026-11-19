@@ -25,15 +25,20 @@ dependencies = [
     # and 0.3.266 is where the interim-scoring control response reports each
     # metric's originating `scorer` apart from its `name`, which the interim
     # harvest reads to keep dict-valued scorers' scores distinct (see
-    # `_worker/interim.py`). So this floor is the whole story for inspect-ai.
-    "inspect-ai>=0.3.266",
+    # `_worker/interim.py`). 0.3.291 is where an eval-set selection can run
+    # its tasks with `empty_attempt()` (UKGovernmentBEIS/inspect_ai#6605),
+    # which a zero's side run uses before `zero_samples` copies the verdicts
+    # in (see `_marks/run.py`). So this floor is the whole story for
+    # inspect-ai.
+    "inspect-ai>=0.3.291",
     # inspect-scout 0.5.1 (2026-09-07) is the first release carrying what this
     # project needs, so this is a plain PyPI floor. It was a git direct
     # reference before that; if scout ever needs tracking ahead of a release
     # again, note that pip ignores `[tool.uv.sources]` for runtime
     # dependencies, so only a PEP 508 direct reference here (with hatch's
-    # `allow-direct-references`) reaches pip installs from git.
-    "inspect-scout>=0.5.1",
+    # `allow-direct-references`) reaches pip installs from git. 0.5.5 since
+    # inspect-ai 0.3.291, which refuses to scan with an older scout.
+    "inspect-scout>=0.5.5",
     "click>=8.0",
     "pyyaml>=6.0",
     # the process table is how Steward finds a worker that has not yet reached

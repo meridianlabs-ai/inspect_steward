@@ -1,6 +1,6 @@
 """A zero obtained from the task's own scorer, in a scratch side run.
 
-The claim no synthesized log can make: that the runner spawns the definition on just the ruled sample ids into `.steward/marks/`, cancel-scores what it starts, and copies the scorer's verdict into the main log with history and provenance — and that nothing of the side run reaches `logs/` or the run's in-flight record. One launch, one runner, one side worker.
+The claim no synthesized log can make: that the runner spawns the definition on just the ruled sample ids into `.steward/marks/`, with Inspect's `empty_attempt()` in place of the task's solver, and copies the scorer's verdict into the main log with history and provenance — and that nothing of the side run reaches `logs/` or the run's in-flight record. One launch, one runner, one side worker.
 """
 
 import shutil
@@ -12,7 +12,7 @@ from inspect_ai.log import list_eval_logs, read_eval_log
 from inspect_steward._anomaly.applied import read_applied
 from inspect_steward._launch import Launch, launch
 from inspect_steward._marks import read_runs
-from inspect_steward._marks.edit import STEWARD, ZEROED
+from inspect_steward._marks.edit import STEWARD
 from inspect_steward._signoff import UNWRITTEN, check
 from inspect_steward._workspace import (
     ACTION,
@@ -58,9 +58,9 @@ def test_a_zero_is_the_scorers_verdict_on_an_empty_attempt(
     (window,) = observed.anomalies.open
     inflight_before = workspace.inflight.read_text(encoding="utf-8")
 
-    # the outage passes, but the operator wants these counted as failures
-    # rather than run again -- which needs the scorer's word for a failure
-    (markers / "healed").touch()
+    # the operator wants these counted as failures rather than run again --
+    # which needs the scorer's word for a failure. The outage is not healed:
+    # an empty attempt never runs the task's solver, where the outage is
     decision: dict[str, Any] = {
         "class": window.class_key,
         "disposition": "zero",
@@ -99,7 +99,11 @@ def test_a_zero_is_the_scorers_verdict_on_an_empty_attempt(
     assert Path(side["log_dir"]).is_relative_to(workspace.marks_run(run))
     assert len(list_eval_logs(side["log_dir"])) == 1
     scratch = read_eval_log(list_eval_logs(side["log_dir"])[0].name)
+    assert scratch.eval.solver == "inspect_ai/empty_attempt"
     assert {str(sample.id) for sample in scratch.samples or []} == set(errored)
+    for sample in scratch.samples or []:
+        assert sample.error is None
+        assert not [event for event in sample.events if event.event == "model"]
 
     # and the main log's samples carry the scorer's verdict, transcript intact
     after = read_eval_log(first.name)
@@ -110,7 +114,7 @@ def test_a_zero_is_the_scorers_verdict_on_an_empty_attempt(
         assert sample.error is not None
         score = (sample.scores or {})["exact"]
         assert score.value == "I"
-        assert score.reason == ZEROED
+        assert score.reason == "zeroed"
         assert score.history[-1].provenance is not None
         assert score.history[-1].provenance.author == "kaia"
         assert score.history[-1].provenance.metadata[STEWARD]["disposition"] == "zero"

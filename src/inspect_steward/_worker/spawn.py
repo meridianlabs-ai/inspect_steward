@@ -140,6 +140,9 @@ class Fleet:
     From the manifest rather than this turn's directives, for the reason `overrides` is: the merge was settled and verified at launch, so an edited `scanners:` key changes nothing until a re-launch verifies it — a worker recording under a set nobody verified would be writing rows the next launch then refuses.
     """
 
+    empty_attempt: bool = False
+    """Run every worker's tasks with Inspect's `empty_attempt()` solver in place of their own. Only a zero's side run sets it (`_marks.run`)."""
+
     def spawn(self, action: SpawnWorker) -> SpawnedWorker:
         """Spawn a detached worker to run a share of the eval set.
 
@@ -192,6 +195,7 @@ class Fleet:
                 overrides=self.overrides,
                 scanners=self.scanners,
                 connections=action.connections,
+                empty_attempt=self.empty_attempt,
             ).model_dump_json(exclude_none=True, indent=2),
             encoding="utf-8",
         )
@@ -260,6 +264,7 @@ def worker_selection(
     overrides: EvalSetOverrides | None = None,
     scanners: dict[str, dict[str, Any]] | None = None,
     connections: tuple[int, int] | None = None,
+    empty_attempt: bool = False,
 ) -> EvalSetSelection:
     """Build the selection document for one worker.
 
@@ -276,6 +281,7 @@ def worker_selection(
         overrides: Inspect's arguments for the run, from the committed manifest. This worker's own values are applied over them.
         scanners: Scanners the worker realizes and merges with the definition's own — a selection field of its own rather than an override, because injection merges where an override replaces.
         connections: The `(min, max)` adaptive connection range to spawn with, or `None` to leave the definition's own (`reconcile._spawn_connections`).
+        empty_attempt: Run the tasks with the `empty_attempt()` solver, for a zero's side run. Inspect refuses it beside a `resume`.
 
     Returns:
         The selection.
@@ -342,6 +348,7 @@ def worker_selection(
         version=EVAL_SET_SELECTION_VERSION,
         eval_set_id=eval_set_id,
         scanners=scanners or None,
+        empty_attempt=empty_attempt or None,
         tasks=[
             EvalSetSelectionTask(
                 identifier=task.identifier,

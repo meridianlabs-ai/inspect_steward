@@ -1,11 +1,13 @@
 """Writing a ruling into a landed log: the primitives, on synthesized logs.
 
-The file is the effect, so every claim here is read back off disk after `commit`: the unscored value and its reason, the score's history with the ruling's provenance, the metrics recomputed over what remains, and the samples nobody ruled on byte-identical.
+The file is the effect, so every claim here is read back off disk after `commit`: the unscored value and its reason, the score's history with the ruling's provenance, the metrics recomputed over what remains, and the samples nobody ruled on byte-identical. Inspect makes the edit (`exclude_samples`, `zero_samples`); what is Steward's is the ruling in the provenance, finding a ruling already written, and deferring a sample that moved.
 """
 
 import math
+from dataclasses import replace
 from pathlib import Path
 
+import pytest
 from inspect_ai.log import EvalLog, EvalSample, read_eval_log
 from inspect_ai.scorer import Score
 from inspect_steward._anomaly.model import (
@@ -16,14 +18,12 @@ from inspect_steward._anomaly.model import (
     Ruling,
 )
 from inspect_steward._marks.edit import (
-    EXCLUDED,
     STEWARD,
-    ZEROED,
     Target,
     commit,
-    harvest_scores,
-    mark_unscored,
+    exclude_targets,
     marked_by,
+    zero_targets,
 )
 
 from .._logs import SynthSample, SynthTask, write_log
@@ -100,7 +100,7 @@ class TestExclusion:
         log = read_eval_log(location)
         anomaly, ruling = decision(Disposition.EXCLUDE)
 
-        marked = mark_unscored(
+        marked = exclude_targets(
             log, [target(log, "s2"), target(log, "s3")], anomaly, ruling
         )
         commit(log, location)
@@ -111,8 +111,8 @@ class TestExclusion:
         after = read_eval_log(location)
         excluded = sample(after, "s2").scores or {}
         assert math.isnan(float(excluded["exact"].as_float()))
-        assert excluded["exact"].reason == EXCLUDED
-        assert "excluded by kaia" in (excluded["exact"].explanation or "")
+        assert excluded["exact"].reason == "excluded"
+        assert excluded["exact"].explanation == "the provider was down"
         # the pre-edit score is the first history entry; the edit, with the
         # ruling's provenance, the second
         first, second = excluded["exact"].history
@@ -135,12 +135,12 @@ class TestExclusion:
         log = read_eval_log(location)
         anomaly, ruling = decision(Disposition.EXCLUDE)
 
-        mark_unscored(log, [target(log, "s3")], anomaly, ruling)
+        exclude_targets(log, [target(log, "s3")], anomaly, ruling)
         commit(log, location)
 
         scores = sample(read_eval_log(location), "s3").scores or {}
         assert list(scores) == ["exact"]
-        assert scores["exact"].reason == EXCLUDED
+        assert scores["exact"].reason == "excluded"
         assert math.isnan(scores["exact"].as_float())
 
     def test_the_metrics_are_recomputed_over_the_rest(self, tmp_path: Path) -> None:
@@ -150,7 +150,7 @@ class TestExclusion:
         assert accuracy(log) == 0.5, "the premise: the header said one of two"
         untouched = sample(log, "s1").model_dump()
 
-        mark_unscored(log, [target(log, "s2")], anomaly, ruling)
+        exclude_targets(log, [target(log, "s2")], anomaly, ruling)
         commit(log, location)
 
         after = read_eval_log(location)
@@ -163,11 +163,11 @@ class TestExclusion:
         location = landed(tmp_path)
         log = read_eval_log(location)
         anomaly, ruling = decision(Disposition.EXCLUDE)
-        mark_unscored(log, [target(log, "s2")], anomaly, ruling)
+        exclude_targets(log, [target(log, "s2")], anomaly, ruling)
         commit(log, location)
 
         again = read_eval_log(location)
-        marked = mark_unscored(again, [target(again, "s2")], anomaly, ruling)
+        marked = exclude_targets(again, [target(again, "s2")], anomaly, ruling)
 
         assert marked.edited == [] and marked.scores == set()
         assert [one.sample_id for one in marked.found] == ["s2"]
@@ -180,7 +180,7 @@ class TestExclusion:
         log = read_eval_log(location)
         anomaly, ruling = decision(Disposition.EXCLUDE)
 
-        marked = mark_unscored(
+        marked = exclude_targets(
             log, [target(log, "s2", uuid="uuid-s2-1-2")], anomaly, ruling
         )
 
@@ -189,53 +189,85 @@ class TestExclusion:
         assert deferred.sample_id == "s2" and "uuid" in why
         assert (sample(log, "s2").scores or {})["exact"].history == []
 
-    def test_a_log_naming_no_scorer_has_nowhere_to_record_it(
+    def test_a_sample_another_ruling_excluded_is_found_not_edited_again(
+        self, tmp_path: Path
+    ) -> None:
+        location = landed(tmp_path)
+        log = read_eval_log(location)
+        anomaly, ruling = decision(Disposition.EXCLUDE)
+        exclude_targets(log, [target(log, "s2")], anomaly, ruling)
+        commit(log, location)
+
+        again = read_eval_log(location)
+        later = replace(ruling, ts="2026-09-01T00:00:00Z")
+        marked = exclude_targets(again, [target(again, "s2")], anomaly, later)
+
+        assert marked.edited == [] and [one.sample_id for one in marked.found] == ["s2"]
+        assert len((sample(again, "s2").scores or {})["exact"].history) == 2
+
+    def test_a_log_naming_no_scorer_refuses_and_edits_nothing(
         self, tmp_path: Path
     ) -> None:
         location = landed(tmp_path, scorers=[])
         log = read_eval_log(location)
         anomaly, ruling = decision(Disposition.EXCLUDE)
 
-        marked = mark_unscored(log, [target(log, "s3")], anomaly, ruling)
+        with pytest.raises(ValueError, match="names no scorer"):
+            exclude_targets(
+                log, [target(log, "s2"), target(log, "s3")], anomaly, ruling
+            )
 
-        ((deferred, why),) = marked.deferred
-        assert deferred.sample_id == "s3" and "scorer" in why
+        assert (sample(log, "s2").scores or {})["exact"].history == []
 
 
-class TestHarvest:
-    def test_the_side_runs_verdict_is_copied_in_with_its_history(
+def empty_attempt(log: EvalLog, verdicts: dict[str, Score | None]) -> EvalLog:
+    """The side run's log of the same task: run with `empty_attempt()`, each sample scored as `verdicts` says."""
+    samples = [
+        EvalSample(
+            id=sample_id,
+            epoch=1,
+            input="question",
+            target="answer",
+            uuid=f"scratch-{sample_id}",
+            scores={"exact": verdict} if verdict is not None else None,
+        )
+        for sample_id, verdict in verdicts.items()
+    ]
+    return log.model_copy(
+        update={
+            "eval": log.eval.model_copy(update={"solver": "inspect_ai/empty_attempt"}),
+            "status": "success",
+            "samples": samples,
+        }
+    )
+
+
+EMPTY = Score(
+    value="I", answer="", explanation="empty attempt", metadata={"grader": "exact"}
+)
+
+
+class TestZero:
+    def test_the_empty_attempts_verdict_is_copied_in_with_its_history(
         self, tmp_path: Path
     ) -> None:
         location = landed(tmp_path)
         log = read_eval_log(location)
         anomaly, ruling = decision(Disposition.ZERO)
-        side = EvalSample(
-            id="s1",
-            epoch=1,
-            input="question",
-            target="answer",
-            uuid="scratch",
-            scores={
-                "exact": Score(
-                    value="I",
-                    answer="",
-                    explanation="empty attempt",
-                    metadata={"grader": "exact"},
-                )
-            },
-        )
+        empty = empty_attempt(read_eval_log(location), {"s1": EMPTY})
         events_before = list(sample(log, "s1").events)
 
-        marked = harvest_scores(log, {target(log, "s1"): side}, anomaly, ruling)
+        marked = zero_targets(log, empty, [target(log, "s1")], anomaly, ruling)
         commit(log, location)
 
         assert [one.sample_id for one in marked.edited] == ["s1"]
+        assert marked.scores == {"exact"}
         after = read_eval_log(location)
         zeroed = (sample(after, "s1").scores or {})["exact"]
         assert zeroed.value == "I"
         assert zeroed.answer == "" and zeroed.explanation == "empty attempt"
         assert zeroed.metadata == {"grader": "exact"}
-        assert zeroed.reason == ZEROED
+        assert zeroed.reason == "zeroed"
         assert zeroed.history[0].value == 1.0
         assert zeroed.history[1].provenance is not None
         assert zeroed.history[1].provenance.metadata[STEWARD]["disposition"] == "zero"
@@ -244,16 +276,34 @@ class TestHarvest:
         assert events[:-1] == events_before and events[-1].event == "score_edit"
         assert accuracy(after) == 0.0
 
-    def test_a_side_sample_without_a_score_defers_its_target(
+    def test_a_second_pass_finds_the_mark_and_edits_nothing(
+        self, tmp_path: Path
+    ) -> None:
+        """Inspect zeroes again when asked, so the record that a ruling is written is Steward's."""
+        location = landed(tmp_path)
+        log = read_eval_log(location)
+        anomaly, ruling = decision(Disposition.ZERO)
+        empty = empty_attempt(read_eval_log(location), {"s1": EMPTY})
+        zero_targets(log, empty, [target(log, "s1")], anomaly, ruling)
+        commit(log, location)
+
+        again = read_eval_log(location)
+        marked = zero_targets(again, empty, [target(again, "s1")], anomaly, ruling)
+
+        assert marked.edited == [] and [one.sample_id for one in marked.found] == ["s1"]
+        assert len((sample(again, "s1").scores or {})["exact"].history) == 2
+
+    def test_an_empty_attempt_without_a_verdict_refuses_and_edits_nothing(
         self, tmp_path: Path
     ) -> None:
         location = landed(tmp_path)
         log = read_eval_log(location)
         anomaly, ruling = decision(Disposition.ZERO)
-        side = EvalSample(id="s1", epoch=1, input="q", target="a", uuid="scratch")
+        empty = empty_attempt(read_eval_log(location), {"s1": EMPTY, "s2": None})
 
-        marked = harvest_scores(log, {target(log, "s1"): side}, anomaly, ruling)
+        with pytest.raises(ValueError, match="no verdict"):
+            zero_targets(
+                log, empty, [target(log, "s1"), target(log, "s2")], anomaly, ruling
+            )
 
-        assert marked.edited == []
-        ((deferred, why),) = marked.deferred
-        assert deferred.sample_id == "s1" and "no score" in why
+        assert (sample(log, "s1").scores or {})["exact"].history == []

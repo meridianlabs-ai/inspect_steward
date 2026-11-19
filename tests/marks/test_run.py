@@ -4,19 +4,29 @@ The suite stands in for the runner's launch (`conftest.py`), so a turn records a
 """
 
 import math
+import os
 from dataclasses import replace
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 import pytest
-from inspect_ai.log import read_eval_log
+from inspect_ai._eval.eval_set_manifest import INSPECT_EVAL_SET_CAPTURE
+from inspect_ai.log import edit_score, read_eval_log, write_eval_log
+from inspect_ai.scorer import ScoreEdit
 from inspect_steward._anomaly.applied import RULING_APPLIED, read_applied
+from inspect_steward._anomaly.fold import read_anomalies
 from inspect_steward._anomaly.model import Anomalies, AnomalyState, Disposition
 from inspect_steward._evalset.instances import Instance
 from inspect_steward._evalset.observe import ObservedTasks, TaskObservation, TaskState
 from inspect_steward._marks import MARK_ATTEMPTS, Target, read_runs, resolve_runs
-from inspect_steward._marks.edit import EXCLUDED
-from inspect_steward._marks.run import _collect_side_scores, _selectors, _Side
+from inspect_steward._marks.edit import provenance
+from inspect_steward._marks.run import (
+    _collect_empty_attempts,
+    _decision,
+    _selectors,
+    _Side,
+    run_mark,
+)
 from inspect_steward._marks.state import (
     record_exited,
     record_intent,
@@ -24,6 +34,7 @@ from inspect_steward._marks.state import (
 )
 from inspect_steward._scan import sync_scan
 from inspect_steward._signoff import FAILED, UNWRITTEN, check
+from inspect_steward._worker import Fleet
 from inspect_steward._workspace import (
     ACTION,
     PAUSED,
@@ -35,7 +46,7 @@ from inspect_steward._workspace import (
 )
 
 from .._logs import SynthSample, SynthTask, synth_manifest, write_log
-from ..anomaly.test_items import CLASS, erroring, ruling
+from ..anomaly.test_items import CLASS, errored, erroring, ruling
 from ..anomaly.test_rulings import (
     IDENT,
     apply,
@@ -46,7 +57,7 @@ from ..anomaly.test_rulings import (
     workspace_at,
 )
 from ..anomaly.test_scan_items import SCAN_ID, TASK, record, rule, scanning
-from ..schedule.test_tend import turn
+from ..schedule.test_tend import prepared, turn
 from ._runner import apply_marks
 
 
@@ -101,7 +112,7 @@ def test_an_exclusion_is_one_run_and_the_next_turn_finds_it_written(
         if sample.error is not None
     }
     assert all(math.isnan(score.as_float()) for score in excluded.values())
-    assert {score.reason for score in excluded.values()} == {EXCLUDED}
+    assert {score.reason for score in excluded.values()} == {"excluded"}
 
 
 def test_a_run_still_running_is_not_started_twice(
@@ -196,6 +207,156 @@ def test_the_runner_finds_nothing_left_after_a_crash_between_write_and_record(
     assert histories == [1, 1]
 
 
+def test_a_log_written_before_another_is_refused_is_still_journaled(
+    tmp_path: Path,
+) -> None:
+    """Inspect refuses a log whole, but the run may already have written one before it; the run fails, and the log it wrote is recorded."""
+    written, refused = (
+        SynthTask("a_written", samples=2),
+        SynthTask("b_refused", samples=2),
+    )
+    workspace, _ = prepared(tmp_path, [written, refused])
+    # a log that names no scorer has nowhere to record an unscored sample's
+    # exclusion, and Inspect refuses it
+    refused_log = write_log(
+        workspace.logs,
+        refused,
+        completed=1,
+        scorers=[],
+        samples=[errored("r0"), SynthSample("c1", score=1.0)],
+    )
+    written_log = write_log(
+        workspace.logs,
+        written,
+        completed=1,
+        samples=[errored("s0"), SynthSample("c0", score=1.0)],
+    )
+    # the newer log is read first, so its target comes first
+    os.utime(refused_log, (1_000_000, 1_000_000))
+    os.utime(written_log, (2_000_000, 2_000_000))
+    turn(workspace)
+    ruling(workspace, "exclude", effect="2 samples excluded from scoring")
+    turn(workspace)
+    (run,) = read_runs(workspace.marks_runs).values()
+    assert [target.task for target in run.targets] == [
+        written.identifier,
+        refused.identifier,
+    ], "the premise: the refused log comes second"
+
+    status = run_mark(workspace, run.run)
+
+    assert status == 1
+    ended = read_runs(workspace.marks_runs)[run.run]
+    assert ended.detail is not None and "names no scorer" in ended.detail
+    (event,) = applications(workspace)
+    (entry,) = edited(event)
+    assert entry["task"] == written.identifier and entry["uuids"] == ["uuid-s0-1"]
+
+
+def test_a_zero_of_integer_ids_fails_before_any_side_worker_starts(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """Inspect zeroes only string ids, so running the side run for an integer id would spend its setup and scorer for nothing."""
+    task = SynthTask("probe", samples=4)
+    workspace, _ = prepared(tmp_path, [task])
+    write_log(
+        workspace.logs,
+        task,
+        completed=2,
+        samples=[
+            *(replace(errored(str(n)), id=n) for n in range(2)),
+            *(SynthSample(n, score=1.0) for n in range(2, 4)),
+        ],
+    )
+    turn(workspace)
+    ruling(workspace, "zero", effect="2 samples scored zero")
+    turn(workspace)
+    (run,) = read_runs(workspace.marks_runs).values()
+
+    def no_worker(self: Fleet, request: object) -> None:
+        raise AssertionError("a side worker was started")
+
+    monkeypatch.setattr(Fleet, "spawn", no_worker)
+    # the runner sets the capture guard in this process's environment
+    monkeypatch.setenv(INSPECT_EVAL_SET_CAPTURE, "")
+
+    status = run_mark(workspace, run.run)
+
+    assert status == 1
+    ended = read_runs(workspace.marks_runs)[run.run]
+    assert ended.detail is not None
+    assert "cannot zero samples with integer ids" in ended.detail
+    assert f"{task.identifier} 0" in ended.detail and "Exclude" in ended.detail
+    assert applications(workspace) == []
+
+
+@pytest.mark.parametrize("pending", [False, True], ids=["all-found", "one-pending"])
+def test_a_zero_written_before_a_crash_is_booked_before_the_side_run(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch, pending: bool
+) -> None:
+    """A zero the previous Steward wrote into integer-id samples, its journal line lost, is recovered: booked without a side run or a second edit, even when the side run for the samples still to edit fails."""
+    task = SynthTask("probe", samples=5)
+    workspace, _ = prepared(tmp_path, [task])
+    location = write_log(
+        workspace.logs,
+        task,
+        completed=2,
+        samples=[
+            *(replace(errored(str(n)), id=n, score=0.0) for n in range(2)),
+            *([errored("s2")] if pending else [SynthSample("c2", score=1.0)]),
+            *(SynthSample(f"c{n}", score=1.0) for n in range(3, 5)),
+        ],
+    )
+    turn(workspace)
+    ruling(workspace, "zero", effect="samples scored zero")
+    turn(workspace)
+    (run,) = read_runs(workspace.marks_runs).values()
+    # the crash: the previous Steward's zero landed in the log, and the
+    # journal line did not
+    anomaly, decided = _decision(
+        read_anomalies(read_journal(workspace.journal).events),
+        run.class_key,
+        run.ruling_ts,
+    )
+    log = read_eval_log(str(location))
+    for sample_id in range(2):
+        edit_score(
+            log,
+            sample_id,
+            "exact",
+            ScoreEdit(
+                value=0.0,
+                reason="zeroed",
+                provenance=provenance(anomaly, decided, Disposition.ZERO),
+            ),
+        )
+    write_eval_log(log, str(location))
+    side_runs: list[list[str]] = []
+
+    def stood_in(workspace: Workspace, directory: Path, targets: list[Target]) -> None:
+        side_runs.append([target.sample_id for target in targets])
+        raise RuntimeError("the side run failed")
+
+    monkeypatch.setattr("inspect_steward._marks.run._side_run", stood_in)
+    # the runner sets the capture guard in this process's environment
+    monkeypatch.setenv(INSPECT_EVAL_SET_CAPTURE, "")
+
+    status = run_mark(workspace, run.run)
+
+    assert side_runs == ([["s2"]] if pending else [])
+    assert status == (1 if pending else 0)
+    (event,) = applications(workspace)
+    (entry,) = edited(event)
+    assert entry["found"] == 2
+    assert sorted(entry["uuids"]) == ["uuid-0-1", "uuid-1-1"]
+    histories = {
+        sample.id: len((sample.scores or {})["exact"].history)
+        for sample in read_eval_log(str(location)).samples or []
+        if isinstance(sample.id, int)
+    }
+    assert histories == {0: 2, 1: 2}
+
+
 def test_a_scan_finding_is_written_into_the_sample_its_row_names(
     tmp_path: Path,
 ) -> None:
@@ -238,7 +399,7 @@ def test_a_scan_finding_is_written_into_the_sample_its_row_names(
     scores = {
         str(sample.id): (sample.scores or {})["exact"] for sample in after.samples or []
     }
-    assert math.isnan(scores["s1"].as_float()) and scores["s1"].reason == EXCLUDED
+    assert math.isnan(scores["s1"].as_float()) and scores["s1"].reason == "excluded"
     assert scores["s1"].history[0].value == 1.0
     assert all(scores[other].history == [] for other in ("s2", "s3", "s4"))
     # the headline moved by itself: one of three remaining is correct
@@ -455,13 +616,13 @@ def test_the_applied_fold_reads_what_a_run_wrote() -> None:
     assert fold.edited_uuids(CLASS, "T1") == frozenset()
 
 
-# --- the side run's harvest ---------------------------------------------
+# --- the side run's logs -------------------------------------------------
 
 
-def _side_target(sample_id: str, location: str = "") -> Target:
+def _side_target(sample_id: str, task: str = TASK.identifier) -> Target:
     return Target(
-        task=TASK.identifier,
-        location=location,
+        task=task,
+        location="",
         eval_id="e",
         sample_id=sample_id,
         epoch=1,
@@ -473,110 +634,129 @@ SIDE_IDS = ["user:cybergym/arvo_1", "user:cybergym/arvo_2"]
 """Ids with a colon, the shape the side run once dropped on the way to its worker."""
 
 
-def _side_run_scratch(
-    tmp_path: Path, landed: list[str], *, wrote: str | None
-) -> tuple[Path, dict[str, _Side]]:
-    """A side run's scratch: its log directory, holding a log of `landed`, and one worker whose output holds `wrote`."""
-    log_dir = tmp_path / "logs"
-    log_dir.mkdir()
+def _side(
+    tmp_path: Path,
+    task: SynthTask,
+    *,
+    landed: bool,
+    wrote: str | None = None,
+    status: Literal["success", "cancelled", "error"] = "success",
+    error: str | None = None,
+) -> _Side:
+    """One task's share of a side run: its own log directory, holding a log with `status` and `error` when `landed`, and a worker whose output holds `wrote`."""
+    log_dir = tmp_path / "logs" / task.name
+    log_dir.mkdir(parents=True)
     if landed:
-        write_log(log_dir, TASK, samples=[SynthSample(id, score=0.0) for id in landed])
-    workers = tmp_path / "workers"
-    workers.mkdir()
-    output = workers / "w1.log"
+        write_log(
+            log_dir,
+            task,
+            status=status,
+            error=error,
+            samples=[SynthSample(id, score=0.0) for id in SIDE_IDS],
+        )
+    output = tmp_path / "workers" / f"{task.name}.log"
+    output.parent.mkdir(exist_ok=True)
     if wrote is not None:
         output.write_text(wrote)
-    side = _Side(
-        row=synth_manifest([TASK]).tasks[0],
-        targets=[_side_target(id) for id in SIDE_IDS],
-        worker="w1",
+    return _Side(
+        row=synth_manifest([task]).tasks[0],
+        targets=[_side_target(id, task.identifier) for id in SIDE_IDS],
+        log_dir=str(log_dir),
+        worker=task.name,
         output=output,
     )
-    return log_dir, {TASK.identifier: side}
 
 
-def test_the_side_run_harvest_returns_every_target_it_ran(tmp_path: Path) -> None:
-    log_dir, sides = _side_run_scratch(tmp_path, SIDE_IDS, wrote=None)
+def test_each_tasks_empty_attempt_is_read_from_its_own_directory(
+    tmp_path: Path,
+) -> None:
+    other = SynthTask("other", samples=4)
+    sides = {
+        TASK.identifier: _side(tmp_path, TASK, landed=True),
+        other.identifier: _side(tmp_path, other, landed=True),
+    }
 
-    scored, locations = _collect_side_scores(
-        synth_manifest([TASK]), str(log_dir), sides
-    )
+    empty, locations = _collect_empty_attempts(sides)
 
-    assert {target.sample_id for target in scored} == set(SIDE_IDS)
-    assert all(str(sample.id) == target.sample_id for target, sample in scored.items())
-    assert len(locations) == 1
+    assert {identifier: log.eval.task for identifier, log in empty.items()} == {
+        TASK.identifier: TASK.name,
+        other.identifier: other.name,
+    }
+    assert all(log.samples for log in empty.values())
+    assert len(locations) == 2
 
 
 @pytest.mark.parametrize(
-    ("landed", "wrote", "expected"),
+    ("wrote", "expected"),
     [
         pytest.param(
-            [],
             "No matches in dataset for sample_id filter ''",
-            [
-                "landed no log",
-                "worker w1 wrote:",
-                "No matches in dataset for sample_id filter ''",
-            ],
-            id="no-log-with-worker-output",
+            ["worker other wrote:", "No matches in dataset for sample_id filter ''"],
+            id="worker-output",
         ),
+        pytest.param(None, ["see the side worker logs in"], id="no-output"),
+    ],
+)
+def test_a_task_whose_worker_landed_no_log_fails_with_the_workers_words(
+    tmp_path: Path, wrote: str | None, expected: list[str]
+) -> None:
+    """Retrying will land it the same way, so it fails rather than defers — carrying the worker's own output, the only place a worker that wrote no log said why. Judged per task, so a task beside one that landed is still missing."""
+    other = SynthTask("other", samples=4)
+    sides = {
+        TASK.identifier: _side(tmp_path, TASK, landed=True),
+        other.identifier: _side(tmp_path, other, landed=False, wrote=wrote),
+    }
+
+    with pytest.raises(RuntimeError) as raised:
+        _collect_empty_attempts(sides)
+
+    assert f"landed no log for {other.identifier}" in str(raised.value)
+    assert TASK.identifier not in str(raised.value)
+    for fragment in expected:
+        assert fragment in str(raised.value)
+
+
+@pytest.mark.parametrize(
+    ("status", "error", "wrote", "expected"),
+    [
         pytest.param(
-            [],
+            "error",
+            "RuntimeError('the sandbox would not start')",
             None,
-            ["landed no log", "see the side worker logs in"],
-            id="no-log-no-output",
+            "the sandbox would not start",
+            id="log-error",
         ),
         pytest.param(
-            [SIDE_IDS[0]],
-            "Traceback",
-            [
-                f"holds no record of {SIDE_IDS[1]}:1 in {TASK.identifier}",
-                "worker w1 wrote:",
-                "Traceback",
-            ],
-            id="missing-sample",
+            "cancelled",
+            None,
+            "the worker was interrupted",
+            "the worker was interrupted",
+            id="worker-output",
         ),
     ],
 )
-def test_a_side_run_that_landed_nothing_usable_fails_with_the_workers_words(
-    tmp_path: Path, landed: list[str], wrote: str | None, expected: list[str]
-) -> None:
-    """Retrying an empty or partial side run will land it the same way, so it fails rather than defers — carrying the worker's own output, the only place a worker that wrote no log said why."""
-    log_dir, sides = _side_run_scratch(tmp_path, landed, wrote=wrote)
-
-    with pytest.raises(RuntimeError) as raised:
-        _collect_side_scores(synth_manifest([TASK]), str(log_dir), sides)
-
-    for fragment in expected:
-        assert fragment in str(raised.value)
-    for id in landed:
-        assert f"no record of {id}" not in str(raised.value)
-
-
-def test_a_task_whose_worker_landed_nothing_is_missing_even_beside_one_that_did(
+def test_a_task_whose_worker_landed_an_unsuccessful_log_fails_with_its_cause(
     tmp_path: Path,
+    status: Literal["cancelled", "error"],
+    error: str | None,
+    wrote: str | None,
+    expected: str,
 ) -> None:
-    """Judged across every task, not only those with a log: the caller commits per log and journals at the end, so a partial map would edit one log and record nothing."""
+    """Inspect would refuse the log by its status alone; the cause is what the operator needs to repair the run."""
     other = SynthTask("other", samples=4)
-    manifest = synth_manifest([TASK, other])
-    log_dir = tmp_path / "logs"
-    log_dir.mkdir()
-    write_log(log_dir, TASK, samples=[SynthSample(SIDE_IDS[0], score=0.0)])
     sides = {
-        TASK.identifier: _Side(
-            row=manifest.tasks[0], targets=[_side_target(SIDE_IDS[0])]
-        ),
-        other.identifier: _Side(
-            row=manifest.tasks[1],
-            targets=[replace(_side_target(SIDE_IDS[1]), task=other.identifier)],
+        TASK.identifier: _side(tmp_path, TASK, landed=True),
+        other.identifier: _side(
+            tmp_path, other, landed=True, status=status, error=error, wrote=wrote
         ),
     }
 
     with pytest.raises(RuntimeError) as raised:
-        _collect_side_scores(manifest, str(log_dir), sides)
+        _collect_empty_attempts(sides)
 
-    assert f"no record of {SIDE_IDS[1]}:1 in {other.identifier}" in str(raised.value)
-    assert f"no record of {SIDE_IDS[0]}" not in str(raised.value)
+    assert f"log for {other.identifier} has status '{status}'" in str(raised.value)
+    assert expected in str(raised.value)
+    assert TASK.identifier not in str(raised.value)
 
 
 @pytest.mark.parametrize(
