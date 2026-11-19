@@ -29,12 +29,12 @@ from inspect_ai.model import ModelUsage
 
 # scout's summary internals are a wire format Steward rebuilds, deliberately
 # not public API (the same posture as the capture and overrides models); the
-# constants and the truthiness/usage helpers are imported rather than copied
+# constants and the truthiness helper are imported rather than copied
 # so the two ends cannot drift
 from inspect_scout import Summary
 from inspect_scout._recorder.buffer import SCAN_SUMMARY, RecorderBuffer
 from inspect_scout._recorder.file import SCAN_JSON, FileRecorder
-from inspect_scout._recorder.summary import ScannerSummary, add_model_usage
+from inspect_scout._recorder.summary import ScannerSummary
 from inspect_scout._validation.validate import is_positive_value
 from upath import UPath
 
@@ -193,8 +193,8 @@ def _folded(parquet: UPath) -> ScannerSummary:
         tokens += int(row["scan_total_tokens"] or 0)
         used = cast(dict[str, Any], json.loads(row["scan_model_usage"] or "{}"))
         for model, spent in used.items():
-            usage[model] = add_model_usage(
-                usage.get(model, ModelUsage()), ModelUsage.model_validate(spent)
+            usage[model] = usage.get(model, ModelUsage()) + ModelUsage.model_validate(
+                spent
             )
     return ScannerSummary(
         scans=len(transcripts),
