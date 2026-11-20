@@ -1026,6 +1026,35 @@ def test_acknowledging_a_stall_settles_the_task_it_names(tmp_path: Path) -> None
     assert turn(workspace).summary.states["incomplete"] == 1
 
 
+@pytest.mark.parametrize("ends", ["finishes", "is dropped"])
+def test_an_acknowledged_stall_settles_nothing_once_it_has_ended(
+    tmp_path: Path, ends: str
+) -> None:
+    """An acknowledgment outlives its stall, and must not settle a different task.
+
+    The stalled task is run again and finishes, or a relaunch drops it from the
+    definition. Counting the old acknowledgment after that subtracts one from
+    the tasks still outstanding, so another task that is still short reads as
+    settled and the run as ready to sign.
+    """
+    other = SynthTask("other")
+    workspace, _ = prepared(tmp_path, [TASK, STUCK, other])
+    write_log(workspace.logs, TASK)
+    write_log(workspace.logs, other, total=4, completed=4)
+    stalling(workspace, 3)
+    ack(workspace, {item.kind: item for item in status(workspace).items}[STALLED])
+
+    if ends == "finishes":
+        write_log(workspace.logs, STUCK, created="2026-08-24T10:00:00+00:00")
+    else:
+        prepared(tmp_path, [TASK, other])
+
+    result = status(workspace)
+    assert result.summary.states["incomplete"] == 1, "the premise: other is short"
+    assert SIGNOFF_READY not in {item.kind for item in result.items}
+    assert result.verdict is not Verdict.COMPLETE
+
+
 def test_relaunching_the_same_manifest_un_signs_it(tmp_path: Path) -> None:
     """An unchanged task set has an unchanged digest, and a launch still restarts work.
 

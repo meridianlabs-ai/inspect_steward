@@ -987,11 +987,14 @@ def settled_by_decision(summary: Summary, acknowledged: Mapping[str, Ack]) -> se
     **Two acts, one meaning.** An `accept` ruling latches a task and says the results stand with a caveat; acknowledging a `stalled` item says *this will not be run again and the results stand without it*, which `anomalies.md` has been printing as a caveat in those words since the file existed. Only the first was counted, so an acknowledged stall was a hole the gate refused over forever — and the refusal's remedy is *rule the class*, which a stall need not have: the guard fires on attempt history, not on an anomaly, so there was no class to rule and no way to finish the run.
 
     Neither act changes what runs. The latch stops respawns the stall guard had already stopped; what both change is whether the run has anything left outstanding.
+
+    **An acknowledged stall counts only while the task is still stalled.** The acknowledgment is kept for good, but the stall can end: a rerun ruling or a higher `stall_after` lets the task run again and finish, or a relaunch drops it from the definition. Callers subtract this set from the unfinished tasks or add it to the complete ones, so a subject that is no longer a stalled task would stand in for some other task that has not finished.
     """
+    stalled = set(summary.stalled)
     return set(summary.accepted) | {
         ack.subject
         for ack in acknowledged.values()
-        if ack.kind == STALLED and ack.subject
+        if ack.kind == STALLED and ack.subject in stalled
     }
 
 
