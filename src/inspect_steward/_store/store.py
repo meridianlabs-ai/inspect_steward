@@ -11,6 +11,7 @@ A store is an index of completed logs keyed on inspect_ai's `task_identifier`, h
 **Every method normalizes its failures to `StoreError`, including the ones nothing here raised.** This is the rare place a bare `except Exception` is the correct instrument rather than a shrug: the operations underneath run on fsspec backends that raise their own hierarchies — `botocore.exceptions.NoCredentialsError` for an S3 store on a machine with no credentials configured, which is an ordinary Tuesday rather than an exotic failure — and none of them are `OSError`. Every caller of this module has promised to degrade a store failure to a warning, and it makes those promises at two of the worst possible moments: after a launch has committed its manifest, and after a signoff has recorded its signature. A leaked provider exception at either point is a traceback where a sentence belonged.
 """
 
+import os
 from collections.abc import Sequence, Set
 from dataclasses import dataclass
 from pathlib import Path
@@ -144,7 +145,7 @@ def store_location(location: str, root: Path) -> str:
     Three cases, and only the middle one is new:
 
     - **`auto`** is the machine's own store rather than a relative directory called `auto`, which is what a literal reading opened.
-    - **A relative path** is relative to the workspace, and comes back absolute.
+    - **A relative path** is relative to the workspace, and comes back absolute. A leading `~` is the user's home, as it is for `log_root`; a `~name` that names no user on this machine is left as written.
     - **A URI** (`s3://…`, `gs://…`, and `file://` too) is already absolute and is left exactly as written — joining a bucket onto a local root would produce a path that is neither.
 
     **A scheme is what tells the third case from the second**, rather than asking the filesystem layer: `filesystem()` calls a `file://` URI local, which is true and is not the question — the question is whether this string still needs somewhere to be relative *to*, and a URI never does. Testing the scheme also cannot raise, which matters because two callers resolve a location before anything is in a position to turn a failure into a warning.
@@ -160,7 +161,7 @@ def store_location(location: str, root: Path) -> str:
         return default_location()
     if urlparse(location).scheme:
         return location
-    return str(Path(root, location).resolve())
+    return str(Path(root, os.path.expanduser(location)).resolve())
 
 
 def open_store(location: str, *, root: Path) -> LogStore:
