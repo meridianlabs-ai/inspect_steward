@@ -105,11 +105,14 @@ def fleet_width(tasks: int, *, max_workers: int | None, max_tasks: int | None) -
     Returns:
         Peak concurrent worker processes.
     """
+    width = tasks
     if max_workers is not None:
-        return min(max_workers, tasks)
-    # unbounded workers means a process per task, so the task ceiling is what
-    # bounds the process count too
-    return min(max_tasks, tasks) if max_tasks is not None else tasks
+        width = min(width, max_workers)
+    # a process is only started for a task that may start, so the task ceiling
+    # bounds the process count too, whether or not max_workers is set
+    if max_tasks is not None:
+        width = min(width, max_tasks)
+    return width
 
 
 def projection(peak_rss: int | None, width: int) -> str | None:
