@@ -14,6 +14,7 @@ from pathlib import Path
 from typing import Any, NoReturn
 
 import click
+from inspect_ai._eval.eval_set_overrides import EvalSetOverrides
 
 from .._evalset.detect import DefinitionType
 from .._launch import Change, Delta, Launch, LaunchError, launch
@@ -575,7 +576,7 @@ def _next_launch(workspace: Workspace, definition: Path, given: _Given) -> str:
         parts.append("--no-overrides")
     else:
         for field, value in sorted((given.overrides or {}).items()):
-            parts.extend([f"--{field.replace('_', '-')}", _typed(value)])
+            parts.extend([f"--{field.replace('_', '-')}", _typed(field, value)])
     if given.max_workers is not None:
         parts.extend(["--max-workers", str(given.max_workers)])
     if given.no_scan_model:
@@ -591,12 +592,19 @@ def _next_launch(workspace: Workspace, definition: Path, given: _Given) -> str:
     return shlex.join(parts)
 
 
-def _typed(value: Any) -> str:
+def _typed(field: str, value: Any) -> str:
     """One override value, spelled the way `parse_override` reads it back.
 
     JSON, because that parser is `yaml.safe_load` and every JSON document is a YAML one — so a range comes back as `[100, 200]` and a boolean as `true`, both of which survive the round trip. A plain string is passed through as itself rather than quoted into `"gpt-5"`, since YAML reads the bare word the same way and the quoted form is what an operator would not have typed.
+
+    The value is dumped through `EvalSetOverrides` rather than handed to `json.dumps` as it is, because some fields read into a model or dataclass (`--epochs` with a reducer, `--generate-config`, `--checkpoint`) that only the overrides model knows how to write back. A checkpoint trigger, for one, needs the model's own serializer to keep its `kind`. `None` fields are left out, so `--generate-config` prints the keys that were typed rather than every key the config has.
     """
-    return value if isinstance(value, str) else json.dumps(value)
+    if isinstance(value, str):
+        return value
+    dumped = EvalSetOverrides.model_validate({field: value}).model_dump(
+        mode="json", exclude_none=True
+    )
+    return json.dumps(dumped.get(field))
 
 
 def _durable_channel(workspace: Workspace) -> str | bool | None:
