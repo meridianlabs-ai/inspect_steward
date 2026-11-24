@@ -310,6 +310,23 @@ class TestWhereTheSettingActuallyPoints:
 
         assert store_location("../shared", root) == str(tmp_path / "shared")
 
+    def test_a_home_relative_path_is_under_home(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ) -> None:
+        # neither `.env` nor YAML expands `~`, so the setting arrives literally
+        home = tmp_path / "home"
+        home.mkdir()
+        monkeypatch.setenv("HOME", str(home))
+
+        once = store_location("~/store", tmp_path / "workspace")
+
+        assert once == str((home / "store").resolve())
+        assert store_location(once, tmp_path / "workspace") == once
+        # a `~name` naming no user stays an ordinary relative directory
+        assert store_location("~no-such-user-for-this-test/s", tmp_path) == str(
+            (tmp_path / "~no-such-user-for-this-test/s").resolve()
+        )
+
     def test_and_says_the_same_thing_from_two_working_directories(
         self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
     ) -> None:
