@@ -93,6 +93,52 @@ class TestParseError:
         assert parsed is not None
         assert parsed.type == "KeyboardInterrupt"
 
+    @pytest.mark.parametrize(
+        ("message_lines", "expected"),
+        [
+            # inspect wraps a provider error as `\nRequest:\n{json}\n\n{repr}`
+            (
+                [
+                    "inspect_ai.model._model.ModelGenerateError: ",
+                    "Request:",
+                    "{",
+                    '  "model": "gpt-4o"',
+                    "}",
+                    "",
+                    "BadRequestError('Error code: 400')",
+                ],
+                "inspect_ai.model._model.ModelGenerateError",
+            ),
+            (["RuntimeError: failed", "Stderr: denied"], "RuntimeError"),
+            # a message quoting a frame has no exception line after it
+            (
+                [
+                    "RuntimeError: command failed:",
+                    '  File "a.py", line 1, in f',
+                    "    x()",
+                ],
+                "RuntimeError",
+            ),
+        ],
+    )
+    def test_a_multi_line_message_is_not_the_type(
+        self, message_lines: list[str], expected: str
+    ) -> None:
+        traceback = "\n".join(
+            [
+                "Traceback (most recent call last):",
+                '  File "/work/inspect_ai/model/_model.py", line 2106, in generate',
+                "    raise ModelGenerateError(",
+                *message_lines,
+            ]
+        )
+
+        parsed = parse_error(None, traceback)
+
+        assert parsed is not None
+        assert parsed.type == expected
+        assert parsed.frame == "model/_model.py:generate"
+
     def test_a_repr_message_yields_the_type_with_no_frame(self) -> None:
         parsed = parse_error("TimeoutError('too slow on sample 41')", None)
 

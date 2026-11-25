@@ -15,6 +15,7 @@ import re
 from collections.abc import Callable, Collection, Sequence
 from dataclasses import dataclass
 from hashlib import sha256
+from itertools import chain
 
 # upstream's own convention for sibling-failure teardown: a sample whose error
 # is a cancellation repr was killed because something *else* failed, and it is
@@ -71,7 +72,15 @@ def parse_error(message: str | None, traceback: str | None) -> ParsedError | Non
     """
     if traceback:
         lines = traceback.splitlines()
-        for index in range(len(lines) - 1, -1, -1):
+        # the exception line is the first after the deepest frame: scanning up
+        # from the bottom would stop on a `Word:` line of a multi-line message
+        # (inspect's `ModelGenerateError` message is `\nRequest:\n{json}...`).
+        # The bottom-up scan stays as the fallback, for text with no frame and
+        # for a message whose own lines look like a frame
+        frames = [index for index, line in enumerate(lines) if _FRAME.match(line)]
+        after_deepest = range(frames[-1] + 1, len(lines)) if frames else range(0)
+        bottom_up = range(len(lines) - 1, -1, -1)
+        for index in chain(after_deepest, bottom_up):
             matched = _EXCEPTION.match(lines[index])
             if matched is None or not _exceptional(matched.group(1)):
                 continue
