@@ -39,6 +39,9 @@ def test_cli_tasks_json() -> None:
         ("nums=[1, 2]", {"nums": [1, 2]}),
         # dashes in keys become underscores (matches inspect_ai parse_cli_args)
         ("max-samples=5", {"max_samples": 5}),
+        # quoting keeps a numeric-looking value a string; the quotes are YAML's, not the value's
+        ('version="1.10"', {"version": "1.10"}),
+        ("split='test'", {"split": "test"}),
     ],
 )
 def test_cliparse_args(arg: str, expected: dict[str, Any]) -> None:

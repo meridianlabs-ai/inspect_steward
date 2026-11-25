@@ -80,7 +80,7 @@ def parse_args(args: tuple[str, ...]) -> dict[str, Any] | None:
             raise click.UsageError(f"--arg must be KEY=VALUE (got '{arg}').")
         loaded = yaml.safe_load(value)
         if isinstance(loaded, str):
-            elements = value.split(",")
+            elements = loaded.split(",")
             loaded = elements if len(elements) > 1 else elements[0]
         parsed[key.replace("-", "_")] = loaded
     return parsed
