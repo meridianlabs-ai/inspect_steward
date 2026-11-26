@@ -114,6 +114,29 @@ def test_the_memory_projection_follows_the_width_the_operator_asked_for(
     assert "1.0 GiB across 1 worker," in output
 
 
+def test_the_memory_projection_is_bounded_by_max_tasks_when_max_workers_is_wider(
+    tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    """A process is only started for a task that may start.
+
+    Four tasks with `max_tasks=2` never have more than two in flight, so a `max_workers` of four still never has more than two processes alive. The projection has to say two, not four.
+    """
+    create_workspace(tmp_path, git=False)
+    workspace, manifest = prepared(
+        tmp_path, [SynthTask(name) for name in "abcd"], max_tasks=2
+    )
+    measured = manifest.model_copy(
+        update={"source": manifest.source.model_copy(update={"capture_rss": 1 << 30})}
+    )
+    write_manifest(measured, workspace.manifest)
+    monkeypatch.chdir(workspace.root)
+
+    code, output = run("status", "--format", "text", "--max-workers", "4")
+
+    assert code == 0, output
+    assert "2.0 GiB across 2 workers" in output
+
+
 def test_tend_says_what_it_did(workspace: Workspace) -> None:
     code, output = run("tend", "--max-workers", "1")
 
