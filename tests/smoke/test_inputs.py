@@ -314,6 +314,26 @@ class TestTheCommandItPrintsBack:
         assert typed == expected
         assert parse_override(field, typed) == value
 
+    @pytest.mark.parametrize(
+        ("field", "typed"),
+        [
+            ("epochs", "{epochs: 2, reducer: mean}"),
+            ("generate_config", "{max_connections: 4}"),
+            ("checkpoint", "{retention: retain}"),
+            ("checkpoint", "{trigger: {kind: turn, every: 5}, retention: retain}"),
+            ("checkpoint", "{trigger: {kind: time, every: PT10M}}"),
+        ],
+    )
+    def test_an_override_read_into_a_model_parses_back_to_itself(
+        self, tmp_path: Path, field: str, typed: str
+    ) -> None:
+        # the parser returns a model or dataclass here, which `json.dumps`
+        # cannot serialize on its own
+        value = parse_override(field, typed)
+        printed = self.printed(tmp_path, overrides={field: value})
+
+        assert parse_override(field, shlex.split(printed)[-1]) == value
+
     def test_nothing_typed_prints_the_bare_command(self, tmp_path: Path) -> None:
         assert self.printed(tmp_path) == "steward launch"
 
